@@ -9,15 +9,16 @@ home, about, catalog with filters, topic pages and question pages in RU and EN,
 in the approved "IDE" design with dark/light themes, on every screen size.
 
 **Architecture:** Clean layers (Domain → Application → Infrastructure/Web).
-Content lives as YAML files, is validated against a JSON Schema and semantic
-rules by `Trainer.Content`, rendered to safe HTML at import time and stored in
+Content lives as YAML files, is deserialized strictly into the C# content model
+(which is also the source of the generated JSON Schema files) and checked
+against semantic rules by `Trainer.Content`, rendered to safe HTML at import time and stored in
 PostgreSQL. Snippet execution lives in a separate `Trainer.Snippets` assembly
 used only by the CLI. Public pages are plain static SSR Razor components (no
 interactive render modes and no `blazor.web.js` in this plan), cached
 in-process for anonymous users.
 
 **Tech Stack:** .NET 10 (SDK pinned in `global.json`), ASP.NET Core Razor
-components (static SSR), EF Core + Npgsql, YamlDotNet, JsonSchema.Net, Markdig,
+components (static SSR), EF Core + Npgsql, YamlDotNet, Markdig,
 ColorCode.HTML, Cysharp `Ulid` (CLI only), xUnit v3 on Microsoft.Testing.Platform,
 Testcontainers.PostgreSql, Microsoft.AspNetCore.Mvc.Testing, Microsoft.Playwright,
 Docker (snippet sandbox).
@@ -25,9 +26,9 @@ Docker (snippet sandbox).
 **Spec:** `docs/superpowers/specs/2026-11-11-dev-interview-trainer-design.md`
 (read it first; section numbers below refer to it).
 
-**Revision:** v2, after reviews by Codex and Fable (2026-11-11). Changes from
+**Revision:** v3, after two rounds of reviews by Codex and Fable (2026-11-11). v3 changes: JsonSchema.Net dropped (its NuGet binaries carry a maintenance-fee EULA); structure is enforced by strict `System.Text.Json` deserialization of the YAML and the JSON Schema files are generated from the C# model for editor support; in-memory content snapshot with a generation number (no DB hits on cache hits, no stale re-caching after import); .NET 10 `NotFound` handling; redirects resolved before question lookup; per-test databases; sandbox and parser refinements; shared test support project. v2 changes from
 v1: explicit safe Markdig pipeline; two-container sandbox in its own assembly;
-JSON Schema structural validation; import hash/lock/render-version fixes;
+structural validation; import hash/lock/render-version fixes;
 Application no longer depends on Content or ASP.NET types; normalised cache
 key; background startup import with readiness; dev/test migrations; task
 order fixed so every task ends green; separate web test content set;
@@ -48,7 +49,8 @@ Each plan is reviewed by Codex and Fable before execution.
 
 - Target framework `net10.0`; `global.json`: SDK `10.0.203`, `rollForward: latestFeature`, `"test": { "runner": "Microsoft.Testing.Platform" }`.
 - `Directory.Build.props`: `Nullable=enable`, `TreatWarningsAsErrors=true`, `ImplicitUsings=enable`, `AnalysisLevel=latest-recommended`, `NuGetAudit=true`, `NuGetAuditMode=all`, `NuGetAuditLevel=low`.
-- Central package management in `Directory.Packages.props`; versions = latest stable compatible with `net10.0` at execution time. No FluentAssertions. No Moq.
+- Central package management in `Directory.Packages.props`; versions = latest stable compatible with `net10.0` at execution time. No FluentAssertions. No Moq. No packages whose binaries carry a paid or fee-bearing licence (check the NuGet licence and README before adding any package; JsonSchema.Net is excluded for this reason).
+- Test projects: `<UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>` (set in `tests/Directory.Build.props`).
 - Explicit types instead of `var` wherever possible; async with `CancellationToken` for IO; `System.Text.Json` with cached options (source-generated contexts where types are fixed); `StringComparison.Ordinal*`; `TimeProvider` instead of `DateTime.Now`.
 - Comments, docs, commit messages in English; Conventional Commits; no AI attribution lines.
 - Dependencies: Domain → nothing. Application → Domain. Content → Domain. Snippets → Content. Infrastructure → Application, Content. Web → Infrastructure, Application. ContentCli → Content, Snippets. **Web never references Snippets.**
@@ -59,7 +61,7 @@ Each plan is reviewed by Codex and Fable before execution.
 - Public pages: static SSR only, no `[StreamRendering]`, no `<form>`, no `blazor.web.js`, no `Set-Cookie` in anonymous responses.
 - Markdown: explicit Markdig pipeline (section in Task 4), raw HTML disabled, no generic attributes, links/images only `https:` absolute or site-relative.
 - Snippet sandbox: build container (no network, 2 GB memory, non-root) and run container (no network, read-only root and `/out`, 256 MB, `--pids-limit 128`, `--cap-drop ALL`, `--security-opt no-new-privileges`, logging disabled, 10 s run deadline enforced from the host with `docker kill`), invariant culture, `TZ=UTC`.
-- Test commands (MTP mode): unit/integration `dotnet test --filter-not-trait "Category=E2E" --filter-not-trait "Category=Docker"`; Docker `dotnet test --filter-trait "Category=Docker"`; E2E `dotnet test --filter-trait "Category=E2E"`. Executor confirms exact xUnit v3 MTP flag spelling in Task 1 and records the final commands in `AGENTS.md`.
+- Test commands (MTP mode; every command keeps `--ignore-exit-code 8` because some projects always have zero matching tests): unit/integration `dotnet test --filter-not-trait "Category=E2E" --filter-not-trait "Category=Docker" --ignore-exit-code 8`; Docker `dotnet test --filter-trait "Category=Docker" --ignore-exit-code 8`; E2E `dotnet test --filter-trait "Category=E2E" --ignore-exit-code 8`. Record them in `AGENTS.md`.
 - WCAG 2.2 AA: 4.5:1 body text, 3:1 large text and UI colours.
 - Responsive widths checked: 375, 768, 1280, 1920 px; no horizontal page scroll at 320 px.
 - Migrations: never applied at production startup. Tests apply them in fixtures; local development applies them only when `ASPNETCORE_ENVIRONMENT=Development` and `App:ApplyMigrationsOnStartup=true` (startup throws if the flag is set in any other environment).
@@ -85,7 +87,7 @@ docs/architecture.md, docs/content-guide.md
 content/
   LICENSE                                   CC BY-SA 4.0 notice + link to legal code
   schema-version                            "1"
-  schema/question.schema.json, schema/topics.schema.json, schema/stacks.schema.json, schema/redirects.schema.json
+  schema/question.schema.json, schema/topics.schema.json, schema/stacks.schema.json, schema/redirects.schema.json   generated from the C# model (Task 3), for editors
   stacks.yaml
   dotnet/topics.yaml                        23 topics from spec section 6
   dotnet/redirects.yaml                     []
@@ -93,8 +95,8 @@ content/
 src/Trainer.Domain/                         Levels/, Questions/, Keys/, AssemblyMarker.cs
 src/Trainer.Content/
   Model/*.cs                                YAML document records
-  Schema/ContentSchema.cs, Schema/SchemaValidator.cs
-  Reading/ContentReader.cs, Reading/ContentHasher.cs, Reading/YamlSetup.cs
+  Schema/ContentSchema.cs, Schema/SchemaGenerator.cs
+  Reading/ContentReader.cs, Reading/ContentHasher.cs, Reading/YamlToJson.cs, Reading/ContentJsonContext.cs
   Validation/ContentValidator.cs, Validation/ContentIssue.cs, Validation/IssueCodes.cs
   Rendering/ContentRenderer.cs, Rendering/SafeLinkPolicy.cs, Rendering/MarkdownPipelineFactory.cs, Rendering/LineWrapper.cs
 src/Trainer.Snippets/                       ISnippetRunner.cs, DockerSnippetRunner.cs, SnippetResult.cs, SnippetResultParser.cs, SnippetVerifier.cs, SandboxOptions.cs
@@ -118,8 +120,11 @@ src/Trainer.Web/
   Endpoints/SitemapEndpoints.cs
   Caching/PublicPageCachePolicy.cs, Caching/OutputCacheInvalidator.cs
   Startup/ContentStartupImporter.cs, Startup/ReadinessState.cs, Startup/SecurityHeadersMiddleware.cs
+  ContentState/ContentSnapshot.cs, ContentState/ContentSnapshotProvider.cs
   wwwroot/css/tokens.css, wwwroot/css/site.css, wwwroot/js/theme-toggle.js
 tools/Trainer.ContentCli/                   Program.cs, Commands/*.cs
+tests/Directory.Build.props                 MTP runner setting
+tests/Trainer.TestSupport/                  PostgresFixture (template databases), TrainerWebFactory, content copy helpers
 tests/Trainer.Domain.Tests/
 tests/Trainer.Content.Tests/                TestContent/valid/**, TestContent/broken/**
 tests/Trainer.Snippets.Tests/               unit + Category=Docker
@@ -141,9 +146,9 @@ tests/Trainer.Web.E2E/                      Category=E2E, Playwright
 - Produces: project references per Global Constraints; `public sealed class AssemblyMarker;` in `Trainer.Domain`.
 
 - [ ] **Step 1:** Create root files with Global Constraints settings. `.editorconfig`: `csharp_style_var_for_built_in_types = false:warning`, `csharp_style_var_when_type_is_apparent = false:warning`, `csharp_style_var_elsewhere = false:warning`, private field naming `_camelCase`, file-scoped namespaces.
-- [ ] **Step 2:** Test projects that have no tests yet get none; configure MTP to not fail on zero tests (`--ignore-exit-code 8` in the CI command) until later tasks add tests. Write `Solution_Builds`: `Assert.Equal("Trainer.Domain", typeof(AssemblyMarker).Assembly.GetName().Name)`.
+- [ ] **Step 2:** Create `tests/Directory.Build.props` with `UseMicrosoftTestingPlatformRunner=true` and `tests/Trainer.TestSupport` (class library, filled by Tasks 8-9). Write `Solution_Builds`: `Assert.Equal("Trainer.Domain", typeof(AssemblyMarker).Assembly.GetName().Name)`.
 - [ ] **Step 3:** `ci.yml`: triggers `pull_request`, `push` to `main`; top-level `permissions: contents: read`; all actions pinned by full commit SHA with version comment. Job `build-test` (`ubuntu-latest`): setup-dotnet from `global.json`, `dotnet restore`, `dotnet format --verify-no-changes`, `dotnet build -warnaserror --no-restore`, unit/integration test command from Global Constraints (Docker is available on the runner for Testcontainers).
-- [ ] **Step 4:** Run build and tests locally → build succeeded, 1 test passed. Confirm the exact MTP filter flags (`dotnet test --help` with xUnit v3) and fix the commands in `ci.yml` and `AGENTS.md` ("Before declaring work done").
+- [ ] **Step 4:** Run build and tests locally → build succeeded, 1 test passed. Put the three test commands from Global Constraints into `ci.yml` and `AGENTS.md` ("Before declaring work done").
 - [ ] **Step 5:** Commit `chore: scaffold solution, central packages and CI`.
 
 ### Task 2: Domain keys and enums
@@ -157,7 +162,7 @@ tests/Trainer.Web.E2E/                      Category=E2E, Playwright
   - `enum Level { Junior = 1, Middle = 2, Senior = 3, Lead = 4, Architect = 5 }`; `static class LevelKeys { string ToKey(Level); bool TryParse(string? key, out Level level); IReadOnlyList<Level> All { get; } }` (parse case-insensitive, `ToKey` lowercase).
   - `enum QuestionType { Open, Single, Multi, Output, FindBug, Situation }`; `static class QuestionTypeKeys` with the same members (`"find-bug"` ↔ `FindBug`).
   - `enum GradingMode { Self, Auto }`; `static class GradingModeKeys` (`self`, `auto`; `llm` rejected in v1).
-  - `readonly record struct QuestionId(string Value)` + `static bool TryCreate(string?, out QuestionId)`: `^[0-9A-HJKMNP-TV-Z]{26}$`.
+  - `readonly record struct QuestionId(string Value)` + `static bool TryCreate(string?, out QuestionId)`: `^[0-7][0-9A-HJKMNP-TV-Z]{25}$` (first character 0-7: a ULID is 128 bits).
   - `Slug`, `StackKey`, `TopicKey`: `readonly record struct X(string Value)` + `TryCreate`, `^[a-z0-9]+(-[a-z0-9]+)*$`, length 1..80.
   - `CultureKey`: `TryCreate` accepts `ru`, `en` (case-sensitive lowercase); `static IReadOnlyList<CultureKey> Supported`; `static CultureKey Default => en`.
 
@@ -170,7 +175,7 @@ public void TryParse_AcceptsKnownKeysCaseInsensitive(string key, Level expected)
 [Fact] public void Levels_AreOrdered() => Assert.True(Level.Senior > Level.Middle);
 [Fact] public void FindBug_RoundTrips()
 { Assert.Equal("find-bug", QuestionTypeKeys.ToKey(QuestionType.FindBug)); Assert.True(QuestionTypeKeys.TryParse("find-bug", out QuestionType t)); Assert.Equal(QuestionType.FindBug, t); }
-[Theory] [InlineData("01JD4X7Q8N9V2K3M4P5R6S7T8W", true)] [InlineData("01JD4X7Q8N9V2K3M4P5R6S7T8I", false)] [InlineData("short", false)]
+[Theory] [InlineData("01JD4X7Q8N9V2K3M4P5R6S7T8W", true)] [InlineData("01JD4X7Q8N9V2K3M4P5R6S7T8I", false)] [InlineData("81JD4X7Q8N9V2K3M4P5R6S7T8W", false)] [InlineData("short", false)]
 public void QuestionId_Validates(string value, bool ok) => Assert.Equal(ok, QuestionId.TryCreate(value, out _));
 [Theory] [InlineData("result-deadlock-ui-thread", true)] [InlineData("Result", false)] [InlineData("a--b", false)] [InlineData("-a", false)]
 public void Slug_Validates(string value, bool ok) => Assert.Equal(ok, Slug.TryCreate(value, out _));
@@ -181,25 +186,26 @@ public void Slug_Validates(string value, bool ok) => Assert.Equal(ok, Slug.TryCr
 - [ ] **Step 2:** Run → FAIL. **Step 3:** Implement (regexes via `[GeneratedRegex]`). **Step 4:** Run → PASS.
 - [ ] **Step 5:** Commit `feat(domain): add levels, question types and validated keys`.
 
-### Task 3: Content model, JSON Schema, reader and hash
+### Task 3: Content model, strict reader, generated schemas and hash
 
 **Files:**
-- Create: `content/schema/*.schema.json`, `src/Trainer.Content/Model/*`, `Schema/*`, `Reading/*`, `Validation/ContentIssue.cs`
-- Create fixtures: `tests/Trainer.Content.Tests/TestContent/valid/**` (schema-version, stacks.yaml, dotnet/topics.yaml with 3 topics, empty redirects, 6 questions one per type, both locales), `TestContent/broken/**` (one good question, one with YAML syntax error, one with an unknown property, one missing `title` in a locale, one with `level: 5` as a number)
-- Test: `tests/Trainer.Content.Tests/ContentReaderTests.cs`, `SchemaValidatorTests.cs`, `ContentHasherTests.cs`
+- Create: `src/Trainer.Content/Model/*`, `Schema/*`, `Reading/*`, `Validation/ContentIssue.cs`; generated `content/schema/*.schema.json`
+- Create fixtures: `tests/Trainer.Content.Tests/TestContent/valid/**` (schema-version, stacks.yaml, dotnet/topics.yaml with 3 topics, empty redirects, 6 questions one per type, both locales), `TestContent/broken/**` (one good question; one YAML syntax error; one unknown property; one locale without `title`; one `level: 5`; one `verified: not-a-date`; one using an anchor/alias; one with two YAML documents)
+- Test: `tests/Trainer.Content.Tests/ContentReaderTests.cs`, `YamlToJsonTests.cs`, `SchemaGenerationTests.cs`, `ContentHasherTests.cs`
 
 **Interfaces:**
 - Produces:
-  - JSON Schemas (draft 2020-12) mirroring spec 7.2, `additionalProperties: false` everywhere, required fields, enums for level/type/grading/harness/expect kind/link kind, `pattern`s from Task 2. The same files serve editor autocompletion (documented in Task 15).
-  - `record ContentIssue(string RelativePath, string Code, string Message, string? JsonPointer = null)`.
-  - `SchemaValidator`: `IReadOnlyList<ContentIssue> Validate(string relativePath, JsonNode document, SchemaKind kind)` using JsonSchema.Net; each error → code `schema-violation` with the JSON pointer.
-  - Model records (all collections `IReadOnlyList`/`IReadOnlyDictionary`): `QuestionDocument`, `CodeBlock { Language, Harness, Source }`, `Expectation { Kind, Value? }`, `OptionDocument { Id, Correct, Expect? }`, `LinkDocument { Url, Lang, Kind }`, `QuestionLocaleDocument { Title, Prompt, Hint?, Options?, OptionExplanations?, Answer, Explanation, LinkTitles }`, `QuestionMeta { Authors, Verified: DateOnly, DotnetVersion?, NoRunReason? }`, `StackDocument`, `TopicDocument { Key, Locales: culture → { Title, Description } }`, `RedirectDocument { From, To }`. `QuestionDocument` fields: `Id, Slug, Stack, Topic, Level, Type, Grading, Tags, Code?, BugLineSets?, FixedSource?, FixedExpect?, Expect?, AcceptedOutputs?, Options?, Links, Locales, Meta`.
+  - `record ContentIssue(string RelativePath, string Code, string Message, string? JsonPath = null)`.
+  - Model records (all collections `IReadOnlyList`/`IReadOnlyDictionary`, required members marked `required`, optional ones nullable): `QuestionDocument`, `CodeBlock { Language, Harness, Source }`, `Expectation { Kind, Value? }`, `OptionDocument { Id, Correct, Expect? }`, `LinkDocument { Url, Lang, Kind }`, `QuestionLocaleDocument { Title, Prompt, Hint?, Options?, OptionExplanations?, Answer, Explanation, LinkTitles }`, `QuestionMeta { Authors, Verified: DateOnly, DotnetVersion?, NoRunReason? }`, `StackDocument`, `TopicDocument { Key, Locales: culture → { Title, Description } }`, `RedirectDocument { From, To }`. `QuestionDocument` fields: `Id, Slug, Stack, Topic, Level, Type, Grading, Tags, Code?, BugLineSets?, FixedSource?, FixedExpect?, Expect?, AcceptedOutputs?, Options?, Links, Locales, Meta`. String-valued enums (level, type, grading, harness, expect kind, link kind) stay strings in the model; their allowed values are enforced by the validator (Task 5) and listed in the generated schema.
+  - `ContentJsonContext` (source-generated `JsonSerializerContext`): camelCase, `UnmappedMemberHandling = Disallow`, `RespectNullableAnnotations = true`, `RespectRequiredConstructorParameters = true`.
+  - `static class YamlToJson { JsonNode Convert(YamlStream stream, out IReadOnlyList<ContentIssue> issues, string relativePath); }` — rules: exactly one document (`yaml-multiple-documents` otherwise); anchors, aliases and merge keys rejected (`yaml-alias-forbidden`); mapping keys must be plain strings. Scalar typing: quoted scalars are always strings; plain scalars `true`/`false` ⇒ bool, `null`/`~`/empty ⇒ null, `^-?(0|[1-9][0-9]*)$` ⇒ integer, everything else (including `012`, `1.5`, `2026-11-11`) ⇒ string. Block scalars are strings.
   - `record SourcedQuestion(string RelativePath, QuestionDocument Document)`.
   - `record ContentSet(int SchemaVersion, IReadOnlyList<StackDocument> Stacks, IReadOnlyDictionary<string, IReadOnlyList<TopicDocument>> TopicsByStack, IReadOnlyList<SourcedQuestion> Questions, IReadOnlyDictionary<string, IReadOnlyList<RedirectDocument>> RedirectsByStack, string Hash, IReadOnlyList<ContentIssue> ReadIssues)`.
   - `interface IContentReader { Task<ContentSet> ReadAsync(string rootPath, CancellationToken ct); }`
-  - `static class ContentHasher { string Compute(IEnumerable<(string RelativePath, byte[] Bytes)> files, int renderVersion); }` — SHA-256 lowercase hex over `renderVersion` + files ordered by ordinal path, each `path\n` + bytes with BOM stripped and CRLF→LF.
+  - `static class ContentHasher { string Compute(IEnumerable<(string RelativePath, byte[] Bytes)> files); }` — SHA-256 lowercase hex over files ordered by ordinal path, each `path\n` + bytes with BOM stripped and CRLF→LF. The render version is not part of the hash; the importer compares the pair (hash, render version) (Task 8).
   - `static class ContentSchema { const int MinSupported = 1; const int MaxSupported = 1; const int RenderVersion = 1; }`
-- Read pipeline per file: bytes → strip BOM, normalise line endings → YamlDotNet `YamlStream` (syntax errors ⇒ `yaml-parse` with line/column) → convert to `JsonNode` (scalars typed by YAML core schema) → schema validation (errors ⇒ `schema-violation`, file skipped) → deserialize the `JsonNode` into records with `System.Text.Json` (source-generated context, camelCase, `DateOnly` supported natively). Reading never stops at the first bad file. Files read with async IO.
+  - `SchemaGenerator.Generate()` → JSON Schema documents produced with `System.Text.Json.Schema.JsonSchemaExporter` from `ContentJsonContext`, post-processed (`TransformSchemaNode`) to add `additionalProperties: false`, `enum` lists for the string enums, and `pattern`s from Task 2. Written to `content/schema/` by running `SchemaGenerationTests` with `DIT_UPDATE_SCHEMAS=1` (the test then writes instead of comparing) and later by CLI `generate-schemas` (Task 7); used only by editors, the application never reads them.
+- Read pipeline per file: bytes → strip BOM, normalise line endings → YamlDotNet `YamlStream.Load` (syntax error ⇒ `yaml-parse` with line/column) → `YamlToJson.Convert` → `JsonSerializer.Deserialize(node, ContentJsonContext...)`; any `JsonException`, `FormatException` or `InvalidOperationException` from conversion or deserialization ⇒ `content-structure` with the exception's JSON path, and the file is skipped. Reading never stops at the first bad file. File IO is async.
 
 - [ ] **Step 1: Write failing tests**
 
@@ -220,22 +226,30 @@ public void Slug_Validates(string value, bool ok) => Assert.Equal(ok, Slug.TryCr
     ContentSet set = await Read(Fixtures.Broken);
     Assert.Single(set.Questions);
     Assert.Contains(set.ReadIssues, i => i.Code == "yaml-parse");
-    Assert.Contains(set.ReadIssues, i => i.Code == "schema-violation" && i.RelativePath.EndsWith("unknown-property.yaml", StringComparison.Ordinal));
-    Assert.Contains(set.ReadIssues, i => i.Code == "schema-violation" && i.JsonPointer == "/locales/ru");
-    Assert.Contains(set.ReadIssues, i => i.Code == "schema-violation" && i.JsonPointer == "/level");
+    Assert.Contains(set.ReadIssues, i => i.Code == "content-structure" && i.RelativePath.EndsWith("unknown-property.yaml", StringComparison.Ordinal));
+    Assert.Contains(set.ReadIssues, i => i.Code == "content-structure" && i.RelativePath.EndsWith("missing-title.yaml", StringComparison.Ordinal));
+    Assert.Contains(set.ReadIssues, i => i.Code == "content-structure" && i.RelativePath.EndsWith("numeric-level.yaml", StringComparison.Ordinal));
+    Assert.Contains(set.ReadIssues, i => i.Code == "content-structure" && i.RelativePath.EndsWith("bad-date.yaml", StringComparison.Ordinal));
+    Assert.Contains(set.ReadIssues, i => i.Code == "yaml-alias-forbidden");
+    Assert.Contains(set.ReadIssues, i => i.Code == "yaml-multiple-documents");
 }
+[Theory] [InlineData("v: 012", "012")] [InlineData("v: '10'", "10")] [InlineData("v: 2026-11-11", "2026-11-11")] [InlineData("v: 1.5", "1.5")]
+public void PlainAndQuotedScalars_BecomeStrings(string yaml, string expected) => Assert.Equal(expected, Convert(yaml)["v"]!.GetValue<string>());
+[Theory] [InlineData("v: 10", 10)] [InlineData("v: -3", -3)]
+public void PlainIntegers_BecomeNumbers(string yaml, int expected) => Assert.Equal(expected, Convert(yaml)["v"]!.GetValue<int>());
 [Fact] public void ContentHash_IsIndependentOfLineEndingsAndBom()
 {
     byte[] lf = "a: 1\nb: 2\n"u8.ToArray();
     byte[] crlfBom = [0xEF, 0xBB, 0xBF, .. "a: 1\r\nb: 2\r\n"u8];
-    Assert.Equal(ContentHasher.Compute([("x.yaml", lf)], 1), ContentHasher.Compute([("x.yaml", crlfBom)], 1));
+    Assert.Equal(ContentHasher.Compute([("x.yaml", lf)]), ContentHasher.Compute([("x.yaml", crlfBom)]));
 }
-[Fact] public void ContentHash_ChangesWithPathOrRenderVersion() { /* different path ⇒ different; same files, renderVersion 2 ⇒ different */ }
-[Fact] public void RepositorySchemas_AcceptValidFixture() { /* every valid fixture file passes its schema */ }
+[Fact] public void ContentHash_ChangesWithPath() { /* same bytes, different path ⇒ different hash */ }
+[Fact] public void GeneratedSchemas_MatchCommittedFiles() { /* SchemaGenerator.Generate() equals content/schema/*.json byte for byte (LF) */ }
+[Fact] public void GeneratedQuestionSchema_ForbidsAdditionalPropertiesAndListsLevels() { /* "additionalProperties": false at root; level enum = 5 keys */ }
 ```
 
-- [ ] **Step 2:** Run → FAIL. **Step 3:** Implement schemas, model, reader, hasher. **Step 4:** Run → PASS.
-- [ ] **Step 5:** Commit `feat(content): add json schemas, content model, reader and hash`.
+- [ ] **Step 2:** Run → FAIL. **Step 3:** Implement model, `YamlToJson`, reader, hasher, schema generator; generate and commit `content/schema/*.json`. **Step 4:** Run → PASS.
+- [ ] **Step 5:** Commit `feat(content): add strict content model, reader, generated schemas and hash`.
 
 ### Task 4: Safe Markdown and code rendering
 
@@ -246,7 +260,7 @@ public void Slug_Validates(string value, bool ok) => Assert.Equal(ok, Slug.TryCr
 **Interfaces:**
 - Produces:
   - `static class SafeLinkPolicy { bool IsAllowed(string url); bool IsAllowedAbsolute(string url); }` — allowed: `https://` absolute; site-relative paths starting with `/` but not `//`. Decode HTML entities and percent-encoding before checking the scheme; reject control characters and whitespace in the scheme.
-  - `MarkdownPipelineFactory.Create()`: `new MarkdownPipelineBuilder().UsePipeTables().UseEmphasisExtras().UseListExtras().UseAutoIdentifiers().DisableHtml().Build()` — **no** `UseAdvancedExtensions`, `UseGenericAttributes`, `UseMediaLinks`, `UseAutoLinks`, `UseMathematics`, `UseDiagrams`.
+  - `MarkdownPipelineFactory.Create()`: `new MarkdownPipelineBuilder().UsePipeTables(new PipeTableOptions { InferColumnWidthsFromSeparator = false }).UseEmphasisExtras().UseListExtras().UseAutoIdentifiers().DisableHtml().Build()`; the renderer replaces table cell alignment `style` attributes with classes `align-left|center|right` (CSP forbids inline styles) — **no** `UseAdvancedExtensions`, `UseGenericAttributes`, `UseMediaLinks`, `UseAutoLinks`, `UseMathematics`, `UseDiagrams`.
   - `interface IContentRenderer { string RenderMarkdown(string markdown); string RenderCode(string source, string language); IReadOnlyList<string> FindUnsafeLinks(string markdown); }`
   - `ContentRenderer`: parse to AST; walk every `LinkInline` (including images and resolved reference links) and `AutolinkInline`; unsafe target ⇒ replace the inline with its literal text; safe external link ⇒ add `rel="nofollow noopener"`. `FindUnsafeLinks` returns the unsafe targets (used by the validator). Code: ColorCode.HTML `HtmlClassFormatter` (CSS classes, no inline styles) → `LineWrapper` splits on `\n`, closes all open spans at each line end and reopens them at the next line start, wraps each line in `<span class="line" data-line="N">`, whole block in `<pre class="code"><code>`.
 
@@ -258,7 +272,10 @@ public void Slug_Validates(string value, bool ok) => Assert.Equal(ok, Slug.TryCr
 [InlineData("[x](https://a.dev){onmouseover=alert(1)}")]
 [InlineData("![x](https://a.dev/i.png){onerror=alert(1)}")]
 [InlineData("# T {onclick=alert(1)}")]
-public void GenericAttributes_AreNotRendered(string md) => Assert.DoesNotContain("on", Attributes(R.RenderMarkdown(md)));   // helper returns all attribute names
+public void GenericAttributes_AreNotRendered(string md) => Assert.DoesNotContain(AttributeNames(R.RenderMarkdown(md)), n => n.StartsWith("on", StringComparison.OrdinalIgnoreCase));
+[Fact] public void Markdown_NeverEmitsStyleAttributes() => Assert.DoesNotContain("style=", R.RenderMarkdown("| a | b |
+|:-|-:|
+| 1 | 2 |"), StringComparison.Ordinal);
 [Theory] [InlineData("[x](javascript:alert(1))")] [InlineData("[x](javascript&#58;alert(1))")] [InlineData("<http://plain.dev>")] [InlineData("![x](data:image/png;base64,AA)")] [InlineData("[x][r]\n\n[r]: javascript:alert(1)")]
 public void UnsafeLinks_AreRenderedAsText(string md) { string html = R.RenderMarkdown(md); Assert.DoesNotContain("href=\"javascript", html, StringComparison.OrdinalIgnoreCase); Assert.DoesNotContain("src=\"data:", html, StringComparison.Ordinal); Assert.DoesNotContain("href=\"http:", html, StringComparison.Ordinal); }
 [Fact] public void HttpsLink_GetsNofollow() => Assert.Contains("rel=\"nofollow noopener\"", R.RenderMarkdown("[x](https://learn.microsoft.com)"));
@@ -279,7 +296,7 @@ public void Policy(string url, bool ok) => Assert.Equal(ok, SafeLinkPolicy.IsAll
 
 **Interfaces:**
 - Consumes: `ContentSet` (Task 3), domain keys (Task 2), `IContentRenderer.FindUnsafeLinks`, `SafeLinkPolicy` (Task 4).
-- Produces: `interface IContentValidator { IReadOnlyList<ContentIssue> Validate(ContentSet set); }`; `ContentValidator(IContentRenderer renderer, TimeProvider time)`; `static class IssueCodes` with the codes below. Structural problems are already caught by the schema (Task 3); these are semantic rules.
+- Produces: `interface IContentValidator { IReadOnlyList<ContentIssue> Validate(ContentSet set); }`; `ContentValidator(IContentRenderer renderer, TimeProvider time)`; `static class IssueCodes` with the codes below. Structural problems are already caught by strict deserialization (Task 3); these are semantic rules, including allowed values of the string enums (`level-invalid`, `type-invalid`, `grading-invalid`, `harness-invalid`, `expect-kind-invalid`, `link-kind-invalid`).
 
 | Code | Rule |
 |---|---|
@@ -316,12 +333,13 @@ public void Policy(string url, bool ok) => Assert.Equal(ok, SafeLinkPolicy.IsAll
   - `record SnippetResult(string Kind, string? Value)`; kinds: `output`, `exception`, `compile-error`, `timeout`, `sandbox-error` (`Value` carries diagnostics for `sandbox-error`).
   - `record SandboxOptions { string Image = "mcr.microsoft.com/dotnet/sdk:10.0"; TimeSpan BuildDeadline = 3 min; TimeSpan RunDeadline = 10 s; int BuildMemoryMb = 2048; int RunMemoryMb = 256; int OutputCapBytes = 65536; }`
   - `interface ISnippetRunner { Task<SnippetBuild> BuildAsync(CodeBlock code, CancellationToken ct); Task<SnippetResult> RunAsync(SnippetBuild build, CancellationToken ct); }` — `SnippetBuild` is `IAsyncDisposable` (owns the temp dirs) and carries either the output dir or a build `SnippetResult` (`compile-error` / `sandbox-error`).
-  - `static class SnippetResultParser { SnippetResult ParseBuild(int exitCode, string output); SnippetResult ParseRun(int exitCode, string stdout, string stderr, bool killedByDeadline, bool truncated); }` — build: exit ≠ 0 and output contains `error CS` ⇒ `compile-error`; exit ≠ 0 otherwise ⇒ `sandbox-error`. Run: deadline ⇒ `timeout`; stderr matching `^Unhandled exception\. (?<type>[\w.]+)` ⇒ `exception` with that type; exit 137 without deadline ⇒ `sandbox-error` (OOM); exit 0 ⇒ `output` (trimmed, LF); truncated ⇒ `sandbox-error`.
+  - `static class SnippetResultParser { SnippetResult ParseBuild(int exitCode, string output); SnippetResult ParseRun(int exitCode, string stdout, string stderr, bool killedByDeadline, bool truncated); }` — build: exit ≠ 0 and output contains `error CS` ⇒ `compile-error`; exit ≠ 0 otherwise ⇒ `sandbox-error`. Run, checked in this order: deadline ⇒ `timeout`; truncated ⇒ `sandbox-error`; stderr matching `^Unhandled exception\. (?<type>[\w.]+)` ⇒ `exception` with that type; exit 0 ⇒ `output` (trimmed, LF); any other exit code (OOM 137, stack overflow 134 without the line, `Environment.Exit(n)`) ⇒ `sandbox-error` with the exit code. Content that wants to demonstrate a crash uses `exception`, not exit codes.
   - `SnippetVerifier(ISnippetRunner runner)`: `Task<IReadOnlyList<ContentIssue>> VerifyAsync(ContentSet set, CancellationToken ct)` with codes `snippet-mismatch`, `snippet-option-mismatch` (choice output: options whose `expect` equals the actual result must be exactly the correct ones), `snippet-accepted-mismatch` (typed output: actual not in `acceptedOutputs`), `snippet-fixed-mismatch`, `snippet-not-nondeterministic` (build once, run 5 times, need ≥2 distinct outputs), `snippet-timeout`, `snippet-sandbox-error` (CI must treat this as an infrastructure failure, not as content).
 - Runner mechanics:
-  - Host temp dir per snippet: `src/` (`Snippet.csproj`: `net10.0`, `OutputType Exe`, `ImplicitUsings enable`, `Nullable disable`, `InvariantGlobalization true`; `Program.cs`: `statements` = top-level statements, `program` = as is) and `out/`, created with permissions allowing the container user.
+  - The image is pinned by digest in `SandboxOptions.Image` (`mcr.microsoft.com/dotnet/sdk:10.0@sha256:...`) and pulled once by `PrepareAsync` before any deadline starts (CI runs `docker pull` as a separate step).
+  - Host temp dir per snippet: `src/` (`Snippet.csproj`: `net10.0`, `OutputType Exe`, `ImplicitUsings enable`, `Nullable disable`, `InvariantGlobalization true`, `UseAppHost false`; `Program.cs`: `statements` = top-level statements, `program` = as is) and `out/`, created with permissions allowing the container user.
   - **Build container**: `docker run --name sb-<guid> --rm --network none --user <host uid>:<host gid> --memory 2g --cpus 2 --pids-limit 512 --cap-drop ALL --security-opt no-new-privileges --log-driver none -e HOME=/tmp -e DOTNET_CLI_TELEMETRY_OPTOUT=1 -e DOTNET_NOLOGO=1 -e NUGET_PACKAGES=/tmp/nuget --tmpfs /tmp:rw,exec,size=1g -v <src>:/src:ro -v <out>:/out:rw <image> dotnet build /src/Snippet.csproj -c Release -o /out -p:BaseIntermediateOutputPath=/tmp/obj/ -v q`. On Windows hosts `--user` is omitted (Docker Desktop maps ownership).
-  - **Run container**: `docker run --name sr-<guid> --rm --network none --read-only --user 65534:65534 --memory 256m --memory-swap 256m --cpus 1 --pids-limit 128 --cap-drop ALL --security-opt no-new-privileges --log-driver none -e TZ=UTC -e DOTNET_gcServer=0 -v <out>:/out:ro <image> dotnet /out/Snippet.dll`.
+  - **Run container**: `docker run --name sr-<guid> --rm --network none --read-only --user 65534:65534 --memory 256m --memory-swap 256m --cpus 1 --pids-limit 128 --cap-drop ALL --security-opt no-new-privileges --log-driver none --tmpfs /tmp:rw,noexec,size=16m -e TZ=UTC -e DOTNET_gcServer=0 -e DOTNET_EnableDiagnostics=0 -v <out>:/out:ro <image> dotnet /out/Snippet.dll`.
   - Process started with `ArgumentList` (no shell); stdout/stderr drained concurrently into buffers capped at `OutputCapBytes` (excess discarded, `truncated = true`). The host enforces deadlines; on deadline or cancellation it runs `docker kill <name>` then `docker rm -f <name>` in `finally` (also when the client process already exited).
 
 - [ ] **Step 1: Write failing unit tests for the parser**
@@ -333,12 +351,13 @@ public void Policy(string url, bool ok) => Assert.Equal(ok, SafeLinkPolicy.IsAll
 [Fact] public void OomKill_IsSandboxError() => Assert.Equal("sandbox-error", P.ParseRun(137, "", "", false, false).Kind);
 [Fact] public void Deadline_IsTimeout() => Assert.Equal("timeout", P.ParseRun(137, "", "", true, false).Kind);
 [Fact] public void Output_IsTrimmedAndLf() => Assert.Equal("1\n2", P.ParseRun(0, "1\r\n2\r\n", "", false, false).Value);
-[Fact] public void Truncated_IsSandboxError() => Assert.Equal("sandbox-error", P.ParseRun(0, "x", "", false, true).Kind);
+[Fact] public void Truncated_IsSandboxError_EvenWithExceptionText() => Assert.Equal("sandbox-error", P.ParseRun(134, "x", "Unhandled exception. System.Exception: x", false, true).Kind);
+[Fact] public void NonZeroExitWithoutException_IsSandboxError() => Assert.Equal("sandbox-error", P.ParseRun(1, "partial", "", false, false).Kind);
 ```
 
 - [ ] **Step 2: Write Docker integration tests** (`Category=Docker`):
   - `ClosureForLoop_Prints333` → `("output","333")`.
-  - `RunContainer_HasNoNetwork`: start a run, `docker inspect sr-…` before kill shows `NetworkMode == "none"` (use a snippet that sleeps 2 s), and a snippet resolving `example.com` yields `exception`.
+  - `RunContainer_HasNoNetwork`: run a snippet that sleeps 30 s; poll `docker inspect sr-…` until `State.Running == true`, then assert `HostConfig.NetworkMode == "none"` and cancel; separately a snippet resolving `example.com` yields `exception`.
   - `InfiniteLoop_IsKilledAtRunDeadline`: `while(true){}` → `timeout`; elapsed run phase < `RunDeadline + 5 s`; `docker ps -a --filter name=sr-` is empty afterwards.
   - `IgnoredSigterm_StillKilled`: snippet registering `AppDomain.ProcessExit`/`PosixSignalRegistration` that ignores SIGTERM and loops → `timeout`, container gone.
   - `OutputFlood_IsCappedAndReported`: infinite `Console.Write('x')` → `sandbox-error` or `timeout`, host memory bounded (buffer length ≤ cap).
@@ -363,7 +382,7 @@ public void Policy(string url, bool ok) => Assert.Equal(ok, SafeLinkPolicy.IsAll
 
 **Interfaces:**
 - Consumes: `IContentReader`, `IContentValidator`, `SnippetVerifier`.
-- Produces: CLI commands, root argument optional (default `content` relative to the current directory): `validate [root]` (exit 0 ok, 1 content issues printed as `path: code: message [pointer]`, 2 usage error), `run-snippets [root]` (exit 3 when any `snippet-sandbox-error`), `new-question <stack> <topic> <slug> <type>` (template file with a fresh ULID from Cysharp `Ulid`). Argument parsing: builder's call.
+- Produces: CLI commands, root argument optional (default `content` relative to the current directory): `validate [root]` (exit 0 ok, 1 content issues printed as `path: code: message [pointer]`, 2 usage error), `run-snippets [root]` (exit 3 when any `snippet-sandbox-error`), `new-question <stack> <topic> <slug> <type>` (template file with a fresh ULID from Cysharp `Ulid`, plus the `yaml-language-server` schema comment), `generate-schemas [root]` (writes `SchemaGenerator` output to `<root>/schema`). Argument parsing: builder's call.
 
 - [ ] **Step 1:** Tests `RepositoryContent_IsValid` (reads `<repo>/content`, validates, `Assert.Empty(issues)` with issues in the message) and `RepositoryContent_CoversAllTypes`.
 - [ ] **Step 2:** Run → FAIL. **Step 3:** Write CLI and content. **Step 4:** Tests PASS; `validate` and `run-snippets` exit 0.
@@ -373,7 +392,8 @@ public void Policy(string url, bool ok) => Assert.Equal(ok, SafeLinkPolicy.IsAll
 
 **Files:**
 - Create: `src/Trainer.Application/Abstractions/IContentCacheInvalidator.cs`, `Content/*`; `src/Trainer.Infrastructure/Persistence/**`, `Content/ContentImportService.cs`, `Content/PayloadJson.cs`, `DependencyInjection.cs`; migration `InitialContent`
-- Test: `tests/Trainer.Infrastructure.Tests/ContentImportServiceTests.cs` with `PostgresFixture` (Testcontainers `postgres:17-alpine`, applies migrations with `MigrateAsync`; each test class gets its own database)
+- Create: `tests/Trainer.TestSupport/PostgresFixture.cs` — one Testcontainers `postgres:17-alpine` container per test run; migrations applied once with `MigrateAsync` into a template database `dit_template`; `Task<string> CreateDatabaseAsync()` returns a connection string for a fresh `CREATE DATABASE dit_<guid> TEMPLATE dit_template`. **Every test gets its own database.**
+- Test: `tests/Trainer.Infrastructure.Tests/ContentImportServiceTests.cs`
 
 **Interfaces:**
 - Consumes: `IContentReader`, `IContentValidator`, `IContentRenderer` (Content).
@@ -385,8 +405,8 @@ public void Policy(string url, bool ok) => Assert.Equal(ok, SafeLinkPolicy.IsAll
 - Import algorithm (all inside one transaction):
   1. Read content (outside the transaction).
   2. Begin transaction; `SELECT pg_advisory_xact_lock(<constant>)`.
-  3. Load the active import row; if its `hash` equals the new hash ⇒ rollback, `Unchanged`.
-  4. Validate (read issues + validator); also reject `slug-changed` (an existing id with a new slug and no redirect old→new) and `slug-reused` (a new id takes a slug held by a retired question). Any issue ⇒ rollback, `Rejected` (issues mapped to `ImportIssue`).
+  3. Load the active import row; if its (`hash`, `render_version`) equals (new hash, `ContentSchema.RenderVersion`) ⇒ rollback, `Unchanged`.
+  4. Validate (read issues + validator); also reject `slug-changed` (an existing id with a new slug and no redirect old→new) and `slug-reused` (a new id takes a slug held by a retired question). Both checks are skipped when the incoming hash already exists in `content_imports` (a rollback to previously accepted content). Any issue ⇒ rollback, `Rejected` (issues mapped to `ImportIssue`).
   5. Upsert stacks/topics/locales; upsert questions by id; replace locales of every question in the set (render Markdown and code here); set `retired_at = now` for ids absent from the set and clear it for ids present; replace redirects; set previous active row inactive; insert new row active.
   6. Commit; then `IContentCacheInvalidator.InvalidateAsync`.
 
@@ -394,11 +414,13 @@ public void Policy(string url, bool ok) => Assert.Equal(ok, SafeLinkPolicy.IsAll
   - `Import_ValidContent_WritesQuestionsAndLocales` — 6 questions, 12 locale rows, `verified` stored, prompt HTML has no `<script`.
   - `Import_SameContentTwice_SecondIsUnchanged` — `Unchanged`, one active row, no second row.
   - `Import_RollbackAtoBtoA_Succeeds` — final status `Imported`, active hash = A, three rows.
-  - `Import_RenderVersionChange_Reimports` — same files, hasher called with a different render version (inject the version through options) ⇒ `Imported`.
+  - `Import_RenderVersionChange_Reimports` — set the active row's `render_version` to 0 directly in the database, import the same files ⇒ `Imported`.
+  - `Import_RollbackOverSlugRename_Succeeds` — A, then B renaming a slug with a redirect, then A again ⇒ `Imported`.
   - `Import_InvalidContent_IsRejectedAndWritesNothing` — previous content and active row intact.
   - `Import_RemovedFile_RetiresQuestion`; `Import_ReaddedFile_ClearsRetired`.
   - `Import_SlugChangedWithoutRedirect_IsRejected` (`slug-changed`); `Import_NewIdReusingRetiredSlug_IsRejected` (`slug-reused`).
   - `Import_Success_InvalidatesCache` — fake invalidator called once; not for `Unchanged`/`Rejected`.
+  - `Import_MalformedFile_IsRejectedWithoutThrowing` (bad date fixture).
   - `Import_ConcurrentCalls_OneImportsOtherUnchanged` — two service instances with separate DbContexts started together via a `Barrier`; results are one `Imported` and one `Unchanged`.
 - [ ] **Step 2:** Run → FAIL. **Step 3:** Implement entities, configurations, `dotnet ef migrations add InitialContent`, service. **Step 4:** Run → PASS.
 - [ ] **Step 5:** Commit `feat(infrastructure): persist content and import it transactionally`.
@@ -414,8 +436,10 @@ public void Policy(string url, bool ok) => Assert.Equal(ok, SafeLinkPolicy.IsAll
 - Consumes: `AddTrainerInfrastructure`, `IContentImportService`, `IContentCacheInvalidator`.
 - Produces:
   - Config: `ConnectionStrings:Trainer`, `App:PublicBaseUrl`, `App:ContentRoot`, `App:ApplyMigrationsOnStartup` (Development only, see Global Constraints).
-  - `TrainerWebFactory : WebApplicationFactory<Program>`: one PostgreSQL container per factory, database migrated with `MigrateAsync`, content copied from `TestContent/web` to a per-factory temp directory (tests that mutate content use their own factory instance); `Task WaitUntilReadyAsync()` polls `/health/ready` (timeout 30 s). All web tests call it before requests.
-  - Routes: Razor component pages use `@page "/{Culture}/{Stack}/..."` without custom constraints. `CultureAndStackMiddleware` (after `UseRouting`) reads `Culture`/`Stack` route values: unsupported culture or unknown stack (`IStackQueries.ExistsAsync`) ⇒ 404 before rendering. `IStackQueries` lives in Application (`Task<bool> ExistsAsync(StackKey, CancellationToken)`, `Task<IReadOnlyList<StackKey>> ListAsync(CancellationToken)`), implemented in Infrastructure.
+  - `TrainerWebFactory : WebApplicationFactory<Program>` in `tests/Trainer.TestSupport` (shared with E2E): a fresh database from `PostgresFixture.CreateDatabaseAsync()`, content copied from `TestContent/web` to a per-factory temp directory (tests that mutate content use their own factory instance); `Task WaitUntilReadyAsync()` polls `/health/ready` (timeout 30 s). All web tests call it before requests, except the readiness tests, which use a gated fake importer and observe the pending/failed states directly.
+  - `ContentSnapshot` (immutable: `long Generation`, known stacks, known topic keys per stack) and `ContentSnapshotProvider` (singleton: `ContentSnapshot Current`, `Task RefreshAsync(CancellationToken)` loads from the database and increments the generation; called after every startup import and by `OutputCacheInvalidator`). Middleware and the cache policy read only the snapshot, so cache hits never touch the database.
+  - Routes: Razor component pages use `@page "/{Culture}/{Stack}/..."` without custom constraints. `CultureAndStackMiddleware` (after `UseRouting`) reads `Culture`/`Stack` route values: unsupported culture or unknown stack (checked against `ContentSnapshot`) ⇒ 404. `IStackQueries` lives in Application (`Task<IReadOnlyDictionary<StackKey, IReadOnlyList<TopicKey>>> GetTaxonomyAsync(CancellationToken)`), implemented in Infrastructure, used only by `ContentSnapshotProvider.RefreshAsync`.
+  - 404 handling (.NET 10): `Routes.razor` sets `<Router NotFoundPage="typeof(NotFound)">`; pages call `NavigationManager.NotFound()` for missing entities; `app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true)` renders the same page for middleware 404s and unmatched routes. The `NotFound` page is `noindex` and never cached.
   - `GET /` (`RootRedirectEndpoint`) → 302 to `/{culture}` from cookie `lang` if valid, else best `Accept-Language` match among `ru`, `en`, else `en`; `Vary: Accept-Language, Cookie`. `/{culture}` renders the home page for the default stack `dotnet` (`App:DefaultStack`).
   - Pipeline order: forwarded headers (Plan 3 config) → `SecurityHeadersMiddleware` → `UseRouting` → `CultureAndStackMiddleware` → `UseRequestLocalization` (single custom provider reading the `Culture` route value) → `UseOutputCache` → `UseAntiforgery` → `MapStaticAssets` → `MapRazorComponents<App>()` (no interactive render modes).
   - `App.razor`: no `blazor.web.js`. `<head>` starts with an inline theme script (before any stylesheet) that sets `document.documentElement.dataset.theme` from `localStorage['theme']` or `prefers-color-scheme`; the toggle button is wired by `theme-toggle.js` (deferred, plain JS).
@@ -424,11 +448,11 @@ public void Policy(string url, bool ok) => Assert.Equal(ok, SafeLinkPolicy.IsAll
   - `tokens.css`: tokens from `docs/design/mockups/` for `[data-theme=dark]` and `[data-theme=light]`, including `--on-ok`, `--warn`, `--bad`; breakpoint values 640/1024/1440 documented in a comment.
   - Language switcher: plain links to the same path and query in the other culture.
   - `ReadinessState` (singleton: `Pending`, `Ready`, `Failed`), `ContentStartupImporter : BackgroundService` creates a scope, runs `ImportAsync(App:ContentRoot)`, sets `Ready` on `Imported`/`Unchanged`, `Failed` on `Rejected`/exception (logged; previous content keeps serving). Health checks: `/health/live` always healthy; `/health/ready` healthy only in `Ready`.
-  - `OutputCacheInvalidator : IContentCacheInvalidator` → `IOutputCacheStore.EvictByTagAsync("content", ct)`; output cache services registered here (policy in Task 13).
+  - `OutputCacheInvalidator : IContentCacheInvalidator` → `ContentSnapshotProvider.RefreshAsync` (new generation) then `IOutputCacheStore.EvictByTagAsync("content", ct)`; output cache services registered here (policy in Task 13).
   - `IStringLocalizer<SharedResource>` for all UI strings.
 - [ ] **Step 1: Write failing tests**
   - `Root_WithRussianAcceptLanguage_RedirectsToRu` (302, `Location: /ru`), `Root_WithUnknownLanguage_RedirectsToEn`, `Root_CookieWinsOverAcceptLanguage`.
-  - `UnsupportedCulture_Returns404` (`/de`), `UnknownStack_Returns404` (`/ru/java`).
+  - `UnsupportedCulture_Returns404WithNotFoundBody` (`/de`), `UnknownStack_Returns404WithNotFoundBody` (`/ru/java`), `UnmatchedRoute_Returns404WithNotFoundBody`.
   - `RuHome_HasHtmlLangRu_AndRussianStrings`.
   - `Resx_RuAndEn_HaveSameKeys`.
   - `Pages_HaveCspWithThemeScriptHash` (CSP header present; hash matches the inline script in the HTML).
@@ -448,7 +472,7 @@ public void Policy(string url, bool ok) => Assert.Equal(ok, SafeLinkPolicy.IsAll
 **Interfaces:**
 - Produces:
   - Application: `record CatalogQuery(CultureKey Culture, StackKey Stack, IReadOnlyList<Level> Levels, IReadOnlyList<TopicKey> Topics, IReadOnlyList<QuestionType> Types, int Page)`; `const int CatalogQuery.PageSize = 25`; `record CatalogPage(IReadOnlyList<CatalogRow> Rows, int Total, int Page, int PageCount, IReadOnlyList<FacetCount> LevelCounts, IReadOnlyList<FacetCount> TopicCounts, IReadOnlyList<FacetCount> TypeCounts)`; `record CatalogRow(string Slug, string Title, Level Level, TopicKey Topic, string TopicTitle, QuestionType Type, IReadOnlyList<string> Tags)`; `record FacetCount(string Key, string Title, int Count)`; `interface ICatalogQueries { Task<CatalogPage> GetAsync(CatalogQuery query, CancellationToken ct); }` — non-retired questions with a locale row for the culture; facet counts apply the other dimensions' filters; order by level, then title.
-  - Web: `static class CatalogQueryParser { CatalogQuery Parse(CultureKey culture, StackKey stack, IQueryCollection query, IReadOnlySet<TopicKey> knownTopics); string ToCanonicalQueryString(CatalogQuery query); }` — case-insensitive, deduplicated, unknown values dropped, values sorted (levels and types by enum order, topics ordinal), page < 1 ⇒ 1, page > 1000 ⇒ 1000; canonical string omits empty dimensions and `page=1`.
+  - Web: `static class CatalogQueryParser { CatalogQuery Parse(CultureKey culture, StackKey stack, IQueryCollection query, IReadOnlySet<TopicKey> knownTopics); string ToCanonicalQueryString(CatalogQuery query); }` (known topics come from `ContentSnapshot`) — case-insensitive, deduplicated, unknown values dropped, values sorted (levels and types by enum order, topics ordinal), page < 1 ⇒ 1, page > 1000 ⇒ 1000; canonical string omits empty dimensions and `page=1`.
   - `interface IHomeQueries { Task<HomeStats> GetStatsAsync(CultureKey culture, StackKey stack, CancellationToken ct); }`; `record HomeStats(int QuestionCount, int TopicCount, int TypeCount, IReadOnlyList<FacetCount> Topics)`.
   - Routes: `/{Culture}` and `/{Culture}/{Stack}` → Home; `/{Culture}/about` → About (what the project is, licences, how to contribute, link to the repository once public); `/{Culture}/{Stack}/questions` → Catalog.
   - Filters are links, not forms (forms would add antiforgery tokens and cookies). Each filter is an `<a>` toggling one value in the canonical query; selected state is shown visually and with `aria-current="true"` on the link plus visually hidden text "(selected)". Search is Plan 2.
@@ -474,15 +498,16 @@ public void Policy(string url, bool ok) => Assert.Equal(ok, SafeLinkPolicy.IsAll
   - `record QuestionPageModel(QuestionId Id, string Slug, StackKey Stack, TopicKey Topic, string TopicTitle, Level Level, QuestionType Type, string Title, string PromptHtml, string? HintHtml, string? CodeHtml, string? FixedCodeHtml, IReadOnlyList<OptionView> Options, string AnswerHtml, string ExplanationHtml, IReadOnlyList<LinkView> Links, IReadOnlyList<CultureKey> AvailableCultures, bool IsRetired, DateOnly Verified, string? DotnetVersion)`; `record OptionView(string Id, string TextHtml, bool Correct, string? ExplanationHtml)`; `record LinkView(string Url, string Title, string Lang, string Kind)`.
   - `interface IQuestionQueries { Task<QuestionPageModel?> GetAsync(CultureKey culture, StackKey stack, Slug slug, CancellationToken ct); Task<Slug?> GetRedirectAsync(StackKey stack, Slug from, CancellationToken ct); }`
   - `interface ITopicQueries { Task<TopicPageModel?> GetAsync(CultureKey culture, StackKey stack, TopicKey topic, CancellationToken ct); }`; `record TopicPageModel(TopicKey Key, string Title, string Description, IReadOnlyList<FacetCount> LevelCounts, IReadOnlyList<CatalogRow> Questions)` (first 25).
-  - `QuestionPage` (`@page "/{Culture}/{Stack}/questions/{Slug}"`) receives `[CascadingParameter] HttpContext`. In `OnInitializedAsync`: invalid slug or no model ⇒ look up a redirect; found ⇒ `Response.StatusCode = 301`, `Response.Headers.Location = /{culture}/{stack}/questions/{to}`, render nothing; not found ⇒ `StatusCode = 404` and render the `NotFound` component. Works because public pages are not streamed (headers not yet sent). Same 404 approach for `TopicPage`.
+  - `QuestionPage` (`@page "/{Culture}/{Stack}/questions/{Slug}"`) receives `[CascadingParameter] HttpContext`. In `OnInitializedAsync`, **redirects are resolved first**: a redirect entry for the slug (old question missing or retired) ⇒ `Response.StatusCode = 301`, `Response.Headers.Location = /{culture}/{stack}/questions/{to}`, render nothing (valid because public pages are not streamed). Otherwise invalid slug or no model ⇒ `NavigationManager.NotFound()`. Same `NotFound()` approach for `TopicPage`.
   - Layout per `docs/design/mockups/question-screen-themes.html`: chips (level, topic, type), title, prompt, code panel, options listed without selection, `<details>` "Show answer" with correct answer, per-option explanations, explanation, fixed code (find-bug), refs with a language marker when link language ≠ page culture, verified date and .NET version. Retired ⇒ notice banner.
 - [ ] **Step 1: Write failing tests**
   - `QuestionPage_RendersAnswerInsideDetails`.
   - `QuestionPage_FindBug_ShowsFixedCode`.
   - `QuestionPage_UnknownSlug_Returns404WithNotFoundBody`.
   - `QuestionPage_RedirectEntry_Returns301ToNewSlug` (`/ru/dotnet/questions/old-closure` → `Location: /ru/dotnet/questions/closure-for-loop`).
+  - `RetiredQuestionWithRedirect_Returns301` (own factory: retire a question and add a redirect from its slug, import, expect 301).
   - `QuestionPage_MissingLocale_Returns404` (`/ru/.../en-only`).
-  - `RetiredQuestion_IsReadableNoindexAndHiddenFromCatalog` (own factory: delete `to-be-retired.yaml` from its temp content, trigger import through `IContentImportService`, then assert page 200 with notice and `noindex`, catalog lacks it).
+  - `RetiredQuestion_IsReadableAndHiddenFromCatalog` (own factory: delete `to-be-retired.yaml` from its temp content, trigger import through `IContentImportService`, then assert page 200 with the retired notice and the catalog lacks it; the `noindex` assertion is in Task 12).
   - `QuestionPage_LinkLanguageMarkerShownWhenDifferent`.
   - `TopicPage_ShowsDescriptionAndCounts`; `TopicPage_UnknownTopic_Returns404`.
 - [ ] **Step 2:** FAIL. **Step 3:** Implement. **Step 4:** PASS.
@@ -505,6 +530,7 @@ public void Policy(string url, bool ok) => Assert.Equal(ok, SafeLinkPolicy.IsAll
 - [ ] **Step 1: Write failing tests**
   - `QuestionPage_HasAbsoluteCanonicalAndHreflangPair`.
   - `Hreflang_ListsOnlyExistingCultures` (`en-only` question: only `en` + `x-default`).
+  - `RetiredQuestion_IsNoindex`, `NotFoundPage_IsNoindex`.
   - `Catalog_MultiLevelFilter_IsNoindex`, `Catalog_SingleLevel_IsIndexable`.
   - `JsonLd_IsValidJsonAndEscapesScript` (`</script>` title question: extract the JSON-LD block, `JsonDocument.Parse` succeeds, raw HTML contains no second `</script>` inside it).
   - `Sitemap_ListsPublishedQuestionsPerCulture_ExcludesRetiredAndMissingLocale`.
@@ -522,7 +548,7 @@ public void Policy(string url, bool ok) => Assert.Equal(ok, SafeLinkPolicy.IsAll
 **Interfaces:**
 - Produces:
   - `static class AuthCookieNames { const string Session = ".dit.session"; }` (Plan 2 uses it for the auth cookie).
-  - `PublicPageCachePolicy : IOutputCachePolicy`: cacheable only for GET/HEAD and 200 responses without `Set-Cookie`; bypass when the request carries `AuthCookieNames.Session`; cache key = path + `CatalogQueryParser.ToCanonicalQueryString(parsed query)` via `VaryByValue` (raw query not part of the key; for non-catalog pages the query is ignored entirely); tag `content`; duration 10 min. Store: `SizeLimit` 100 MB, `MaximumBodySize` 2 MB.
+  - `PublicPageCachePolicy : IOutputCachePolicy`, registered with `AddPolicy("public", new PublicPageCachePolicy(...))`. As a custom policy it sets everything itself in `CacheRequestAsync`: `EnableOutputCaching`, `AllowCacheLookup`, `AllowCacheStorage`, `AllowLocking` = true only for GET/HEAD requests without `AuthCookieNames.Session`; `CacheVaryByRules.QueryKeys` left empty (raw query is not part of the key); `CacheVaryByRules.VaryByValues["q"]` = `CatalogQueryParser.ToCanonicalQueryString(parsed query)` for catalog pages (empty for others); `CacheVaryByRules.VaryByValues["gen"]` = `ContentSnapshot.Generation` captured at request start, so a response rendered from old content can only land under the old generation's key; `Tags.Add("content")`; `ResponseExpirationTimeSpan` 10 min. `ServeResponseAsync` disables storage for non-200 responses and responses with `Set-Cookie`. Store: `SizeLimit` 100 MB, `MaximumBodySize` 2 MB.
   - Response compression: Brotli + Gzip, `EnableForHttps = true`. Static assets through `MapStaticAssets()`.
 - [ ] **Step 1: Write failing tests**
   - `AnonymousPublicPage_SecondRequestIsCacheHit` — second response has an `Age` header (output cache sets it on hits).
@@ -531,6 +557,8 @@ public void Policy(string url, bool ok) => Assert.Equal(ok, SafeLinkPolicy.IsAll
   - `EquivalentCatalogQueries_ShareOneCacheEntry` — `?level=middle`, `?level=MIDDLE&level=middle&utm_source=x`: the second is a hit.
   - `Import_EvictsCachedPages` (own factory: edit a title in temp content, import, page shows the new title without `Age`).
   - `NotFound_IsNotCached`.
+  - `CacheHit_ExecutesNoSql` (an EF Core command interceptor counter registered in the test factory stays unchanged on a hit).
+  - `InFlightRenderDuringImport_DoesNotRecacheStaleContent`: a test-only query decorator gates the question query; start a request (captures generation N), import changed content (generation N+1), release the gate; the next request returns the new title.
 - [ ] **Step 2:** FAIL. **Step 3:** Implement. **Step 4:** PASS.
 - [ ] **Step 5:** Commit `feat(web): cache public pages for anonymous users with normalised keys`.
 
@@ -541,10 +569,10 @@ public void Policy(string url, bool ok) => Assert.Equal(ok, SafeLinkPolicy.IsAll
 - Modify: `src/Trainer.Web/wwwroot/css/site.css` (fixes found by the tests), `.github/workflows/ci.yml` (job `e2e`: install Playwright Chromium, run E2E tests, upload `TestResults/screenshots/**` as an artifact)
 
 **Interfaces:**
-- Consumes: the running app. `AppHostFixture` starts the app on a real port with `WebApplicationFactory<Program>.UseKestrel()` (available in .NET 10); if it is not available in the installed version, start the built `Trainer.Web` with `dotnet <dll>` and test configuration. Uses `TestContent/web` and a Testcontainers database.
+- Consumes: the running app. `AppHostFixture` uses `TrainerWebFactory` from `Trainer.TestSupport` with `UseKestrel()` and `StartServer()` (.NET 10) on a free port; content from `TestContent/web`.
 - Produces: screenshots `TestResults/screenshots/{page}-{width}-{theme}.png`.
 
-Matrix: pages (home, catalog `?level=middle`, topic page, question page with the long-line seed question, 404) × widths (375, 768, 1280, 1920) in the dark theme; light theme at 375 and 1280.
+Matrix: pages (home, about, catalog `?level=middle`, topic page, question page with the long-line seed question, 404) × widths (375, 768, 1280, 1920) in the dark theme; light theme at 375 and 1280.
 
 - [ ] **Step 1: Write failing tests**
   - `NoHorizontalOverflow` (matrix): `document.documentElement.scrollWidth <= window.innerWidth`; plus 320 px for home and question page.
@@ -575,4 +603,4 @@ Matrix: pages (home, catalog `?level=middle`, topic page, question page with the
 ## Self-review notes
 
 - Coverage for Plan 1: 5.1 (Task 2); 5.2 schema (Tasks 3, 5); 6 (Task 7); 7.1-7.5 (Tasks 3-8; scheduled link checker → Plan 3 per Roadmap); 8.1 (Task 1; Contracts/Web.Client → Plan 2); 8.2 public half (Tasks 9-11); 8.3 (Tasks 9-10); 8.4 (Tasks 12-13); 8.5 (Task 9); 8.6 content tables (Task 8); 9/9.1 (Tasks 9-14); 10 architecture/content guides (Task 15; deployment guide → Plan 3).
-- Interface names checked across tasks: `ContentIssue` (Content) vs `ImportIssue` (Application); `CatalogQueryParser` lives in Web and is used by Tasks 10, 12, 13; `IStackQueries` defined in Task 9; `OutputCacheInvalidator` defined in Task 9, policy in Task 13; `AuthCookieNames` defined in Task 13.
+- Interface names checked across tasks: `ContentIssue` (Content) vs `ImportIssue` (Application); `CatalogQueryParser` lives in Web and is used by Tasks 10, 12, 13; `IStackQueries`, `ContentSnapshotProvider` and `TrainerWebFactory` defined in Task 9 (`PostgresFixture` in Task 8); `OutputCacheInvalidator` defined in Task 9, policy in Task 13; `AuthCookieNames` defined in Task 13.

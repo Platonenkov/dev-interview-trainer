@@ -1,0 +1,190 @@
+@page "/{Culture}/{Stack}/questions/{Slug}"
+@using Microsoft.AspNetCore.OutputCaching
+@attribute [OutputCache(PolicyName = "public")]
+@using Trainer.Application.Questions
+@using Trainer.Domain.Keys
+@using Trainer.Domain.Questions
+@using Trainer.Web.Seo
+@inject IStringLocalizer<SharedResource> L
+@inject IQuestionQueries Questions
+@inject NavigationManager Navigation
+
+@if (_model is not null)
+{
+    <SeoHead Title="@($"{_model.Title} · {L["Site.Name"]}")"
+             Description="@Description()"
+             CanonicalPathAndQuery="@PathFor(Culture)"
+             AvailableCultures="_model.AvailableCultures"
+             PathForCulture="c => PathFor(c.Value)"
+             NoIndex="@_model.IsRetired"
+             OgType="article" />
+    <BreadcrumbJsonLd Items="Breadcrumbs()" />
+    <article class="question">
+        @if (_model.IsRetired)
+        {
+            <p class="notice" role="note">@L["Question.Retired"]</p>
+        }
+        <div class="chips" role="group" aria-label="@L["Question.Meta.Label"]">
+            <LevelChip Level="_model.Level" />
+            @if (_model.TopicIsRetired)
+            {
+                <span class="chip">@_model.TopicTitle</span>
+            }
+            else
+            {
+                <a class="chip" href="/@Culture/@Stack/topics/@_model.Topic.Value">@_model.TopicTitle</a>
+            }
+            <span class="chip">@L["Type." + QuestionTypeKeys.ToKey(_model.Type)]</span>
+        </div>
+        <h1 class="question__title">@_model.Title</h1>
+        <div class="rich">@((MarkupString)_model.PromptHtml)</div>
+        @if (_model.HintHtml is not null)
+        {
+            <details class="hint">
+                <summary>@L["Question.Hint"]</summary>
+                <div class="rich">@((MarkupString)_model.HintHtml)</div>
+            </details>
+        }
+        @if (_model.CodeHtml is not null)
+        {
+            <div class="editor">@((MarkupString)_model.CodeHtml)</div>
+        }
+        @if (_model.Options.Count > 0)
+        {
+            <ul class="opts" aria-label="@L["Question.Options"]">
+                @foreach (OptionView option in _model.Options)
+                {
+                    <li class="opt"><div class="rich">@((MarkupString)option.TextHtml)</div></li>
+                }
+            </ul>
+        }
+        <details class="answer">
+            <summary>@L["Question.ShowAnswer"]</summary>
+            <div class="term">
+                <p class="term__cmd"><span class="term__prompt" aria-hidden="true">$</span> @L["Question.Answer"]</p>
+                <div class="rich">@((MarkupString)_model.AnswerHtml)</div>
+                @if (_model.Options.Count > 0)
+                {
+                    <ul class="opts opts--result">
+                        @foreach (OptionView option in _model.Options)
+                        {
+                            <li class="opt @(option.Correct ? "opt--good" : "opt--bad")">
+                                <strong class="opt__verdict">@(option.Correct ? "✓" : "✗") <span class="visually-hidden">@L[option.Correct ? "Question.Correct" : "Question.Incorrect"]</span></strong>
+                                <div class="rich">@((MarkupString)option.TextHtml)</div>
+                                @if (option.ExplanationHtml is not null)
+                                {
+                                    <div class="rich opt__why">@((MarkupString)option.ExplanationHtml)</div>
+                                }
+                            </li>
+                        }
+                    </ul>
+                }
+                <p class="term__cmd"><span class="term__prompt" aria-hidden="true">$</span> @L["Question.Explanation"]</p>
+                <div class="rich">@((MarkupString)_model.ExplanationHtml)</div>
+                @if (_model.FixedCodeHtml is not null)
+                {
+                    <p class="term__cmd"><span class="term__prompt" aria-hidden="true">$</span> @L["Question.FixedCode"]</p>
+                    <div class="editor editor--fixed">@((MarkupString)_model.FixedCodeHtml)</div>
+                }
+                @if (_model.Links.Count > 0)
+                {
+                    <p class="term__cmd"><span class="term__prompt" aria-hidden="true">$</span> @L["Question.Refs"]</p>
+                    <ul class="refs">
+                        @foreach (LinkView link in _model.Links)
+                        {
+                            <li>
+                                <a href="@link.Url" rel="nofollow noopener noreferrer">@link.Title</a>
+                                @if (!string.Equals(link.Lang, Culture, StringComparison.Ordinal))
+                                {
+                                    <span class="ref__lang">[@L["Question.LinkLang", link.Lang]]</span>
+                                }
+                            </li>
+                        }
+                    </ul>
+                }
+            </div>
+        </details>
+        <p class="question__meta">
+            <time datetime="@_model.Verified.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)">@L["Question.Verified", _model.Verified.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)]</time>
+            @if (_model.DotnetVersion is not null)
+            {
+                <span> · @L["Question.DotnetVersion", _model.DotnetVersion]</span>
+            }
+        </p>
+        @if (!_model.TopicIsRetired)
+        {
+            <p><a href="/@Culture/@Stack/topics/@_model.Topic.Value">← @L["Question.BackToTopic"]</a></p>
+        }
+    </article>
+}
+
+@code {
+    [Parameter]
+    public string? Culture { get; set; }
+
+    [Parameter]
+    public string? Stack { get; set; }
+
+    [Parameter]
+    public string? Slug { get; set; }
+
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    private QuestionPageModel? _model;
+
+    private string PathFor(string? culture) => $"/{culture}/{Stack}/questions/{_model!.Slug}";
+
+    private string Description()
+    {
+        string snippet = PlainText.Snippet(_model!.PromptHtml);
+        return snippet.Length > 0 ? snippet : _model.Title;
+    }
+
+    // The topic crumb is left out when its page is gone, so neither the markup nor the JSON-LD points to a 404.
+    private BreadcrumbItem[] Breadcrumbs()
+    {
+        List<BreadcrumbItem> items =
+        [
+            new(L["Breadcrumb.Home"], $"/{Culture}"),
+            new(L["Catalog.Heading"], $"/{Culture}/{Stack}/questions"),
+        ];
+        if (!_model!.TopicIsRetired)
+        {
+            items.Add(new(_model.TopicTitle, $"/{Culture}/{Stack}/topics/{_model.Topic.Value}"));
+        }
+
+        items.Add(new(_model.Title, PathFor(Culture)));
+        return [.. items];
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        // The routing middleware has already rejected an unknown culture or stack.
+        if (HttpContext is null
+            || !CultureKey.TryCreate(Culture, out CultureKey culture)
+            || !StackKey.TryCreate(Stack, out StackKey stack)
+            || !Domain.Keys.Slug.TryCreate(Slug, out Slug slug))
+        {
+            Navigation.NotFound();
+            return;
+        }
+
+        CancellationToken ct = HttpContext.RequestAborted;
+
+        // Redirects win over everything: a retired question keeps its page, but once it points elsewhere it is a 301.
+        Slug? target = await Questions.GetRedirectAsync(stack, slug, ct);
+        if (target is { } to)
+        {
+            HttpContext.Response.StatusCode = StatusCodes.Status301MovedPermanently;
+            HttpContext.Response.Headers.Location = $"/{culture.Value}/{stack.Value}/questions/{to.Value}";
+            return;
+        }
+
+        _model = await Questions.GetAsync(culture, stack, slug, ct);
+        if (_model is null)
+        {
+            Navigation.NotFound();
+        }
+    }
+}

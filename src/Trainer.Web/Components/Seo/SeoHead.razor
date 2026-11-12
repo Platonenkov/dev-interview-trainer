@@ -1,0 +1,88 @@
+@using Trainer.Domain.Keys
+@using Trainer.Web.Seo
+@inject SiteUrls Urls
+@inject PageLinks Links
+@inject IStringLocalizer<SharedResource> L
+
+<PageTitle>@Title</PageTitle>
+<HeadContent>
+    <meta name="description" content="@Description" />
+    <link rel="canonical" href="@Canonical" />
+    @foreach (CultureKey culture in AvailableCultures)
+    {
+        <link rel="alternate" hreflang="@culture.Value" href="@Absolute(PathForCulture(culture))" />
+    }
+    @if (DefaultCulture() is { } defaultCulture)
+    {
+        <link rel="alternate" hreflang="x-default" href="@Absolute(PathForCulture(defaultCulture))" />
+    }
+    <meta property="og:type" content="@OgType" />
+    <meta property="og:title" content="@Title" />
+    <meta property="og:description" content="@Description" />
+    <meta property="og:url" content="@Canonical" />
+    <meta property="og:site_name" content="@L["Site.Name"]" />
+    <meta property="og:locale" content="@OgLocale()" />
+    @if (NoIndex)
+    {
+        <meta name="robots" content="noindex" />
+    }
+</HeadContent>
+
+@code {
+    [Parameter, EditorRequired]
+    public string Title { get; set; } = "";
+
+    [Parameter, EditorRequired]
+    public string Description { get; set; } = "";
+
+    /// <summary>Normalised site-relative URL of this page, including the canonical query string if any.</summary>
+    [Parameter, EditorRequired]
+    public string CanonicalPathAndQuery { get; set; } = "";
+
+    /// <summary>The cultures this page exists in; one hreflang link is written for each.</summary>
+    [Parameter, EditorRequired]
+    public IReadOnlyList<CultureKey> AvailableCultures { get; set; } = [];
+
+    [Parameter, EditorRequired]
+    public Func<CultureKey, string> PathForCulture { get; set; } = null!;
+
+    [Parameter]
+    public bool NoIndex { get; set; }
+
+    [Parameter]
+    public string OgType { get; set; } = "website";
+
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    protected override void OnParametersSet() => Links.Set(AvailableCultures, PathForCulture);
+
+    private string Canonical => Absolute(CanonicalPathAndQuery);
+
+    private string Absolute(string pathAndQuery) => Urls.Absolute(HttpContext?.Request, pathAndQuery);
+
+    // x-default is the English page when there is one; a page that exists in a single culture is its own default.
+    private CultureKey? DefaultCulture()
+    {
+        if (AvailableCultures.Count == 0)
+        {
+            return null;
+        }
+
+        foreach (CultureKey culture in AvailableCultures)
+        {
+            if (culture == CultureKey.Default)
+            {
+                return culture;
+            }
+        }
+
+        return AvailableCultures[0];
+    }
+
+    private static string OgLocale() => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName switch
+    {
+        "ru" => "ru_RU",
+        _ => "en_US",
+    };
+}

@@ -1,0 +1,169 @@
+@page "/{Culture}"
+@page "/{Culture}/{Stack}"
+@using Microsoft.AspNetCore.OutputCaching
+@attribute [OutputCache(PolicyName = "public")]
+@using Trainer.Application.Catalog
+@using Trainer.Application.Home
+@using Trainer.Domain.Keys
+@using Trainer.Domain.Levels
+@using Trainer.Web.Catalog
+@using Microsoft.Extensions.Options
+@using Trainer.Web.ContentState
+@using Trainer.Web.Seo
+@using Trainer.Web.Startup
+@inject IStringLocalizer<SharedResource> L
+@inject IHomeQueries HomeQueries
+@inject ContentSnapshotProvider Snapshots
+@inject IOptions<AppOptions> Options
+@inject ILogger<Home> Logger
+
+@if (_culture.Value is not null)
+{
+    <SeoHead Title="@L["Home.Title"]"
+             Description="@L["Home.Tagline"]"
+             CanonicalPathAndQuery="@HomePath(_culture)"
+             AvailableCultures="CultureKey.Supported"
+             PathForCulture="HomePath" />
+    <BreadcrumbJsonLd Items="Breadcrumbs()" />
+}
+
+<div class="page-stack">
+    <section class="hero">
+        <div>
+            <h1>@L["Home.Heading.Lead"] <em>@L["Home.Heading.Accent"]</em></h1>
+            <p class="hero__tagline">@L["Home.Tagline"]</p>
+            @if (_catalogUrl is not null)
+            {
+                <div class="hero__actions">
+                    <a class="btn btn--primary" href="@_catalogUrl">@L["Home.Cta.Browse"]</a>
+                </div>
+            }
+        </div>
+        <div class="shell" aria-hidden="true">
+            <div class="shell__bar"><i></i><i></i><i></i></div>
+<pre><span class="shell__prompt">$</span> trainer start --level middle --topic async
+<span class="shell__comment">@L["Home.Sample.Comment"]</span>
+
+@L["Home.Sample.Question"]
+  @L["Home.Sample.OptionA"]
+  @L["Home.Sample.OptionB"]
+  @L["Home.Sample.OptionC"]
+<span class="shell__prompt">&gt;</span> b
+<span class="shell__prompt">@L["Home.Sample.Correct"]</span></pre>
+        </div>
+    </section>
+
+    @if (_stats is not null)
+    {
+        <dl class="stats" aria-label="@L["Home.Stats.Label"]">
+            <div class="stat"><dt class="stat__label">@L["Home.Stats.Questions"]</dt><dd class="stat__value">@_stats.QuestionCount</dd></div>
+            <div class="stat"><dt class="stat__label">@L["Home.Stats.Topics"]</dt><dd class="stat__value">@_stats.TopicCount</dd></div>
+            <div class="stat"><dt class="stat__label">@L["Home.Stats.Types"]</dt><dd class="stat__value">@_stats.TypeCount</dd></div>
+            <div class="stat"><dt class="stat__label">@L["Home.Stats.Languages"]</dt><dd class="stat__value">@L["Home.Stats.LanguagesValue"]</dd></div>
+        </dl>
+
+        <section>
+            <h2 class="section-title">@L["Home.Section.Levels"]</h2>
+            <ul class="card-grid card-grid--levels">
+                @foreach (Level level in LevelKeys.All)
+                {
+                    string key = LevelKeys.ToKey(level);
+                    <li>
+                        <a class="level-card level-@key" href="@LevelUrl(level)">
+                            <b>@key</b>
+                            <p>@L["Home.Level." + key]</p>
+                        </a>
+                    </li>
+                }
+            </ul>
+        </section>
+
+        @if (_stats.Topics.Count > 0)
+        {
+            <section>
+                <h2 class="section-title">@L["Home.Section.Topics"]</h2>
+                <ul class="card-grid card-grid--topics">
+                    @foreach (FacetCount topic in _stats.Topics)
+                    {
+                        <li><a class="topic-card" href="@TopicUrl(topic)">@topic.Title <span>@topic.Count</span></a></li>
+                    }
+                </ul>
+            </section>
+        }
+    }
+
+    <section>
+        <h2 class="section-title">@L["Home.Section.Modes"]</h2>
+        <ul class="card-grid card-grid--modes">
+            <li><div class="mode-card"><div class="mode-card__cmd">$ trainer practice</div><h3>@L["Home.Mode.Practice.Title"]</h3><p>@L["Home.Mode.Practice.Text"]</p><span class="mode-card__soon">@L["Home.Mode.Soon"]</span></div></li>
+            <li><div class="mode-card"><div class="mode-card__cmd">$ trainer mock</div><h3>@L["Home.Mode.Mock.Title"]</h3><p>@L["Home.Mode.Mock.Text"]</p><span class="mode-card__soon">@L["Home.Mode.Soon"]</span></div></li>
+            <li><div class="mode-card"><div class="mode-card__cmd">$ trainer review</div><h3>@L["Home.Mode.Review.Title"]</h3><p>@L["Home.Mode.Review.Text"]</p><span class="mode-card__soon">@L["Home.Mode.Soon"]</span></div></li>
+        </ul>
+    </section>
+</div>
+
+@code {
+    [Parameter]
+    public string? Culture { get; set; }
+
+    [Parameter]
+    public string? Stack { get; set; }
+
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    private HomeStats? _stats;
+    private string? _catalogUrl;
+    private CultureKey _culture;
+    private StackKey _stack;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!CultureKey.TryCreate(Culture, out _culture))
+        {
+            return;
+        }
+
+        string? stack = Stack ?? ResolveDefaultStack();
+        if (!StackKey.TryCreate(stack, out _stack))
+        {
+            return;
+        }
+
+        _catalogUrl = CatalogQueryParser.ToUrl(Query());
+        _stats = await HomeQueries.GetStatsAsync(_culture, _stack, HttpContext?.RequestAborted ?? CancellationToken.None);
+    }
+
+    // The bare culture URL shows the configured default stack; the first known stack only covers a misconfiguration.
+    private string? ResolveDefaultStack()
+    {
+        ContentSnapshot snapshot = Snapshots.Current;
+        string configured = Options.Value.DefaultStack;
+        if (snapshot.HasStack(configured))
+        {
+            return configured;
+        }
+
+        string? fallback = snapshot.Stacks.Order(StringComparer.Ordinal).FirstOrDefault();
+        if (fallback is not null)
+        {
+            Logger.LogWarning("App:DefaultStack '{Configured}' is not a known stack; the home page falls back to '{Fallback}'.", configured, fallback);
+        }
+
+        return fallback;
+    }
+
+    // The default stack home and the bare culture home are one page; the bare URL is the canonical one.
+    private string HomePath(CultureKey culture) =>
+        Stack is null || string.Equals(Stack, Options.Value.DefaultStack, StringComparison.Ordinal)
+            ? $"/{culture.Value}"
+            : $"/{culture.Value}/{Stack}";
+
+    private BreadcrumbItem[] Breadcrumbs() => [new(L["Breadcrumb.Home"], HomePath(_culture))];
+
+    private CatalogQuery Query() => new(_culture, _stack, [], [], [], 1);
+
+    private string LevelUrl(Level level) => CatalogQueryParser.ToUrl(Query() with { Levels = [level] });
+
+    private string TopicUrl(FacetCount topic) => CatalogQueryParser.ToUrl(Query() with { Topics = [new TopicKey(topic.Key)] });
+}

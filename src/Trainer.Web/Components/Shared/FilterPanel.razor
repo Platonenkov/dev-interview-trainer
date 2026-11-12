@@ -1,0 +1,92 @@
+@using Trainer.Application.Catalog
+@using Trainer.Domain.Keys
+@using Trainer.Domain.Levels
+@using Trainer.Domain.Questions
+@using Trainer.Web.Catalog
+@inject IStringLocalizer<SharedResource> L
+<details class="filters">
+    <summary class="filters__toggle">@L["Catalog.Filters.Label"]</summary>
+    <nav class="filters__panel" aria-label="@L["Catalog.Filters.Label"]">
+        @Group("Catalog.Filter.Level", LevelItems())
+        @Group("Catalog.Filter.Topic", TopicItems())
+        @Group("Catalog.Filter.Type", TypeItems())
+        @if (HasFilters)
+        {
+            <a class="filters__reset" href="@CatalogQueryParser.ToUrl(Query with { Levels = [], Topics = [], Types = [], Page = 1 })">@L["Catalog.Filter.Reset"]</a>
+        }
+    </nav>
+</details>
+
+@code {
+    [Parameter, EditorRequired]
+    public CatalogQuery Query { get; set; } = null!;
+
+    [Parameter, EditorRequired]
+    public CatalogPage Page { get; set; } = null!;
+
+    private sealed record FilterItem(string Label, int Count, bool Selected, string Href);
+
+    private bool HasFilters => Query.Levels.Count + Query.Topics.Count + Query.Types.Count > 0;
+
+    private IEnumerable<FilterItem> LevelItems()
+    {
+        foreach (FacetCount facet in Page.LevelCounts)
+        {
+            LevelKeys.TryParse(facet.Key, out Level level);
+            yield return new FilterItem(
+                L["Level." + facet.Key].Value,
+                facet.Count,
+                Query.Levels.Contains(level),
+                CatalogQueryParser.ToUrl(Query with { Levels = Flip(Query.Levels, level), Page = 1 }));
+        }
+    }
+
+    private IEnumerable<FilterItem> TopicItems()
+    {
+        foreach (FacetCount facet in Page.TopicCounts)
+        {
+            TopicKey topic = new(facet.Key);
+            yield return new FilterItem(
+                facet.Title,
+                facet.Count,
+                Query.Topics.Contains(topic),
+                CatalogQueryParser.ToUrl(Query with { Topics = Flip(Query.Topics, topic), Page = 1 }));
+        }
+    }
+
+    private IEnumerable<FilterItem> TypeItems()
+    {
+        foreach (FacetCount facet in Page.TypeCounts)
+        {
+            QuestionTypeKeys.TryParse(facet.Key, out QuestionType type);
+            yield return new FilterItem(
+                L["Type." + facet.Key].Value,
+                facet.Count,
+                Query.Types.Contains(type),
+                CatalogQueryParser.ToUrl(Query with { Types = Flip(Query.Types, type), Page = 1 }));
+        }
+    }
+
+    private static List<T> Flip<T>(IReadOnlyList<T> current, T value) =>
+        current.Contains(value) ? [.. current.Where(v => !EqualityComparer<T>.Default.Equals(v, value))] : [.. current, value];
+
+    private RenderFragment Group(string headingKey, IEnumerable<FilterItem> items) =>
+        @<section class="filters__group">
+            <h2 class="filters__heading">@L[headingKey]</h2>
+            <ul>
+                @foreach (FilterItem item in items)
+                {
+                    <li>
+                        <a class="filters__item" href="@item.Href" aria-current="@(item.Selected ? "true" : null)">
+                            <span class="filters__box" aria-hidden="true"></span>
+                            <span>@item.Label@if (item.Selected)
+                            {
+                                <span class="visually-hidden"> @L["Catalog.Filter.Selected"]</span>
+                            }</span>
+                            <span class="filters__count">@item.Count</span>
+                        </a>
+                    </li>
+                }
+            </ul>
+        </section>;
+}

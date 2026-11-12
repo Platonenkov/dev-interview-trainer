@@ -1,0 +1,90 @@
+@page "/{Culture}/{Stack}/questions"
+@using Microsoft.AspNetCore.OutputCaching
+@attribute [OutputCache(PolicyName = "public-catalog")]
+@using Trainer.Application.Catalog
+@using Trainer.Domain.Keys
+@using Trainer.Web.Catalog
+@using Trainer.Web.ContentState
+@using Trainer.Web.Seo
+@inject IStringLocalizer<SharedResource> L
+@inject ICatalogQueries Catalogs
+@inject ContentSnapshotProvider Snapshots
+
+@if (_query is not null && _page is not null)
+{
+    <SeoHead Title="@PageTitleText()"
+             Description="@L["Catalog.Description"]"
+             CanonicalPathAndQuery="@CatalogQueryParser.ToUrl(_query with { Page = _page.Page })"
+             AvailableCultures="CultureKey.Supported"
+             PathForCulture="c => CatalogQueryParser.ToUrl(_query with { Culture = c, Page = _page.Page })"
+             NoIndex="@IsNoIndex()" />
+    <BreadcrumbJsonLd Items="Breadcrumbs()" />
+    <div class="catalog">
+        <FilterPanel Query="_query" Page="_page" />
+        <section>
+            <h1 class="catalog__heading">@L["Catalog.Heading"]</h1>
+            <p class="catalog__found">@L["Catalog.Found", _page.Total]</p>
+            @if (_page.Rows.Count == 0)
+            {
+                <p>@L["Catalog.Empty"]</p>
+            }
+            else
+            {
+                <ol class="rows">
+                    @foreach (CatalogRow row in _page.Rows)
+                    {
+                        <li><QuestionRow Row="row" Culture="@_query.Culture.Value" Stack="@_query.Stack.Value" /></li>
+                    }
+                </ol>
+            }
+            <Pager Query="_query" Page="_page" />
+        </section>
+    </div>
+}
+
+@code {
+    [Parameter]
+    public string? Culture { get; set; }
+
+    [Parameter]
+    public string? Stack { get; set; }
+
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    private CatalogQuery? _query;
+    private CatalogPage? _page;
+
+    // Combinations beyond one level and one topic, any type filter and every page after the first would only
+    // duplicate or dilute the indexable single-selection pages.
+    private bool IsNoIndex() => _query!.Levels.Count > 1 || _query.Topics.Count > 1 || _query.Types.Count > 0 || _page!.Page > 1;
+
+    private string PageTitleText()
+    {
+        string title = $"{L["Catalog.Heading"]} · {L["Site.Name"]}";
+        return _page!.Page > 1 ? L["Catalog.TitlePage", title, _page.Page] : title;
+    }
+
+    private BreadcrumbItem[] Breadcrumbs()
+    {
+        string home = $"/{_query!.Culture.Value}";
+        return
+        [
+            new(L["Breadcrumb.Home"], home),
+            new(L["Catalog.Heading"], CatalogQueryParser.ToUrl(new CatalogQuery(_query.Culture, _query.Stack, [], [], [], 1))),
+        ];
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        // The routing middleware has already answered 404 for an unknown culture or stack, so both parse here.
+        if (HttpContext is null || !CultureKey.TryCreate(Culture, out CultureKey culture) || !StackKey.TryCreate(Stack, out StackKey stack))
+        {
+            return;
+        }
+
+        HashSet<TopicKey> knownTopics = [.. Snapshots.Current.TopicsOf(stack.Value).Select(t => new TopicKey(t))];
+        _query = CatalogQueryParser.Parse(culture, stack, HttpContext.Request.Query, knownTopics);
+        _page = await Catalogs.GetAsync(_query, HttpContext.RequestAborted);
+    }
+}

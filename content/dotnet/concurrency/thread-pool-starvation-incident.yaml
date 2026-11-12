@@ -1,0 +1,94 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M76SZNT2NQNV70Q725PHZ9AP
+slug: thread-pool-starvation-incident
+stack: dotnet
+topic: concurrency
+level: senior
+type: situation
+grading: self
+tags: [thread-pool, starvation, incident, diagnostics]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/debug-threadpool-starvation
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-counters
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-stack
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Продакшен: после релиза ASP.NET Core API отвечает за десятки секунд при свободном процессоре"
+    prompt: |
+      Вечером после релиза ASP.NET Core API начал отвечать за 20-30 секунд, а часть запросов завершается по таймауту.
+      Загрузка процессора около 5%, база данных и внешние сервисы отвечают быстро, память в норме.
+      Перезапуск помогает на 10-15 минут, потом всё повторяется. Что вы будете делать и в каком порядке?
+    hint: Что общего у «всё медленно» и «процессор простаивает»? Что должно было измениться в релизе?
+    answer: |
+      1. **Снизить ущерб.** Откатить релиз или временно добавить инстансы и вывести из ротации «зависшие».
+         Перезапуск лишь выигрывает время, причина остаётся.
+      2. **Проверить гипотезу голодания пула потоков.** `dotnet-counters monitor System.Runtime`: число потоков
+         пула (`threadpool-thread-count`, в .NET 9 и новее `dotnet.thread_pool.thread.count`) медленно растёт, а процессор
+         при этом свободен. Часто растёт и длина очереди (`threadpool-queue-length`, в .NET 9 и новее `dotnet.thread_pool.queue.length`),
+         но не всегда.
+      3. **Найти, где потоки заняты.** `dotnet-stack report` или дамп: десятки потоков стоят в `Task.Wait`,
+         `GetAwaiter().GetResult()`, `.Result`, `Monitor.Enter` или синхронном вводе-выводе.
+      4. **Сопоставить с изменениями релиза** и найти новый блокирующий вызов на пути запроса: синхронный клиент,
+         `.Result` в фильтре или middleware, `lock` вокруг ввода-вывода, `Task.Run` вокруг блокирующего кода.
+      5. **Исправить причину.** Сделать путь асинхронным целиком (`async`/`await`), ограничить параллелизм
+         (`SemaphoreSlim`, ограниченный `Channel`, лимиты на исходящие вызовы), поставить таймауты.
+         `ThreadPool.SetMinThreads` допустим как временная мера, но не как исправление.
+      6. **Закрепить результат.** Нагрузочный тест, воспроизводящий проблему, алерты на длину очереди пула и число потоков,
+         анализатор на блокирующие вызовы в CI, разбор инцидента.
+    explanation: |
+      Пул потоков добавляет новые потоки сверх минимума медленно, порядка одного-двух в секунду. Когда запросы
+      блокируют потоки на ожидании, а новые запросы продолжают приходить, работа ждёт свободного потока, хотя процессор
+      простаивает. Поэтому «низкий процессор и высокая задержка» - классический признак голодания пула, а не
+      нехватки вычислительных ресурсов, и масштабирование по CPU здесь не поможет.
+
+      Хороший ответ различает три уровня: быстро снять симптом, доказать причину измерениями (счётчики и стеки, а не догадки)
+      и убрать причину, а не маскировать её настройкой пула. Увеличение `SetMinThreads` только сдвигает порог отказа.
+    linkTitles:
+      - Диагностика голодания пула потоков
+      - Инструмент dotnet-counters
+      - Инструмент dotnet-stack
+  en:
+    title: "Production: after a release an ASP.NET Core API answers in tens of seconds while the CPU idles"
+    prompt: |
+      In the evening after a release, an ASP.NET Core API started to answer in 20-30 seconds, and some requests time out.
+      CPU usage is about 5%, the database and external services respond quickly, memory is normal.
+      A restart helps for 10-15 minutes and then it all repeats. What do you do, and in what order?
+    hint: What do "everything is slow" and "the CPU is idle" have in common? What must have changed in the release?
+    answer: |
+      1. **Stop the damage.** Roll the release back, or temporarily add instances and take the stuck ones out of rotation.
+         A restart only buys time; the cause remains.
+      2. **Test the thread pool starvation hypothesis.** `dotnet-counters monitor System.Runtime`: the thread pool
+         thread count (`threadpool-thread-count`, `dotnet.thread_pool.thread.count` in .NET 9 and later) keeps slowly growing while
+         the CPU is free. The queue length (`threadpool-queue-length`, `dotnet.thread_pool.queue.length` in .NET 9 and later)
+         often grows too, but not always.
+      3. **Find where the threads are stuck.** `dotnet-stack report` or a dump: dozens of threads sit in `Task.Wait`,
+         `GetAwaiter().GetResult()`, `.Result`, `Monitor.Enter` or synchronous IO.
+      4. **Compare with the release changes** and look for a new blocking call on the request path: a synchronous client,
+         `.Result` in a filter or middleware, a `lock` around IO, `Task.Run` around blocking code.
+      5. **Fix the cause.** Make the path asynchronous end to end (`async`/`await`), limit concurrency
+         (`SemaphoreSlim`, a bounded `Channel`, limits on outgoing calls), set timeouts.
+         `ThreadPool.SetMinThreads` is acceptable as a temporary measure, not as the fix.
+      6. **Make it stick.** A load test that reproduces the problem, alerts on pool queue length and thread count,
+         an analyzer for blocking calls in CI, a post-incident review.
+    explanation: |
+      The thread pool adds new threads above its minimum slowly, on the order of one or two per second. When requests
+      block threads while waiting and new requests keep arriving, work waits for a free thread even though the CPU idles. That is why "low CPU and high latency" is the classic sign of
+      thread pool starvation rather than a lack of compute, and scaling on CPU will not help here.
+
+      A good answer separates three levels: relieve the symptom quickly, prove the cause with measurements (counters and
+      stacks, not guesses), and remove the cause instead of masking it with pool settings. Raising `SetMinThreads` only
+      moves the failure threshold.
+    linkTitles:
+      - Debug thread pool starvation
+      - dotnet-counters tool
+      - dotnet-stack tool
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-12
+  dotnetVersion: "10"

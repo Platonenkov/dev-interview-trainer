@@ -1,0 +1,102 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  # Pushes to main get a group of their own, so none is cancelled and none is dropped from the pending slot.
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          global-json-file: global.json
+      - name: Restore
+        run: dotnet restore
+      - name: Verify formatting
+        run: dotnet format --verify-no-changes --no-restore
+      - name: Build
+        run: dotnet build -warnaserror --no-restore
+      - name: Unit and integration tests
+        run: dotnet test --no-build --filter-not-trait "Category=E2E" --filter-not-trait "Category=Docker" --ignore-exit-code 8
+
+  # Snippets come from pull requests and are untrusted code: this job has no secrets and read-only permissions,
+  # and the code runs only inside the throw-away sandbox containers.
+  content:
+    needs: build-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      # Must match SandboxOptions.Image so the pull below is the one the runner would otherwise do inside its build deadline.
+      SANDBOX_IMAGE: mcr.microsoft.com/dotnet/sdk@sha256:fe0fd4e93bd2fbb47c883b7a6369e5c8d3db8bf01cdc5981f6ee35fbdf3ff4fb
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          global-json-file: global.json
+      - name: Restore
+        run: dotnet restore
+      - name: Build
+        run: dotnet build -warnaserror --no-restore
+      - name: Validate content
+        run: dotnet run --no-build --project tools/Trainer.ContentCli -- validate
+      - name: Pull sandbox image
+        run: docker pull "$SANDBOX_IMAGE"
+      - name: Snippet sandbox tests
+        run: dotnet test --no-build --filter-trait "Category=Docker" --ignore-exit-code 8
+      - name: Run content snippets
+        run: |
+          set +e
+          dotnet run --no-build --project tools/Trainer.ContentCli -- run-snippets
+          code=$?
+          if [ "$code" -eq 3 ]; then
+            echo "::error title=Snippet sandbox failure::The sandbox (Docker) failed. This is an infrastructure problem, not a content defect; re-run the job."
+          fi
+          exit "$code"
+
+  # The browser checks start the real site over a throw-away PostgreSQL container (Testcontainers, Docker is preinstalled).
+  e2e:
+    needs: build-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          global-json-file: global.json
+      - name: Restore
+        run: dotnet restore
+      - name: Build
+        run: dotnet build -warnaserror --no-restore
+      - name: Install Playwright Chromium
+        run: pwsh tests/Trainer.Web.E2E/bin/Debug/net10.0/playwright.ps1 install --with-deps chromium
+      - name: E2E tests
+        run: dotnet test --no-build --filter-trait "Category=E2E" --ignore-exit-code 8
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-screenshots
+          path: TestResults/screenshots/**
+          if-no-files-found: warn

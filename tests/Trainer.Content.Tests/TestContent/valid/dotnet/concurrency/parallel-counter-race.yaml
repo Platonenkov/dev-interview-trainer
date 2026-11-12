@@ -1,0 +1,64 @@
+id: 01KBZ3Q8N9V2K3M4P5R6S7T8WE
+slug: parallel-counter-race
+stack: dotnet
+topic: concurrency
+level: middle
+type: find-bug
+grading: auto
+tags: [race-condition, parallel-for, interlocked]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    using System.Threading;
+    using System.Threading.Tasks;
+
+    int counter = 0;
+    Parallel.For(0, 1000, i =>
+    {
+        counter++;
+    });
+    Console.WriteLine(counter);
+bugLineSets: [[7]]
+fixedSource: |
+  using System.Threading;
+  using System.Threading.Tasks;
+
+  int counter = 0;
+  Parallel.For(0, 1000, i =>
+  {
+      Interlocked.Increment(ref counter);
+  });
+  Console.WriteLine(counter);
+fixedExpect: { kind: output, value: "1000" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.interlocked
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строку с гонкой данных в параллельном подсчёте
+    prompt: |
+      Код должен вывести 1000, но результат бывает меньше. Щёлкните по строке с дефектом.
+    hint: Что на самом деле происходит при `counter++`?
+    answer: Строка 7, `counter++`.
+    explanation: |
+      Инкремент состоит из чтения, сложения и записи, и параллельные потоки перезаписывают друг друга.
+      Исправление: `Interlocked.Increment(ref counter)`, тогда результат всегда 1000.
+    linkTitles:
+      - Класс Interlocked
+  en:
+    title: Find the line with the data race in a parallel count
+    prompt: |
+      The code should print 1000, but the result is sometimes lower. Click the line that contains the defect.
+    hint: What really happens during `counter++`?
+    answer: Line 7, `counter++`.
+    explanation: |
+      An increment is a read, an add and a write, and parallel threads overwrite each other.
+      The fix is `Interlocked.Increment(ref counter)`, after which the result is always 1000.
+    linkTitles:
+      - Interlocked class
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-11
+  dotnetVersion: "10"

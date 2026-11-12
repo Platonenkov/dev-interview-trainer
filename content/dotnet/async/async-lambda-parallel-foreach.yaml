@@ -1,0 +1,94 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M76SZWF9VG8T679HHB2Z9M21
+slug: async-lambda-parallel-foreach
+stack: dotnet
+topic: async
+level: middle
+type: find-bug
+grading: auto
+tags: [parallel-foreach, async-void, tpl]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    using System.Collections.Concurrent;
+
+    ConcurrentBag<int> processed = new();
+    List<int> pendingIds = Enumerable.Range(1, 40).Where(id => id % 2 == 1).Select(id => id * id).Where(id => id > 0).OrderByDescending(id => id).Take(10).ToList();
+
+    Parallel.ForEach(pendingIds, async id =>
+    {
+        await Task.Delay(50);
+        processed.Add(id);
+    });
+
+    Console.WriteLine(processed.Count);
+bugLineSets: [[6]]
+fixedSource: |
+  using System.Collections.Concurrent;
+
+  ConcurrentBag<int> processed = new();
+  List<int> pendingIds = Enumerable.Range(1, 40).Where(id => id % 2 == 1).Select(id => id * id).Where(id => id > 0).OrderByDescending(id => id).Take(10).ToList();
+
+  await Parallel.ForEachAsync(pendingIds, async (id, ct) =>
+  {
+      await Task.Delay(50, ct);
+      processed.Add(id);
+  });
+
+  Console.WriteLine(processed.Count);
+fixedExpect: { kind: output, value: "10" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.tasks.parallel.foreachasync
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/archive/msdn-magazine/2013/march/async-await-best-practices-in-asynchronous-programming
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Найдите строку, из-за которой Parallel.ForEach не дожидается работы
+    prompt: |
+      Программа должна обработать 10 элементов и вывести `10`, но обычно выводит `0` или меньшее число.
+      Щёлкните по строке с дефектом.
+    hint: Какой тип делегата принимает `Parallel.ForEach` и во что превращается `async`-лямбда, которая ничего не возвращает?
+    answer: Строка 6, вызов `Parallel.ForEach` с `async`-лямбдой.
+    explanation: |
+      У `Parallel.ForEach` нет перегрузки для асинхронных делегатов: он принимает `Action<T>`, и `async`-лямбда
+      превращается в `async void`. Цикл считает итерацию законченной, как только лямбда дойдёт до первого незавершённого
+      `await`, поэтому `Parallel.ForEach` возвращается сразу, а работа продолжается в фоне. Программа читает счётчик до того,
+      как элементы обработаны. Исключения из `async void` к тому же нельзя перехватить снаружи, и необработанное исключение
+      может завершить процесс.
+
+      Исправление: `await Parallel.ForEachAsync(pendingIds, async (id, ct) => { ... })`. Метод принимает
+      `Func<T, CancellationToken, ValueTask>`, дожидается всех итераций, передаёт исключения вызывающему коду, а степень
+      параллелизма задаётся через `ParallelOptions.MaxDegreeOfParallelism`. Для CPU-bound синхронной работы подходит
+      обычный `Parallel.ForEach`.
+    linkTitles:
+      - Метод Parallel.ForEachAsync
+      - Рекомендации по асинхронному программированию (async/await)
+  en:
+    title: Find the line that makes Parallel.ForEach not wait for the work
+    prompt: |
+      The program should process 10 items and print `10`, but it usually prints `0` or a smaller number.
+      Click the line that contains the defect.
+    hint: Which delegate type does `Parallel.ForEach` accept, and what does an `async` lambda without a value turn into?
+    answer: Line 6, the `Parallel.ForEach` call with an `async` lambda.
+    explanation: |
+      `Parallel.ForEach` has no overload for asynchronous delegates: it takes an `Action<T>`, so an `async` lambda becomes
+      `async void`. The loop treats an iteration as finished as soon as the lambda reaches its first incomplete `await`,
+      so `Parallel.ForEach` returns at once while the work continues in the background. The program reads the counter
+      before the items are processed. Exceptions from `async void` also cannot be caught from outside, and an unhandled one
+      can bring the process down.
+
+      The fix is `await Parallel.ForEachAsync(pendingIds, async (id, ct) => { ... })`. It takes a
+      `Func<T, CancellationToken, ValueTask>`, waits for every iteration, propagates exceptions to the caller, and the degree
+      of parallelism is set through `ParallelOptions.MaxDegreeOfParallelism`. Plain `Parallel.ForEach` remains the right
+      tool for synchronous CPU-bound work.
+    linkTitles:
+      - Parallel.ForEachAsync method
+      - Async/await best practices in asynchronous programming
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-12
+  dotnetVersion: "10"

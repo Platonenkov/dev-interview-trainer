@@ -1,0 +1,47 @@
+id: 01KBZ3Q8N9V2K3M4P5R6S7T8WF
+slug: latency-spikes-thread-pool-starvation
+stack: dotnet
+topic: concurrency
+level: senior
+type: situation
+grading: self
+tags: [thread-pool, diagnostics, production]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/debug-threadpool-starvation
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Сервис периодически замирает под нагрузкой, а процессор простаивает
+    prompt: |
+      После релиза ASP.NET Core сервис раз в несколько минут перестаёт отвечать на 10-30 секунд.
+      Загрузка процессора при этом низкая, запросов в очереди много. Как вы будете искать причину?
+    hint: Что общего у "замирания" и низкой загрузки процессора?
+    answer: |
+      Проверить голодание пула потоков: счётчики `ThreadPool` в `dotnet-counters`, дамп стеков через
+      `dotnet-stack` или `dotnet-dump`. Найти синхронные блокировки (`.Result`, `.Wait()`, синхронный ввод-вывод)
+      на путях запроса, заменить их на `async`, ограничить параллелизм и добавить метрики очереди пула.
+    explanation: |
+      Блокирующие вызовы удерживают потоки пула, а пул добавляет новые медленно, поэтому очередь растёт,
+      пока процессор простаивает. Решение системное: убрать блокировки, а не поднимать `SetMinThreads`.
+    linkTitles:
+      - Диагностика голодания пула потоков
+  en:
+    title: The service stalls periodically under load while the CPU is idle
+    prompt: |
+      After a release, an ASP.NET Core service stops responding for 10-30 seconds every few minutes.
+      CPU usage is low and many requests are queued. How would you find the cause?
+    hint: What do "stalls" and low CPU usage have in common?
+    answer: |
+      Check for thread pool starvation: `ThreadPool` counters in `dotnet-counters`, stack dumps via
+      `dotnet-stack` or `dotnet-dump`. Find synchronous blocking (`.Result`, `.Wait()`, synchronous IO)
+      on request paths, replace it with `async`, limit parallelism and add pool queue metrics.
+    explanation: |
+      Blocking calls hold pool threads, and the pool injects new ones slowly, so the queue grows
+      while the CPU idles. The fix is systemic: remove the blocking, rather than raising `SetMinThreads`.
+    linkTitles:
+      - Debugging thread pool starvation
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-11
+  dotnetVersion: "10"

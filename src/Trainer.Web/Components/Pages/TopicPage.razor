@@ -1,0 +1,89 @@
+@page "/{Culture}/{Stack}/topics/{Topic}"
+@using Microsoft.AspNetCore.OutputCaching
+@attribute [OutputCache(PolicyName = "public")]
+@using Trainer.Application.Catalog
+@using Trainer.Application.Topics
+@using Trainer.Domain.Keys
+@using Trainer.Domain.Levels
+@using Trainer.Web.Seo
+@inject IStringLocalizer<SharedResource> L
+@inject ITopicQueries Topics
+@inject NavigationManager Navigation
+
+@if (_model is not null)
+{
+    <SeoHead Title="@($"{_model.Title} · {L["Site.Name"]}")"
+             Description="@_model.Description"
+             CanonicalPathAndQuery="@PathFor(_model.Key, Culture)"
+             AvailableCultures="_model.AvailableCultures"
+             PathForCulture="c => PathFor(_model.Key, c.Value)"
+             NoIndex="@(_model.Questions.Count == 0)" />
+    <BreadcrumbJsonLd Items="Breadcrumbs()" />
+    <section class="topic">
+        <h1 class="topic__heading">@_model.Title</h1>
+        <p class="topic__description">@_model.Description</p>
+        <ul class="level-counts" aria-label="@L["Topic.LevelCounts"]">
+            @foreach (FacetCount facet in _model.LevelCounts)
+            {
+                <li>
+                    <a class="level-counts__item" href="/@Culture/@Stack/questions?level=@facet.Key&topic=@_model.Key.Value">
+                        <LevelChip Level="LevelOf(facet)" /> <span class="level-counts__count">@facet.Count</span>
+                    </a>
+                </li>
+            }
+        </ul>
+        <h2 class="topic__subheading">@L["Topic.Questions"]</h2>
+        <ol class="rows">
+            @foreach (CatalogRow row in _model.Questions)
+            {
+                <li><QuestionRow Row="row" Culture="@Culture" Stack="@Stack" /></li>
+            }
+        </ol>
+        <p><a href="/@Culture/@Stack/questions?topic=@_model.Key.Value">@L["Topic.AllQuestions"] →</a></p>
+    </section>
+}
+
+@code {
+    [Parameter]
+    public string? Culture { get; set; }
+
+    [Parameter]
+    public string? Stack { get; set; }
+
+    [Parameter]
+    public string? Topic { get; set; }
+
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    private TopicPageModel? _model;
+
+    private string PathFor(TopicKey topic, string? culture) => $"/{culture}/{Stack}/topics/{topic.Value}";
+
+    private BreadcrumbItem[] Breadcrumbs() =>
+    [
+        new(L["Breadcrumb.Home"], $"/{Culture}"),
+        new(L["Catalog.Heading"], $"/{Culture}/{Stack}/questions"),
+        new(_model!.Title, PathFor(_model.Key, Culture)),
+    ];
+
+    private static Level LevelOf(FacetCount facet) => LevelKeys.TryParse(facet.Key, out Level level) ? level : default;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (HttpContext is null
+            || !CultureKey.TryCreate(Culture, out CultureKey culture)
+            || !StackKey.TryCreate(Stack, out StackKey stack)
+            || !TopicKey.TryCreate(Topic, out TopicKey topic))
+        {
+            Navigation.NotFound();
+            return;
+        }
+
+        _model = await Topics.GetAsync(culture, stack, topic, HttpContext.RequestAborted);
+        if (_model is null)
+        {
+            Navigation.NotFound();
+        }
+    }
+}

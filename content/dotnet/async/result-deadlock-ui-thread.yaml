@@ -1,0 +1,110 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M76SZRCB0WKNBTT7M8RG2KHR
+slug: result-deadlock-ui-thread
+stack: dotnet
+topic: async
+level: middle
+type: single
+grading: auto
+tags: [synchronization-context, deadlock, winforms, sync-over-async]
+code:
+  language: csharp
+  harness: none
+  source: |
+    private void LoadButton_Click(object sender, EventArgs e)
+    {
+        string text = LoadGreetingAsync().Result;
+        statusLabel.Text = text;
+    }
+
+    private static async Task<string> LoadGreetingAsync()
+    {
+        await Task.Delay(100);
+        return "done";
+    }
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://blog.stephencleary.com/2012/07/dont-block-on-async-code.html
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/archive/msdn-magazine/2013/march/async-await-best-practices-in-asynchronous-programming
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Что произойдёт при вызове .Result в обработчике кнопки WinForms?
+    prompt: |
+      Пользователь нажимает кнопку, и в приложении WinForms выполняется этот обработчик.
+      Что произойдёт?
+    hint: В каком потоке должно выполниться продолжение после `await Task.Delay(100)` и чем в это время занят этот поток?
+    options:
+      a: Интерфейс замрёт примерно на 100 мс, затем метка получит текст "done"
+      b: Интерфейс зависнет навсегда из-за взаимной блокировки
+      c: Продолжение выполнится в потоке пула и выбросит `InvalidOperationException` при обращении к метке
+      d: Свойство `Result` выбросит `AggregateException`
+    optionExplanations:
+      a: Так было бы, если бы продолжению не требовался UI-поток. Но `await` захватил `SynchronizationContext` формы, а UI-поток заблокирован в `.Result`, поэтому задача не завершится.
+      c: Продолжение вообще не получает шанса выполниться, потому что оно запланировано на заблокированный UI-поток. До обращения к метке дело не доходит.
+      d: "`Result` выбрасывает `AggregateException`, только если задача завершилась с ошибкой. Здесь задача не завершается совсем, и поток ждёт её бесконечно."
+    answer: Интерфейс зависнет навсегда из-за взаимной блокировки.
+    explanation: |
+      `await` запоминает текущий `SynchronizationContext`, и в WinForms это контекст UI-потока: продолжение после `await`
+      должно выполниться именно там. Но UI-поток в этот момент заблокирован в `.Result` и ждёт завершения задачи, а задача
+      не может завершиться, пока не отработает продолжение. Каждая сторона ждёт другую - это взаимная блокировка.
+
+      Правильное решение - не блокироваться: сделать обработчик `async void` (для обработчиков событий это допустимо)
+      и написать `string text = await LoadGreetingAsync();`. `ConfigureAwait(false)` на `await Task.Delay(100)` внутри
+      `LoadGreetingAsync` убрал бы взаимную блокировку именно здесь: продолжение выполнилось бы в потоке пула и не ждало бы
+      UI-поток. Но `.Result` по-прежнему блокировал бы UI-поток, а любой `await` без
+      `ConfigureAwait(false)`, который начинается в UI-потоке (например, в вызываемом отсюда методе), вернул бы зависание,
+      так что защищаться этим от блокировок не стоит.
+      В ASP.NET Core контекста синхронизации нет, поэтому такая взаимная блокировка там не возникает, зато блокирующий
+      вызов занимает поток пула и может привести к его истощению.
+    linkTitles:
+      - "Стивен Клири: Don't Block on Async Code"
+      - Рекомендации по асинхронному программированию (async/await)
+  en:
+    title: What happens when you call .Result in a WinForms button handler?
+    prompt: |
+      A user clicks the button in a WinForms application and this handler runs.
+      What happens?
+    hint: Which thread must run the continuation after `await Task.Delay(100)`, and what is that thread doing at the time?
+    options:
+      a: The UI freezes for about 100 ms, then the label shows "done"
+      b: The UI hangs forever because of a deadlock
+      c: The continuation runs on a thread pool thread and throws `InvalidOperationException` when it touches the label
+      d: The `Result` property throws `AggregateException`
+    optionExplanations:
+      a: That would be true if the continuation did not need the UI thread. But `await` captured the form's `SynchronizationContext`, and the UI thread is blocked in `.Result`, so the task can never complete.
+      c: The continuation never gets a chance to run, because it is scheduled onto the blocked UI thread. The code never reaches the label.
+      d: "`Result` throws `AggregateException` only when the task has faulted. Here the task never completes, and the thread waits for it forever."
+    answer: The UI hangs forever because of a deadlock.
+    explanation: |
+      `await` records the current `SynchronizationContext`, which in WinForms is the UI thread's context, so the continuation
+      after `await` has to run there. But the UI thread is blocked in `.Result` waiting for the task, and the task cannot
+      complete until the continuation has run. Each side waits for the other, which is a deadlock.
+
+      The right fix is not to block: make the handler `async void` (acceptable for event handlers) and write
+      `string text = await LoadGreetingAsync();`. Adding `ConfigureAwait(false)` to `await Task.Delay(100)` inside
+      `LoadGreetingAsync` would remove the deadlock at that spot: the continuation would run on a thread pool thread and would
+      not wait for the UI thread. But `.Result` would still block the UI thread, and any `await` without
+      `ConfigureAwait(false)` that starts on the UI thread (for example in a method called from here) would bring the hang
+      back, so it should not be relied on as protection against blocking.
+      ASP.NET Core has no synchronization context, so this exact deadlock does not occur there, but a blocking call still
+      occupies a thread pool thread and can lead to thread pool starvation.
+    linkTitles:
+      - "Stephen Cleary: Don't Block on Async Code"
+      - Async/await best practices in asynchronous programming
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-12
+  dotnetVersion: "10"
+  noRunReason: Needs a WinForms message loop, which the sandbox does not provide.

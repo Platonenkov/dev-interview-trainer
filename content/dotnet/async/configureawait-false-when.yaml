@@ -1,0 +1,101 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M76SZSVQGNT1X96KPRAK5Z80
+slug: configureawait-false-when
+stack: dotnet
+topic: async
+level: senior
+type: open
+grading: self
+tags: [configureawait, synchronization-context, library-design]
+links:
+  - url: https://devblogs.microsoft.com/dotnet/configureawait-faq/
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/dotnet/fundamentals/code-analysis/quality-rules/ca2007
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.tasks.configureawaitoptions
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Когда в .NET 10 нужен ConfigureAwait(false), а когда он бесполезен?
+    prompt: |
+      Что именно меняет `ConfigureAwait(false)`? В каком коде его нужно ставить, в каком он ничего не даёт
+      и чего он гарантировать не может?
+    hint: Куда по умолчанию возвращается продолжение после `await` и что происходит, если задача уже завершена к моменту `await`?
+    answer: |
+      `await` по умолчанию захватывает текущий `SynchronizationContext`, а если его нет - текущий `TaskScheduler`,
+      и планирует продолжение туда. `ConfigureAwait(false)` отключает захват: продолжение выполняется там, где завершилась задача,
+      обычно в потоке пула.
+
+      - **Библиотечный код.** Нужен: библиотека не знает, из какого контекста её вызовут, а возврат в него стоит дорого
+        (очередь сообщений UI-потока) и повышает риск взаимной блокировки, если вызывающий код блокируется на `.Result`.
+        Ставить надо на каждый `await` в методе.
+      - **Код приложения на ASP.NET Core.** Бесполезен: контекста синхронизации там нет, поведение не меняется.
+      - **Код UI-приложения (WinForms, WPF).** После `await ...ConfigureAwait(false)` продолжение может выполниться
+        в потоке пула, поэтому код после такого `await` не должен обращаться к элементам управления. Если после `await`
+        нужен UI, оставьте поведение по умолчанию. В остальных местах `ConfigureAwait(false)` допустим, но выигрыш небольшой.
+      - **Чего он не гарантирует.** Он не переносит выполнение в другой поток: если задача уже завершена, `await` продолжается
+        синхронно в текущем потоке. Он не лечит блокирующий вызов `.Result` или `.Wait()`, а лишь уменьшает вероятность
+        взаимной блокировки в конкретном месте.
+
+      В .NET 8 появился `ConfigureAwait(ConfigureAwaitOptions)` с флагами `SuppressThrowing` и `ForceYielding`.
+      Анализатор CA2007 требует явно вызывать `ConfigureAwait` на каждом `await` и рассчитан на библиотеки. По умолчанию он
+      выключен: его включают через `.editorconfig` (`dotnet_diagnostic.CA2007.severity`), а в коде приложений обычно оставляют выключенным.
+    explanation: |
+      Суть вопроса в том, что `ConfigureAwait(false)` - это не оптимизация и не защита от взаимных блокировок вообще,
+      а явное решение: нужен ли продолжению исходный контекст. Библиотека такого контекста требовать не должна, поэтому
+      для неё `ConfigureAwait(false)` - правило по умолчанию. Приложение контекст знает и может его использовать:
+      в UI-коде он нужен для доступа к элементам управления, а в ASP.NET Core его просто нет.
+
+      Типичная ошибка кандидата - сказать, что `ConfigureAwait(false)` запускает остаток метода в фоновом потоке.
+      Это не так: если ожидаемая задача уже завершена, продолжение выполняется синхронно в текущем потоке, и контекст
+      при этом не меняется. Поэтому его нужно ставить на каждый `await`, а не только на первый.
+    linkTitles:
+      - ConfigureAwait FAQ
+      - "Правило анализатора CA2007: не ждать задачу напрямую"
+      - Перечисление ConfigureAwaitOptions
+  en:
+    title: When is ConfigureAwait(false) needed in .NET 10 and when is it pointless?
+    prompt: |
+      What exactly does `ConfigureAwait(false)` change? In which code should you use it, where does it do nothing,
+      and what can it not guarantee?
+    hint: Where does the continuation after `await` run by default, and what happens when the task has already completed by the time of the `await`?
+    answer: |
+      By default `await` captures the current `SynchronizationContext`, or the current `TaskScheduler` if there is no context,
+      and schedules the continuation back onto it. `ConfigureAwait(false)` turns the capture off: the continuation runs
+      wherever the task completed, usually on a thread pool thread.
+
+      - **Library code.** Needed: a library does not know which context calls it, and going back to that context is costly
+        (a message queue for the UI thread) and raises the risk of deadlock when the caller blocks on `.Result`.
+        It has to be applied to every `await` in the method.
+      - **ASP.NET Core application code.** Pointless: there is no synchronization context there, so the behaviour does not change.
+      - **UI application code (WinForms, WPF).** After `await ...ConfigureAwait(false)` the continuation may run on a
+        thread pool thread, so the code after that `await` must not touch UI controls. If the code after an `await` needs
+        the UI, keep the default behaviour. Elsewhere `ConfigureAwait(false)` is allowed, but the gain is small.
+      - **What it does not guarantee.** It does not move execution to another thread: if the task has already completed,
+        `await` continues synchronously on the current thread. It does not fix a blocking `.Result` or `.Wait()`; it only lowers
+        the chance of a deadlock at that one place.
+
+      .NET 8 added `ConfigureAwait(ConfigureAwaitOptions)` with the `SuppressThrowing` and `ForceYielding` flags.
+      The CA2007 analyzer requires an explicit `ConfigureAwait` call on every `await` and is aimed at libraries. It is off by
+      default: you enable it through `.editorconfig` (`dotnet_diagnostic.CA2007.severity`), and in application code it is
+      usually left off.
+    explanation: |
+      The point of the question is that `ConfigureAwait(false)` is neither an optimization nor a general protection against
+      deadlocks, but an explicit decision about whether the continuation needs the original context. A library should not
+      require such a context, so for it `ConfigureAwait(false)` is the default rule. An application knows its context and can use it:
+      UI code needs it to reach controls, and ASP.NET Core simply has none.
+
+      A typical mistake is to say that `ConfigureAwait(false)` runs the rest of the method on a background thread.
+      It does not: when the awaited task has already completed, the continuation runs synchronously on the current thread
+      and the context does not change. That is why it has to be applied to every `await`, not only the first one.
+    linkTitles:
+      - ConfigureAwait FAQ
+      - "Code analysis rule CA2007: do not directly await a Task"
+      - ConfigureAwaitOptions enum
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-12
+  dotnetVersion: "10"

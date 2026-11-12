@@ -1,0 +1,88 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M76SZV7P5B2C5JN9DTTQF4BY
+slug: valuetask-when-justified
+stack: dotnet
+topic: async
+level: senior
+type: multi
+grading: auto
+tags: [valuetask, allocations, performance, task]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+links:
+  - url: https://devblogs.microsoft.com/dotnet/understanding-the-whys-whats-and-whens-of-valuetask/
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.tasks.valuetask-1
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Когда оправдан ValueTask<T> и какие у него ограничения?
+    prompt: |
+      Выберите все верные утверждения о `ValueTask<T>` в .NET 10.
+    hint: Что произойдёт, если результат одной и той же структуры `ValueTask<T>` потребуют два потребителя?
+    options:
+      a: Он оправдан в горячем пути, где метод часто завершается синхронно (попадание в кэш, данные уже в буфере), потому что тогда не нужно выделять `Task<T>`
+      b: Один и тот же `ValueTask<T>` можно безопасно ожидать несколько раз через `await`, как и `Task<T>`
+      c: Чтобы ожидать результат несколько раз или передать его в `Task.WhenAll`, нужно один раз вызвать `AsTask()` и дальше работать с полученным `Task<T>`
+      d: Он всегда быстрее `Task<T>`, поэтому его стоит возвращать из всех асинхронных методов
+      e: Метод `async ValueTask<T>` никогда ничего не выделяет, даже когда ему действительно приходится ждать незавершённую операцию
+    optionExplanations:
+      b: "Нельзя. `ValueTask<T>` рассчитан на однократное потребление: повторный `await`, параллельное ожидание или обращение к `.Result` у незавершённой операции дают неопределённое поведение, особенно если за структурой стоит повторно используемый `IValueTaskSource`."
+      d: "Нет. Это структура большего размера, чем ссылка на `Task<T>`, и она накладывает ограничения на использование. Выигрыш есть только когда синхронное завершение частое или результат поддерживается пулом `IValueTaskSource`. По умолчанию возвращайте `Task<T>`."
+      e: "Нет. Выделений удаётся избежать только при синхронном завершении. Если метод действительно приостанавливается, компилятор создаёт объект для конечного автомата, как и у `Task<T>`; избавиться от этого можно, лишь включив пулинг (`PoolingAsyncValueTaskMethodBuilder`)."
+    answer: "Верны `a` и `c`: `ValueTask<T>` нужен для горячих путей с частым синхронным завершением, а для повторного или множественного ожидания его один раз превращают в `Task<T>` через `AsTask()`."
+    explanation: |
+      `ValueTask<T>` - это структура, которая хранит либо готовый результат, либо ссылку на `Task<T>`, либо ссылку на
+      `IValueTaskSource<T>`. Если операция завершилась синхронно, `Task<T>` не создаётся вообще, и именно в этом его смысл.
+      Платой за это служат ограничения: структура крупнее, её нужно потреблять ровно один раз (один `await` или один `AsTask()`),
+      нельзя ожидать параллельно и нельзя блокироваться на ней до завершения.
+
+      Поэтому правило такое: `Task<T>` - вариант по умолчанию, `ValueTask<T>` - осознанная оптимизация, подтверждённая
+      замером, обычно в библиотечном или высоконагруженном коде. Когда метод всё же приостанавливается, асинхронный путь
+      стоит столько же, сколько у `Task<T>`, если не использовать пулинг.
+    linkTitles:
+      - "Стивен Туб: Understanding the Whys, Whats, and Whens of ValueTask"
+      - Структура ValueTask<TResult>
+  en:
+    title: When is ValueTask<T> justified and what are its limits?
+    prompt: |
+      Select all correct statements about `ValueTask<T>` in .NET 10.
+    hint: What happens when two consumers want the result of the very same `ValueTask<T>` struct?
+    options:
+      a: It is justified on a hot path where the method often completes synchronously (a cache hit, data already buffered), because then no `Task<T>` has to be allocated
+      b: The same `ValueTask<T>` can be safely awaited several times with `await`, just like a `Task<T>`
+      c: To await the result several times or pass it to `Task.WhenAll`, call `AsTask()` once and keep working with the resulting `Task<T>`
+      d: It is always faster than `Task<T>`, so it should be returned from every asynchronous method
+      e: An `async ValueTask<T>` method never allocates anything, even when it really has to wait for an incomplete operation
+    optionExplanations:
+      b: "It cannot. `ValueTask<T>` is meant to be consumed once: awaiting it again, awaiting it concurrently, or reading `.Result` on an incomplete operation gives undefined behaviour, especially when the struct is backed by a reusable `IValueTaskSource`."
+      d: "No. It is a larger struct than a reference to a `Task<T>` and it restricts how it may be used. It pays off only when synchronous completion is common or the result is backed by a pooled `IValueTaskSource`. Return `Task<T>` by default."
+      e: "No. Allocation is avoided only on synchronous completion. When the method really suspends, the compiler creates a state machine object, as it does for `Task<T>`; the only way to avoid that is to opt into pooling (`PoolingAsyncValueTaskMethodBuilder`)."
+    answer: "`a` and `c` are correct: `ValueTask<T>` is for hot paths with frequent synchronous completion, and for repeated or multiple awaiting it is converted once to a `Task<T>` with `AsTask()`."
+    explanation: |
+      `ValueTask<T>` is a struct that holds either a ready result, a reference to a `Task<T>`, or a reference to an
+      `IValueTaskSource<T>`. When the operation completes synchronously no `Task<T>` is created at all, and that is its whole point.
+      The price is a set of restrictions: the struct is larger, it must be consumed exactly once (one `await` or one `AsTask()`),
+      it must not be awaited concurrently, and it must not be blocked on before it completes.
+
+      So the rule is: `Task<T>` is the default, and `ValueTask<T>` is a deliberate optimization confirmed by measurement,
+      usually in library or high-throughput code. When the method does suspend, the asynchronous path costs the same
+      as with `Task<T>` unless pooling is used.
+    linkTitles:
+      - "Stephen Toub: Understanding the Whys, Whats, and Whens of ValueTask"
+      - ValueTask<TResult> struct
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-11
+  dotnetVersion: "10"

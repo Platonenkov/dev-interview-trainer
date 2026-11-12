@@ -1,0 +1,104 @@
+using System.Net;
+using System.Text.RegularExpressions;
+
+namespace Trainer.Web.Tests;
+
+public sealed partial class CatalogPageTests(WebSiteFixture site) : IClassFixture<WebSiteFixture>
+{
+    [GeneratedRegex(@"<a[^>]*aria-current=""true""[^>]*>", RegexOptions.CultureInvariant)]
+    private static partial Regex CurrentLink();
+
+    private async Task<(HttpResponseMessage Response, string Body)> GetAsync(string path)
+    {
+        using HttpClient client = site.Factory.CreateClient();
+        HttpResponseMessage response = await client.GetAsync(path, TestContext.Current.CancellationToken);
+        return (response, await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Catalog_RendersRowsWithLinksToQuestionPages()
+    {
+        (HttpResponseMessage response, string body) = await GetAsync("/ru/dotnet/questions");
+        using HttpResponseMessage _ = response;
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains("href=\"/ru/dotnet/questions/closure-for-loop\"", body, StringComparison.Ordinal);
+        Assert.Contains("Что выведет код с лямбдами", body, StringComparison.Ordinal);
+        // The English-only question has no Russian locale and must not be linked from the Russian catalog.
+        Assert.DoesNotContain("/questions/en-only-question", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Catalog_InEnglish_ListsTheEnglishOnlyQuestion()
+    {
+        (HttpResponseMessage response, string body) = await GetAsync("/en/dotnet/questions");
+        using HttpResponseMessage _ = response;
+
+        Assert.Contains("href=\"/en/dotnet/questions/en-only-question\"", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Catalog_JunkQuery_Returns200AndMarksOnlyTheValidFilterSelected()
+    {
+        (HttpResponseMessage response, string body) = await GetAsync("/en/dotnet/questions?level=MIDDLE&level=middle&topic=nope&utm_source=x");
+        using HttpResponseMessage _ = response;
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        string current = Assert.Single(CurrentLink().Matches(body)).Value;
+        Assert.Contains("href=\"/en/dotnet/questions\"", current, StringComparison.Ordinal);
+        Assert.Contains("(selected)", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("closure-for-loop", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Catalog_FilterLinksToggleOneValueInTheCanonicalQuery()
+    {
+        (HttpResponseMessage response, string body) = await GetAsync("/en/dotnet/questions?level=middle");
+        using HttpResponseMessage _ = response;
+
+        Assert.Contains("href=\"/en/dotnet/questions?level=junior&amp;level=middle\"", body, StringComparison.Ordinal);
+        Assert.Contains("href=\"/en/dotnet/questions?level=middle&amp;topic=async\"", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Catalog_EmptySelection_ShowsMessage()
+    {
+        (HttpResponseMessage response, string body) = await GetAsync("/ru/dotnet/questions?level=architect");
+        using HttpResponseMessage _ = response;
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains("Под эти фильтры не подходит ни один вопрос.", body, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("/ru")]
+    [InlineData("/en/dotnet")]
+    [InlineData("/ru/about")]
+    [InlineData("/en/about")]
+    [InlineData("/ru/dotnet/questions")]
+    [InlineData("/en/dotnet/questions?level=middle&topic=async")]
+    public async Task Catalog_AndHome_AndAbout_HaveNoFormsAndNoSetCookie(string path)
+    {
+        (HttpResponseMessage response, string body) = await GetAsync(path);
+        using HttpResponseMessage _ = response;
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.DoesNotContain("<form", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("blazor.web.js", body, StringComparison.Ordinal);
+        Assert.False(response.Headers.Contains("Set-Cookie"), path);
+    }
+
+    [Fact]
+    public async Task About_IsLocalised()
+    {
+        (HttpResponseMessage ru, string ruBody) = await GetAsync("/ru/about");
+        (HttpResponseMessage en, string enBody) = await GetAsync("/en/about");
+        using HttpResponseMessage _1 = ru;
+        using HttpResponseMessage _2 = en;
+
+        Assert.Contains("<html lang=\"ru\">", ruBody, StringComparison.Ordinal);
+        Assert.Contains("Лицензии", ruBody, StringComparison.Ordinal);
+        Assert.Contains("CC BY-SA 4.0", enBody, StringComparison.Ordinal);
+        Assert.Contains("How to contribute", enBody, StringComparison.Ordinal);
+    }
+}

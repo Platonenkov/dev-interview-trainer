@@ -306,11 +306,29 @@ Rules:
 
 ### 7.3 Import
 
-A `ContentImporter` reads `content/`, validates every file and upserts questions
-into PostgreSQL in one transaction. It runs on application start (guarded by a
-content hash so it is a no-op when nothing changed) and is also exposed as a CLI
-command for CI. Removed files mark questions as retired, not deleted, so user
-progress survives.
+Content is delivered **separately from the application image** (owner's
+decision): fixing a typo in a question must not require rebuilding or
+restarting the app. Delivery pipeline is in section 8.7.
+
+A `ContentImporter` reads a content release directory, validates every file and
+upserts questions into PostgreSQL in one transaction. It runs:
+
+- on application start, from the currently active content release (guarded by
+  a content hash, so it is a no-op when nothing changed);
+- on demand, when the content workflow triggers the internal import endpoint
+  after uploading a new release (section 8.7); the running app imports, then
+  evicts its output cache and regenerates the sitemap;
+- as a CLI command in CI for validation (no database writes).
+
+Removed files mark questions as retired, not deleted, so user progress
+survives. A failed validation or import leaves the previous content active.
+
+**Schema compatibility.** `content/schema-version` holds an integer. The app
+declares the range of content schema versions it supports and refuses to
+import anything outside it. A change that needs a new schema version is shipped
+in two steps: first the app release that supports both old and new versions,
+then content using the new version. The content workflow checks the deployed
+app's supported range before uploading.
 
 ### 7.4 Validation and accuracy
 
@@ -521,13 +539,96 @@ history with a client-generated unique id are decided.
 - Content import runs at startup; the readiness endpoint reports not-ready
   until import finishes, and nginx/compose health checks use it.
 - Configuration: `App:PublicBaseUrl` (domain), `App:AdminTelegramIds`,
-  `TelegramOidc:ClientId` / `ClientSecret` (secrets via environment, never in
-  git), connection string.
+  `TelegramOidc:ClientId` / `ClientSecret`, connection string. Runtime secrets
+  live only on the server (an env file readable by the service user), never in
+  git and never in GitHub.
 - Structured logging (no auth headers or cookies in logs), daily PostgreSQL
   backup script.
-- GitHub Actions: build, tests (including content validation and isolated
-  snippet execution), format check, Playwright layout checks. Deploy is manual
-  in v1 (builder documents it in `docs/deployment.md`).
+
+#### 8.7.1 Server layout
+
+```
+/srv/dev-interview-trainer/
+  compose.yaml
+  .env                       # runtime secrets, mode 600, written by bootstrap
+  content/
+    releases/<git-sha>/      # one directory per content release
+    current -> releases/<sha>  # symlink, mounted read-only into the app container
+  backups/
+```
+
+The app container mounts `content/current` read-only. The last 5 releases are
+kept; rollback = re-run the content workflow on an older commit (or repoint the
+symlink and trigger import).
+
+#### 8.7.2 Workflows (GitHub Actions)
+
+Everything is published through Actions. There are three workflows:
+
+1. **`ci.yml`** (every PR and push): build, unit and integration tests, format
+   check, content validation, isolated snippet execution, Playwright layout
+   checks.
+2. **`deploy-app.yml`** (push to `main` that changes anything outside
+   `content/`, or manual): build the image, push it to GitHub Container
+   Registry tagged with the commit sha, then over SSH as the deploy user: pull
+   the image, run the EF Core migration bundle, `docker compose up -d`, wait
+   for readiness, roll back to the previous image tag if readiness fails.
+3. **`deploy-content.yml`** (push to `main` that changes `content/`, or manual):
+   validate content and run snippets (same jobs as CI), check the deployed
+   app's supported schema range, pack `content/` as an archive, upload it over
+   SSH into `releases/<sha>`, switch the `current` symlink, then call the
+   internal import endpoint. If the import fails, the symlink is switched back
+   and the workflow fails. No image is built.
+
+Both deploy workflows use a GitHub environment `production` (optionally with
+required reviewers) and a concurrency group, so two deploys never overlap.
+
+**Internal import endpoint.** `POST /internal/content/import` is served on a
+separate port bound to `127.0.0.1` on the host and is not proxied by nginx, so
+it is unreachable from the internet. It also requires a bearer token
+(`CONTENT_IMPORT_TOKEN`), compared with `CryptographicOperations.FixedTimeEquals`.
+The workflow calls it over the SSH session with `curl`. `GET /internal/version`
+on the same port returns the app version and supported content schema range.
+
+#### 8.7.3 Bootstrap (first-time provisioning from the admin's PC)
+
+A bootstrap script in `deploy/bootstrap/` is run once by the admin from their
+own machine against a fresh VPS (Ubuntu LTS), over SSH with the admin's key. It
+is idempotent: re-running it repairs or updates the setup without destroying
+data. Written in PowerShell 7 (`pwsh`, runs on Windows, Linux and macOS);
+the remote part is a bash script it uploads and runs.
+
+It asks for: SSH host and admin user, domain, admin Telegram user id(s),
+Telegram OIDC client id and secret, e-mail for Let's Encrypt.
+
+It does:
+
+1. Installs Docker Engine with the compose plugin, nginx and certbot;
+   enables the firewall (22, 80, 443 only) and unattended security upgrades.
+2. Creates a `deploy` user with no sudo except the narrow commands it needs
+   (or docker group membership), and generates a dedicated SSH key pair for
+   GitHub Actions; the public key goes to `deploy`'s `authorized_keys`, the
+   private key is shown once for GitHub and not stored on the server.
+3. Creates `/srv/dev-interview-trainer/` with `compose.yaml`, generates the
+   PostgreSQL password and `CONTENT_IMPORT_TOKEN`, writes `.env` (mode 600)
+   with all runtime settings, including the Telegram secret and
+   `App__AdminTelegramIds`. This is how the first admin user is seeded: the
+   gate grants `Admin` to these ids on their first sign-in.
+4. Configures nginx for the domain, obtains the TLS certificate, sets up
+   renewal.
+5. Installs the daily backup job (PostgreSQL dump + Data Protection keys).
+6. Prints a checklist of what to put into GitHub:
+   - **Secrets** (environment `production`): `DEPLOY_SSH_KEY`, `DEPLOY_HOST`,
+     `DEPLOY_USER`, `DEPLOY_KNOWN_HOSTS`, `CONTENT_IMPORT_TOKEN`.
+   - **Variables**: `PUBLIC_BASE_URL`, `APP_DIR`.
+   With the GitHub CLI available and authenticated, it offers to set them
+   itself (`gh secret set` / `gh variable set`) after confirmation.
+7. Prints the BotFather redirect URI to register
+   (`https://<domain>/signin-telegram`).
+
+After bootstrap, the first `deploy-app` run starts the app and the first
+`deploy-content` run loads the questions. `docs/deployment.md` documents the
+whole procedure, including how to rotate the deploy key and the import token.
 
 ### 8.8 API contract, reliability and security
 
@@ -629,9 +730,10 @@ and Fable) of this document. They are decisions made by the designer, not by
 the owner; the owner can change any of them. Most review findings were folded
 directly into sections 4-8; this list keeps the remaining calls in one place.
 
-1. **Admin bootstrap.** Config key `App:AdminTelegramIds` (list). The sign-in
-   gate grants `Admin` to these ids on every sign-in. Other roles are managed
-   from the admin page later; no CLI needed in v1.
+1. **Admin bootstrap.** Config key `App:AdminTelegramIds` (list), written to
+   the server `.env` by the bootstrap script (section 8.7.3). The sign-in gate
+   grants `Admin` to these ids on every sign-in. Other roles are managed from
+   the admin page later.
 2. **Auth and culture routing.** Library endpoints (`/signin-telegram/*`) live
    outside the culture prefix and are excluded from culture redirects. The
    library's `LoginPath` and `AccessDeniedPath` point to a culture-neutral
@@ -657,10 +759,11 @@ directly into sections 4-8; this list keeps the remaining calls in one place.
    self-study tool with no stakes, so trusting the client is accepted.
    Domain grading code stays free of server dependencies so the WASM client can
    reference `Trainer.Domain`.
-6. **Content delivery.** `content/` is copied into the Docker image; updating
-   content means building and deploying a new image. Import runs on startup
-   (hash-guarded) and is also validated in CI. Sitemap and cache invalidation
-   follow the import.
+6. **Content delivery.** Owner's decision: content is delivered separately
+   from the app image, through its own workflow (sections 7.3 and 8.7).
+   Designer's calls inside it: release directories plus a `current` symlink,
+   import through a localhost-only internal endpoint with a token, schema
+   version range check, automatic rollback of the symlink on failed import.
 7. **Retired questions.** Their pages stay readable with a "retired" notice, get
    `noindex`, leave the sitemap and catalog, and stop appearing in Practice and
    Mock. Review drops them. If a redirect entry exists, the old URL redirects

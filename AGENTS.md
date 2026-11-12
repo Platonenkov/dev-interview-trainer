@@ -30,7 +30,9 @@ src/Trainer.Web/             Blazor Web App host: SSR pages, auth, /api endpoint
 src/Trainer.Web.Client/      WebAssembly interactive islands
 tools/Trainer.ContentCli/    validate / import / run snippets
 tests/                       xUnit v3 test projects
-content/                     question bank (CC BY-SA 4.0)
+content/                     question bank (CC BY-SA 4.0), deployed separately from the app
+deploy/                      compose files, bootstrap script for first-time VPS provisioning
+.github/workflows/           ci.yml, deploy-app.yml, deploy-content.yml
 docs/                        architecture, content guide, deployment, ADRs
 ```
 

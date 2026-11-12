@@ -539,9 +539,12 @@ history with a client-generated unique id are decided.
 - Content import runs at startup; the readiness endpoint reports not-ready
   until import finishes, and nginx/compose health checks use it.
 - Configuration: `App:PublicBaseUrl` (domain), `App:AdminTelegramIds`,
-  `TelegramOidc:ClientId` / `ClientSecret`, connection string. Runtime secrets
-  live only on the server (an env file readable by the service user), never in
-  git and never in GitHub.
+  `TelegramOidc:ClientId` / `ClientSecret`, connection string. **GitHub is the
+  single source of truth for configuration** (owner's decision): secrets in
+  GitHub Secrets, non-secret settings in GitHub Variables, both in the
+  `production` environment. `deploy-app.yml` renders the server `.env` from them
+  on every deploy. Nothing is edited by hand on the server, and a lost server
+  can be rebuilt from bootstrap + deploy + the latest backup.
 - Structured logging (no auth headers or cookies in logs), daily PostgreSQL
   backup script.
 
@@ -550,7 +553,7 @@ history with a client-generated unique id are decided.
 ```
 /srv/dev-interview-trainer/
   compose.yaml
-  .env                       # runtime secrets, mode 600, written by bootstrap
+  .env                       # mode 600, rendered by deploy-app.yml from GitHub secrets/variables
   content/
     releases/<git-sha>/      # one directory per content release
     current -> releases/<sha>  # symlink, mounted read-only into the app container
@@ -563,16 +566,24 @@ symlink and trigger import).
 
 #### 8.7.2 Workflows (GitHub Actions)
 
-Everything is published through Actions. There are three workflows:
+Everything is published through Actions. There are four workflows:
 
 1. **`ci.yml`** (every PR and push): build, unit and integration tests, format
    check, content validation, isolated snippet execution, Playwright layout
    checks.
 2. **`deploy-app.yml`** (push to `main` that changes anything outside
    `content/`, or manual): build the image, push it to GitHub Container
-   Registry tagged with the commit sha, then over SSH as the deploy user: pull
-   the image, run the EF Core migration bundle, `docker compose up -d`, wait
-   for readiness, roll back to the previous image tag if readiness fails.
+   Registry tagged with the commit sha, then over SSH as the deploy user:
+   render `.env` and `compose.yaml` from the repository templates and GitHub
+   secrets/variables (written atomically, mode 600), pull the image, run the
+   EF Core migration bundle, `docker compose up -d`, wait for readiness, roll
+   back to the previous image tag and previous `.env` if readiness fails.
+   Changing only a secret or variable = re-run this workflow manually.
+4. **`rotate-db-password.yml`** (manual only): generates a new password, runs
+   `ALTER ROLE` on the server, stores it with `gh secret set` (using a
+   fine-grained token limited to this repository's secrets), then triggers
+   `deploy-app`. Changing `DB_PASSWORD` in GitHub by hand does not change the
+   database password, so rotation always goes through this workflow.
 3. **`deploy-content.yml`** (push to `main` that changes `content/`, or manual):
    validate content and run snippets (same jobs as CI), check the deployed
    app's supported schema range, pack `content/` as an archive, upload it over
@@ -580,8 +591,17 @@ Everything is published through Actions. There are three workflows:
    internal import endpoint. If the import fails, the symlink is switched back
    and the workflow fails. No image is built.
 
-Both deploy workflows use a GitHub environment `production` (optionally with
-required reviewers) and a concurrency group, so two deploys never overlap.
+All deploy workflows use the GitHub environment `production` with a deployment
+branch rule (only `main`) and a shared concurrency group, so two deploys never
+overlap. Hardening, required before the repository goes public:
+
+- third-party actions pinned by full commit SHA;
+- `permissions:` set per job to the minimum (`contents: read`,
+  `packages: write` only where the image is pushed);
+- workflows triggered by pull requests never receive secrets (GitHub default
+  for forks) and never use `pull_request_target`;
+- secrets are passed to remote commands through stdin or env, never on the
+  command line, and never echoed (masked output is not relied upon).
 
 **Internal import endpoint.** `POST /internal/content/import` is served on a
 separate port bound to `127.0.0.1` on the host and is not proxied by nginx, so
@@ -599,7 +619,8 @@ data. Written in PowerShell 7 (`pwsh`, runs on Windows, Linux and macOS);
 the remote part is a bash script it uploads and runs.
 
 It asks for: SSH host and admin user, domain, admin Telegram user id(s),
-Telegram OIDC client id and secret, e-mail for Let's Encrypt.
+Telegram OIDC client id and secret, e-mail for Let's Encrypt. These values are
+not stored on the server by bootstrap; they go to GitHub (step 6).
 
 It does:
 
@@ -609,26 +630,33 @@ It does:
    (or docker group membership), and generates a dedicated SSH key pair for
    GitHub Actions; the public key goes to `deploy`'s `authorized_keys`, the
    private key is shown once for GitHub and not stored on the server.
-3. Creates `/srv/dev-interview-trainer/` with `compose.yaml`, generates the
-   PostgreSQL password and `CONTENT_IMPORT_TOKEN`, writes `.env` (mode 600)
-   with all runtime settings, including the Telegram secret and
-   `App__AdminTelegramIds`. This is how the first admin user is seeded: the
-   gate grants `Admin` to these ids on their first sign-in.
+3. Creates `/srv/dev-interview-trainer/` with the directory layout, owned by
+   `deploy`. Generates the PostgreSQL password and `CONTENT_IMPORT_TOKEN`
+   locally on the admin's PC (they go to GitHub, step 6). The first admin user
+   is seeded through the `ADMIN_TELEGRAM_IDS` variable: the gate grants `Admin`
+   to these ids on their first sign-in.
 4. Configures nginx for the domain, obtains the TLS certificate, sets up
    renewal.
 5. Installs the daily backup job (PostgreSQL dump + Data Protection keys).
-6. Prints a checklist of what to put into GitHub:
-   - **Secrets** (environment `production`): `DEPLOY_SSH_KEY`, `DEPLOY_HOST`,
-     `DEPLOY_USER`, `DEPLOY_KNOWN_HOSTS`, `CONTENT_IMPORT_TOKEN`.
-   - **Variables**: `PUBLIC_BASE_URL`, `APP_DIR`.
-   With the GitHub CLI available and authenticated, it offers to set them
-   itself (`gh secret set` / `gh variable set`) after confirmation.
+6. Creates the `production` environment (branch rule: `main` only) and fills
+   it, after showing the list and asking for confirmation, with
+   `gh secret set` / `gh variable set` (values passed through stdin, never as
+   arguments). Without an authenticated `gh` it prints the checklist instead,
+   showing each secret once:
+   - **Secrets**: `TELEGRAM_OIDC_CLIENT_SECRET`, `DB_PASSWORD`,
+     `CONTENT_IMPORT_TOKEN`, `DEPLOY_SSH_KEY`, `DEPLOY_KNOWN_HOSTS`.
+   - **Variables**: `TELEGRAM_OIDC_CLIENT_ID`, `ADMIN_TELEGRAM_IDS`,
+     `PUBLIC_BASE_URL`, `DEPLOY_HOST`, `DEPLOY_USER`, `APP_DIR`.
+   Nothing is written to disk on the admin's PC except a temporary file that
+   is deleted at the end.
 7. Prints the BotFather redirect URI to register
    (`https://<domain>/signin-telegram`).
 
 After bootstrap, the first `deploy-app` run starts the app and the first
 `deploy-content` run loads the questions. `docs/deployment.md` documents the
-whole procedure, including how to rotate the deploy key and the import token.
+whole procedure, including how to change a setting (edit in GitHub, re-run
+`deploy-app`), how to rotate the deploy key, the import token and the DB
+password, and how to rebuild a lost server.
 
 ### 8.8 API contract, reliability and security
 
@@ -730,8 +758,8 @@ and Fable) of this document. They are decisions made by the designer, not by
 the owner; the owner can change any of them. Most review findings were folded
 directly into sections 4-8; this list keeps the remaining calls in one place.
 
-1. **Admin bootstrap.** Config key `App:AdminTelegramIds` (list), written to
-   the server `.env` by the bootstrap script (section 8.7.3). The sign-in gate
+1. **Admin bootstrap.** Config key `App:AdminTelegramIds` (list), from the
+   GitHub variable `ADMIN_TELEGRAM_IDS` set by bootstrap (section 8.7.3). The sign-in gate
    grants `Admin` to these ids on every sign-in. Other roles are managed from
    the admin page later.
 2. **Auth and culture routing.** Library endpoints (`/signin-telegram/*`) live

@@ -294,6 +294,9 @@ public sealed class StartupImportTests(PostgresFixture postgres)
 
                 return await inner.GetTaxonomyAsync(ct);
             }
+
+            public Task<IReadOnlyList<TopicTitle>> GetTopicTitlesAsync(CultureKey culture, StackKey stack, CancellationToken ct) =>
+                inner.GetTopicTitlesAsync(culture, stack, ct);
         }
     }
 
@@ -315,6 +318,9 @@ public sealed class StartupImportTests(PostgresFixture postgres)
     private sealed class ThrowingStackQueries : IStackQueries
     {
         public Task<IReadOnlyDictionary<StackKey, IReadOnlyList<TopicKey>>> GetTaxonomyAsync(CancellationToken ct) =>
+            throw new InvalidOperationException("database is down");
+
+        public Task<IReadOnlyList<TopicTitle>> GetTopicTitlesAsync(CultureKey culture, StackKey stack, CancellationToken ct) =>
             throw new InvalidOperationException("database is down");
     }
 

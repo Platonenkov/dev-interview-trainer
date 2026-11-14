@@ -6,9 +6,9 @@ namespace Trainer.Web.Routing;
 
 /// <summary>
 /// <c>GET /lang/{target}?return={path}</c>: the explicit language choice. It stores the choice in the <c>lang</c> cookie
-/// and redirects back to the same page in the chosen culture. This is the only place the cookie is written: public pages
-/// must stay cookie-free so the output cache can serve them, which is why the language switcher links here instead of
-/// setting the cookie from a page.
+/// and redirects back to the same page in the chosen culture. Public pages must stay cookie-free so the output cache can
+/// serve them, which is why the language switcher links here instead of setting the cookie from a page; the only other
+/// writer is the sign-in callback, which restores a stored choice on a new device.
 /// </summary>
 public static class LanguageEndpoint
 {
@@ -63,17 +63,24 @@ public static class LanguageEndpoint
             return Results.NotFound();
         }
 
-        context.Response.Cookies.Append(RootRedirectEndpoint.CookieName, culture.Value, new CookieOptions
+        context.Response.Cookies.Append(RootRedirectEndpoint.CookieName, culture.Value, CreateCookieOptions(context.Request));
+
+        string destination = ResolveReturnPath(context.Request.Query[ReturnParameter].ToString(), culture);
+        return Results.Redirect(ToLocation(destination), permanent: false);
+    }
+
+    /// <summary>Options of the <c>lang</c> cookie; sign-in writes it with the same ones when it restores a stored choice.</summary>
+    public static CookieOptions CreateCookieOptions(HttpRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return new CookieOptions
         {
             Path = "/",
             MaxAge = CookieLifetime,
             SameSite = SameSiteMode.Lax,
             HttpOnly = true,
-            Secure = context.Request.IsHttps,
-        });
-
-        string destination = ResolveReturnPath(context.Request.Query[ReturnParameter].ToString(), culture);
-        return Results.Redirect(ToLocation(destination), permanent: false);
+            Secure = request.IsHttps,
+        };
     }
 
     /// <summary>

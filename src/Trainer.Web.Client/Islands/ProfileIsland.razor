@@ -1,0 +1,299 @@
+@using System.Text.Json
+@using Trainer.Contracts.Storage
+@using Trainer.Web.Client.Api
+@using Trainer.Web.Client.Storage
+@using Trainer.Web.Client.Sync
+@implements IDisposable
+@inject TrainerApiClient Api
+@inject OutboxSyncService Sync
+@inject SummaryStore Summaries
+@inject AccountWatcher Accounts
+@inject TimeProvider Time
+@inject IStringLocalizer<ClientResource> L
+
+@* The signed-in user's statistics for one stack (ADR 0010): streak, answers, the review queue, progress per topic and
+   level, recent mocks, mock results the server refused, and the anonymous import. Pending answers and summaries are
+   flushed before the profile is fetched, so it counts what was answered a moment ago. *@
+<IslandRoot ShowImportNotice="false" Usable="_phase != Phase.Loading">
+    @if (_bootstrap is { } bootstrap)
+    {
+        <div class="profile">
+            @if (_owner is { } owner)
+            {
+                <ImportPanel Owner="owner" Imported="LoadAsync" />
+            }
+            @switch (_phase)
+            {
+                case Phase.Loading:
+                    <p class="island-state" role="status">@L["Profile.Loading"]</p>
+                    break;
+                case Phase.State:
+                    <IslandStateView Kind="_state" RetryAfter="_retryAfter" Retry="LoadAsync" />
+                    break;
+                case Phase.Ready when _profile is { } profile:
+                    <section class="profile__section" aria-labelledby="profile-heading">
+                        <h2 class="profile__heading" id="profile-heading">@L["Profile.Heading"]</h2>
+                        <dl class="profile__stats">
+                            <div class="profile__stat">
+                                <dt>@L["Profile.Streak"]</dt>
+                                <dd class="profile__streak">@Counted("Profile.Streak", profile.StreakDays)</dd>
+                            </div>
+                            <div class="profile__stat">
+                                <dt>@L["Profile.Total"]</dt>
+                                <dd class="profile__total">@profile.TotalAnswered.ToString(CultureInfo.CurrentCulture)</dd>
+                            </div>
+                            <div class="profile__stat">
+                                <dt>@L["Profile.Due"]</dt>
+                                <dd class="profile__due">
+                                    @if (profile.DueNow > 0)
+                                    {
+                                        <a href="@ModeHref("review")" data-enhance-nav="false">@Counted("Profile.Due.Link", profile.DueNow)</a>
+                                    }
+                                    else
+                                    {
+                                        @L["Profile.Due.None"]
+                                    }
+                                </dd>
+                            </div>
+                            <div class="profile__stat">
+                                <dt>@L["Profile.Next"]</dt>
+                                <dd class="profile__next">
+                                    @if (profile.NextDueAt is { } next)
+                                    {
+                                        <LocalTime Value="next" WithTime="true" />
+                                    }
+                                    else
+                                    {
+                                        @L["Profile.Next.None"]
+                                    }
+                                </dd>
+                            </div>
+                        </dl>
+                    </section>
+                    <div class="profile__progress">
+                        <ProgressBars Kind="topics" Heading="@L["Profile.Topics"]" Items="TopicItems(profile)" />
+                        <ProgressBars Kind="levels" Heading="@L["Profile.Levels"]" Items="LevelItems(profile)" />
+                    </div>
+                    <section class="profile__section profile__mocks" aria-labelledby="profile-mocks">
+                        <h3 id="profile-mocks">@L["Profile.Mocks"]</h3>
+                        @if (profile.RecentMocks.Count == 0)
+                        {
+                            <p>@L["Profile.Mocks.None"]</p>
+                        }
+                        else
+                        {
+                            <ul class="profile__list">
+                                @foreach (MockHistoryDto mock in profile.RecentMocks)
+                                {
+                                    <li>
+                                        <span class="level-chip level-@mock.Level">@mock.Level</span>
+                                        <LocalTime Value="mock.FinishedAt" />
+                                        <span>@Counted("Profile.Mock.Questions", mock.QuestionCount)</span>
+                                        <span class="profile__counts">@L["Profile.Mock.Counts", mock.Knew, mock.Partial, mock.DidntKnow, mock.Unanswered]</span>
+                                    </li>
+                                }
+                            </ul>
+                        }
+                    </section>
+                    break;
+            }
+            @* Says how the last Discard went; it takes focus because the button that had it is gone or disabled, and it
+               exists in every phase, unlike the profile heading. *@
+            @if (_discardMessage is { } discardMessage)
+            {
+                <p class="profile__notice" role="status" tabindex="-1" @ref="_discardNotice">@discardMessage</p>
+            }
+            @if (_failed.Count > 0)
+            {
+                <section class="profile__section profile__failed" aria-labelledby="profile-failed">
+                    <h3 id="profile-failed">@L["Profile.Failed.Heading"]</h3>
+                    <ul class="profile__list">
+                        @foreach (StoredMockSummary item in _failed)
+                        {
+                            <li>
+                                <span class="level-chip level-@item.Summary.Level">@item.Summary.Level</span>
+                                <LocalTime Value="item.Summary.FinishedAt" />
+                                <span>@string.Format(CultureInfo.CurrentCulture, L["Profile.Failed.Item"].Value, Reason(item.Reason))</span>
+                                <button type="button" class="btn profile__discard" disabled="@_discarding" @onclick="() => DiscardAsync(item.MockSessionId)">@L["Profile.Failed.Discard"]</button>
+                            </li>
+                        }
+                    </ul>
+                </section>
+            }
+        </div>
+    }
+</IslandRoot>
+
+@code {
+    // How long the profile waits for pending answers and summaries to reach the server before it fetches statistics.
+    private static readonly TimeSpan FlushWait = TimeSpan.FromSeconds(5);
+
+    private readonly CancellationTokenSource _lifetime = new();
+
+    private IslandBootstrapDto? _bootstrap;
+    private long? _owner;
+    private Phase _phase = Phase.Loading;
+    private IslandStateKind _state;
+    private TimeSpan? _retryAfter;
+    private ProfileDto? _profile;
+    private IReadOnlyList<StoredMockSummary> _failed = [];
+    private SlowStorage _slowStorage = null!;
+    private bool _loading;
+    private bool _discarding;
+    private bool _reloadRequested;
+    private string? _discardMessage;
+    private ElementReference _discardNotice;
+    private bool _focusNotice;
+
+    /// <summary>The <c>IslandBootstrapDto</c> the server serialised with <c>TrainerJsonContext</c>.</summary>
+    [Parameter, EditorRequired]
+    public string BootstrapJson { get; set; } = "";
+
+    private enum Phase
+    {
+        Loading,
+        State,
+        Ready,
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _slowStorage = new SlowStorage(Time);
+        _bootstrap = JsonSerializer.Deserialize(BootstrapJson, TrainerJsonContext.Default.IslandBootstrapDto)
+            ?? throw new InvalidOperationException("The island bootstrap is empty.");
+        _owner = _bootstrap.Me?.TelegramUserId;
+
+        string pageOwner = _owner is { } owner ? owner.ToString(CultureInfo.InvariantCulture) : AccountWatcher.Anonymous;
+
+        // Reads name the page's account too: the server answers 409 once another tab switched it (ADR 0008).
+        Api.BindOwner(pageOwner);
+        await Accounts.StartAsync(pageOwner);
+        if (_owner is not { } bound)
+        {
+            // The page requires a sign-in; a bootstrap without a user means the session ended meanwhile.
+            _state = IslandStateKind.SignedOut;
+            _phase = Phase.State;
+            return;
+        }
+
+        Sync.Start(bound);
+        await LoadAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_focusNotice && _discardMessage is not null)
+        {
+            _focusNotice = false;
+            await _discardNotice.FocusAsync();
+        }
+    }
+
+    public void Dispose()
+    {
+        _lifetime.Cancel();
+        _lifetime.Dispose();
+    }
+
+    private async Task LoadAsync()
+    {
+        if (_owner is not { } owner)
+        {
+            return;
+        }
+
+        if (_loading)
+        {
+            // An import finished during this load: load again afterwards so its answers are counted.
+            _reloadRequested = true;
+            return;
+        }
+
+        _loading = true;
+        try
+        {
+            do
+            {
+                _reloadRequested = false;
+                await LoadOnceAsync(owner);
+            }
+            while (_reloadRequested);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task LoadOnceAsync(long owner)
+    {
+        CancellationToken ct = _lifetime.Token;
+        // Flush-before-fetch: the statistics count what the server has, and a summary it refuses moves to the failed
+        // list now rather than after the page shows it as pending.
+        await Sync.FlushAsync(FlushWait, ct);
+        ApiResult<ProfileDto> result = await Api.ProfileAsync(_bootstrap!.Culture, _bootstrap.Stack, ct);
+        IslandStateKind kind = IslandState.FromResult(result, false);
+        if (kind == IslandStateKind.Ready)
+        {
+            _profile = result.Value;
+            _phase = Phase.Ready;
+        }
+        else
+        {
+            _state = kind;
+            _retryAfter = result.RetryAfter;
+            _phase = Phase.State;
+        }
+
+        _failed = await ReadFailedAsync(owner);
+    }
+
+    // Reads take no lock, but a corrupt value is quarantined first, which does; the profile never waits on that.
+    private Task<IReadOnlyList<StoredMockSummary>> ReadFailedAsync(long owner) =>
+        _slowStorage.WaitAsync(Summaries.ReadFailedAsync(owner).AsTask(), _failed);
+
+    private async Task DiscardAsync(string mockSessionId)
+    {
+        if (_discarding || _owner is not { } owner)
+        {
+            return;
+        }
+
+        _discarding = true;
+        try
+        {
+            Task<StoreResult> discard = Summaries.DiscardFailedAsync(owner, mockSessionId).AsTask();
+            StoreResult result = await _slowStorage.WaitAsync(discard, StoreResult.Failed(StoreErrors.Unavailable));
+            _failed = await ReadFailedAsync(owner);
+            // A timed-out or refused write is a failure even if it lands later: the list re-read says what is stored.
+            _discardMessage = result.Ok && !_failed.Any(f => string.Equals(f.MockSessionId, mockSessionId, StringComparison.Ordinal))
+                ? L["Profile.Failed.Discarded"].Value
+                : L["Profile.Failed.DiscardFailed"].Value;
+        }
+        finally
+        {
+            _discarding = false;
+            _focusNotice = true;
+        }
+    }
+
+    private string Counted(string baseKey, int count) => string.Format(
+        CultureInfo.CurrentCulture,
+        L[PluralForms.Key(baseKey, count, CultureInfo.CurrentUICulture)].Value,
+        count);
+
+    // The codes OutboxSyncService treats as final refusals; anything else (an older app's code) gets a general reason.
+    private string Reason(string? code) =>
+        string.Equals(code, ApiErrorCodes.Validation, StringComparison.Ordinal) || string.Equals(code, ApiErrorCodes.NotFound, StringComparison.Ordinal)
+            ? L["Profile.Failed.Reason." + code].Value
+            : L["Profile.Failed.Reason.Other"].Value;
+
+    private static List<ProgressBarItem> TopicItems(ProfileDto profile) =>
+        [.. profile.Topics.Select(t => new ProgressBarItem(t.Topic, t.Title, t.Known, t.LiveQuestions))];
+
+    private static List<ProgressBarItem> LevelItems(ProfileDto profile) =>
+        [.. profile.Levels.Select(l => new ProgressBarItem(l.Level, l.Level, l.Known, l.LiveQuestions))];
+
+    // Island pages carry <base href="/">, so every link is absolute.
+    private string ModeHref(string mode) => $"/{_bootstrap!.Culture}/{_bootstrap.Stack}/{mode}";
+}

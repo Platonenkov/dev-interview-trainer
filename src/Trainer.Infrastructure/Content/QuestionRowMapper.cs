@@ -56,12 +56,14 @@ internal sealed class QuestionRowMapper(IContentRenderer renderer)
     private QuestionPayload BuildPayload(QuestionDocument document)
     {
         CodeBlock? code = document.Code;
+        IReadOnlyList<string>? codeLines = code is null ? null : renderer.RenderCodeLines(code.Source, code.Language);
         return new QuestionPayload
         {
             CodeLanguage = code?.Language,
             Harness = code?.Harness,
             CodeSource = code?.Source,
             CodeHtml = code is null ? null : renderer.RenderCode(code.Source, code.Language),
+            CodeLinesHtml = codeLines,
             Expect = document.Expect,
             AcceptedOutputs = document.AcceptedOutputs,
             BugLineSets = document.BugLineSets,

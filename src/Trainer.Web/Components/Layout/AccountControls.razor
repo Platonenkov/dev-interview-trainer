@@ -1,0 +1,70 @@
+@using Trainer.Domain.Keys
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.Extensions.Options
+@using Trainer.Web.Auth
+@using Trainer.Web.Islands
+@using Trainer.Web.Client.Storage
+@using Trainer.Web.Routing
+@using Trainer.Web.Startup
+@implements IDisposable
+@inject IStringLocalizer<SharedResource> L
+@inject PageLinks Links
+@inject IOptions<AppOptions> App
+
+@if (HttpContext?.User is { Identity.IsAuthenticated: true } user)
+{
+    <div class="account">
+        <a class="account__name" href="/@Current/@App.Value.DefaultStack/profile" data-enhance-nav="false">@AccountName.For(user, L)</a>
+        <form class="account__logout" method="post" action="@(TelegramAuth.CallbackPath + "/logout")">
+            <AntiforgeryToken />
+            <button type="submit" class="account__button">@L["Account.SignOut"]</button>
+        </form>
+    </div>
+    @if (user.GetTelegramUserId() is { } owner)
+    {
+        @* Island tabs signed in as someone else notice this and ask for a reload (AccountWatcher). *@
+        <script src="/@Assets["js/account-publish.js"]" data-owner="@owner.ToString(CultureInfo.InvariantCulture)" defer></script>
+    }
+    @if (!InteractiveIslandPageAttribute.IsMatched(HttpContext))
+    {
+        @* Shown by import-notice.js while this browser holds answers given before sign-in (spec 4, 11.4). The script only
+           checks that the anonymous outbox key (data-key, from StorageKeys) exists; the text is localised here. Islands show their own notice. *@
+        <p class="import-notice" hidden data-key="@StorageKeys.AnonymousOutbox"><a href="/@Current/@App.Value.DefaultStack/profile#import" data-enhance-nav="false">@L["Account.ImportNotice"]</a></p>
+        <script src="/@Assets["js/import-notice.js"]" defer></script>
+    }
+}
+else if (!IsSignInPage)
+{
+    <a class="account__button" href="@SignInHref" rel="nofollow">@L["Account.SignIn"]</a>
+}
+
+@code {
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    private string Current => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
+
+    // The sign-in page is the target of the link; linking to it from itself would nest its URL in returnUrl.
+    private bool IsSignInPage =>
+        HttpContext?.Request.Path.Value is { } path
+        && CulturePath.FromPath(path) is { } culture
+        && string.Equals(path.TrimEnd('/'), SignInRedirectEndpoint.PagePath(culture, null), StringComparison.OrdinalIgnoreCase);
+
+    protected override void OnInitialized() => Links.Changed += OnLinksChanged;
+
+    public void Dispose() => Links.Changed -= OnLinksChanged;
+
+    // The return path comes from PageLinks, never the raw request: anonymous HTML is cached and shared, so it must
+    // carry the canonical URL, not whatever junk query the first visitor sent.
+    private string SignInHref
+    {
+        get
+        {
+            CultureKey culture = CultureKey.TryCreate(Current, out CultureKey parsed) ? parsed : CultureKey.Default;
+            string returnPath = Links.PathFor(culture) ?? "/" + culture.Value;
+            return SignInRedirectEndpoint.PagePath(culture, returnPath);
+        }
+    }
+
+    private void OnLinksChanged() => _ = InvokeAsync(StateHasChanged);
+}

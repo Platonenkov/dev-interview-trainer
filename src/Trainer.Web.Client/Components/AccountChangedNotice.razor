@@ -1,0 +1,36 @@
+@using Trainer.Web.Client.Sync
+@implements IDisposable
+@inject AccountNotice Notice
+@inject NavigationManager Navigation
+@inject IStringLocalizer<ClientResource> L
+
+@* Another tab published another owner, or the server refused this tab's owner: syncing stops, everything is kept, and
+   only a reload continues. Or the server ended the session while syncing: signing in again continues (the answers stay
+   in this browser meanwhile). Only IslandRoot renders this component; every other place asks AccountNotice, so it
+   appears once. *@
+@switch (Notice.Reason)
+{
+    case AccountNoticeReason.AccountChanged:
+        <div class="account-changed" role="alert">
+            <p>@L["Account.Changed"]</p>
+            <button type="button" class="btn btn--primary" @onclick="Reload">@L["Account.Reload"]</button>
+        </div>
+        break;
+    case AccountNoticeReason.SignedOut:
+        <div class="account-changed" role="alert">
+            <p>@L["State.SignedOut"]</p>
+            <a class="btn btn--primary" href="@SignInLink.For(Navigation)" rel="nofollow" data-enhance-nav="false">@L["State.SignIn"]</a>
+        </div>
+        break;
+}
+
+@code {
+    protected override void OnInitialized() => Notice.Changed += OnChanged;
+
+    public void Dispose() => Notice.Changed -= OnChanged;
+
+    // OutboxSyncService stops itself on the same events; this only shows the notice.
+    private void OnChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private void Reload() => Navigation.NavigateTo(Navigation.Uri, forceLoad: true);
+}

@@ -1,0 +1,91 @@
+@inject IStringLocalizer<ClientResource> L
+
+@* Open and situation questions: write (or think) an answer, reveal the reference, then grade yourself. An explicit
+   grade is the answer, notes or not; Skip records nothing. *@
+<div class="self">
+    <label class="self__label" for="@NotesId">@L["Self.Notes"]</label>
+    <textarea id="@NotesId"
+              class="self__notes"
+              rows="5"
+              readonly="@Attempt.IsFrozen"
+              value="@Attempt.Notes"
+              @oninput="OnNotesAsync"></textarea>
+    @if (!Attempt.ReferenceRevealed && AllowReveal)
+    {
+        <button type="button" class="btn" @onclick="RevealAsync">@L["Self.Reveal"]</button>
+    }
+    else if (Attempt.ReferenceRevealed)
+    {
+        <div class="term self__reference">
+            <p class="term__cmd"><span class="term__prompt" aria-hidden="true">$</span> @L["Feedback.Cmd.Answer"]</p>
+            <div class="rich">@((MarkupString)Attempt.Question.AnswerHtml)</div>
+        </div>
+        @* While the island saves the chosen grade the buttons stay, disabled, with a saving note: this component re-renders
+           after its own click even when the island holds its graded state back. *@
+        @if (!Attempt.IsDone || IsSaving)
+        {
+            <div class="self__grades" role="group" aria-label="@L["Self.Question"]">
+                <p class="self__question" aria-hidden="true">@L["Self.Question"]</p>
+                @GradeButton(Grade.Knew, "1", "Self.Grade.Knew")
+                @GradeButton(Grade.Partial, "2", "Self.Grade.Partial")
+                @GradeButton(Grade.DidntKnow, "3", "Self.Grade.DidntKnow")
+                @if (AllowSkip)
+                {
+                    <button type="button" class="btn btn--quiet" disabled="@Busy" @onclick="() => Skip.InvokeAsync()">@L["Self.Skip"]</button>
+                }
+                @if (IsSaving)
+                {
+                    <p class="self__saving" role="status">@L["Self.Saving"]</p>
+                }
+            </div>
+        }
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public QuestionAttempt Attempt { get; set; } = null!;
+
+    /// <summary>The user chose a grade; the island submits it through the grader and saves the answer.</summary>
+    [Parameter]
+    public EventCallback<Grade> Graded { get; set; }
+
+    /// <summary>Practice offers Skip after the reference is shown; nothing is recorded.</summary>
+    [Parameter]
+    public bool AllowSkip { get; set; }
+
+    [Parameter]
+    public EventCallback Skip { get; set; }
+
+    /// <summary>False while a mock is answered: the reference appears only in the assessment phase.</summary>
+    [Parameter]
+    public bool AllowReveal { get; set; } = true;
+
+    [Parameter]
+    public EventCallback Changed { get; set; }
+
+    /// <summary>Asked at every render: the island is saving the chosen grade (Practice); null when it never holds it back.</summary>
+    [Parameter]
+    public Func<bool>? Saving { get; set; }
+
+    private bool IsSaving => Saving?.Invoke() == true;
+
+    private bool Busy => Attempt.IsAssessing || IsSaving;
+
+    private string NotesId => "notes-" + Attempt.ClientAnswerId;
+
+    private RenderFragment GradeButton(Grade grade, string key, string label) =>
+        @<button type="button" class="btn self__grade self__grade--@GradeKeys.ToKey(grade)" disabled="@Busy" @onclick="() => Graded.InvokeAsync(grade)"><kbd class="kbd-hint" aria-hidden="true">@key</kbd>@L[label]</button>;
+
+    private Task OnNotesAsync(ChangeEventArgs e)
+    {
+        Attempt.SetNotes(e.Value as string ?? "");
+        return Changed.InvokeAsync();
+    }
+
+    private Task RevealAsync()
+    {
+        Attempt.RevealReference();
+        return Changed.InvokeAsync();
+    }
+}

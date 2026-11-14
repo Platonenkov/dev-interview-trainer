@@ -14,7 +14,7 @@ internal sealed class CatalogQueries(TrainerDbContext db) : ICatalogQueries
     {
         ArgumentNullException.ThrowIfNull(query);
 
-        IQueryable<QuestionEntity> live = LiveQuestions.Of(db, query.Culture, query.Stack);
+        IQueryable<QuestionEntity> live = ApplySearch(LiveQuestions.Of(db, query.Culture, query.Stack), query);
         Level[] levels = [.. query.Levels];
         string[] topics = [.. query.Topics.Select(t => t.Value)];
         QuestionType[] types = [.. query.Types];
@@ -28,11 +28,38 @@ internal sealed class CatalogQueries(TrainerDbContext db) : ICatalogQueries
         IReadOnlyList<CatalogRow> rows = await ReadRowsAsync(matching, query.Culture, page, topicTitles, ct);
 
         IReadOnlyList<FacetCount> levelCounts = await CountLevelsAsync(Filter(live, [], topics, types), ct);
-        IReadOnlyList<FacetCount> topicCounts = await CountTopicsAsync(Filter(live, levels, [], types), topics, topicTitles, ct);
+        IReadOnlyList<FacetCount> topicCounts = await CountTopicsAsync(Filter(live, levels, [], types), topics, topicTitles, query.Culture, ct);
         IReadOnlyList<FacetCount> typeCounts = await CountTypesAsync(Filter(live, levels, topics, []), ct);
 
         return new CatalogPage(rows, total, page, pageCount, levelCounts, topicCounts, typeCounts);
     }
+
+    /// <summary>
+    /// Narrows the live set before the facets are derived from it, so every count reflects the search. The term is a
+    /// bound parameter and its LIKE wildcards are escaped, so it only ever matches literally; a tag has to match
+    /// exactly (kebab-case, spaces turned into hyphens), which keeps "async" from pulling in every "async-*" tag.
+    /// </summary>
+    private IQueryable<QuestionEntity> ApplySearch(IQueryable<QuestionEntity> live, CatalogQuery query)
+    {
+        if (string.IsNullOrEmpty(query.Search))
+        {
+            return live;
+        }
+
+        string pattern = "%" + EscapeLike(query.Search) + "%";
+        string tag = query.Search.ToLowerInvariant().Replace(' ', '-');
+        string culture = query.Culture.Value;
+        return live.Where(q =>
+            q.Tags.Contains(tag)
+            || db.QuestionLocales.Any(l => l.QuestionId == q.Id && l.Culture == culture && EF.Functions.ILike(EF.Functions.Collate(l.Title, Collations.IcuSearch), pattern, LikeEscape)));
+    }
+
+    private const string LikeEscape = "\\";
+
+    private static string EscapeLike(string term) =>
+        term.Replace(LikeEscape, LikeEscape + LikeEscape, StringComparison.Ordinal)
+            .Replace("%", LikeEscape + "%", StringComparison.Ordinal)
+            .Replace("_", LikeEscape + "_", StringComparison.Ordinal);
 
     private static IQueryable<QuestionEntity> Filter(
         IQueryable<QuestionEntity> source, Level[] levels, string[] topics, QuestionType[] types)
@@ -69,13 +96,14 @@ internal sealed class CatalogQueries(TrainerDbContext db) : ICatalogQueries
                 join l in db.QuestionLocales on q.Id equals l.QuestionId
                 where l.Culture == cultureValue
                 orderby q.Level, l.Title, q.Slug
-                select new { q.Slug, l.Title, q.Level, q.TopicKey, q.Type, q.Tags })
+                select new { q.Id, q.Slug, l.Title, q.Level, q.TopicKey, q.Type, q.Tags })
             .Skip((page - 1) * CatalogQuery.PageSize)
             .Take(CatalogQuery.PageSize)
             .ToListAsync(ct);
 
         return [.. projected.Select(r => new CatalogRow(
-            r.Slug, r.Title, r.Level, new TopicKey(r.TopicKey), LiveQuestions.TitleOf(topicTitles, r.TopicKey), r.Type, r.Tags))];
+            r.Slug, r.Title, r.Level, new TopicKey(r.TopicKey), LiveQuestions.TitleOf(topicTitles, r.TopicKey), r.Type, r.Tags,
+            new QuestionId(r.Id)))];
     }
 
     private static async Task<IReadOnlyList<FacetCount>> CountLevelsAsync(IQueryable<QuestionEntity> source, CancellationToken ct)
@@ -110,6 +138,7 @@ internal sealed class CatalogQueries(TrainerDbContext db) : ICatalogQueries
         IQueryable<QuestionEntity> source,
         string[] selected,
         IReadOnlyDictionary<string, string> titles,
+        CultureKey culture,
         CancellationToken ct)
     {
         Dictionary<string, int> counts = await source
@@ -123,6 +152,6 @@ internal sealed class CatalogQueries(TrainerDbContext db) : ICatalogQueries
             counts.TryAdd(key, 0);
         }
 
-        return LiveQuestions.TopicFacets(counts, titles);
+        return LiveQuestions.TopicFacets(counts, titles, culture);
     }
 }

@@ -10,6 +10,10 @@ internal sealed record QuestionPayload
     public string? Harness { get; init; }
     public string? CodeSource { get; init; }
     public string? CodeHtml { get; init; }
+
+    /// <summary>The per-line <c>span.line</c> fragments whose newline join is the body of <see cref="CodeHtml"/>; the practice client marks bug lines on them.</summary>
+    public IReadOnlyList<string>? CodeLinesHtml { get; init; }
+
     public Expectation? Expect { get; init; }
     public IReadOnlyList<string>? AcceptedOutputs { get; init; }
     public IReadOnlyList<IReadOnlyList<int>>? BugLineSets { get; init; }

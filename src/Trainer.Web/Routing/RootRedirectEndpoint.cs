@@ -40,13 +40,18 @@ public static class RootRedirectEndpoint
         context.Response.Headers.Vary = "Accept-Language, Cookie";
 
         context.Request.Cookies.TryGetValue(CookieName, out string? cookie);
-        List<string> languages = context.Request.GetTypedHeaders().AcceptLanguage
+        CultureKey culture = ResolveCulture(cookie, AcceptLanguageByPreference(context.Request));
+        return Results.Redirect("/" + culture.Value, permanent: false);
+    }
+
+    /// <summary>The <c>Accept-Language</c> tags of <paramref name="request"/>, most preferred first, without <c>*</c> and q=0.</summary>
+    public static IReadOnlyList<string> AcceptLanguageByPreference(HttpRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return request.GetTypedHeaders().AcceptLanguage
             .Where(l => (l.Quality is null or > 0) && l.Value.HasValue && l.Value != "*")
             .OrderByDescending(l => l.Quality ?? 1.0)
             .Select(l => l.Value.Value!)
             .ToList();
-
-        CultureKey culture = ResolveCulture(cookie, languages);
-        return Results.Redirect("/" + culture.Value, permanent: false);
     }
 }

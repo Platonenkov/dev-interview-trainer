@@ -1,0 +1,54 @@
+@inject IStringLocalizer<ClientResource> L
+
+@* Native inputs inside their labels: the whole label is the target, and the browser handles arrows, Space and focus. *@
+<fieldset class="pick" disabled="@Attempt.IsFrozen">
+    <legend class="visually-hidden">@L[Attempt.Kind == QuestionKind.MultiChoice ? "Question.Options.Multi" : "Question.Options.Single"]</legend>
+    @* The column count follows the options (OptionLayout); islands.css applies it from 1024 px. *@
+    <div class="opts opts--pick opts--fit-@OptionLayout.Columns(Attempt.Options)">
+        @for (int i = 0; i < Attempt.Options.Count; i++)
+        {
+            OptionDto option = Attempt.Options[i];
+            bool picked = Attempt.Picked.Contains(option.Id);
+            <label class="opt opt--pick @VerdictClass(option, picked)">
+                <input type="@(Attempt.Kind == QuestionKind.MultiChoice ? "checkbox" : "radio")"
+                       name="@GroupName"
+                       value="@option.Id"
+                       checked="@picked"
+                       @onchange="() => ToggleAsync(option.Id)" />
+                @if (i < 4)
+                {
+                    <kbd class="kbd-hint" aria-hidden="true">@(i + 1)</kbd>
+                }
+                <span class="rich opt__text">@((MarkupString)option.TextHtml)</span>
+                @if (ShowVerdicts && (option.Correct || picked))
+                {
+                    <span class="opt__verdict" aria-hidden="true">@(option.Correct ? "✓" : "✗")</span>
+                    <span class="visually-hidden">@L[option.Correct ? "Feedback.Option.Correct" : "Feedback.Option.Wrong"]</span>
+                }
+            </label>
+        }
+    </div>
+</fieldset>
+
+@code {
+    [Parameter, EditorRequired]
+    public QuestionAttempt Attempt { get; set; } = null!;
+
+    /// <summary>Marks correct options and wrong picks (Practice feedback; Mock only after the end).</summary>
+    [Parameter]
+    public bool ShowVerdicts { get; set; }
+
+    [Parameter]
+    public EventCallback Changed { get; set; }
+
+    private string GroupName => "opt-" + Attempt.ClientAnswerId;
+
+    private string? VerdictClass(OptionDto option, bool picked) =>
+        !ShowVerdicts ? null : option.Correct ? "opt--good" : picked ? "opt--bad" : null;
+
+    private Task ToggleAsync(string optionId)
+    {
+        Attempt.Toggle(optionId);
+        return Changed.InvokeAsync();
+    }
+}

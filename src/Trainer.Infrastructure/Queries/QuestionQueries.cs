@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Trainer.Application.Catalog;
 using Trainer.Application.Questions;
 using Trainer.Domain.Keys;
 using Trainer.Domain.Questions;
@@ -56,6 +57,50 @@ internal sealed class QuestionQueries(TrainerDbContext db) : IQuestionQueries
             .Select(r => r.ToSlug)
             .FirstOrDefaultAsync(ct);
         return Slug.TryCreate(target, out Slug to) ? to : null;
+    }
+
+    public async Task<IReadOnlyList<CatalogRow>> GetRelatedAsync(
+        CultureKey culture, StackKey stack, QuestionId id, int limit, CancellationToken ct)
+    {
+        if (limit <= 0)
+        {
+            return [];
+        }
+
+        string idValue = id.Value;
+        string stackValue = stack.Value;
+        string cultureValue = culture.Value;
+        var own = await db.Questions
+            .AsNoTracking()
+            .Where(q => q.Id == idValue && q.StackKey == stackValue)
+            .Select(q => new { q.Tags, q.TopicKey })
+            .FirstOrDefaultAsync(ct);
+        if (own is null || own.Tags.Length == 0)
+        {
+            return [];
+        }
+
+        string[] tags = own.Tags;
+        string ownTopic = own.TopicKey;
+
+        // Liveness and the culture's locale come from LiveQuestions.Of, the same rule the catalog uses, so a related
+        // link can never point to a retired question or topic or to a page that would answer 404.
+        var projected = await (
+                from q in LiveQuestions.Of(db, culture, stack)
+                where q.Id != idValue
+                let shared = q.Tags.Count(t => tags.Contains(t))
+                where shared > 0
+                join l in db.QuestionLocales on q.Id equals l.QuestionId
+                where l.Culture == cultureValue
+                orderby shared descending, q.TopicKey == ownTopic ? 0 : 1, l.Title, q.Slug
+                select new { q.Id, q.Slug, l.Title, q.Level, q.TopicKey, q.Type, q.Tags })
+            .Take(limit)
+            .ToListAsync(ct);
+
+        Dictionary<string, string> topicTitles = await LiveQuestions.TopicTitlesAsync(db, culture, stack, ct);
+        return [.. projected.Select(r => new CatalogRow(
+            r.Slug, r.Title, r.Level, new TopicKey(r.TopicKey), LiveQuestions.TitleOf(topicTitles, r.TopicKey), r.Type, r.Tags,
+            new QuestionId(r.Id)))];
     }
 
     private static QuestionPageModel Map(

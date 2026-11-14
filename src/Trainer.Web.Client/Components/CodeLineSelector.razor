@@ -1,0 +1,35 @@
+@inject IStringLocalizer<ClientResource> L
+
+@* Find-bug: every line is a toggle button. The line number comes from the fragment's data-line (CSS) for the eye and
+   from the hidden prefix for screen readers. *@
+<div class="editor editor--select" role="group" aria-label="@L["Question.Lines"]">
+    <div class="code code-lines">
+        @for (int i = 0; i < Lines.Count; i++)
+        {
+            int line = i + 1;
+            bool selected = Attempt.SelectedLines.Contains(line);
+            <button type="button"
+                    class="code-line"
+                    aria-pressed="@(selected ? "true" : "false")"
+                    disabled="@Attempt.IsFrozen"
+                    @onclick="() => ToggleAsync(line)"><span class="visually-hidden">@(L["Question.Line", line].Value + " ")</span>@((MarkupString)Lines[i])</button>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public QuestionAttempt Attempt { get; set; } = null!;
+
+    /// <summary>Raised after every toggle, so the island can save and re-render its actions.</summary>
+    [Parameter]
+    public EventCallback Changed { get; set; }
+
+    private IReadOnlyList<string> Lines => Attempt.Question.CodeLinesHtml ?? [];
+
+    private Task ToggleAsync(int line)
+    {
+        Attempt.ToggleLine(line);
+        return Changed.InvokeAsync();
+    }
+}

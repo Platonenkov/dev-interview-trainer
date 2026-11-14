@@ -25,4 +25,24 @@ internal sealed class StackQueries(TrainerDbContext db) : IStackQueries
 
         return result;
     }
+
+    public async Task<IReadOnlyList<TopicTitle>> GetTopicTitlesAsync(CultureKey culture, StackKey stack, CancellationToken ct)
+    {
+        string cultureValue = culture.Value;
+        string stackValue = stack.Value;
+        var rows = await db.TopicLocales
+            .AsNoTracking()
+            .Where(l => l.StackKey == stackValue
+                && l.Culture == cultureValue
+                && db.Stacks.Any(s => s.Key == l.StackKey && s.RetiredAt == null)
+                && db.Topics.Any(t => t.StackKey == l.StackKey && t.Key == l.TopicKey && t.RetiredAt == null))
+            .Select(l => new { l.TopicKey, l.Title })
+            .ToListAsync(ct);
+
+        // The catalog facets and the profile sort the same way.
+        return [.. rows
+            .OrderBy(r => r.Title, LiveQuestions.TitleComparer(culture))
+            .ThenBy(r => r.TopicKey, StringComparer.Ordinal)
+            .Select(r => new TopicTitle(new TopicKey(r.TopicKey), r.Title))];
+    }
 }

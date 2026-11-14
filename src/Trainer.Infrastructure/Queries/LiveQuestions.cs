@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.EntityFrameworkCore;
 using Trainer.Application.Catalog;
 using Trainer.Domain.Keys;
@@ -42,12 +43,20 @@ internal static class LiveQuestions
     public static string TitleOf(IReadOnlyDictionary<string, string> titles, string topicKey) =>
         titles.TryGetValue(topicKey, out string? title) ? title : topicKey;
 
+    /// <summary>
+    /// The order of topic titles in <paramref name="culture"/>: the requested culture, never the thread's, which under
+    /// <c>/api</c> (no route culture) comes from <c>Accept-Language</c>. Sorted in memory because the database collation
+    /// is not the culture's. Russian, for one, puts Cyrillic titles before Latin ones.
+    /// </summary>
+    public static StringComparer TitleComparer(CultureKey culture) =>
+        StringComparer.Create(CultureInfo.GetCultureInfo(culture.Value), ignoreCase: false);
+
     public static FacetCount[] TopicFacets(
-        IEnumerable<KeyValuePair<string, int>> counts, IReadOnlyDictionary<string, string> titles)
+        IEnumerable<KeyValuePair<string, int>> counts, IReadOnlyDictionary<string, string> titles, CultureKey culture)
     {
         return [.. counts
             .Select(c => new FacetCount(c.Key, TitleOf(titles, c.Key), c.Value))
-            .OrderBy(f => f.Title, StringComparer.CurrentCulture)
+            .OrderBy(f => f.Title, TitleComparer(culture))
             .ThenBy(f => f.Key, StringComparer.Ordinal)];
     }
 }

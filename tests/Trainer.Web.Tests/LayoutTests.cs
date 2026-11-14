@@ -93,7 +93,7 @@ public sealed partial class LayoutTests(WebSiteFixture site) : IClassFixture<Web
 
         Assert.True(head >= 0 && script > head, "the inline theme script must be inside <head>");
         Assert.True(stylesheet > script, "the theme script must come before the first stylesheet");
-        Assert.DoesNotContain("blazor.web.js", body, StringComparison.Ordinal);
+        RuntimeAssertions.AssertNoRuntime(body);
     }
 
     [Fact]
@@ -104,7 +104,8 @@ public sealed partial class LayoutTests(WebSiteFixture site) : IClassFixture<Web
 
         string[] urls = [.. AssetUrl().Matches(body).Select(m => m.Groups["url"].Value)];
 
-        Assert.Equal(3, urls.Length);
+        // tokens.css, site.css, theme-toggle.js and runtime-preload.js.
+        Assert.Equal(4, urls.Length);
         foreach (string url in urls)
         {
             Assert.StartsWith("/", url, StringComparison.Ordinal);

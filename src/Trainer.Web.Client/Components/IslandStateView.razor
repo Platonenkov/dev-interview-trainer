@@ -1,0 +1,92 @@
+@using Trainer.Web.Client.Sync
+@inject IStringLocalizer<ClientResource> L
+@inject NavigationManager Navigation
+@inject AccountNotice AccountNotice
+
+@* What an island shows instead of questions; Practice, Mock and Review all use it. Storage problems belong to
+   StorageNotice and pending answers to SyncStatus (both in IslandRoot); answers the server rejected are not listed. *@
+@switch (Kind)
+{
+    case IslandStateKind.Loading:
+        <p class="island-state" role="status">@L["State.Loading"]</p>
+        break;
+    case IslandStateKind.Empty:
+        <div class="island-state" role="status">
+            <p>@L["State.Empty"]</p>
+            <button type="button" class="btn" @onclick="() => ChangeFilters.InvokeAsync()">@L["State.ChangeFilters"]</button>
+        </div>
+        break;
+    case IslandStateKind.Offline:
+        <div class="island-state" role="alert">
+            <p>@L["State.Offline"]</p>
+            <button type="button" class="btn btn--primary" @onclick="() => Retry.InvokeAsync()">@L["State.TryAgain"]</button>
+        </div>
+        break;
+    case IslandStateKind.RateLimited:
+        <div class="island-state" role="alert">
+            <p>@RateLimitedText</p>
+            <button type="button" class="btn" @onclick="() => Retry.InvokeAsync()">@L["State.TryAgain"]</button>
+        </div>
+        break;
+    case IslandStateKind.SignedOut:
+        <div class="island-state" role="alert">
+            <p>@L["State.SignedOut"]</p>
+            <a class="btn btn--primary" href="@SignInHref" rel="nofollow" data-enhance-nav="false">@L["State.SignIn"]</a>
+        </div>
+        break;
+    case IslandStateKind.AccountChanged:
+        @* The notice itself is the shell's (IslandRoot), so it appears once; this state only makes sure it shows. *@
+        break;
+    case IslandStateKind.ServerError:
+        <div class="island-state" role="alert">
+            <p>@L["State.ServerError"]</p>
+            <button type="button" class="btn btn--primary" @onclick="() => Retry.InvokeAsync()">@L["State.TryAgain"]</button>
+        </div>
+        break;
+}
+
+@code {
+    [Parameter, EditorRequired]
+    public IslandStateKind Kind { get; set; }
+
+    /// <summary>The 429 response's <c>Retry-After</c> (<c>ApiResult.RetryAfter</c>).</summary>
+    [Parameter]
+    public TimeSpan? RetryAfter { get; set; }
+
+    [Parameter]
+    public EventCallback Retry { get; set; }
+
+    /// <summary>The island opens its filters.</summary>
+    [Parameter]
+    public EventCallback ChangeFilters { get; set; }
+
+    protected override void OnParametersSet()
+    {
+        if (Kind == IslandStateKind.AccountChanged)
+        {
+            AccountNotice.Show();
+        }
+    }
+
+    // Seconds while the wait is short, whole minutes (rounded up) from two minutes on: "3600 seconds" reads badly.
+    private string RateLimitedText
+    {
+        get
+        {
+            if (RetryAfter is not { } wait)
+            {
+                return L["State.RateLimited"].Value;
+            }
+
+            int seconds = Math.Max(1, (int)Math.Ceiling(wait.TotalSeconds));
+            (string key, int count) = seconds < 120 ? ("State.RateLimitedIn", seconds) : ("State.RateLimitedInMinutes", (seconds + 59) / 60);
+            return string.Format(
+                CultureInfo.CurrentCulture,
+                L[PluralForms.Key(key, count, CultureInfo.CurrentUICulture)].Value,
+                count);
+        }
+    }
+
+    // The sign-in page returns here afterwards. Island pages carry <base href="/">, so the link is absolute.
+    private string SignInHref => SignInLink.For(Navigation);
+}

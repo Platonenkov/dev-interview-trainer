@@ -1,0 +1,895 @@
+@using System.Text.Json
+@using Trainer.Contracts.Storage
+@using Trainer.Domain.Ids
+@using Trainer.Web.Client.Api
+@using Trainer.Web.Client.Storage
+@using Trainer.Web.Client.Sync
+@implements IAsyncDisposable
+@inject TrainerApiClient Api
+@inject OutboxSyncService Sync
+@inject AccountWatcher Accounts
+@inject MockPersistence Persistence
+@inject KeyboardShortcuts Shortcuts
+@inject IAnswerGrader Grader
+@inject UlidGenerator Ids
+@inject ServerClock Clock
+@inject IJSRuntime JS
+@inject IStringLocalizer<ClientResource> L
+
+@* Mock interview (spec 5.3): setup, a warning for a small pool before any question shows, answering without feedback,
+   the assessment of open and situation questions, then the summary. The running mock is saved on every change and
+   resumes after a reload (MockPersistence); its answers reach the outbox before the summary shows any grade. Focus
+   always moves to what replaced the control the user used, never to the page body. *@
+<IslandRoot Usable="_view != View.Loading">
+    @if (_bootstrap is { } bootstrap)
+    {
+        <div class="mock" data-mock-phase="@PhaseKey" data-mock-read-only="@(ReadOnly ? "true" : null)">
+            @* One live region that exists from the start: text inserted together with its container is announced unreliably. *@
+            <div class="visually-hidden" role="status" aria-live="polite">@Announcement</div>
+            @if (ReadOnly)
+            {
+                <p class="mock__notice">@L["Mock.OtherTab"]</p>
+            }
+            @if (Persistence.IsSlow)
+            {
+                <p class="mock__notice mock__notice--slow">@L["Mock.Slow"]</p>
+            }
+            @if (_view is View.Setup or View.Prepared)
+            {
+                @switch (_anonymousMock)
+                {
+                    case AnonymousMockState.Unfinished:
+                    case AnonymousMockState.Pending when _anonymousFinishFailed:
+                        <div class="mock__notice mock__anonymous">
+                            <p>@L["Mock.Anonymous.Unfinished"]</p>
+                            @if (_anonymousFinishFailed)
+                            {
+                                <p>@L["Mock.Anonymous.Pending"]</p>
+                            }
+                            <button type="button" class="btn mock__anonymous-finish" disabled="@(ReadOnly || _anonymousBusy)" @onclick="FinishAnonymousAsync">@L["Mock.Anonymous.Finish"]</button>
+                        </div>
+                        break;
+                    case AnonymousMockState.HandedOver:
+                        <p class="mock__notice mock__anonymous">
+                            @L["Mock.Anonymous.Saved"]
+                            <a href="/@bootstrap.Culture/@bootstrap.Stack/profile#import" data-enhance-nav="false">@L["Mock.Anonymous.Import"]</a>
+                        </p>
+                        break;
+                }
+            }
+            @switch (_view)
+            {
+                case View.Setup:
+                case View.Prepared:
+                    <MockSetup @ref="_setup" Bootstrap="bootstrap" Value="_settings" Prepared="_view == View.Prepared" Busy="StartBlocked" Changed="OnSettingsChanged" Start="StartAsync">
+                        @if (_view == View.Prepared && _prepared is { } prepared)
+                        {
+                            <div class="mock-warn" tabindex="-1" @ref="_warning">
+                                <p class="mock-warn__text">@WarningText(prepared)</p>
+                                <div class="action-bar">
+                                    @if (OffersSuggestion(prepared))
+                                    {
+                                        <button type="button" class="btn btn--primary mock-warn__use" disabled="@StartBlocked" @onclick="UseSuggestedAsync">@L["Mock.UseSuggested", prepared.SuggestedCount]</button>
+                                    }
+                                    <button type="button" class="btn mock-warn__anyway" disabled="@StartBlocked" @onclick="BeginAsync">@L["Mock.StartAnyway"]</button>
+                                </div>
+                            </div>
+                        }
+                    </MockSetup>
+                    break;
+                case View.Loading:
+                case View.Finishing:
+                    <div class="island-state">
+                        <h2 class="mock__status" tabindex="-1" @ref="_status">@L[_view == View.Loading ? "State.Loading" : "Mock.Finishing"]</h2>
+                    </div>
+                    break;
+                case View.State:
+                    <div class="mock__state" tabindex="-1" @ref="_stateRegion">
+                        <IslandStateView Kind="_state" RetryAfter="_retryAfter" Retry="FetchAsync" ChangeFilters="ShowSetup" />
+                    </div>
+                    break;
+                case View.Elsewhere:
+                    <div class="island-state">
+                        <p>@L["Mock.Elsewhere"]</p>
+                        @if (_elsewherePending)
+                        {
+                            <p class="mock__notice">@L["Mock.Elsewhere.Pending"]</p>
+                        }
+                        <div class="action-bar">
+                            <a class="btn btn--primary" href="@_elsewhere" data-enhance-nav="false">@L["Mock.Elsewhere.Continue"]</a>
+                            <button type="button" class="btn mock__end-elsewhere" disabled="@ReadOnly" @onclick="EndElsewhereAsync">@L["Mock.Elsewhere.Finish"]</button>
+                        </div>
+                    </div>
+                    break;
+                case View.Session when _session is { } session:
+                    @switch (session.Phase)
+                    {
+                        case MockPhase.Answering:
+                            QuestionAttempt attempt = session.Current;
+                            <fieldset class="mock__frame" disabled="@ReadOnly">
+                                <legend class="visually-hidden">@L["Mock.Jump"]</legend>
+                                <div class="mock__bar">
+                                    <SessionBar Level="@attempt.Question.Level"
+                                                TopicTitle="@attempt.Question.TopicTitle"
+                                                Position="session.Index + 1"
+                                                Count="session.Attempts.Count"
+                                                Completed="session.Attempts.Count(MockSession.IsAnswered)" />
+                                    @if (session.Deadline is not null)
+                                    {
+                                        <MockTimer Session="session" Expired="FinishAsync" />
+                                    }
+                                </div>
+                                <MockJumpStrip Session="session" Selected="GoToAsync" />
+                                <div class="qs__body">
+                                    <QuestionCard @key="attempt.ClientAnswerId" @ref="_card" Attempt="attempt" Changed="SaveNowAsync">
+                                        @AnswerArea(attempt)
+                                    </QuestionCard>
+                                </div>
+                                <div class="action-bar mock__actions">
+                                    <button type="button" class="btn mock__prev" disabled="@(session.Index == 0)" @onclick="() => GoToAsync(session.Index - 1)">@L["Mock.Previous"]</button>
+                                    <button type="button" class="btn mock__next" disabled="@(session.Index + 1 == session.Attempts.Count)" @onclick="() => GoToAsync(session.Index + 1)">
+                                        @L["Mock.Next"]
+                                        <kbd class="kbd-hint" aria-hidden="true">N</kbd>
+                                    </button>
+                                    <button type="button" class="btn btn--primary mock__finish" @onclick="FinishAsync">@L["Mock.Finish"]</button>
+                                </div>
+                            </fieldset>
+                            break;
+                        case MockPhase.Assessment:
+                            <MockAssessment @ref="_assessment"
+                                            Session="session"
+                                            Saving="_assessing"
+                                            Disabled="ReadOnly"
+                                            Graded="GradeAsync"
+                                            Skip="SkipAsync"
+                                            ItemFocused="index => _activeItem = index" />
+                            break;
+                        case MockPhase.Summary when session.Completion is { } completion:
+                            <MockSummaryView @ref="_summary"
+                                             Session="session"
+                                             Summary="completion.Summary"
+                                             Culture="@bootstrap.Culture"
+                                             Stack="@bootstrap.Stack"
+                                             HandoffPending="_handoffPending"
+                                             NewMock="NewMockAsync" />
+                            break;
+                    }
+                    break;
+            }
+        </div>
+    }
+</IslandRoot>
+
+@code {
+    private readonly CancellationTokenSource _lifetime = new();
+
+    private IslandBootstrapDto? _bootstrap;
+    private long? _owner;
+    private MockSettings _settings = null!;
+    private View _view = View.Loading;
+    private IslandStateKind _state;
+    private TimeSpan? _retryAfter;
+    private MockSessionDto? _prepared;
+    private MockSession? _session;
+    private MockHandoff? _handoff;
+    private bool _handoffPending;
+    private string? _elsewhere;
+    private (MockSession Session, MockProgress Progress)? _elsewhereMock;
+    private bool _elsewherePending;
+    private AnonymousMockState _anonymousMock;
+    private bool _anonymousBusy;
+    private bool _anonymousFinishFailed;
+    private int? _assessing;
+    private int? _activeItem;
+    private bool _fetching;
+    private bool _loadPending;
+    private bool _starting;
+    private Focus _focus;
+    private int _focusItem;
+    private ElementReference _status;
+    private ElementReference _warning;
+    private ElementReference _stateRegion;
+    private MockSetup? _setup;
+    private QuestionCard? _card;
+    private MockAssessment? _assessment;
+    private MockSummaryView? _summary;
+    private DotNetObjectReference<MockIsland>? _self;
+    private int? _lifecycleHandle;
+
+    /// <summary>The <c>IslandBootstrapDto</c> the server serialised with <c>TrainerJsonContext</c>.</summary>
+    [Parameter, EditorRequired]
+    public string BootstrapJson { get; set; } = "";
+
+    private enum View
+    {
+        Loading,
+        Setup,
+        Prepared,
+        State,
+        Elsewhere,
+        Session,
+        Finishing,
+    }
+
+    private enum Focus
+    {
+        None,
+        Setup,
+        Status,
+        Warning,
+        State,
+        Question,
+        Assessment,
+        AssessmentItem,
+        Summary,
+    }
+
+    private bool ReadOnly => Persistence.IsReadOnly;
+
+    // Start waits while a fetch runs, while a load that timed out may still find a mock to resume, and while a start
+    // is releasing a stored mock (that step has no time bound: taking it as done early could overwrite that mock).
+    private bool StartBlocked => _fetching || _loadPending || _starting;
+
+    private string OwnerKey => _owner is { } owner ? owner.ToString(CultureInfo.InvariantCulture) : StorageKeys.AnonymousOwner;
+
+    // Tests wait on this attribute.
+    private string PhaseKey => _view switch
+    {
+        View.Session when _session is { } session => session.Phase.ToString().ToLowerInvariant(),
+        _ => _view.ToString().ToLowerInvariant(),
+    };
+
+    private string? Announcement
+    {
+        get
+        {
+            if (ReadOnly)
+            {
+                return L["Mock.OtherTab"].Value;
+            }
+
+            if (Persistence.IsSlow)
+            {
+                return L["Mock.Slow"].Value;
+            }
+
+            return _view switch
+            {
+                View.Prepared when _prepared is { } prepared => WarningText(prepared),
+                View.Finishing => L["Mock.Finishing"].Value,
+                _ when _handoffPending => L["Mock.HandoffPending"].Value,
+                _ => null,
+            };
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _bootstrap = JsonSerializer.Deserialize(BootstrapJson, TrainerJsonContext.Default.IslandBootstrapDto)
+            ?? throw new InvalidOperationException("The island bootstrap is empty.");
+        _owner = _bootstrap.Me?.TelegramUserId;
+        _settings = MockSettings.From(_bootstrap);
+        Persistence.Changed += OnPersistenceChanged;
+
+        // The watcher first: a sync bound after another tab already switched accounts must not start.
+        string pageOwner = _owner is { } owner ? owner.ToString(CultureInfo.InvariantCulture) : AccountWatcher.Anonymous;
+        // Reads name the page's account too: the server answers 409 once another tab switched it (ADR 0008).
+        Api.BindOwner(pageOwner);
+        await Accounts.StartAsync(pageOwner);
+        if (_owner is { } bound)
+        {
+            Sync.Start(bound);
+        }
+
+        await ResumeAsync();
+        if (_owner is not null)
+        {
+            _anonymousMock = await Persistence.ReleaseAnonymousAsync(Clock, finish: false);
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            Shortcuts.Pressed += OnShortcut;
+            await Shortcuts.StartAsync();
+            _self = DotNetObjectReference.Create(this);
+            try
+            {
+                _lifecycleHandle = await JS.InvokeAsync<int>("ditPageLifecycle.attach", _self);
+            }
+            catch (JSException)
+            {
+                // Without the script, debounced text is saved by its timer only.
+            }
+        }
+
+        Focus focus = _focus;
+        _focus = Focus.None;
+        ValueTask move = focus switch
+        {
+            Focus.Setup when _setup is not null && _view is View.Setup or View.Prepared => _setup.Heading.FocusAsync(),
+            Focus.Status when _view is View.Loading or View.Finishing => _status.FocusAsync(),
+            Focus.Warning when _view == View.Prepared => _warning.FocusAsync(),
+            Focus.State when _view == View.State => _stateRegion.FocusAsync(),
+            Focus.Question when _card is not null && _session?.Phase == MockPhase.Answering => _card.Title.FocusAsync(),
+            Focus.Assessment when _assessment is not null && _session?.Phase == MockPhase.Assessment => _assessment.Heading.FocusAsync(),
+            Focus.AssessmentItem when _assessment is not null && _session?.Phase == MockPhase.Assessment => _assessment.FocusItemAsync(_focusItem),
+            Focus.Summary when _summary is not null && _session?.Phase == MockPhase.Summary => _summary.Heading.FocusAsync(),
+            _ => ValueTask.CompletedTask,
+        };
+        await move;
+    }
+
+    /// <summary>The page is being hidden or left: the debounced text is saved now.</summary>
+    [JSInvokable]
+    public Task OnPageHidden() => Persistence.FlushAsync();
+
+    public async ValueTask DisposeAsync()
+    {
+        Shortcuts.Pressed -= OnShortcut;
+        Persistence.Changed -= OnPersistenceChanged;
+        await _lifetime.CancelAsync();
+        _lifetime.Dispose();
+        if (_lifecycleHandle is { } handle)
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("ditPageLifecycle.detach", handle);
+            }
+            catch (JSDisconnectedException)
+            {
+                // The page is going away; its listeners go with it.
+            }
+            catch (JSException)
+            {
+                // Nothing left to remove.
+            }
+        }
+
+        _self?.Dispose();
+    }
+
+    private RenderFragment AnswerArea(QuestionAttempt attempt) => attempt.Kind switch
+    {
+        QuestionKind.FindBug => @<CodeLineSelector Attempt="attempt" Changed="SaveNowAsync" />,
+        QuestionKind.OutputTyped => @<TypedOutputInput Attempt="attempt" Changed="ScheduleSave" />,
+        QuestionKind.SelfAssessed => @<SelfAssessment Attempt="attempt" AllowReveal="false" Changed="ScheduleSave" />,
+        _ => @<OptionList Attempt="attempt" ShowVerdicts="false" Changed="SaveNowAsync" />,
+    };
+
+    private async Task ResumeAsync()
+    {
+        Task<(MockSession? Session, MockProgress? Progress)> load = Persistence.LoadAsync(OwnerKey, Clock);
+        try
+        {
+            await load.WaitAsync(MockPersistence.WriteTimeout, _lifetime.Token);
+        }
+        catch (TimeoutException)
+        {
+            // The load goes on: Start stays blocked until it ends, and a mock it finds is still resumed.
+            _view = View.Setup;
+            _loadPending = true;
+            _ = AdoptLateAsync(load);
+            return;
+        }
+
+        await AdoptAsync(await load);
+    }
+
+    private async Task AdoptLateAsync(Task<(MockSession? Session, MockProgress? Progress)> load)
+    {
+        (MockSession? Session, MockProgress? Progress) loaded;
+        try
+        {
+            loaded = await load;
+        }
+#pragma warning disable CA1031 // A failed late load leaves the setup form usable; there is nothing else to do with it.
+        catch (Exception)
+#pragma warning restore CA1031
+        {
+            loaded = default;
+        }
+
+        await InvokeAsync(async () =>
+        {
+            _loadPending = false;
+            if (_session is null && _view is View.Setup or View.Prepared or View.State)
+            {
+                await AdoptAsync(loaded);
+            }
+
+            StateHasChanged();
+        });
+    }
+
+    private async Task AdoptAsync((MockSession? Session, MockProgress? Progress) loaded)
+    {
+        if (loaded is not { Session: { } session, Progress: { } progress })
+        {
+            _view = View.Setup;
+            return;
+        }
+
+        IslandBootstrapDto bootstrap = _bootstrap!;
+        if (!string.Equals(session.Context.Culture, bootstrap.Culture, StringComparison.Ordinal)
+            || !string.Equals(session.Context.Stack, bootstrap.Stack, StringComparison.Ordinal))
+        {
+            // Resuming here would mix languages on one page; the mock continues on its own page or is ended here.
+            _elsewhere = $"/{session.Context.Culture}/{session.Context.Stack}/mock";
+            _elsewhereMock = (session, progress);
+            _view = View.Elsewhere;
+            return;
+        }
+
+        Persistence.Adopt(progress);
+        _session = session;
+        _view = View.Session;
+        _focus = session.Phase == MockPhase.Answering ? Focus.Question : Focus.None;
+        if (session.Phase == MockPhase.Answering && session.IsExpired(Clock.Now()) && session.Finish())
+        {
+            await Persistence.SaveAsync(session);
+        }
+
+        _activeItem = FirstPending(session);
+        await CompleteIfReadyAsync();
+    }
+
+    // Until focus enters an item, 1-3 act on the first open one: it sits right under the assessment heading.
+    private static int? FirstPending(MockSession session) =>
+        session.PendingAssessment.FirstOrDefault() is { } first ? IndexOf(session, first) : null;
+
+    private void OnSettingsChanged(MockSettings settings)
+    {
+        _settings = settings;
+        if (_view == View.Prepared)
+        {
+            // The prepared questions belong to the previous choice; the focused field stays where it is.
+            _prepared = null;
+            _view = View.Setup;
+        }
+    }
+
+    private async Task StartAsync(MockSettings settings)
+    {
+        _settings = settings;
+        await FetchAsync();
+    }
+
+    private Task UseSuggestedAsync()
+    {
+        if (_prepared is { } prepared)
+        {
+            _settings = _settings with { Count = prepared.SuggestedCount };
+        }
+
+        return FetchAsync();
+    }
+
+    private void ShowSetup()
+    {
+        _view = View.Setup;
+        _focus = Focus.Setup;
+    }
+
+    private async Task FetchAsync()
+    {
+        // A double click must not fetch (and start) twice.
+        if (StartBlocked)
+        {
+            return;
+        }
+
+        _fetching = true;
+        try
+        {
+            IslandBootstrapDto bootstrap = _bootstrap!;
+            _prepared = null;
+            _view = View.Loading;
+            _focus = Focus.Status;
+            StateHasChanged();
+
+            ApiResult<MockSessionDto> result = await Api.MockAsync(_settings.ToRequest(bootstrap.Culture, bootstrap.Stack), _lifetime.Token);
+            IslandStateKind kind = IslandState.FromResult(result, result.Value is { Questions.Count: 0 });
+            if (kind != IslandStateKind.Ready)
+            {
+                _state = kind;
+                _retryAfter = result.RetryAfter;
+                _view = View.State;
+                _focus = Focus.State;
+                return;
+            }
+
+            _prepared = result.Value!;
+            _view = View.Prepared;
+            _focus = Focus.Warning;
+        }
+        finally
+        {
+            _fetching = false;
+        }
+
+        // A pool smaller than about 3 x N is warned about before any question shows; otherwise the mock starts at once.
+        if (_prepared is { RepeatsLikely: false })
+        {
+            await BeginAsync();
+        }
+    }
+
+    private async Task BeginAsync()
+    {
+        if (_prepared is not { } prepared || StartBlocked)
+        {
+            return;
+        }
+
+        _prepared = null;
+        IslandBootstrapDto bootstrap = _bootstrap!;
+        int count = prepared.Questions.Count;
+        MockContext context = new(
+            Ids.Next(),
+            OwnerKey,
+            bootstrap.Stack,
+            bootstrap.Culture,
+            _settings.Level,
+            _settings.Timed,
+            _settings.Timed ? MockContext.PerQuestion * count : null,
+            Clock.Now());
+        MockSession session = new(prepared.Questions, context, Ids, Random.Shared, Clock);
+        _view = View.Loading;
+        _focus = Focus.Status;
+        StateHasChanged();
+        bool started;
+        _starting = true;
+        try
+        {
+            started = await Persistence.StartAsync(session, _owner);
+        }
+        finally
+        {
+            _starting = false;
+        }
+
+        if (!started)
+        {
+            // A stored mock comes first: another tab's live one, or one whose results are not durable yet. It is
+            // resumed (and a finished one handed over), never replaced.
+            await ResumeAsync();
+            return;
+        }
+
+        _session = session;
+        _handoff = null;
+        _handoffPending = false;
+        _view = View.Session;
+        _focus = Focus.Question;
+    }
+
+    private Task SaveNowAsync() =>
+        _session is { Phase: MockPhase.Answering } session && !ReadOnly ? Persistence.SaveAsync(session) : Task.CompletedTask;
+
+    private void ScheduleSave()
+    {
+        if (_session is { Phase: MockPhase.Answering } session && !ReadOnly)
+        {
+            Persistence.ScheduleSave(session);
+        }
+    }
+
+    private Task GoToAsync(int index)
+    {
+        if (_session is not { Phase: MockPhase.Answering } session || ReadOnly)
+        {
+            return Task.CompletedTask;
+        }
+
+        session.GoTo(index);
+        return Persistence.SaveAsync(session);
+    }
+
+    // The finish button and the timer both land here; MockSession.Finish lets only the first one through.
+    private async Task FinishAsync()
+    {
+        if (_session is not { } session || ReadOnly || !session.Finish())
+        {
+            return;
+        }
+
+        _focus = Focus.Assessment;
+        _activeItem = FirstPending(session);
+        await Persistence.SaveAsync(session);
+        await CompleteIfReadyAsync();
+    }
+
+    private async Task GradeAsync((int Index, Grade Grade) choice)
+    {
+        if (_session is not { Phase: MockPhase.Assessment } session || ReadOnly || _assessing is not null
+            || session.Attempts[choice.Index] is not { CanSelfAssess: true })
+        {
+            return;
+        }
+
+        // The grade shows only after the save returned: the screen never shows a grade a reload could lose. Focus waits
+        // on the item's title meanwhile, because its buttons are disabled while saving.
+        BeginAssessing(choice.Index);
+        try
+        {
+            await session.AssessAsync(choice.Index, choice.Grade, Grader, _lifetime.Token);
+            await Persistence.SaveAsync(session);
+        }
+        finally
+        {
+            _assessing = null;
+        }
+
+        await AfterAssessmentAsync(session, choice.Index);
+    }
+
+    private async Task SkipAsync(int index)
+    {
+        if (_session is not { Phase: MockPhase.Assessment } session || ReadOnly || _assessing is not null
+            || session.Attempts[index] is not { CanSelfAssess: true })
+        {
+            return;
+        }
+
+        BeginAssessing(index);
+        try
+        {
+            session.SkipAssessment(index);
+            await Persistence.SaveAsync(session);
+        }
+        finally
+        {
+            _assessing = null;
+        }
+
+        await AfterAssessmentAsync(session, index);
+    }
+
+    private void BeginAssessing(int index)
+    {
+        _assessing = index;
+        _focus = Focus.AssessmentItem;
+        _focusItem = index;
+        StateHasChanged();
+    }
+
+    // Focus goes to the next open item after this one (wrapping round), or on to the summary when none is left.
+    private async Task AfterAssessmentAsync(MockSession session, int index)
+    {
+        List<int> pending = [.. session.PendingAssessment.Select(a => IndexOf(session, a))];
+        if (pending.Count > 0)
+        {
+            int next = pending.FirstOrDefault(i => i > index, pending[0]);
+            _focus = Focus.AssessmentItem;
+            _focusItem = next;
+            _activeItem = next;
+            return;
+        }
+
+        await CompleteIfReadyAsync();
+    }
+
+    // Hands the results over (outbox first) and only then shows the summary. Every storage step inside is bounded, so a
+    // lock that is never granted delays the summary by seconds, never for good; the answers then wait in this tab's
+    // memory and the slow notice says so.
+    private async Task CompleteIfReadyAsync()
+    {
+        if (_session is not { CanComplete: true } session || ReadOnly)
+        {
+            return;
+        }
+
+        _view = View.Finishing;
+        _focus = Focus.Status;
+        StateHasChanged();
+        try
+        {
+            _handoff = await Persistence.HandOffAsync(session, _owner);
+        }
+        finally
+        {
+            _view = View.Session;
+        }
+
+        if (_owner is not null)
+        {
+            Sync.RequestFlush();
+        }
+
+        _focus = Focus.Summary;
+    }
+
+    // A new mock may replace this one only once its results are durable (P24): the hand-over is tried again first, and
+    // while the stored mock still waits for it the summary stays, saying why.
+    private async Task NewMockAsync()
+    {
+        if (_session is { } session && _handoff is not { Cleared: true } && !ReadOnly)
+        {
+            await CompleteIfReadyAsync();
+            if (_handoff is not { Cleared: true } && await IsStoredAsync(session.Context.SessionId))
+            {
+                _handoffPending = true;
+                _focus = Focus.Summary;
+                return;
+            }
+        }
+
+        _session = null;
+        _handoff = null;
+        _handoffPending = false;
+        _view = View.Setup;
+        _focus = Focus.Setup;
+    }
+
+    // Ends a mock of another culture or stack from here: unanswered questions stay unanswered, open ones are skipped,
+    // and only once its results are durable may a mock start on this page.
+    private async Task EndElsewhereAsync()
+    {
+        if (_elsewhereMock is not { } elsewhere || ReadOnly)
+        {
+            return;
+        }
+
+        (MockSession session, MockProgress progress) = elsewhere;
+        Persistence.Adopt(progress);
+        session.Finish();
+        foreach (QuestionAttempt pending in session.PendingAssessment)
+        {
+            session.SkipAssessment(IndexOf(session, pending));
+        }
+
+        _view = View.Finishing;
+        _focus = Focus.Status;
+        StateHasChanged();
+        MockHandoff outcome;
+        try
+        {
+            outcome = await Persistence.HandOffAsync(session, _owner);
+        }
+        finally
+        {
+            _view = View.Elsewhere;
+        }
+
+        if (_owner is not null)
+        {
+            Sync.RequestFlush();
+        }
+
+        if (outcome.Cleared || !await IsStoredAsync(session.Context.SessionId))
+        {
+            _elsewhereMock = null;
+            _elsewherePending = false;
+            _view = View.Setup;
+            _focus = Focus.Setup;
+            return;
+        }
+
+        _elsewherePending = true;
+    }
+
+    // A mock begun before sign-in: ending it here hands its answers to the anonymous outbox, which the profile imports.
+    private async Task FinishAnonymousAsync()
+    {
+        if (_anonymousBusy || ReadOnly)
+        {
+            return;
+        }
+
+        _anonymousBusy = true;
+        try
+        {
+            _anonymousMock = await Persistence.ReleaseAnonymousAsync(Clock, finish: true);
+            _anonymousFinishFailed = _anonymousMock == AnonymousMockState.Pending;
+        }
+        finally
+        {
+            _anonymousBusy = false;
+        }
+    }
+
+    private async Task<bool> IsStoredAsync(string sessionId)
+    {
+        try
+        {
+            (_, MockProgress? stored) = await Persistence.LoadAsync(OwnerKey, Clock).WaitAsync(MockPersistence.WriteTimeout, _lifetime.Token);
+            return string.Equals(stored?.SessionId, sessionId, StringComparison.Ordinal);
+        }
+        catch (TimeoutException)
+        {
+            // Unknown: keep the mock rather than risk replacing results that are not durable.
+            return true;
+        }
+    }
+
+    private static int IndexOf(MockSession session, QuestionAttempt attempt)
+    {
+        for (int i = 0; i < session.Attempts.Count; i++)
+        {
+            if (ReferenceEquals(session.Attempts[i], attempt))
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private bool OffersSuggestion(MockSessionDto prepared) => _settings.OffersSuggestion(prepared.SuggestedCount);
+
+    private string WarningText(MockSessionDto prepared)
+    {
+        string text = string.Format(
+            CultureInfo.CurrentCulture,
+            L[PluralForms.Key("Mock.SmallPool", prepared.PoolSize, CultureInfo.CurrentUICulture)].Value,
+            prepared.PoolSize);
+        if (OffersSuggestion(prepared))
+        {
+            text += " " + L["Mock.SmallPool.Try", prepared.SuggestedCount].Value;
+        }
+
+        if (_settings.Timed)
+        {
+            // The limit follows the questions received, which a small pool may cut below N.
+            text += " " + L["Mock.SmallPool.Timer", MockSetup.Duration(MockContext.PerQuestion * prepared.Questions.Count)].Value;
+        }
+
+        return text;
+    }
+
+    private void OnPersistenceChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private void OnShortcut(ShortcutKey key) => _ = InvokeAsync(() => HandleShortcutAsync(key));
+
+    private async Task HandleShortcutAsync(ShortcutKey key)
+    {
+        if (_view != View.Session || _session is not { } session || ReadOnly)
+        {
+            return;
+        }
+
+        if (session.Phase == MockPhase.Answering)
+        {
+            QuestionAttempt attempt = session.Current;
+            ShortcutAction action = KeyboardShortcuts.Resolve(key, attempt, session.Index + 1 < session.Attempts.Count);
+            switch (action.Command)
+            {
+                case ShortcutCommand.PickOption:
+                    attempt.Toggle(attempt.Options[action.OptionIndex].Id);
+                    await SaveNowAsync();
+                    break;
+                case ShortcutCommand.Next:
+                    await GoToAsync(session.Index + 1);
+                    break;
+                default:
+                    return;
+            }
+        }
+        else if (session.Phase == MockPhase.Assessment && AssessmentTarget(session) is { } target)
+        {
+            // 1-3 grade the item that holds focus (or that focus was last moved to), never one out of view.
+            ShortcutAction action = KeyboardShortcuts.Resolve(key, session.Attempts[target], false);
+            if (action.Command != ShortcutCommand.SelfGrade)
+            {
+                return;
+            }
+
+            await GradeAsync((target, action.Grade));
+        }
+
+        StateHasChanged();
+    }
+
+    private int? AssessmentTarget(MockSession session)
+    {
+        if (_activeItem is { } active && active >= 0 && active < session.Attempts.Count && session.Attempts[active].CanSelfAssess)
+        {
+            return active;
+        }
+
+        return null;
+    }
+}

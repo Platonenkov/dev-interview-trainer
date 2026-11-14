@@ -1,16 +1,64 @@
+@using Trainer.Web.Islands
 @using Trainer.Web.Startup
 <!DOCTYPE html>
 <html lang="@CultureInfo.CurrentUICulture.TwoLetterISOLanguageName">
 <head>
     <script>@((MarkupString)ThemeScript.Source)</script>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    @if (IsIslandPage)
+    {
+        @* The runtime, the preloads and its JS initializers resolve "_framework/..." against the document base. *@
+        <base href="/" />
+        @* The on-screen keyboard resizes the layout instead of covering inputs. iOS Safari ignores it; islands.css pads with env(safe-area-inset-bottom). *@
+        <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content" />
+    }
+    else
+    {
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+    }
     <link rel="stylesheet" href="/@Assets["css/tokens.css"]" />
     <link rel="stylesheet" href="/@Assets["css/site.css"]" />
+    @if (IsIslandPage)
+    {
+        <link rel="stylesheet" href="/@Assets["css/islands.css"]" />
+        <ResourcePreloader />
+        @* Maps the runtime's plain module names (blazor.web.js imports ./_framework/dotnet.js) to the fingerprinted files
+           the preloads fetched; without it each such file is downloaded twice. Inline, so allowed by nonce (ADR 0012). *@
+        <ImportMap AdditionalAttributes="ImportMapAttributes" />
+    }
     <HeadOutlet />
 </head>
 <body>
     <Routes />
     <script src="/@Assets["js/theme-toggle.js"]" defer></script>
+    @if (IsIslandPage)
+    {
+        @* Only island pages load the runtime (ADR 0009). *@
+        @* Before the runtime: the islands call window.ditStore for every outbox and mock-session write. *@
+        <script src="/@Assets["js/outbox.js"]"></script>
+        @* Before the runtime too: KeyboardShortcuts attaches through window.ditShortcuts. *@
+        <script src="/@Assets["js/shortcuts.js"]"></script>
+        @* The Mock island saves its debounced text when the page is hidden (window.ditPageLifecycle). *@
+        <script src="/@Assets["js/page-lifecycle.js"]"></script>
+        <script src="/@Assets["_framework/blazor.web.js"]" autostart="false"></script>
+        <script src="/@Assets["js/islands-start.js"]"></script>
+    }
+    else
+    {
+        @* Prefetches the runtime when a Practice or Mock entry point is hovered, focused or touched (spec 8.2). *@
+        <script src="/@Assets["js/runtime-preload.js"]" defer></script>
+    }
 </body>
 </html>
+
+@code {
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    [Inject]
+    private CspNonce Nonce { get; set; } = default!;
+
+    private bool IsIslandPage => HttpContext is not null && InteractiveIslandPageAttribute.IsMatched(HttpContext);
+
+    private Dictionary<string, object> ImportMapAttributes => new(StringComparer.Ordinal) { ["nonce"] = Nonce.Value };
+}

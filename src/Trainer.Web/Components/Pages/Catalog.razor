@@ -2,12 +2,16 @@
 @using Microsoft.AspNetCore.OutputCaching
 @attribute [OutputCache(PolicyName = "public-catalog")]
 @using Trainer.Application.Catalog
+@using Trainer.Application.Progress
 @using Trainer.Domain.Keys
+@using Trainer.Domain.Questions
+@using Trainer.Web.Auth
 @using Trainer.Web.Catalog
 @using Trainer.Web.ContentState
 @using Trainer.Web.Seo
 @inject IStringLocalizer<SharedResource> L
 @inject ICatalogQueries Catalogs
+@inject IProgressQueries Progress
 @inject ContentSnapshotProvider Snapshots
 
 @if (_query is not null && _page is not null)
@@ -24,6 +28,12 @@
         <section>
             <h1 class="catalog__heading">@L["Catalog.Heading"]</h1>
             <p class="catalog__found">@L["Catalog.Found", _page.Total]</p>
+            @if (_page.Total > 0)
+            {
+                <p class="practise-these">
+                    <IslandLink Class="btn btn--primary" Href="@PracticeUrl()" PreloadRuntime="true">@L["Practice.These"]</IslandLink>
+                </p>
+            }
             @if (_page.Rows.Count == 0)
             {
                 <p>@L["Catalog.Empty"]</p>
@@ -33,7 +43,7 @@
                 <ol class="rows">
                     @foreach (CatalogRow row in _page.Rows)
                     {
-                        <li><QuestionRow Row="row" Culture="@_query.Culture.Value" Stack="@_query.Stack.Value" /></li>
+                        <li><QuestionRow Row="row" Culture="@_query.Culture.Value" Stack="@_query.Stack.Value" Statuses="_statuses" /></li>
                     }
                 </ol>
             }
@@ -54,10 +64,20 @@
 
     private CatalogQuery? _query;
     private CatalogPage? _page;
+    private IReadOnlyDictionary<QuestionId, QuestionStatus>? _statuses;
 
-    // Combinations beyond one level and one topic, any type filter and every page after the first would only
-    // duplicate or dilute the indexable single-selection pages.
-    private bool IsNoIndex() => _query!.Levels.Count > 1 || _query.Topics.Count > 1 || _query.Types.Count > 0 || _page!.Page > 1;
+    // Combinations beyond one level and one topic, any type filter, every page after the first and every search would
+    // only duplicate or dilute the indexable single-selection pages.
+    private bool IsNoIndex() =>
+        _query!.Levels.Count > 1 || _query.Topics.Count > 1 || _query.Types.Count > 0 || _page!.Page > 1 || _query.Search is not null;
+
+    // The catalog's filters without the page or the search: Practice draws its own random selection from them.
+    private string PracticeUrl()
+    {
+        string query = CatalogQueryParser.ToCanonicalQueryString(_query! with { Page = 1, Search = null });
+        string path = $"/{_query!.Culture.Value}/{_query.Stack.Value}/practice";
+        return query.Length == 0 ? path : path + "?" + query;
+    }
 
     private string PageTitleText()
     {
@@ -86,5 +106,9 @@
         HashSet<TopicKey> knownTopics = [.. Snapshots.Current.TopicsOf(stack.Value).Select(t => new TopicKey(t))];
         _query = CatalogQueryParser.Parse(culture, stack, HttpContext.Request.Query, knownTopics);
         _page = await Catalogs.GetAsync(_query, HttpContext.RequestAborted);
+        if (HttpContext.User.GetUserId() is { } user)
+        {
+            _statuses = await Progress.GetStatusesAsync(user, [.. _page.Rows.Select(r => r.Id)], HttpContext.RequestAborted);
+        }
     }
 }

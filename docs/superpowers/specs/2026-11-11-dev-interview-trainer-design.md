@@ -88,9 +88,16 @@ Why it exists:
 | Who | Can do |
 |---|---|
 | Anonymous visitor | Browse home, catalog, topic and question pages; Practice and Mock modes. Progress is kept only in the browser (`localStorage`). |
-| Signed-in user | Everything above plus server-side progress, Review mode, statistics per topic and level, streak. |
+| Signed-in user | Everything above plus server-side progress, Review mode, statistics per topic and level, streak, and question feedback (see below). |
 | Editor (role) | Reserved for future in-app tooling; no extra UI in v1. |
 | Admin (role) | Health page, content import status, user block flag. |
+
+Question feedback (owner decision 2026-11-13, Plan 3): a signed-in user can
+like or dislike a question and report it with a reason chosen from a fixed
+list (wrong answer, unclear wording, outdated, broken link, other) plus an
+optional comment. Anonymous visitors see no feedback controls. One rating per
+user and question (changeable); reports are rate-limited per user and listed
+for the Admin role. Reports feed the post-launch re-verification of content.
 
 Sign-in flow: `Telegram.OpenIdConnect.AspNetCore` with cookie auth. The
 `ITelegramSignInGate` implementation allows everyone who is not blocked,
@@ -434,8 +441,11 @@ analyzers and NuGet audit.
   Markdown or highlighting libraries on the client (content arrives as
   pre-rendered HTML, section 7.5). Performance targets, measured and recorded
   by the builder: on a mid-range phone over 4G, Practice is interactive within
-  2 s with a warm cache and within 5 s cold. Public pages link-preload the
-  runtime only on hover/focus of the Practice/Mock entry points.
+  2 s with a warm cache and within 5 s cold. These are measured on a real phone
+  against the deployed site (the island page opened with `?perf=1`) and are an
+  acceptance criterion of the deployment plan; the CI emulation of a phone guards
+  against regressions with its own budgets (ADR 0014). Public pages link-preload
+  the runtime only on hover/focus of the Practice/Mock entry points.
 
 ### 8.3 Localisation and URLs
 
@@ -446,8 +456,9 @@ analyzers and NuGet audit.
 - Server: route culture is authoritative. `UseRouting` runs before
   `UseRequestLocalization` so a route-data culture provider sees the
   `{culture}` value.
-- WebAssembly: the client starts with `Blazor.start({ webAssembly: {
-  applicationCulture } })` set from `<html lang>`, ships satellite resource
+- WebAssembly: the client takes its culture from `<html lang>` at startup
+  (`PageCulture.Apply`, because the client runs with invariant globalization and
+  the runtime ignores `applicationCulture`, ADR 0013), ships satellite resource
   assemblies for every supported culture, and never changes culture at
   runtime. The language switcher is a plain link with
   `data-enhance-nav="false"`, forcing a full reload into the other culture, so
@@ -462,6 +473,7 @@ analyzers and NuGet audit.
   - `/{culture}/{stack}/topics/{topic}` topic page
   - `/{culture}/{stack}/questions/{slug}` question page
   - `/{culture}/{stack}/practice`, `/mock`, `/review` interactive modes (noindex)
+  - `/{culture}/{stack}/profile` statistics and the anonymous import, signed-in users (noindex; ADR 0010)
   - `/{culture}/signin` sign-in page; library endpoints `/signin-telegram/*` stay
     outside the culture prefix (section 11, item 2)
 
@@ -484,7 +496,8 @@ analyzers and NuGet audit.
     (progress, statuses).
   - Varies by path plus an explicit, normalised query allow-list
     (`level`, `topic`, `type`, `page`); other query parameters are ignored for
-    the key. Size limit configured.
+    the key. Size limit configured. Catalog requests with a search term (`q`)
+    are never cached: see ADR 0011.
   - Evicted by tag after content import.
   - Integration tests assert that anonymous public responses carry no
     `Set-Cookie` and that a second request is a cache hit.
@@ -769,7 +782,8 @@ directly into sections 4-8; this list keeps the remaining calls in one place.
    `Accept-Language`), preserving `denied`/`error` query flags. The sign-in
    link passes `returnUrl` with the culture path. Sign-in and logout controls
    are rendered by the static SSR layout. Anonymous responses show only a plain
-   "Sign in" link (no form, so no antiforgery cookie and they stay cacheable);
+   "Sign in" link (no form, so no antiforgery cookie and they stay cacheable;
+   the one exception is the catalog's GET search form, ADR 0011);
    signed-in responses, which bypass the cache, render the logout form with its
    antiforgery token.
    Auth state reaches islands as described in section 8.8.

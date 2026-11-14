@@ -1,0 +1,74 @@
+@page "/{Culture:length(2)}/{Stack}/mock"
+@using Trainer.Application.Catalog
+@using Trainer.Contracts
+@using Trainer.Domain.Keys
+@using Trainer.Domain.Levels
+@using Trainer.Web.Catalog
+@using Trainer.Web.Client.Islands
+@using Trainer.Web.ContentState
+@using Trainer.Web.Islands
+@attribute [InteractiveIslandPage]
+@inject IStringLocalizer<SharedResource> L
+@inject IslandBootstrapFactory Bootstrap
+@inject ContentSnapshotProvider Snapshots
+
+@* The culture constraint keeps POST /api/sessions/mock (Culture "api", Stack "sessions") from matching this page.
+   No output cache: an island page is noindex and its bootstrap carries the signed-in user's progress. *@
+@if (_query is { } query && _bootstrap is not null)
+{
+    @* SeoHead sets PageLinks, so "Sign in" and the language switch return to this mock with its filters. *@
+    <SeoHead Title="@($"{L["Mock.Title"]} · {L["Site.Name"]}")"
+             Description="@L["Mock.Description"]"
+             CanonicalPathAndQuery="@PathFor(query.Culture)"
+             AvailableCultures="CultureKey.Supported"
+             PathForCulture="PathFor"
+             NoIndex="true" />
+
+    <h1>@L["Mock.Heading"]</h1>
+    <div class="island" data-island="mock">
+        <div class="island-skeleton" aria-hidden="true"></div>
+        <IslandBootError Href="@PathFor(query.Culture)" />
+        <MockIsland @rendermode="IslandRenderMode.NoPrerender" BootstrapJson="@_bootstrap" />
+    </div>
+}
+
+@code {
+    [Parameter]
+    public string? Culture { get; set; }
+
+    [Parameter]
+    public string? Stack { get; set; }
+
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    private CatalogQuery? _query;
+    private string? _bootstrap;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        // The culture and the stack were checked by CultureAndStackMiddleware before the page ran.
+        if (HttpContext is null || !CultureKey.TryCreate(Culture, out CultureKey culture) || !StackKey.TryCreate(Stack, out StackKey stack))
+        {
+            return;
+        }
+
+        HashSet<TopicKey> knownTopics = [.. Snapshots.Current.TopicsOf(stack.Value).Select(t => new TopicKey(t))];
+        // A mock mixes question types (spec 5.3), so only the level and topic filters of a catalog link carry over.
+        _query = CatalogQueryParser.Parse(culture, stack, HttpContext.Request.Query, knownTopics) with { Page = 1, Types = [], Search = null };
+        PracticeFiltersDto filters = new(
+            [.. _query.Levels.Select(LevelKeys.ToKey)],
+            [.. _query.Topics.Select(t => t.Value)],
+            [],
+            null,
+            null);
+        _bootstrap = await Bootstrap.CreateJsonAsync(culture, stack, filters, HttpContext.User, HttpContext.RequestAborted);
+    }
+
+    private string PathFor(CultureKey target)
+    {
+        string path = $"/{target.Value}/{_query!.Stack.Value}/mock";
+        string query = CatalogQueryParser.ToCanonicalQueryString(_query);
+        return query.Length == 0 ? path : path + "?" + query;
+    }
+}

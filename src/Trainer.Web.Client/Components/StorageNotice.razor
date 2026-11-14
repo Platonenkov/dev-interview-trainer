@@ -1,0 +1,47 @@
+@using Trainer.Web.Client.Storage
+@implements IDisposable
+@inject OutboxStore Outbox
+@inject SummaryStore Summaries
+@inject ActiveMockStore ActiveMock
+@inject IStringLocalizer<ClientResource> L
+
+@if (Message is { } message)
+{
+    <p class="storage-notice" role="status">@message</p>
+}
+
+@code {
+    private string? Message => Status switch
+    {
+        StorageStatus.MemoryOnly => L["Storage.MemoryOnly"].Value,
+        StorageStatus.Full => string.Format(
+            CultureInfo.CurrentCulture,
+            L[PluralForms.Key("Storage.Full", Outbox.UnsavedCount, CultureInfo.CurrentUICulture)].Value,
+            Outbox.UnsavedCount),
+        StorageStatus.NewerVersion => L["Storage.NewerVersion"].Value,
+        StorageStatus.WriteFailed => L["Storage.WriteFailed"].Value,
+        _ => null,
+    };
+
+    // A tab that cannot write at all says so first; otherwise data left for a newer app outranks a full storage.
+    private StorageStatus Status =>
+        Outbox.Status != StorageStatus.MemoryOnly && (Summaries.HasNewerVersion || ActiveMock.HasNewerVersion)
+            ? StorageStatus.NewerVersion
+            : Outbox.Status;
+
+    protected override void OnInitialized()
+    {
+        Outbox.Changed += OnChanged;
+        Summaries.Changed += OnChanged;
+        ActiveMock.Changed += OnChanged;
+    }
+
+    public void Dispose()
+    {
+        Outbox.Changed -= OnChanged;
+        Summaries.Changed -= OnChanged;
+        ActiveMock.Changed -= OnChanged;
+    }
+
+    private void OnChanged() => _ = InvokeAsync(StateHasChanged);
+}

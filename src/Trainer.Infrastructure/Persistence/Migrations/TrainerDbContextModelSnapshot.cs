@@ -22,6 +22,93 @@ namespace Trainer.Infrastructure.Persistence.Migrations
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
+            modelBuilder.Entity("Microsoft.AspNetCore.DataProtection.EntityFrameworkCore.DataProtectionKey", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasColumnName("id");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("FriendlyName")
+                        .HasColumnType("text")
+                        .HasColumnName("friendly_name");
+
+                    b.Property<string>("Xml")
+                        .HasColumnType("text")
+                        .HasColumnName("xml");
+
+                    b.HasKey("Id")
+                        .HasName("pk_data_protection_keys");
+
+                    b.ToTable("data_protection_keys", (string)null);
+                });
+
+            modelBuilder.Entity("Trainer.Infrastructure.Persistence.Entities.AnswerEntity", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("character(26)")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("AnsweredAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("answered_at");
+
+                    b.Property<string>("ClientAnswerId")
+                        .IsRequired()
+                        .HasColumnType("character(26)")
+                        .HasColumnName("client_answer_id");
+
+                    b.Property<short>("Grade")
+                        .HasColumnType("smallint")
+                        .HasColumnName("grade");
+
+                    b.Property<string>("MockSessionId")
+                        .HasColumnType("character(26)")
+                        .HasColumnName("mock_session_id");
+
+                    b.Property<short>("Mode")
+                        .HasColumnType("smallint")
+                        .HasColumnName("mode");
+
+                    b.Property<string>("QuestionId")
+                        .IsRequired()
+                        .HasColumnType("character(26)")
+                        .HasColumnName("question_id");
+
+                    b.Property<DateTimeOffset>("ReceivedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("received_at");
+
+                    b.Property<bool>("UsedHint")
+                        .HasColumnType("boolean")
+                        .HasColumnName("used_hint");
+
+                    b.Property<string>("UserId")
+                        .IsRequired()
+                        .HasColumnType("character(26)")
+                        .HasColumnName("user_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_answers");
+
+                    b.HasIndex("ClientAnswerId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_answers_client_answer_id");
+
+                    b.HasIndex("QuestionId")
+                        .HasDatabaseName("ix_answers_question_id");
+
+                    b.HasIndex("ReceivedAt")
+                        .HasDatabaseName("ix_answers_received_at");
+
+                    b.HasIndex("UserId", "AnsweredAt")
+                        .HasDatabaseName("ix_answers_user_id_answered_at");
+
+                    b.ToTable("answers", (string)null);
+                });
+
             modelBuilder.Entity("Trainer.Infrastructure.Persistence.Entities.ContentImportEntity", b =>
                 {
                     b.Property<long>("Id")
@@ -68,6 +155,56 @@ namespace Trainer.Infrastructure.Persistence.Migrations
                         .HasFilter("is_active");
 
                     b.ToTable("content_imports", (string)null);
+                });
+
+            modelBuilder.Entity("Trainer.Infrastructure.Persistence.Entities.MockSessionEntity", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("character(26)")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("FinishedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("finished_at");
+
+                    b.Property<short>("Level")
+                        .HasColumnType("smallint")
+                        .HasColumnName("level");
+
+                    b.Property<int>("QuestionCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("question_count");
+
+                    b.Property<string>("StackKey")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("stack_key");
+
+                    b.Property<DateTimeOffset>("StartedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("started_at");
+
+                    b.Property<string>("Summary")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("summary");
+
+                    b.Property<bool>("Timed")
+                        .HasColumnType("boolean")
+                        .HasColumnName("timed");
+
+                    b.Property<string>("UserId")
+                        .IsRequired()
+                        .HasColumnType("character(26)")
+                        .HasColumnName("user_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_mock_sessions");
+
+                    b.HasIndex("UserId")
+                        .HasDatabaseName("ix_mock_sessions_user_id");
+
+                    b.ToTable("mock_sessions", (string)null);
                 });
 
             modelBuilder.Entity("Trainer.Infrastructure.Persistence.Entities.QuestionEntity", b =>
@@ -209,6 +346,62 @@ namespace Trainer.Infrastructure.Persistence.Migrations
                     b.ToTable("redirects", (string)null);
                 });
 
+            modelBuilder.Entity("Trainer.Infrastructure.Persistence.Entities.ReviewStateEntity", b =>
+                {
+                    b.Property<string>("UserId")
+                        .HasColumnType("character(26)")
+                        .HasColumnName("user_id");
+
+                    b.Property<string>("QuestionId")
+                        .HasColumnType("character(26)")
+                        .HasColumnName("question_id");
+
+                    b.Property<DateTimeOffset>("DueAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("due_at");
+
+                    b.Property<decimal>("Ease")
+                        .HasColumnType("numeric(4,2)")
+                        .HasColumnName("ease");
+
+                    b.Property<int>("IntervalDays")
+                        .HasColumnType("integer")
+                        .HasColumnName("interval_days");
+
+                    b.Property<int>("Lapses")
+                        .HasColumnType("integer")
+                        .HasColumnName("lapses");
+
+                    b.Property<DateTimeOffset>("LastAnsweredAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_answered_at");
+
+                    b.Property<short>("LastGrade")
+                        .HasColumnType("smallint")
+                        .HasColumnName("last_grade");
+
+                    b.Property<int>("Repetitions")
+                        .HasColumnType("integer")
+                        .HasColumnName("repetitions");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("UserId", "QuestionId")
+                        .HasName("pk_review_states");
+
+                    b.HasIndex("QuestionId")
+                        .HasDatabaseName("ix_review_states_question_id");
+
+                    b.HasIndex("UserId", "DueAt")
+                        .HasDatabaseName("ix_review_states_user_id_due_at");
+
+                    b.ToTable("review_states", (string)null);
+                });
+
             modelBuilder.Entity("Trainer.Infrastructure.Persistence.Entities.StackEntity", b =>
                 {
                     b.Property<string>("Key")
@@ -301,6 +494,106 @@ namespace Trainer.Infrastructure.Persistence.Migrations
                     b.ToTable("topic_locales", (string)null);
                 });
 
+            modelBuilder.Entity("Trainer.Infrastructure.Persistence.Entities.UserEntity", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("character(26)")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("DisplayName")
+                        .HasColumnType("text")
+                        .HasColumnName("display_name");
+
+                    b.Property<bool>("IsBlocked")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false)
+                        .HasColumnName("is_blocked");
+
+                    b.Property<DateTimeOffset>("LastSignInAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_sign_in_at");
+
+                    b.Property<string>("PreferredCulture")
+                        .HasColumnType("text")
+                        .HasColumnName("preferred_culture");
+
+                    b.Property<string>("SecurityStamp")
+                        .IsRequired()
+                        .HasColumnType("character(32)")
+                        .HasColumnName("security_stamp");
+
+                    b.Property<long>("TelegramUserId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("telegram_user_id");
+
+                    b.Property<string>("Username")
+                        .HasColumnType("text")
+                        .HasColumnName("username");
+
+                    b.Property<short>("UtcOffsetMinutes")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("smallint")
+                        .HasDefaultValue((short)0)
+                        .HasColumnName("utc_offset_minutes");
+
+                    b.HasKey("Id")
+                        .HasName("pk_users");
+
+                    b.HasIndex("TelegramUserId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_users_telegram_user_id");
+
+                    b.ToTable("users", (string)null);
+                });
+
+            modelBuilder.Entity("Trainer.Infrastructure.Persistence.Entities.UserRoleEntity", b =>
+                {
+                    b.Property<string>("UserId")
+                        .HasColumnType("character(26)")
+                        .HasColumnName("user_id");
+
+                    b.Property<string>("Role")
+                        .HasColumnType("text")
+                        .HasColumnName("role");
+
+                    b.HasKey("UserId", "Role")
+                        .HasName("pk_user_roles");
+
+                    b.ToTable("user_roles", (string)null);
+                });
+
+            modelBuilder.Entity("Trainer.Infrastructure.Persistence.Entities.AnswerEntity", b =>
+                {
+                    b.HasOne("Trainer.Infrastructure.Persistence.Entities.QuestionEntity", null)
+                        .WithMany()
+                        .HasForeignKey("QuestionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_answers_questions_question_id");
+
+                    b.HasOne("Trainer.Infrastructure.Persistence.Entities.UserEntity", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_answers_users_user_id");
+                });
+
+            modelBuilder.Entity("Trainer.Infrastructure.Persistence.Entities.MockSessionEntity", b =>
+                {
+                    b.HasOne("Trainer.Infrastructure.Persistence.Entities.UserEntity", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_mock_sessions_users_user_id");
+                });
+
             modelBuilder.Entity("Trainer.Infrastructure.Persistence.Entities.QuestionEntity", b =>
                 {
                     b.HasOne("Trainer.Infrastructure.Persistence.Entities.TopicEntity", null)
@@ -331,6 +624,23 @@ namespace Trainer.Infrastructure.Persistence.Migrations
                         .HasConstraintName("fk_redirects_stacks_stack_key");
                 });
 
+            modelBuilder.Entity("Trainer.Infrastructure.Persistence.Entities.ReviewStateEntity", b =>
+                {
+                    b.HasOne("Trainer.Infrastructure.Persistence.Entities.QuestionEntity", null)
+                        .WithMany()
+                        .HasForeignKey("QuestionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_review_states_questions_question_id");
+
+                    b.HasOne("Trainer.Infrastructure.Persistence.Entities.UserEntity", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_review_states_users_user_id");
+                });
+
             modelBuilder.Entity("Trainer.Infrastructure.Persistence.Entities.StackLocaleEntity", b =>
                 {
                     b.HasOne("Trainer.Infrastructure.Persistence.Entities.StackEntity", null)
@@ -359,6 +669,16 @@ namespace Trainer.Infrastructure.Persistence.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_topic_locales_topics_stack_key_topic_key");
+                });
+
+            modelBuilder.Entity("Trainer.Infrastructure.Persistence.Entities.UserRoleEntity", b =>
+                {
+                    b.HasOne("Trainer.Infrastructure.Persistence.Entities.UserEntity", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_user_roles_users_user_id");
                 });
 #pragma warning restore 612, 618
         }

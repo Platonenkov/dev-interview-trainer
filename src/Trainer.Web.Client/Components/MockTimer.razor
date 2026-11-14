@@ -1,0 +1,54 @@
+@using Trainer.Web.Client.Api
+@implements IDisposable
+@inject ServerClock Clock
+@inject TimeProvider Time
+@inject IStringLocalizer<ClientResource> L
+
+@* The value is computed from the deadline on every tick, never counted down, so a throttled background tab is right
+   as soon as it runs again. role="timer" is not announced on its own; one polite announcement says one minute is left. *@
+<div class="mock-timer@(_lastMinute ? " mock-timer--low" : "")">
+    <span class="mock-timer__label">@L["Mock.Timer.Label"]</span>
+    <span class="mock-timer__value" role="timer" aria-label="@L["Mock.Timer.Label"]">@MockSetup.Duration(Ceiling(Session.Remaining(Clock.Now())))</span>
+    <span class="visually-hidden" aria-live="polite">@_announcement</span>
+</div>
+
+@code {
+    private static readonly TimeSpan Tick = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan LastMinute = TimeSpan.FromMinutes(1);
+
+    private ITimer? _timer;
+    private bool _lastMinute;
+    private string? _announcement;
+    private bool _expired;
+
+    [Parameter, EditorRequired]
+    public MockSession Session { get; set; } = null!;
+
+    /// <summary>The deadline passed; the island finishes the mock (idempotently, with the finish button).</summary>
+    [Parameter]
+    public EventCallback Expired { get; set; }
+
+    protected override void OnInitialized() =>
+        _timer = Time.CreateTimer(_ => _ = InvokeAsync(OnTickAsync), null, Tick, Tick);
+
+    public void Dispose() => _timer?.Dispose();
+
+    private static TimeSpan Ceiling(TimeSpan value) => TimeSpan.FromSeconds(Math.Ceiling(value.TotalSeconds));
+
+    private async Task OnTickAsync()
+    {
+        TimeSpan left = Session.Remaining(Clock.Now());
+        if (!_lastMinute && left <= LastMinute)
+        {
+            _lastMinute = true;
+            _announcement = L["Mock.Timer.OneMinute"].Value;
+        }
+
+        StateHasChanged();
+        if (!_expired && left <= TimeSpan.Zero)
+        {
+            _expired = true;
+            await Expired.InvokeAsync();
+        }
+    }
+}

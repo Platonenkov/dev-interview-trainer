@@ -13,7 +13,8 @@ namespace Trainer.Web.Caching;
 /// <summary>
 /// Output cache policy for anonymous public pages. It is a custom policy rather than a tweak of the default one so
 /// that the raw query string is never part of the key: only the content generation and, for the catalog, the
-/// canonical form of the parsed query are, so every spelling of one selection shares one entry.
+/// canonical form of the parsed query are, so every spelling of one selection shares one entry. Catalog requests that
+/// carry a search term are not cached at all (ADR 0011).
 /// </summary>
 public sealed class PublicPageCachePolicy(bool varyByCatalogQuery) : IOutputCachePolicy
 {
@@ -30,7 +31,7 @@ public sealed class PublicPageCachePolicy(bool varyByCatalogQuery) : IOutputCach
     public ValueTask CacheRequestAsync(OutputCacheContext context, CancellationToken cancellation)
     {
         HttpContext http = context.HttpContext;
-        bool cacheable = IsCacheableRequest(http.Request);
+        bool cacheable = IsCacheableRequest(http.Request) && !(varyByCatalogQuery && IsSearch(http.Request));
 
         context.EnableOutputCaching = cacheable;
         context.AllowCacheLookup = cacheable;
@@ -63,6 +64,10 @@ public sealed class PublicPageCachePolicy(bool varyByCatalogQuery) : IOutputCach
 
         return ValueTask.CompletedTask;
     }
+
+    // ADR 0011: a search term is free text, so its results would be an unbounded set of cache keys and an easy way to
+    // fill the cache. Such a request neither reads nor writes an entry; an empty or blank term is no search at all.
+    private static bool IsSearch(HttpRequest request) => CatalogQueryParser.ParseSearch(request.Query) is not null;
 
     private static bool IsCacheableRequest(HttpRequest request) =>
         (HttpMethods.IsGet(request.Method) || HttpMethods.IsHead(request.Method))

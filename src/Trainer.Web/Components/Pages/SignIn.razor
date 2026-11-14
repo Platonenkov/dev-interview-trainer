@@ -1,0 +1,105 @@
+@page "/{Culture}/signin"
+@using System.Security.Claims
+@using Trainer.Domain.Keys
+@using Telegram.OpenIdConnect.AspNetCore
+@using Trainer.Web.Auth
+@using Trainer.Web.Routing
+@inject IStringLocalizer<SharedResource> L
+@inject TelegramOidcOptions Telegram
+
+@* No output cache: the page depends on the query and on who is signed in. *@
+@if (_culture is { } culture)
+{
+    <SeoHead Title="@L["SignIn.Title"]"
+             Description="@L["SignIn.Description"]"
+             CanonicalPathAndQuery="@SignInRedirectEndpoint.PagePath(culture, null)"
+             AvailableCultures="CultureKey.Supported"
+             PathForCulture="PathFor"
+             NoIndex="true" />
+
+    <section class="signin">
+        <h1>@L["SignIn.Heading"]</h1>
+        @if (Denied is not null)
+        {
+            <p class="signin__alert" role="alert">@L["SignIn.Denied"]</p>
+        }
+        @if (Error is not null)
+        {
+            <p class="signin__alert" role="alert">@L["SignIn.Error"]</p>
+        }
+
+        @if (SignedInName() is { } name)
+        {
+            <p>@L["SignIn.SignedInAs", name]</p>
+            <a class="btn btn--primary" href="@(_returnPath ?? "/" + culture.Value)">@L["SignIn.Continue"]</a>
+        }
+        else
+        {
+            @* A sign-out lands here: island tabs of the previous account notice and ask for a reload. Signed in, the
+               header's AccountControls publishes the owner instead. A session that is only unverified because the
+               database failed is still signed in, so nothing is published. *@
+            @if (!RevalidationOutage.IsMarked(HttpContext))
+            {
+                <script src="/@Assets["js/account-publish.js"]" data-owner="anon" defer></script>
+            }
+            <p class="signin__lead">@L["SignIn.Stored"]</p>
+            @if (IsConfigured)
+            {
+                <a class="btn btn--primary" href="@ChallengeHref(culture)" data-enhance-nav="false">@L["SignIn.WithTelegram"]</a>
+            }
+            else
+            {
+                <p class="signin__alert" role="status">@L["SignIn.NotConfigured"]</p>
+            }
+        }
+    </section>
+}
+
+@code {
+    [Parameter]
+    public string? Culture { get; set; }
+
+    [SupplyParameterFromQuery(Name = SignInRedirectEndpoint.ReturnUrlParameter)]
+    public string? ReturnUrl { get; set; }
+
+    [SupplyParameterFromQuery(Name = SignInRedirectEndpoint.DeniedParameter)]
+    public string? Denied { get; set; }
+
+    [SupplyParameterFromQuery(Name = SignInRedirectEndpoint.ErrorParameter)]
+    public string? Error { get; set; }
+
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    private CultureKey? _culture;
+    private string? _returnPath;
+
+    // The library swaps an empty client id or secret for a placeholder and answers the challenge with 503.
+    private bool IsConfigured => !string.IsNullOrWhiteSpace(Telegram.ClientId) && !string.IsNullOrWhiteSpace(Telegram.ClientSecret);
+
+    protected override void OnParametersSet()
+    {
+        _culture = CultureKey.TryCreate(Culture, out CultureKey culture) ? culture : null;
+        _returnPath = _culture is { } current && !string.IsNullOrEmpty(ReturnUrl)
+            ? LanguageEndpoint.ResolveReturnPath(ReturnUrl, current)
+            : null;
+    }
+
+    private string? SignedInName()
+    {
+        ClaimsPrincipal? user = HttpContext?.User;
+        if (user?.Identity?.IsAuthenticated != true)
+        {
+            return null;
+        }
+
+        return AccountName.For(user, L);
+    }
+
+    private string ChallengeHref(CultureKey culture) =>
+        $"{TelegramAuth.CallbackPath}/challenge?returnUrl={Uri.EscapeDataString(_returnPath ?? "/" + culture.Value)}";
+
+    // The other culture's sign-in page returns to the same page in that culture.
+    private string PathFor(CultureKey target) =>
+        SignInRedirectEndpoint.PagePath(target, _returnPath is null ? null : CulturePath.SwitchCulture(_returnPath, target));
+}

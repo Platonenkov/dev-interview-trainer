@@ -15,6 +15,7 @@ public sealed class LayoutTests(AppHostFixture host) : IClassFixture<AppHostFixt
         ["home"] = "/en",
         ["about"] = "/en/about",
         ["catalog"] = "/en/dotnet/questions?level=middle",
+        ["catalog-search"] = "/en/dotnet/questions?level=middle&q=ConfigureAwait",
         ["topic"] = "/en/dotnet/topics/concurrency",
         ["question"] = "/en/dotnet/questions/parallel-counter-race",
         ["not-found"] = "/en/dotnet/questions/no-such-question",
@@ -38,6 +39,7 @@ public sealed class LayoutTests(AppHostFixture host) : IClassFixture<AppHostFixt
 
         // The narrowest supported width, where an unbreakable word or a code line is most likely to push the page sideways.
         data.Add("home", 320, "dark");
+        data.Add("catalog-search", 320, "dark");
         data.Add("question", 320, "dark");
         return data;
     }
@@ -141,6 +143,30 @@ public sealed class LayoutTests(AppHostFixture host) : IClassFixture<AppHostFixt
         await AssertTargetsAsync(tab, ".filters summary", "filter drawer toggle");
         await AssertTargetsAsync(tab, ".filters a", "filter drawer links");
         await AssertTargetsAsync(tab, "header a, header button", "header controls");
+    }
+
+    [Theory]
+    [InlineData(320)]
+    [InlineData(375)]
+    [InlineData(768)]
+    [InlineData(1280)]
+    [InlineData(1920)]
+    public async Task SearchFormTargetsAtLeast44pxAndTheFormFitsTheViewport(int width)
+    {
+        await using IBrowserContext context = await NewContextAsync(width, "dark");
+        IPage tab = await context.NewPageAsync();
+        await tab.GotoAsync(Pages["catalog-search"]);
+
+        await AssertTargetsAsync(tab, ".catalog-search input[type=search]", "search box");
+        await AssertTargetsAsync(tab, ".catalog-search button", "search button");
+        await AssertTargetsAsync(tab, ".catalog-search__clear", "clear search link");
+
+        // The form is visible without opening the filter drawer and stays inside the viewport at every width.
+        LocatorBoundingBoxResult? form = await tab.Locator("form.catalog-search").BoundingBoxAsync();
+        Assert.NotNull(form);
+        Assert.True(form.X >= 0 && form.X + form.Width <= width, $"The search form spans {form.X:0.#}..{form.X + form.Width:0.#} in a {width} px viewport.");
+        Assert.True(await tab.Locator("form.catalog-search input[type=search]").IsVisibleAsync());
+        Assert.Equal("ConfigureAwait", await tab.Locator("#catalog-search").InputValueAsync());
     }
 
     private static async Task AssertTargetsAsync(IPage tab, string selector, string description)

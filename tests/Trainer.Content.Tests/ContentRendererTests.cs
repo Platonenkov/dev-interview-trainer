@@ -150,6 +150,50 @@ public sealed partial class ContentRendererTests
         Assert.EndsWith("</code></pre>", html, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("csharp", "var a = \"<b>\";\nint b = 1;\n")]
+    [InlineData("csharp", "/* a\n b */\r\nint c;")]
+    [InlineData("no-such-language", "<script>alert(1)</script>\nx")]
+    [InlineData("csharp", "single line")]
+    public void RenderCodeLines_MatchRenderCodeLineSpans(string language, string source)
+    {
+        IReadOnlyList<string> lines = R.RenderCodeLines(source, language);
+        string html = R.RenderCode(source, language);
+
+        Assert.Equal($"<pre class=\"code\"><code>{string.Join('\n', lines)}</code></pre>", html);
+        for (int i = 0; i < lines.Count; i++)
+        {
+            Assert.StartsWith($"<span class=\"line\" data-line=\"{i + 1}\">", lines[i], StringComparison.Ordinal);
+            Assert.EndsWith("</span>", lines[i], StringComparison.Ordinal);
+            Assert.DoesNotContain('\n', lines[i]);
+            // Every line is a self-contained fragment: a span the highlighter opened (a multi-line comment) is closed at
+            // the end of its line and reopened on the next, so one line can be marked without the others.
+            Assert.Equal(CountOf(lines[i], "<span"), CountOf(lines[i], "</span>"));
+        }
+    }
+
+    [Fact]
+    public void RenderCodeLines_MultiLineComment_ClosesAndReopensTheSpanPerLine()
+    {
+        IReadOnlyList<string> lines = R.RenderCodeLines("/* a\n b */", "csharp");
+
+        Assert.Equal(2, lines.Count);
+        Assert.All(lines, line => Assert.Equal(CountOf(line, "<span"), CountOf(line, "</span>")));
+        Assert.Contains("comment", lines[0], StringComparison.Ordinal);
+        Assert.Contains("comment", lines[1], StringComparison.Ordinal);
+    }
+
+    private static int CountOf(string text, string token)
+    {
+        int count = 0;
+        for (int index = text.IndexOf(token, StringComparison.Ordinal); index >= 0; index = text.IndexOf(token, index + token.Length, StringComparison.Ordinal))
+        {
+            count++;
+        }
+
+        return count;
+    }
+
     [Fact]
     public void Code_UnknownLanguage_IsEncodedAsPlainText()
     {

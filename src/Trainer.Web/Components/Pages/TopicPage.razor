@@ -2,12 +2,16 @@
 @using Microsoft.AspNetCore.OutputCaching
 @attribute [OutputCache(PolicyName = "public")]
 @using Trainer.Application.Catalog
+@using Trainer.Application.Progress
 @using Trainer.Application.Topics
 @using Trainer.Domain.Keys
 @using Trainer.Domain.Levels
+@using Trainer.Domain.Questions
+@using Trainer.Web.Auth
 @using Trainer.Web.Seo
 @inject IStringLocalizer<SharedResource> L
 @inject ITopicQueries Topics
+@inject IProgressQueries Progress
 @inject NavigationManager Navigation
 
 @if (_model is not null)
@@ -32,11 +36,17 @@
                 </li>
             }
         </ul>
+        @if (_model.Questions.Count > 0)
+        {
+            <p class="practise-these">
+                <IslandLink Class="btn btn--primary" Href="@($"/{Culture}/{Stack}/practice?topic={_model.Key.Value}")" PreloadRuntime="true">@L["Practice.These"]</IslandLink>
+            </p>
+        }
         <h2 class="topic__subheading">@L["Topic.Questions"]</h2>
         <ol class="rows">
             @foreach (CatalogRow row in _model.Questions)
             {
-                <li><QuestionRow Row="row" Culture="@Culture" Stack="@Stack" /></li>
+                <li><QuestionRow Row="row" Culture="@Culture" Stack="@Stack" Statuses="_statuses" /></li>
             }
         </ol>
         <p><a href="/@Culture/@Stack/questions?topic=@_model.Key.Value">@L["Topic.AllQuestions"] →</a></p>
@@ -57,6 +67,7 @@
     private HttpContext? HttpContext { get; set; }
 
     private TopicPageModel? _model;
+    private IReadOnlyDictionary<QuestionId, QuestionStatus>? _statuses;
 
     private string PathFor(TopicKey topic, string? culture) => $"/{culture}/{Stack}/topics/{topic.Value}";
 
@@ -84,6 +95,12 @@
         if (_model is null)
         {
             Navigation.NotFound();
+            return;
+        }
+
+        if (HttpContext.User.GetUserId() is { } user)
+        {
+            _statuses = await Progress.GetStatusesAsync(user, [.. _model.Questions.Select(r => r.Id)], HttpContext.RequestAborted);
         }
     }
 }

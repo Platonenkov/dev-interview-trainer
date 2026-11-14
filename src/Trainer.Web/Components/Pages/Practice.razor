@@ -1,0 +1,99 @@
+@page "/{Culture:length(2)}/{Stack}/practice"
+@using Trainer.Application.Catalog
+@using Trainer.Contracts
+@using Trainer.Domain.Keys
+@using Trainer.Domain.Levels
+@using Trainer.Domain.Questions
+@using Trainer.Web.Catalog
+@using Trainer.Web.Client.Islands
+@using Trainer.Web.ContentState
+@using Trainer.Web.Islands
+@attribute [InteractiveIslandPage]
+@inject IStringLocalizer<SharedResource> L
+@inject IslandBootstrapFactory Bootstrap
+@inject ContentSnapshotProvider Snapshots
+
+@* The culture constraint keeps POST /api/sessions/practice (Culture "api", Stack "sessions") from matching this page
+   when the API endpoint rejects the request's content type, which must stay a 415, not this page's 404. *@
+@* No output cache: an island page is noindex and its bootstrap carries the signed-in user's progress. *@
+@if (_query is { } query && _bootstrap is not null)
+{
+    <SeoHead Title="@($"{L["Practice.Title"]} · {L["Site.Name"]}")"
+             Description="@L["Practice.Description"]"
+             CanonicalPathAndQuery="@PathFor(query.Culture)"
+             AvailableCultures="CultureKey.Supported"
+             PathForCulture="PathFor"
+             NoIndex="true" />
+
+    <h1>@L["Practice.Heading"]</h1>
+    <div class="island" data-island="practice">
+        <div class="island-skeleton" aria-hidden="true"></div>
+        <IslandBootError Href="@PathFor(query.Culture)" />
+        <PracticeIsland @rendermode="IslandRenderMode.NoPrerender" BootstrapJson="@_bootstrap" />
+    </div>
+}
+
+@code {
+    [Parameter]
+    public string? Culture { get; set; }
+
+    [Parameter]
+    public string? Stack { get; set; }
+
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    private const string StatusParameter = "status";
+    private const string FirstParameter = "first";
+
+    private CatalogQuery? _query;
+    private string? _status;
+    private string? _first;
+    private string? _bootstrap;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        // The culture and the stack were checked by CultureAndStackMiddleware before the page ran.
+        if (HttpContext is null || !CultureKey.TryCreate(Culture, out CultureKey culture) || !StackKey.TryCreate(Stack, out StackKey stack))
+        {
+            return;
+        }
+
+        HashSet<TopicKey> knownTopics = [.. Snapshots.Current.TopicsOf(stack.Value).Select(t => new TopicKey(t))];
+        _query = CatalogQueryParser.Parse(culture, stack, HttpContext.Request.Query, knownTopics) with { Page = 1, Search = null };
+        _status = ParseStatus(HttpContext.Request.Query[StatusParameter].FirstOrDefault());
+        _first = QuestionId.TryCreate(HttpContext.Request.Query[FirstParameter].FirstOrDefault(), out QuestionId first) ? first.Value : null;
+        PracticeFiltersDto filters = new(
+            [.. _query.Levels.Select(LevelKeys.ToKey)],
+            [.. _query.Topics.Select(t => t.Value)],
+            [.. _query.Types.Select(QuestionTypeKeys.ToKey)],
+            _status,
+            _first);
+        _bootstrap = await Bootstrap.CreateJsonAsync(culture, stack, filters, HttpContext.User, HttpContext.RequestAborted);
+    }
+
+    // The same mode with the same canonical filters, so "Sign in" and the language switch return here.
+    private string PathFor(CultureKey target)
+    {
+        string path = $"/{target.Value}/{_query!.Stack.Value}/practice";
+        string query = CatalogQueryParser.ToCanonicalQueryString(_query);
+        if (_status is not null)
+        {
+            query += (query.Length == 0 ? "" : "&") + StatusParameter + "=" + _status;
+        }
+
+        if (_first is not null)
+        {
+            query += (query.Length == 0 ? "" : "&") + FirstParameter + "=" + _first;
+        }
+
+        return query.Length == 0 ? path : path + "?" + query;
+    }
+
+    // Practice statuses (spec 5.3); anything else leaves the status to the island's remembered or default filters.
+    private static string? ParseStatus(string? value) => value switch
+    {
+        PracticeStatusKeys.All or PracticeStatusKeys.New or PracticeStatusKeys.Due => value,
+        _ => null,
+    };
+}

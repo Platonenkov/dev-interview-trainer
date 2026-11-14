@@ -4,8 +4,10 @@
 @attribute [OutputCache(PolicyName = "public")]
 @using Trainer.Application.Catalog
 @using Trainer.Application.Home
+@using Trainer.Application.Progress
 @using Trainer.Domain.Keys
 @using Trainer.Domain.Levels
+@using Trainer.Web.Auth
 @using Trainer.Web.Catalog
 @using Microsoft.Extensions.Options
 @using Trainer.Web.ContentState
@@ -13,6 +15,7 @@
 @using Trainer.Web.Startup
 @inject IStringLocalizer<SharedResource> L
 @inject IHomeQueries HomeQueries
+@inject IProgressQueries Progress
 @inject ContentSnapshotProvider Snapshots
 @inject IOptions<AppOptions> Options
 @inject ILogger<Home> Logger
@@ -92,14 +95,47 @@
         }
     }
 
-    <section>
-        <h2 class="section-title">@L["Home.Section.Modes"]</h2>
-        <ul class="card-grid card-grid--modes">
-            <li><div class="mode-card"><div class="mode-card__cmd">$ trainer practice</div><h3>@L["Home.Mode.Practice.Title"]</h3><p>@L["Home.Mode.Practice.Text"]</p><span class="mode-card__soon">@L["Home.Mode.Soon"]</span></div></li>
-            <li><div class="mode-card"><div class="mode-card__cmd">$ trainer mock</div><h3>@L["Home.Mode.Mock.Title"]</h3><p>@L["Home.Mode.Mock.Text"]</p><span class="mode-card__soon">@L["Home.Mode.Soon"]</span></div></li>
-            <li><div class="mode-card"><div class="mode-card__cmd">$ trainer review</div><h3>@L["Home.Mode.Review.Title"]</h3><p>@L["Home.Mode.Review.Text"]</p><span class="mode-card__soon">@L["Home.Mode.Soon"]</span></div></li>
-        </ul>
-    </section>
+    @if (_catalogUrl is not null)
+    {
+        <section>
+            <h2 class="section-title">@L["Home.Section.Modes"]</h2>
+            <ul class="card-grid card-grid--modes">
+                <li>
+                    <IslandLink Class="mode-card" Href="@ModePath("practice")" PreloadRuntime="true">
+                        <span class="mode-card__cmd">$ trainer practice</span>
+                        <h3>@L["Home.Mode.Practice.Title"]</h3>
+                        <p>@L["Home.Mode.Practice.Text"]</p>
+                        <span class="mode-card__action">@L["Home.Mode.Practice.Action"] →</span>
+                    </IslandLink>
+                </li>
+                <li>
+                    <IslandLink Class="mode-card" Href="@ModePath("mock")" PreloadRuntime="true">
+                        <span class="mode-card__cmd">$ trainer mock</span>
+                        <h3>@L["Home.Mode.Mock.Title"]</h3>
+                        <p>@L["Home.Mode.Mock.Text"]</p>
+                        <span class="mode-card__action">@L["Home.Mode.Mock.Action"] →</span>
+                    </IslandLink>
+                </li>
+                <li>
+                    @* Anonymous home pages are cached and shared, so the card only says Review needs a sign-in; the Review page
+                       itself sends a visitor to sign in and back. *@
+                    <IslandLink Class="mode-card" Href="@ModePath("review")" Rel="nofollow">
+                        <span class="mode-card__cmd">$ trainer review</span>
+                        <h3>@L["Home.Mode.Review.Title"]</h3>
+                        <p>@L["Home.Mode.Review.Text"]</p>
+                        @if (_dueCount is { } due)
+                        {
+                            <p class="mode-card__due">@L["Home.Review.Due", due]</p>
+                        }
+                        else
+                        {
+                            <span class="mode-card__action">@L["Home.Mode.Review.SignIn"]</span>
+                        }
+                    </IslandLink>
+                </li>
+            </ul>
+        </section>
+    }
 </div>
 
 @code {
@@ -113,6 +149,7 @@
     private HttpContext? HttpContext { get; set; }
 
     private HomeStats? _stats;
+    private int? _dueCount;
     private string? _catalogUrl;
     private CultureKey _culture;
     private StackKey _stack;
@@ -131,7 +168,12 @@
         }
 
         _catalogUrl = CatalogQueryParser.ToUrl(Query());
-        _stats = await HomeQueries.GetStatsAsync(_culture, _stack, HttpContext?.RequestAborted ?? CancellationToken.None);
+        CancellationToken ct = HttpContext?.RequestAborted ?? CancellationToken.None;
+        _stats = await HomeQueries.GetStatsAsync(_culture, _stack, ct);
+        if (HttpContext?.User.GetUserId() is { } user)
+        {
+            _dueCount = await Progress.GetDueCountAsync(user, _culture, _stack, ct);
+        }
     }
 
     // The bare culture URL shows the configured default stack; the first known stack only covers a misconfiguration.
@@ -162,6 +204,8 @@
     private BreadcrumbItem[] Breadcrumbs() => [new(L["Breadcrumb.Home"], HomePath(_culture))];
 
     private CatalogQuery Query() => new(_culture, _stack, [], [], [], 1);
+
+    private string ModePath(string mode) => $"/{_culture.Value}/{_stack.Value}/{mode}";
 
     private string LevelUrl(Level level) => CatalogQueryParser.ToUrl(Query() with { Levels = [level] });
 

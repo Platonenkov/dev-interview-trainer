@@ -1,6 +1,8 @@
 using Trainer.Application.Catalog;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using Trainer.Application.Home;
+using Trainer.Application.Questions;
 using Trainer.Application.Seo;
 using Trainer.Application.Topics;
 using Trainer.Domain.Keys;
@@ -24,8 +26,9 @@ public sealed class CatalogQueriesTests(PostgresFixture postgres)
         Level[]? levels = null,
         string[]? topics = null,
         QuestionType[]? types = null,
-        int page = 1) =>
-        new(culture ?? En, Dotnet, levels ?? [], [.. (topics ?? []).Select(t => new TopicKey(t))], types ?? [], page);
+        int page = 1,
+        string? search = null) =>
+        new(culture ?? En, Dotnet, levels ?? [], [.. (topics ?? []).Select(t => new TopicKey(t))], types ?? [], page, search);
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -57,7 +60,16 @@ public sealed class CatalogQueriesTests(PostgresFixture postgres)
     }
 
     private static void AddQuestion(
-        TrainerDbContext db, string id, string slug, string topic, Level level, QuestionType type, string? ru, string en, bool retired = false)
+        TrainerDbContext db,
+        string id,
+        string slug,
+        string topic,
+        Level level,
+        QuestionType type,
+        string? ru,
+        string en,
+        bool retired = false,
+        string[]? tags = null)
     {
         db.Questions.Add(new QuestionEntity
         {
@@ -68,7 +80,7 @@ public sealed class CatalogQueriesTests(PostgresFixture postgres)
             Level = level,
             Type = type,
             Grading = GradingMode.Self,
-            Tags = ["tag-" + slug],
+            Tags = tags ?? ["tag-" + slug],
             Verified = new DateOnly(2026, 11, 11),
             RetiredAt = retired ? new DateTimeOffset(2026, 11, 12, 0, 0, 0, TimeSpan.Zero) : null,
         });
@@ -253,5 +265,199 @@ public sealed class CatalogQueriesTests(PostgresFixture postgres)
         Assert.Equal(["a", "b"], ru.Topics.Select(t => t.Key).ToArray());
         Assert.Equal(4, en.QuestionCount);
         Assert.Equal(3, en.TypeCount);
+    }
+
+    private async Task<TrainerDbContext> CreateWithTopicsAsync(params string[] retiredTopics) =>
+        await CreateWithTopicsAsync(await postgres.CreateDatabaseAsync(), retiredTopics);
+
+    private static async Task<TrainerDbContext> CreateWithTopicsAsync(string connectionString, params string[] retiredTopics)
+    {
+        TrainerDbContext db = PostgresFixture.CreateContext(connectionString);
+        db.Stacks.Add(new StackEntity { Key = "dotnet" });
+        foreach (string topic in new[] { "a", "b", "c" })
+        {
+            db.Topics.Add(new TopicEntity
+            {
+                StackKey = "dotnet",
+                Key = topic,
+                RetiredAt = retiredTopics.Contains(topic, StringComparer.Ordinal) ? new DateTimeOffset(2026, 11, 12, 0, 0, 0, TimeSpan.Zero) : null,
+            });
+            db.TopicLocales.Add(new TopicLocaleEntity { StackKey = "dotnet", TopicKey = topic, Culture = "en", Title = $"Topic {topic.ToUpperInvariant()}", Description = "" });
+            db.TopicLocales.Add(new TopicLocaleEntity { StackKey = "dotnet", TopicKey = topic, Culture = "ru", Title = $"Тема {topic.ToUpperInvariant()}", Description = "" });
+        }
+
+        return db;
+    }
+
+    private async Task<TrainerDbContext> SeedSearchAsync()
+    {
+        TrainerDbContext db = await CreateWithTopicsAsync();
+        AddQuestion(db, "01KBZ3Q8N9V2K3M4P5R6S7T811", "async-basics", "a", Level.Middle, QuestionType.Open, ru: "Асинхронность и ГОНКИ", en: "Async Await basics", tags: ["tasks"]);
+        AddQuestion(db, "01KBZ3Q8N9V2K3M4P5R6S7T812", "percent", "a", Level.Junior, QuestionType.Open, ru: "100% уверен", en: "100% sure", tags: ["x"]);
+        AddQuestion(db, "01KBZ3Q8N9V2K3M4P5R6S7T813", "underscore", "b", Level.Middle, QuestionType.Single, ru: "а_б", en: "a_b under", tags: ["x"]);
+        AddQuestion(db, "01KBZ3Q8N9V2K3M4P5R6S7T814", "plain-axb", "b", Level.Middle, QuestionType.Single, ru: "аxб", en: "axb plain", tags: ["x"]);
+        AddQuestion(db, "01KBZ3Q8N9V2K3M4P5R6S7T815", "backslash", "b", Level.Senior, QuestionType.Open, ru: null, en: "path\\to file", tags: ["x"]);
+        AddQuestion(db, "01KBZ3Q8N9V2K3M4P5R6S7T816", "async-retired", "a", Level.Middle, QuestionType.Open, ru: "Снятый async", en: "Async retired", retired: true, tags: ["x"]);
+        AddQuestion(db, "01KBZ3Q8N9V2K3M4P5R6S7T817", "async-en-only", "b", Level.Senior, QuestionType.Open, ru: null, en: "Async only in English", tags: ["x"]);
+        AddQuestion(db, "01KBZ3Q8N9V2K3M4P5R6S7T818", "context-capture", "a", Level.Senior, QuestionType.Open, ru: "Захват контекста", en: "Context capture", tags: ["synchronization-context"]);
+        await db.SaveChangesAsync(Ct);
+        return db;
+    }
+
+    private static string[] SlugsOf(CatalogPage page) => [.. page.Rows.Select(r => r.Slug).Order(StringComparer.Ordinal)];
+
+    [Fact]
+    public async Task Search_MatchesTitleCaseInsensitive()
+    {
+        await using TrainerDbContext db = await SeedSearchAsync();
+        CatalogQueries queries = new(db);
+
+        CatalogPage en = await queries.GetAsync(Query(search: "aWaIt"), Ct);
+        CatalogPage ru = await queries.GetAsync(Query(culture: Ru, search: "гонки"), Ct);
+
+        Assert.Equal(["async-basics"], SlugsOf(en));
+        Assert.Equal(1, en.Total);
+        Assert.Equal(["async-basics"], SlugsOf(ru));
+    }
+
+    [Fact]
+    public async Task Search_MatchesTagWithSpaces()
+    {
+        await using TrainerDbContext db = await SeedSearchAsync();
+        CatalogQueries queries = new(db);
+
+        CatalogPage byTag = await queries.GetAsync(Query(search: "Synchronization Context"), Ct);
+        CatalogPage partialTag = await queries.GetAsync(Query(search: "synchronization"), Ct);
+
+        Assert.Equal(["context-capture"], SlugsOf(byTag));
+        // A tag matches only exactly: a fragment of it is not a hit.
+        Assert.Empty(partialTag.Rows);
+    }
+
+    [Theory]
+    [InlineData("%", "percent")]
+    [InlineData("_", "underscore")]
+    [InlineData("a_b", "underscore")]
+    [InlineData("\\", "backslash")]
+    public async Task Search_EscapesWildcards(string term, string expectedSlug)
+    {
+        await using TrainerDbContext db = await SeedSearchAsync();
+        CatalogQueries queries = new(db);
+
+        CatalogPage page = await queries.GetAsync(Query(search: term), Ct);
+
+        Assert.Equal([expectedSlug], SlugsOf(page));
+    }
+
+    [Fact]
+    public async Task Search_RespectsCultureAndFilters()
+    {
+        await using TrainerDbContext db = await SeedSearchAsync();
+        CatalogQueries queries = new(db);
+
+        CatalogPage en = await queries.GetAsync(Query(search: "async"), Ct);
+        CatalogPage ru = await queries.GetAsync(Query(culture: Ru, search: "async"), Ct);
+        CatalogPage inTopicB = await queries.GetAsync(Query(topics: ["b"], search: "async"), Ct);
+        CatalogPage atLevel = await queries.GetAsync(Query(levels: [Level.Middle], search: "async"), Ct);
+
+        // The retired question is never found; the Russian catalog matches the Russian titles only.
+        Assert.Equal(["async-basics", "async-en-only"], SlugsOf(en));
+        Assert.Empty(ru.Rows);
+        Assert.Equal(["async-en-only"], SlugsOf(inTopicB));
+        Assert.Equal(["async-basics"], SlugsOf(atLevel));
+        Assert.Equal(1, CountOf(en.TopicCounts, "a"));
+        Assert.Equal(1, CountOf(en.TopicCounts, "b"));
+        Assert.Equal(1, CountOf(en.LevelCounts, "middle"));
+        Assert.Equal(1, CountOf(en.LevelCounts, "senior"));
+        Assert.Equal(0, CountOf(en.LevelCounts, "junior"));
+        Assert.Equal(2, CountOf(en.TypeCounts, "open"));
+    }
+
+    [Fact]
+    public async Task Search_FoldsCyrillicCaseWhateverTheDatabaseCtype()
+    {
+        await using TrainerDbContext db = await CreateWithTopicsAsync(await CCtypeDatabase.CreateAsync(postgres, Ct));
+        AddQuestion(db, "01KBZ3Q8N9V2K3M4P5R6S7T841", "lambda", "a", Level.Middle, QuestionType.Open, ru: "Лямбда и ЗАМЫКАНИЕ", en: "Lambda closure");
+        await db.SaveChangesAsync(Ct);
+        CatalogQueries queries = new(db);
+
+        CatalogPage lower = await queries.GetAsync(Query(culture: Ru, search: "замыкание"), Ct);
+        CatalogPage upper = await queries.GetAsync(Query(culture: Ru, search: "ЛЯМБДА"), Ct);
+        CatalogPage ascii = await queries.GetAsync(Query(search: "CLOSURE"), Ct);
+
+        Assert.Equal(["lambda"], SlugsOf(lower));
+        Assert.Equal(["lambda"], SlugsOf(upper));
+        Assert.Equal(["lambda"], SlugsOf(ascii));
+    }
+
+    private async Task<TrainerDbContext> SeedRelatedAsync()
+    {
+        TrainerDbContext db = await CreateWithTopicsAsync(retiredTopics: "c");
+        db.Stacks.Add(new StackEntity { Key = "old", RetiredAt = new DateTimeOffset(2026, 11, 12, 0, 0, 0, TimeSpan.Zero) });
+        db.Topics.Add(new TopicEntity { StackKey = "old", Key = "o" });
+
+        AddQuestion(db, "01KBZ3Q8N9V2K3M4P5R6S7T821", "self", "a", Level.Middle, QuestionType.Open, ru: "Я", en: "Self", tags: ["t1", "t2", "t3"]);
+        AddQuestion(db, "01KBZ3Q8N9V2K3M4P5R6S7T822", "two-same-topic", "a", Level.Middle, QuestionType.Open, ru: "Два А", en: "Two same topic", tags: ["t2", "t3"]);
+        AddQuestion(db, "01KBZ3Q8N9V2K3M4P5R6S7T823", "two-b-first", "b", Level.Middle, QuestionType.Open, ru: "Два Б первый", en: "A two other topic", tags: ["t1", "t2"]);
+        AddQuestion(db, "01KBZ3Q8N9V2K3M4P5R6S7T824", "two-b-second", "b", Level.Middle, QuestionType.Open, ru: "Два Б второй", en: "B two other topic", tags: ["t1", "t2", "t9"]);
+        AddQuestion(db, "01KBZ3Q8N9V2K3M4P5R6S7T825", "one", "a", Level.Middle, QuestionType.Open, ru: "Один", en: "One", tags: ["t3"]);
+        AddQuestion(db, "01KBZ3Q8N9V2K3M4P5R6S7T826", "none", "a", Level.Middle, QuestionType.Open, ru: "Ноль", en: "None", tags: ["z"]);
+        AddQuestion(db, "01KBZ3Q8N9V2K3M4P5R6S7T827", "retired", "a", Level.Middle, QuestionType.Open, ru: "Снят", en: "Retired", retired: true, tags: ["t1", "t2", "t3"]);
+        AddQuestion(db, "01KBZ3Q8N9V2K3M4P5R6S7T828", "retired-topic", "c", Level.Middle, QuestionType.Open, ru: "Тема снята", en: "Retired topic", tags: ["t1", "t2", "t3"]);
+        AddQuestion(db, "01KBZ3Q8N9V2K3M4P5R6S7T829", "en-only", "a", Level.Middle, QuestionType.Open, ru: null, en: "English only", tags: ["t1", "t2", "t3"]);
+        db.Questions.Add(new QuestionEntity
+        {
+            Id = "01KBZ3Q8N9V2K3M4P5R6S7T830",
+            StackKey = "old",
+            TopicKey = "o",
+            Slug = "old-stack",
+            Level = Level.Middle,
+            Type = QuestionType.Open,
+            Grading = GradingMode.Self,
+            Tags = ["t1"],
+            Verified = new DateOnly(2026, 11, 11),
+        });
+        db.QuestionLocales.Add(Locale("01KBZ3Q8N9V2K3M4P5R6S7T830", "en", "Old stack"));
+        await db.SaveChangesAsync(Ct);
+        return db;
+    }
+
+    [Fact]
+    public async Task Related_SharesTagsOrderedByOverlap_ExcludesSelfRetiredAndOtherCulture()
+    {
+        await using TrainerDbContext db = await SeedRelatedAsync();
+        QuestionQueries queries = new(db);
+        QuestionId self = new("01KBZ3Q8N9V2K3M4P5R6S7T821");
+
+        IReadOnlyList<CatalogRow> ru = await queries.GetRelatedAsync(Ru, Dotnet, self, 10, Ct);
+        IReadOnlyList<CatalogRow> en = await queries.GetRelatedAsync(En, Dotnet, self, 10, Ct);
+        IReadOnlyList<CatalogRow> limited = await queries.GetRelatedAsync(Ru, Dotnet, self, 2, Ct);
+
+        // Overlap first (en-only shares three tags), then the same topic, then the title; never the question itself,
+        // a retired question or topic, or a question that has no locale for the culture.
+        Assert.Equal(["two-same-topic", "two-b-second", "two-b-first", "one"], ru.Select(r => r.Slug).ToArray());
+        Assert.Equal(["en-only", "two-same-topic", "two-b-first", "two-b-second", "one"], en.Select(r => r.Slug).ToArray());
+        Assert.Equal(["two-same-topic", "two-b-second"], limited.Select(r => r.Slug).ToArray());
+        CatalogRow first = ru[0];
+        Assert.Equal("Два А", first.Title);
+        Assert.Equal("Тема A", first.TopicTitle);
+        Assert.Equal(["t2", "t3"], first.Tags);
+    }
+
+    [Fact]
+    public async Task Related_IsEmptyWithoutSharedTagsOrForRetiredStackOrUnknownQuestion()
+    {
+        await using TrainerDbContext db = await SeedRelatedAsync();
+        QuestionQueries queries = new(db);
+
+        IReadOnlyList<CatalogRow> noOverlap = await queries.GetRelatedAsync(Ru, Dotnet, new QuestionId("01KBZ3Q8N9V2K3M4P5R6S7T826"), 5, Ct);
+        IReadOnlyList<CatalogRow> retiredStack = await queries.GetRelatedAsync(En, new StackKey("old"), new QuestionId("01KBZ3Q8N9V2K3M4P5R6S7T830"), 5, Ct);
+        IReadOnlyList<CatalogRow> unknown = await queries.GetRelatedAsync(Ru, Dotnet, new QuestionId("01KBZ3Q8N9V2K3M4P5R6S7TZZZ"), 5, Ct);
+        IReadOnlyList<CatalogRow> zero = await queries.GetRelatedAsync(Ru, Dotnet, new QuestionId("01KBZ3Q8N9V2K3M4P5R6S7T821"), 0, Ct);
+
+        Assert.Empty(noOverlap);
+        Assert.Empty(retiredStack);
+        Assert.Empty(unknown);
+        Assert.Empty(zero);
     }
 }

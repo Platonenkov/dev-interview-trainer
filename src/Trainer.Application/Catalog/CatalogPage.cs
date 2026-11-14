@@ -24,7 +24,8 @@ public sealed record CatalogRow(
     TopicKey Topic,
     string TopicTitle,
     QuestionType Type,
-    IReadOnlyList<string> Tags);
+    IReadOnlyList<string> Tags,
+    QuestionId Id);
 
 /// <summary>
 /// A filter value with the number of questions it would show. <paramref name="Key"/> is the URL key; for topics

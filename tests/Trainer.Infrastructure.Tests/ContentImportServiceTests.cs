@@ -170,6 +170,30 @@ public sealed class ContentImportServiceTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task Import_RenderVersion3_ReimportsAndStoresCodeLines()
+    {
+        (TrainerDbContext db, ContentImportService service, _) = await NewScopeAsync();
+        await using (db)
+        {
+            using ContentWorkspace content = ContentWorkspace.CopyOfValid();
+            await service.ImportAsync(content.Root, TestContext.Current.CancellationToken);
+            await db.Database.ExecuteSqlAsync($"UPDATE content_imports SET render_version = 2 WHERE is_active", TestContext.Current.CancellationToken);
+            await db.Database.ExecuteSqlAsync($"UPDATE questions SET payload = payload - 'codeLinesHtml'", TestContext.Current.CancellationToken);
+
+            ContentImportResult result = await service.ImportAsync(content.Root, TestContext.Current.CancellationToken);
+
+            Assert.Equal(ContentImportStatus.Imported, result.Status);
+            Assert.Equal(3, Trainer.Content.Schema.ContentSchema.RenderVersion);
+            QuestionEntity closure = await db.Questions.AsNoTracking().SingleAsync(q => q.Id == ClosureId, TestContext.Current.CancellationToken);
+            using System.Text.Json.JsonDocument payload = System.Text.Json.JsonDocument.Parse(closure.Payload);
+            string[] lines = [.. payload.RootElement.GetProperty("codeLinesHtml").EnumerateArray().Select(e => e.GetString()!)];
+            string codeHtml = payload.RootElement.GetProperty("codeHtml").GetString()!;
+            Assert.NotEmpty(lines);
+            Assert.Equal($"<pre class=\"code\"><code>{string.Join('\n', lines)}</code></pre>", codeHtml);
+        }
+    }
+
+    [Fact]
     public async Task Import_RollbackOverSlugRename_Succeeds()
     {
         (TrainerDbContext db, ContentImportService service, _) = await NewScopeAsync();
@@ -506,6 +530,30 @@ public sealed class ContentImportServiceTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task Import_WritePhaseThrows_TheSameServiceCanImportAgain()
+    {
+        string connectionString = await postgres.CreateDatabaseAsync();
+        FailOnceInterceptor failure = new("INSERT INTO question_locales");
+        DbContextOptionsBuilder<TrainerDbContext> options = new();
+        TrainerDbContextOptions.Configure(options, connectionString);
+        options.AddInterceptors(failure);
+        await using TrainerDbContext db = new(options.Options);
+        ContentImportService service = CreateService(db, new FakeInvalidator());
+        using ContentWorkspace content = ContentWorkspace.CopyOfValid();
+
+        // The questions were saved inside the transaction, then the connection failed while the locales were written.
+        await Assert.ThrowsAsync<DbUpdateException>(() => service.ImportAsync(content.Root, TestContext.Current.CancellationToken));
+        Assert.True(failure.Fired);
+
+        // A retry on the same scope must start from the database, not from entities the rollback discarded.
+        ContentImportResult retried = await service.ImportAsync(content.Root, TestContext.Current.CancellationToken);
+
+        Assert.Equal(ContentImportStatus.Imported, retried.Status);
+        Assert.Equal(6, await db.Questions.CountAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(12, await db.QuestionLocales.CountAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task Import_InvalidatorThrowsAfterCommit_StillReturnsImportedAndLogsAnError()
     {
         string connectionString = await postgres.CreateDatabaseAsync();
@@ -645,6 +693,36 @@ public sealed class ContentImportServiceTests(PostgresFixture postgres)
                 Verified = new DateOnly(2026, 11, 11),
             });
             await other.SaveChangesAsync(ct);
+        }
+    }
+
+    /// <summary>Throws once, before the first command whose text contains <paramref name="marker"/>, as a dropped connection would.</summary>
+    private sealed class FailOnceInterceptor(string marker) : DbCommandInterceptor
+    {
+        private int _fired;
+
+        public bool Fired => Volatile.Read(ref _fired) == 1;
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command, CommandEventData eventData, InterceptionResult<DbDataReader> result, CancellationToken cancellationToken = default)
+        {
+            ThrowOnce(command);
+            return ValueTask.FromResult(result);
+        }
+
+        public override ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
+            DbCommand command, CommandEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken = default)
+        {
+            ThrowOnce(command);
+            return ValueTask.FromResult(result);
+        }
+
+        private void ThrowOnce(DbCommand command)
+        {
+            if (command.CommandText.Contains(marker, StringComparison.OrdinalIgnoreCase) && Interlocked.Exchange(ref _fired, 1) == 0)
+            {
+                throw new InvalidOperationException("The connection was lost.");
+            }
         }
     }
 

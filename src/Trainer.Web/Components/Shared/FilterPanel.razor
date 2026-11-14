@@ -4,18 +4,44 @@
 @using Trainer.Domain.Questions
 @using Trainer.Web.Catalog
 @inject IStringLocalizer<SharedResource> L
-<details class="filters">
-    <summary class="filters__toggle">@L["Catalog.Filters.Label"]</summary>
-    <nav class="filters__panel" aria-label="@L["Catalog.Filters.Label"]">
-        @Group("Catalog.Filter.Level", LevelItems())
-        @Group("Catalog.Filter.Topic", TopicItems())
-        @Group("Catalog.Filter.Type", TypeItems())
-        @if (HasFilters)
+<div class="catalog__side">
+    @* The only form on a public page (ADR 0011): GET, no antiforgery token and no cookie, so cached HTML stays shared. *@
+    <form class="catalog-search" method="get" action="@SearchAction" role="search">
+        <label class="catalog-search__label" for="catalog-search">@L["Catalog.Search.Label"]</label>
+        <div class="catalog-search__row">
+            <input id="catalog-search" name="@CatalogQueryParser.SearchParameter" type="search" value="@Query.Search" maxlength="@CatalogQueryParser.MaxSearchLength" autocomplete="off" />
+            <button type="submit" class="btn btn--primary">@L["Catalog.Search.Submit"]</button>
+        </div>
+        @foreach (Level level in Query.Levels)
         {
-            <a class="filters__reset" href="@CatalogQueryParser.ToUrl(Query with { Levels = [], Topics = [], Types = [], Page = 1 })">@L["Catalog.Filter.Reset"]</a>
+            <input type="hidden" name="@CatalogQueryParser.LevelParameter" value="@LevelKeys.ToKey(level)" />
         }
-    </nav>
-</details>
+        @foreach (TopicKey topic in Query.Topics)
+        {
+            <input type="hidden" name="@CatalogQueryParser.TopicParameter" value="@topic.Value" />
+        }
+        @foreach (QuestionType type in Query.Types)
+        {
+            <input type="hidden" name="@CatalogQueryParser.TypeParameter" value="@QuestionTypeKeys.ToKey(type)" />
+        }
+        @if (Query.Search is not null)
+        {
+            <a class="catalog-search__clear" href="@CatalogQueryParser.ToUrl(Query with { Search = null, Page = 1 })">@L["Catalog.Search.Clear"]</a>
+        }
+    </form>
+    <details class="filters">
+        <summary class="filters__toggle">@L["Catalog.Filters.Label"]</summary>
+        <nav class="filters__panel" aria-label="@L["Catalog.Filters.Label"]">
+            @Group("Catalog.Filter.Level", LevelItems())
+            @Group("Catalog.Filter.Topic", TopicItems())
+            @Group("Catalog.Filter.Type", TypeItems())
+            @if (HasFilters)
+            {
+                <a class="filters__reset" href="@CatalogQueryParser.ToUrl(Query with { Levels = [], Topics = [], Types = [], Page = 1 })">@L["Catalog.Filter.Reset"]</a>
+            }
+        </nav>
+    </details>
+</div>
 
 @code {
     [Parameter, EditorRequired]
@@ -25,6 +51,8 @@
     public CatalogPage Page { get; set; } = null!;
 
     private sealed record FilterItem(string Label, int Count, bool Selected, string Href);
+
+    private string SearchAction => $"/{Query.Culture.Value}/{Query.Stack.Value}/questions";
 
     private bool HasFilters => Query.Levels.Count + Query.Topics.Count + Query.Types.Count > 0;
 

@@ -1,0 +1,252 @@
+@using Trainer.Web.Client.Storage
+@using Trainer.Web.Client.Sync
+@implements IDisposable
+@inject AnonymousImport Import
+@inject MockPersistence Persistence
+@inject Trainer.Web.Client.Api.ServerClock Clock
+@inject AccountWatcher Accounts
+@inject OutboxSyncService Sync
+@inject NavigationManager Navigation
+@inject TimeProvider Time
+@inject IStringLocalizer<ClientResource> L
+
+@* The anonymous import (spec 4, 11.4; AnonymousImport): answers this browser kept before sign-in stay under the
+   anonymous key until the user chooses Import or Discard. Import reports success only when that key is empty
+   afterwards; Discard deletes exactly the answers the confirmation counted. A page whose account changed in another
+   tab does neither. *@
+@if (_ids.Count > 0 || _result is not null)
+{
+    <section class="import-panel" id="import" aria-labelledby="import-heading">
+        <h2 class="import-panel__heading" id="import-heading" tabindex="-1" @ref="_heading">@L["Import.Heading"]</h2>
+        @if (_result is { } result)
+        {
+            <p class="import-panel__result" role="status" tabindex="-1" @ref="_resultText">@result</p>
+        }
+        @if (_ids.Count > 0)
+        {
+            <p class="import-panel__count">@Counted("Import.Found", _ids.Count)</p>
+            <p class="import-panel__note">@L[Import.CanAct ? "Import.Note" : "Import.Stale"]</p>
+            @if (_confirming)
+            {
+                <div class="import-panel__confirm" role="group" aria-labelledby="import-confirm-text">
+                    <p class="import-panel__confirm-text" id="import-confirm-text" tabindex="-1" @ref="_confirmText">@Counted("Import.Confirm", _counted.Count)</p>
+                    <div class="import-panel__actions">
+                        <button type="button" class="btn btn--primary import-panel__confirm-discard" disabled="@Disabled" @onclick="DiscardAsync">@L["Import.Confirm.Discard"]</button>
+                        <button type="button" class="btn import-panel__cancel" disabled="@_busy" @onclick="Cancel">@L["Import.Confirm.Cancel"]</button>
+                    </div>
+                </div>
+            }
+            else
+            {
+                <div class="import-panel__actions">
+                    <button type="button" class="btn btn--primary import-panel__import" disabled="@Disabled" @onclick="ImportAsync">@L["Import.Import"]</button>
+                    <button type="button" class="btn import-panel__discard" disabled="@Disabled" @ref="_discard" @onclick="AskToDiscardAsync">@L["Import.Discard"]</button>
+                </div>
+            }
+        }
+    </section>
+}
+
+@code {
+    // How long the panel waits for the moved answers to reach the server before it reports them as queued.
+    private static readonly TimeSpan FlushWait = TimeSpan.FromSeconds(5);
+
+    private readonly CancellationTokenSource _lifetime = new();
+
+    private SlowStorage _slowStorage = null!;
+    private IReadOnlyList<string> _ids = [];
+    private IReadOnlyList<string> _counted = [];
+    private string? _result;
+    private bool _busy;
+    private bool _confirming;
+    private Focus _focus;
+    private bool _scrolled;
+    private ElementReference _heading;
+    private ElementReference _resultText;
+    private ElementReference _confirmText;
+    private ElementReference _discard;
+
+    /// <summary>The signed-in user's Telegram id: the owner whose outbox receives the answers.</summary>
+    [Parameter, EditorRequired]
+    public long Owner { get; set; }
+
+    /// <summary>Raised after answers moved, so the profile can show the new numbers.</summary>
+    [Parameter]
+    public EventCallback Imported { get; set; }
+
+    private enum Focus
+    {
+        None,
+        Result,
+        Confirm,
+        Discard,
+    }
+
+    private bool Disabled => _busy || !Import.CanAct;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _slowStorage = new SlowStorage(Time);
+        Accounts.Changed += OnAccountChanged;
+        Sync.Changed += OnSyncChanged;
+        if (Import.CanAct)
+        {
+            // A finished anonymous mock is part of the offer: its answers join the anonymous outbox before it is counted.
+            // IslandRoot does the same at the island's start; the hand-over is serialised, so the second call finds none.
+            await Persistence.ReleaseAnonymousAsync(Clock, finish: false);
+        }
+
+        _ids = await Import.PendingIdsAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // The panel appears after the island starts, too late for the browser to scroll to /profile#import itself.
+        if (!_scrolled && _ids.Count > 0 && Navigation.Uri.EndsWith("#import", StringComparison.Ordinal))
+        {
+            _scrolled = true;
+            await _heading.FocusAsync();
+        }
+
+        // Every action removes or disables the button that had focus, so focus moves to what replaced it, never to the
+        // body; the heading is there whenever the panel is.
+        Focus focus = _focus;
+        _focus = Focus.None;
+        switch (focus)
+        {
+            case Focus.Result when _result is not null:
+                await _resultText.FocusAsync();
+                break;
+            case Focus.Confirm when _confirming:
+                await _confirmText.FocusAsync();
+                break;
+            case Focus.Discard when !_confirming && _ids.Count > 0:
+                await _discard.FocusAsync();
+                break;
+            case Focus.Result or Focus.Confirm or Focus.Discard when _ids.Count > 0 || _result is not null:
+                await _heading.FocusAsync();
+                break;
+        }
+    }
+
+    public void Dispose()
+    {
+        Accounts.Changed -= OnAccountChanged;
+        Sync.Changed -= OnSyncChanged;
+        _lifetime.Cancel();
+        _lifetime.Dispose();
+    }
+
+    private void OnAccountChanged(string owner) => _ = InvokeAsync(StateHasChanged);
+
+    private void OnSyncChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private string Counted(string baseKey, int count) => string.Format(
+        CultureInfo.CurrentCulture,
+        L[PluralForms.Key(baseKey, count, CultureInfo.CurrentUICulture)].Value,
+        count);
+
+    private async Task ImportAsync()
+    {
+        if (Disabled)
+        {
+            return;
+        }
+
+        _busy = true;
+        _result = null;
+        try
+        {
+            ImportResult result = await WaitShowingSlowAsync(Import.ImportAsync(Owner, FlushWait, _lifetime.Token));
+            _result = result.Status switch
+            {
+                ImportStatus.Imported => Counted("Import.Imported", result.Moved),
+                ImportStatus.Queued => L["Import.Queued"].Value,
+                ImportStatus.Incomplete when result.StillHere is { } stillHere => Counted("Import.Incomplete", stillHere),
+                ImportStatus.Incomplete => L["Import.Unconfirmed"].Value,
+                _ => L["Import.Stale"].Value,
+            };
+            _ids = await Import.PendingIdsAsync();
+            // Anything but a refusal may have changed what the server holds or is about to receive, so the numbers reload.
+            if (result.Status != ImportStatus.Refused)
+            {
+                await Imported.InvokeAsync();
+            }
+        }
+        finally
+        {
+            _busy = false;
+            _focus = Focus.Result;
+        }
+    }
+
+    // The confirmation names the answers stored now, and Discard deletes exactly those: an answer another tab adds
+    // after this moment is not deleted unseen.
+    private async Task AskToDiscardAsync()
+    {
+        if (Disabled)
+        {
+            return;
+        }
+
+        _result = null;
+        _counted = await Import.PendingIdsAsync();
+        _ids = _counted;
+        _confirming = _counted.Count > 0;
+        _focus = Focus.Confirm;
+    }
+
+    private void Cancel()
+    {
+        _confirming = false;
+        _counted = [];
+        _focus = Focus.Discard;
+    }
+
+    private async Task DiscardAsync()
+    {
+        if (Disabled)
+        {
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            DiscardResult result = await WaitShowingSlowAsync(Import.DiscardAsync([.. _counted]));
+            _result = result switch
+            {
+                DiscardResult.Discarded => L["Import.Discarded"].Value,
+                DiscardResult.Failed => L["Import.DiscardFailed"].Value,
+                _ => L["Import.Stale"].Value,
+            };
+            _ids = await Import.PendingIdsAsync();
+        }
+        finally
+        {
+            _busy = false;
+            _confirming = false;
+            _counted = [];
+            _focus = Focus.Result;
+        }
+    }
+
+    // Bounded like every island write (SlowStorage): past the bound the panel says that saving is slow and keeps its
+    // buttons disabled, but the rest of the island stays usable; the result is shown once the write returns.
+    private async Task<T> WaitShowingSlowAsync<T>(Task<T> work)
+    {
+        if (!await _slowStorage.WaitAsync(CompletionOf(work), false))
+        {
+            _result = L["Storage.Slow"].Value;
+            StateHasChanged();
+        }
+
+        return await work;
+    }
+
+    private static async Task<bool> CompletionOf<T>(Task<T> work)
+    {
+        await work;
+        return true;
+    }
+}

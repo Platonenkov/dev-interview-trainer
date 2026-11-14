@@ -67,8 +67,9 @@ public sealed partial class ContentImportService : IContentImportService
         ContentSet content = await _reader.ReadAsync(contentRoot, ct);
 
         ContentImportResult result;
-        await using (IDbContextTransaction transaction = await _db.Database.BeginTransactionAsync(ct))
+        try
         {
+            await using IDbContextTransaction transaction = await _db.Database.BeginTransactionAsync(ct);
             await _db.Database.ExecuteSqlAsync($"SELECT pg_advisory_xact_lock({AdvisoryLockKey})", ct);
             result = await TryImportLockedAsync(content, ct);
             if (result.Status == ContentImportStatus.Imported)
@@ -80,8 +81,12 @@ public sealed partial class ContentImportService : IContentImportService
                 await transaction.RollbackAsync(ct);
             }
         }
-
-        _db.ChangeTracker.Clear();
+        finally
+        {
+            // Also after a failure mid-write: the rolled-back rows would otherwise stay tracked as saved or added, and a
+            // retry on the same scope would collide with them instead of starting from the database.
+            _db.ChangeTracker.Clear();
+        }
         if (result.Status == ContentImportStatus.Imported)
         {
             await InvalidateCachesAsync(result, ct);

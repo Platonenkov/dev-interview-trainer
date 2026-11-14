@@ -1,0 +1,130 @@
+@inject IStringLocalizer<ClientResource> L
+
+@* The Practice filters (spec 5.3). Native checkboxes and radios inside their labels: the label is the 44 px target and
+   the browser handles focus, Space and arrows. Nothing is sent until Start. *@
+<section class="pf" aria-labelledby="pf-heading">
+    <h2 class="pf__heading" id="pf-heading">@L["Practice.Filters.Heading"]</h2>
+    <p class="pf__note">@L["Practice.Filters.Any"]</p>
+    <fieldset class="pf__group">
+        <legend class="pf__legend">@L["Practice.Filters.Levels"]</legend>
+        <div class="pf__options">
+            @foreach (string level in Bootstrap.Levels)
+            {
+                <label class="pf__option">
+                    <input type="checkbox" name="level" value="@level" checked="@_levels.Contains(level)" @onchange="() => Toggle(_levels, level)" />
+                    <span class="level-chip level-@level">@level</span>
+                </label>
+            }
+        </div>
+    </fieldset>
+    <fieldset class="pf__group">
+        <legend class="pf__legend">@L["Practice.Filters.Topics"]</legend>
+        <div class="pf__options">
+            @foreach (TopicDto topic in Bootstrap.Topics)
+            {
+                <label class="pf__option">
+                    <input type="checkbox" name="topic" value="@topic.Key" checked="@_topics.Contains(topic.Key)" @onchange="() => Toggle(_topics, topic.Key)" />
+                    <span>@topic.Title</span>
+                </label>
+            }
+        </div>
+    </fieldset>
+    <fieldset class="pf__group">
+        <legend class="pf__legend">@L["Practice.Filters.Types"]</legend>
+        <div class="pf__options">
+            @foreach (string type in Bootstrap.Types)
+            {
+                <label class="pf__option">
+                    <input type="checkbox" name="type" value="@type" checked="@_types.Contains(type)" @onchange="() => Toggle(_types, type)" />
+                    <span>@L["Practice.Type." + type]</span>
+                </label>
+            }
+        </div>
+    </fieldset>
+    <fieldset class="pf__group">
+        <legend class="pf__legend">@L["Practice.Filters.Status"]</legend>
+        <div class="pf__options">
+            @foreach (string status in Statuses)
+            {
+                <label class="pf__option">
+                    <input type="radio" name="status" value="@status" checked="@(_status == status)" @onchange="() => _status = status" />
+                    <span>@L["Practice.Status." + status]</span>
+                </label>
+            }
+        </div>
+    </fieldset>
+    <label class="pf__count">
+        <span class="pf__legend">@L["Practice.Filters.Count"]</span>
+        <input type="number"
+               name="count"
+               inputmode="numeric"
+               min="@PracticeFilterSet.MinCount"
+               max="@PracticeFilterSet.MaxCount"
+               value="@_count"
+               @oninput="OnCount" />
+    </label>
+    <div class="action-bar">
+        <button type="button" class="btn btn--primary pf__start" @onclick="StartAsync">@L["Practice.Start"]</button>
+    </div>
+</section>
+
+@code {
+    private HashSet<string> _levels = new(StringComparer.Ordinal);
+    private HashSet<string> _topics = new(StringComparer.Ordinal);
+    private HashSet<string> _types = new(StringComparer.Ordinal);
+    private string _status = PracticeFilterSet.All;
+    private int _count = PracticeFilterSet.DefaultCount;
+    private PracticeFilterSet? _shown;
+
+    [Parameter, EditorRequired]
+    public IslandBootstrapDto Bootstrap { get; set; } = null!;
+
+    /// <summary>The filters the form opens with (resolved by the island).</summary>
+    [Parameter, EditorRequired]
+    public PracticeFilterSet Value { get; set; } = null!;
+
+    [Parameter]
+    public EventCallback<PracticeFilterSet> Start { get; set; }
+
+    // Due needs server state, so only a signed-in user is offered it.
+    private IEnumerable<string> Statuses => Bootstrap.Me is null
+        ? [PracticeFilterSet.All, PracticeFilterSet.New]
+        : [PracticeFilterSet.All, PracticeFilterSet.New, PracticeFilterSet.Due];
+
+    protected override void OnParametersSet()
+    {
+        if (ReferenceEquals(_shown, Value))
+        {
+            return;
+        }
+
+        _shown = Value;
+        _levels = new HashSet<string>(Value.Levels, StringComparer.Ordinal);
+        _topics = new HashSet<string>(Value.Topics, StringComparer.Ordinal);
+        _types = new HashSet<string>(Value.Types, StringComparer.Ordinal);
+        _status = Value.Status;
+        _count = Value.Count;
+    }
+
+    private static void Toggle(HashSet<string> set, string value)
+    {
+        if (!set.Remove(value))
+        {
+            set.Add(value);
+        }
+    }
+
+    private void OnCount(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value as string, NumberStyles.None, CultureInfo.InvariantCulture, out int count))
+        {
+            _count = count;
+        }
+    }
+
+    private Task StartAsync()
+    {
+        PracticeFilterSet chosen = new PracticeFilterSet([.. _levels], [.. _topics], [.. _types], _status, _count).Normalise(Bootstrap);
+        return Start.InvokeAsync(chosen);
+    }
+}

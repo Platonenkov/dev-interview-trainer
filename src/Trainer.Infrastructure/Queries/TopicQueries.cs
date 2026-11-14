@@ -3,6 +3,7 @@ using Trainer.Application.Catalog;
 using Trainer.Application.Topics;
 using Trainer.Domain.Keys;
 using Trainer.Domain.Levels;
+using Trainer.Domain.Questions;
 using Trainer.Infrastructure.Persistence;
 using Trainer.Infrastructure.Persistence.Entities;
 
@@ -45,11 +46,12 @@ internal sealed class TopicQueries(TrainerDbContext db) : ITopicQueries
                 join l in db.QuestionLocales on q.Id equals l.QuestionId
                 where l.Culture == cultureValue
                 orderby q.Level, l.Title, q.Slug
-                select new { q.Slug, l.Title, q.Level, q.Type, q.Tags })
+                select new { q.Id, q.Slug, l.Title, q.Level, q.Type, q.Tags })
             .Take(CatalogQuery.PageSize)
             .ToListAsync(ct);
 
-        CatalogRow[] rows = [.. projected.Select(r => new CatalogRow(r.Slug, r.Title, r.Level, topic, locale.Title, r.Type, r.Tags))];
+        CatalogRow[] rows = [.. projected.Select(r => new CatalogRow(
+            r.Slug, r.Title, r.Level, topic, locale.Title, r.Type, r.Tags, new QuestionId(r.Id)))];
         List<string> localeCultures = await db.TopicLocales
             .AsNoTracking()
             .Where(l => l.StackKey == stackValue && l.TopicKey == topicValue)

@@ -1,8 +1,11 @@
 using System.Net;
+using System.Security.Cryptography;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using Npgsql;
 using Trainer.Web.Startup;
 
 namespace Trainer.TestSupport;
@@ -11,7 +14,9 @@ namespace Trainer.TestSupport;
 public sealed class TrainerWebFactoryOptions
 {
     /// <summary>
-    /// Not Development, so the factory's settings are not overridden by <c>appsettings.Development.json</c>.
+    /// Not Development, so the factory's settings are not overridden by <c>appsettings.Development.json</c>. The
+    /// user-secrets source is removed from every host this factory builds, so a Development host never reads a
+    /// developer's real <c>TelegramOidc:ClientSecret</c>.
     /// </summary>
     public string Environment { get; init; } = "Testing";
 
@@ -24,6 +29,22 @@ public sealed class TrainerWebFactoryOptions
     public Action<IServiceCollection>? ConfigureServices { get; init; }
 
     public IReadOnlyDictionary<string, string?>? Settings { get; init; }
+
+    /// <summary>
+    /// Points the app's Telegram OIDC handler at this fake server: sets <c>TelegramOidc:ClientId</c> and
+    /// <c>TelegramOidc:ClientSecret</c> to the server's own, and <c>TelegramOidc:MetadataAddress</c>.
+    /// The app honours the metadata address only in the Testing environment.
+    /// </summary>
+    public FakeTelegramOidcServer? Telegram { get; init; }
+
+    /// <summary>Replaces the app's <see cref="TimeProvider"/>, for example with a <c>FakeTimeProvider</c>.</summary>
+    public TimeProvider? Time { get; init; }
+
+    /// <summary>Receives every log entry the host writes; without it the host logs nowhere.</summary>
+    public CapturingLoggerProvider? Logs { get; init; }
+
+    /// <summary>The client id tests start a <see cref="FakeTelegramOidcServer"/> with; the factory reads the server's own <c>ClientId</c>.</summary>
+    public const string TelegramClientId = "1000";
 }
 
 /// <summary>
@@ -32,7 +53,11 @@ public sealed class TrainerWebFactoryOptions
 /// </summary>
 public sealed class TrainerWebFactory : WebApplicationFactory<Program>
 {
+    private static readonly Uri DefaultClientAddress = new("https://localhost");
     private static readonly TimeSpan ReadyTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>The per-minute <c>App:RateLimits</c> every test host runs with unless <see cref="TrainerWebFactoryOptions.Settings"/> overrides it.</summary>
+    public const string RaisedRateLimit = "100000";
 
     private readonly TrainerWebFactoryOptions _options;
     private readonly string _connectionString;
@@ -61,7 +86,7 @@ public sealed class TrainerWebFactory : WebApplicationFactory<Program>
 
     /// <summary>A client that does not follow redirects, for asserting on <c>Location</c>.</summary>
     public HttpClient CreateNonRedirectingClient() =>
-        CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+        base.CreateClient(DefaultClientOptions(allowAutoRedirect: false));
 
     /// <summary>Polls <c>/health/ready</c> until it is 200. Fails fast when the startup import has already failed.</summary>
     public async Task WaitUntilReadyAsync()
@@ -95,22 +120,95 @@ public sealed class TrainerWebFactory : WebApplicationFactory<Program>
         }
     }
 
+    /// <summary>
+    /// In-memory clients talk https, like production behind the proxy, so Secure cookies round-trip. This hides the base
+    /// method rather than overriding it (it is not virtual): code that holds the host as a plain
+    /// <c>WebApplicationFactory&lt;Program&gt;</c> gets the http default. Only the client
+    /// default changes: <c>ClientOptions</c> stays as it is, because <c>UseKestrel</c> stores its real address there,
+    /// and a caller that passes its own options to <c>CreateClient(options)</c> still gets exactly that address.
+    /// </summary>
+    public new HttpClient CreateClient() => base.CreateClient(DefaultClientOptions(allowAutoRedirect: ClientOptions.AllowAutoRedirect));
+
+    private WebApplicationFactoryClientOptions DefaultClientOptions(bool allowAutoRedirect) => new()
+    {
+        AllowAutoRedirect = allowAutoRedirect,
+        HandleCookies = ClientOptions.HandleCookies,
+        MaxAutomaticRedirections = ClientOptions.MaxAutomaticRedirections,
+        BaseAddress = IsDefaultClientAddress(ClientOptions.BaseAddress) ? DefaultClientAddress : ClientOptions.BaseAddress,
+    };
+
+    protected override void ConfigureClient(HttpClient client)
+    {
+        base.ConfigureClient(client);
+        if (IsDefaultClientAddress(ClientOptions.BaseAddress))
+        {
+            client.BaseAddress = DefaultClientAddress;
+        }
+    }
+
+    private static bool IsDefaultClientAddress(Uri address) =>
+        address.IsLoopback && address.Host == "localhost" && address.IsDefaultPort;
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment(_options.Environment);
         // Outside Development the host ignores the static web assets manifest, and a browser that accepts gzip then gets empty compressed assets.
         builder.UseStaticWebAssets();
-        builder.ConfigureLogging(logging => logging.ClearProviders());
+        builder.ConfigureLogging(logging =>
+        {
+            logging.ClearProviders();
+            if (_options.Logs is not null)
+            {
+                logging.AddProvider(_options.Logs);
+            }
+        });
+        // A Development host would otherwise load the developer's user secrets (a real Telegram client secret among
+        // them); a test host never depends on them, so the source is removed.
+        builder.ConfigureAppConfiguration((_, configuration) =>
+        {
+            for (int i = configuration.Sources.Count - 1; i >= 0; i--)
+            {
+                if (configuration.Sources[i] is Microsoft.Extensions.Configuration.Json.JsonConfigurationSource { Path: "secrets.json" })
+                {
+                    configuration.Sources.RemoveAt(i);
+                }
+            }
+        });
         // UseSetting rather than ConfigureAppConfiguration: Program reads these keys before the host is built.
         builder.UseSetting("ConnectionStrings:Trainer", _connectionString);
         builder.UseSetting("App:ContentRoot", Content.Root);
         builder.UseSetting("App:PublicBaseUrl", "https://trainer.test");
+        // Tests fire requests far faster than a person; only the dedicated rate limit tests lower these through Settings.
+        builder.UseSetting("App:RateLimits:WritesPerMinute", RaisedRateLimit);
+        builder.UseSetting("App:RateLimits:ReadsPerMinute", RaisedRateLimit);
+        builder.UseSetting("App:RateLimits:SearchPerMinute", RaisedRateLimit);
+
+        // Production refuses to start without Telegram credentials; Production tests that never sign in get inert ones,
+        // which Settings may still override.
+        if (_options.Telegram is null && string.Equals(_options.Environment, "Production", StringComparison.Ordinal))
+        {
+            builder.UseSetting("TelegramOidc:ClientId", TrainerWebFactoryOptions.TelegramClientId);
+            builder.UseSetting("TelegramOidc:ClientSecret", "production-test-placeholder");
+        }
+
         if (_options.Settings is not null)
         {
             foreach (KeyValuePair<string, string?> setting in _options.Settings)
             {
                 builder.UseSetting(setting.Key, setting.Value);
             }
+        }
+
+        if (_options.Telegram is not null)
+        {
+            builder.UseSetting("TelegramOidc:ClientId", _options.Telegram.ClientId);
+            builder.UseSetting("TelegramOidc:ClientSecret", _options.Telegram.ClientSecret);
+            builder.UseSetting("TelegramOidc:MetadataAddress", _options.Telegram.MetadataAddress.ToString());
+        }
+
+        if (_options.Time is not null)
+        {
+            builder.ConfigureServices(services => services.Replace(ServiceDescriptor.Singleton(_options.Time)));
         }
 
         if (_options.ConfigureServices is not null)
@@ -122,7 +220,16 @@ public sealed class TrainerWebFactory : WebApplicationFactory<Program>
     protected override void Dispose(bool disposing)
     {
         base.Dispose(disposing);
-        if (disposing && _ownsContent)
+        if (!disposing)
+        {
+            return;
+        }
+
+        // A stopped host leaves its pooled connections idle for minutes; across a long run they exhaust the
+        // server's connection limit and later hosts never finish their startup import.
+        using NpgsqlConnection pooled = new(_connectionString);
+        NpgsqlConnection.ClearPool(pooled);
+        if (_ownsContent)
         {
             Content.Dispose();
         }

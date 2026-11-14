@@ -1,0 +1,116 @@
+@inject IStringLocalizer<ClientResource> L
+
+@* The mock setup (spec 5.3). Native radios and checkboxes inside their labels: the label is the 44 px target. Every
+   change is reported, so the island can drop questions it prepared for the previous choice. *@
+<section class="pf mock-setup" aria-labelledby="mock-setup-heading">
+    <h2 class="pf__heading" id="mock-setup-heading" tabindex="-1" @ref="Heading">@L["Mock.Setup.Heading"]</h2>
+    <fieldset class="pf__group">
+        <legend class="pf__legend">@L["Mock.Setup.Level"]</legend>
+        <p class="pf__note">@L["Mock.Setup.LevelNote"]</p>
+        <div class="pf__options">
+            @foreach (string level in Bootstrap.Levels)
+            {
+                <label class="pf__option">
+                    <input type="radio" name="mock-level" value="@level" checked="@(Value.Level == level)" @onchange="() => ChangeAsync(Value with { Level = level })" />
+                    <span class="level-chip level-@level">@level</span>
+                </label>
+            }
+        </div>
+    </fieldset>
+    <fieldset class="pf__group">
+        <legend class="pf__legend">@L["Mock.Setup.Topics"]</legend>
+        <p class="pf__note">@L["Mock.Setup.TopicsNote"]</p>
+        <div class="pf__options">
+            @foreach (TopicDto topic in Bootstrap.Topics)
+            {
+                <label class="pf__option">
+                    <input type="checkbox" name="mock-topic" value="@topic.Key" checked="@Value.Topics.Contains(topic.Key)" @onchange="() => ChangeAsync(Value with { Topics = Toggled(topic.Key) })" />
+                    <span>@topic.Title</span>
+                </label>
+            }
+        </div>
+    </fieldset>
+    <label class="pf__count">
+        <span class="pf__legend">@L["Mock.Setup.Count"]</span>
+        @* A new element whenever the typed text was not taken as is (not a number, or clamped to 5..50), so the field
+           shows the count that will be requested; the browser keeps an input's own value otherwise. *@
+        <input @key="_countVersion"
+               type="number"
+               name="count"
+               inputmode="numeric"
+               min="@MockSettings.MinCount"
+               max="@MockSettings.MaxCount"
+               value="@Value.Count"
+               @onchange="OnCountAsync" />
+    </label>
+    <label class="pf__option mock-setup__timer">
+        <input type="checkbox" name="timer" checked="@Value.Timed" @onchange="() => ChangeAsync(Value with { Timed = !Value.Timed })" />
+        <span>@L["Mock.Setup.Timer"]</span>
+        <span class="pf__note">@string.Format(CultureInfo.CurrentCulture, L["Mock.Setup.TimerNote"].Value, Duration(Value.TimeLimit))</span>
+    </label>
+    @ChildContent
+    @if (!Prepared)
+    {
+        <div class="action-bar">
+            <button type="button" class="btn btn--primary mock-setup__start" disabled="@Busy" @onclick="() => Start.InvokeAsync(Value)">@L["Mock.Start"]</button>
+        </div>
+    }
+</section>
+
+@code {
+    [Parameter, EditorRequired]
+    public IslandBootstrapDto Bootstrap { get; set; } = null!;
+
+    [Parameter, EditorRequired]
+    public MockSettings Value { get; set; } = null!;
+
+    /// <summary>The island has questions for <see cref="Value"/> and shows its warning instead of Start.</summary>
+    [Parameter]
+    public bool Prepared { get; set; }
+
+    [Parameter]
+    public bool Busy { get; set; }
+
+    [Parameter]
+    public EventCallback<MockSettings> Changed { get; set; }
+
+    [Parameter]
+    public EventCallback<MockSettings> Start { get; set; }
+
+    /// <summary>The small-pool warning, inside the form so it reads as part of the choice.</summary>
+    [Parameter]
+    public RenderFragment? ChildContent { get; set; }
+
+    private int _countVersion;
+
+    public ElementReference Heading { get; private set; }
+
+    /// <summary>"7:30": minutes and seconds.</summary>
+    public static string Duration(TimeSpan value) =>
+        string.Create(CultureInfo.InvariantCulture, $"{(int)value.TotalMinutes}:{value.Seconds:00}");
+
+    private Task ChangeAsync(MockSettings next) => Changed.InvokeAsync(next);
+
+    private string[] Toggled(string topic) =>
+        Value.Topics.Contains(topic, StringComparer.Ordinal)
+            ? [.. Value.Topics.Where(t => !string.Equals(t, topic, StringComparison.Ordinal))]
+            : [.. Value.Topics, topic];
+
+    private Task OnCountAsync(ChangeEventArgs e)
+    {
+        string text = e.Value as string ?? "";
+        if (!int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out int typed))
+        {
+            _countVersion++;
+            return Task.CompletedTask;
+        }
+
+        int count = Math.Clamp(typed, MockSettings.MinCount, MockSettings.MaxCount);
+        if (count != typed || !string.Equals(text, count.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal))
+        {
+            _countVersion++;
+        }
+
+        return ChangeAsync(Value with { Count = count });
+    }
+}

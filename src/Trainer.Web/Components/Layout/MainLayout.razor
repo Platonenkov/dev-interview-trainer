@@ -1,7 +1,8 @@
 @inherits LayoutComponentBase
+@using Trainer.Web.Islands
 @inject IStringLocalizer<SharedResource> L
 
-<a class="skip-link" href="#main">@L["Nav.SkipToContent"]</a>
+<a class="skip-link" href="@SkipLinkHref">@L["Nav.SkipToContent"]</a>
 <header class="site-header">
     <div class="container site-header__inner">
         <a class="brand" href="/@CultureInfo.CurrentUICulture.TwoLetterISOLanguageName" aria-label="@L["Nav.HomeLabel"]">
@@ -9,6 +10,7 @@
         </a>
         <div class="site-header__tools">
             <LanguageSwitcher />
+            <AccountControls />
             <button type="button" class="theme-toggle" id="theme-toggle" aria-label="@L["Theme.Toggle"]">
                 <span class="theme-toggle__icon" aria-hidden="true"></span>
             </button>
@@ -24,3 +26,15 @@
         <a href="/@CultureInfo.CurrentUICulture.TwoLetterISOLanguageName/about">@L["Footer.About"]</a>
     </div>
 </footer>
+
+@code {
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    // Island pages carry <base href="/"> for the WebAssembly runtime, against which a bare "#main" would mean "/#main"
+    // and leave the page. Island pages are never output-cached, so writing this request's own URL into them is safe.
+    private string SkipLinkHref =>
+        HttpContext is { } http && InteractiveIslandPageAttribute.IsMatched(http)
+            ? http.Request.Path.ToUriComponent() + http.Request.QueryString.ToUriComponent() + "#main"
+            : "#main";
+}

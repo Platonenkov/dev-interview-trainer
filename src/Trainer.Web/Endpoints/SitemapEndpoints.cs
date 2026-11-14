@@ -20,8 +20,8 @@ public static class SitemapEndpoints
     private const string SitemapNamespace = "http://www.sitemaps.org/schemas/sitemap/0.9";
     private const string XhtmlNamespace = "http://www.w3.org/1999/xhtml";
 
-    // Plan 2 interactive pages: not indexable, and crawlers have nothing useful to do there.
-    private static readonly string[] InteractiveSegments = ["practice", "mock", "review"];
+    // Island pages: not indexable, and crawlers have nothing useful to do there.
+    private static readonly string[] InteractiveSegments = ["practice", "mock", "review", "profile"];
 
     private static readonly XmlWriterSettings WriterSettings = new()
     {

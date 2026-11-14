@@ -4,6 +4,12 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      enforce:
+        description: Fail the release job when Practice exceeds its cold or warm regression budget (docs/performance.md, ADR 0014)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -31,7 +37,7 @@ jobs:
       - name: Build
         run: dotnet build -warnaserror --no-restore
       - name: Unit and integration tests
-        run: dotnet test --no-build --filter-not-trait "Category=E2E" --filter-not-trait "Category=Docker" --ignore-exit-code 8
+        run: dotnet test --no-build --filter-not-trait "Category=E2E" --filter-not-trait "Category=Docker" --filter-not-trait "Category=Release" --ignore-exit-code 8
 
   # Snippets come from pull requests and are untrusted code: this job has no secrets and read-only permissions,
   # and the code runs only inside the throw-away sandbox containers.
@@ -99,4 +105,83 @@ jobs:
         with:
           name: e2e-screenshots
           path: TestResults/screenshots/**
+          if-no-files-found: warn
+
+  # The published Release build (trimmed, fingerprinted, compressed) in a browser, over a migrated PostgreSQL service:
+  # the islands boot and round-trip real DTOs, every runtime file loads once and stays cached, and Practice is timed under
+  # a phone-over-4G profile against regression budgets (docs/performance.md, ADR 0014). Timings fail the job only when
+  # dispatched with enforce = true; the transfer budget always does.
+  release:
+    needs: build-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    services:
+      postgres:
+        # postgres:17-alpine, pinned so timing runs are reproducible.
+        image: postgres@sha256:d3244e8ce3f165ee3c93d9c4a4b1d0fe48b3a89e2287b717fdcbbde92d405065
+        env:
+          POSTGRES_PASSWORD: release
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DIT_RELEASE_PUBLISH_DIR: ${{ github.workspace }}/artifacts/publish
+      DIT_RELEASE_CONNECTION: Host=localhost;Port=5432;Database=trainer;Username=postgres;Password=release
+      DIT_PERF_ENFORCE: ${{ inputs.enforce && '1' || '0' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The relink below needs a workload set of the SDK's feature band: SDK 10.0.303 and workload set 10.0.303 move together.
+      # global.json asks for 10.0.203 with latestFeature so developers get the newest band, which on ubuntu-latest is the
+      # preinstalled SDK (10.0.4xx), not the one setup-dotnet installs. This job-local override, written before any dotnet
+      # command, pins the exact SDK; it is never committed.
+      - name: Pin the SDK to 10.0.303
+        run: |
+          jq '.sdk = {version: "10.0.303", rollForward: "disable"}' global.json > global.json.tmp
+          mv global.json.tmp global.json
+          cat global.json
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: 10.0.303
+      # The relinked runtime drops what the client does not use (the ICU code under invariant globalization, ADR 0013);
+      # without the workload the publish uses the prebuilt runtime, about 0.5 MB larger (docs/performance.md). Pinned to a
+      # workload set so the relinked runtime, and so the transfer budget, is reproducible.
+      - name: Install wasm-tools
+        run: |
+          version="$(dotnet --version)"
+          echo "SDK $version"
+          case "$version" in
+            10.0.3??) ;;
+            *) echo "::error::The wasm-tools pin needs an SDK in the 10.0.3xx band, got $version"; exit 1 ;;
+          esac
+          dotnet workload install wasm-tools --version 10.0.303
+      - name: Restore
+        run: dotnet restore
+      - name: Build
+        run: dotnet build -warnaserror --no-restore
+      - name: Publish Release
+        run: dotnet publish src/Trainer.Web -c Release -o "$DIT_RELEASE_PUBLISH_DIR"
+      - name: Restore tools
+        run: dotnet tool restore
+      - name: Migrate the database
+        run: TRAINER_DB="$DIT_RELEASE_CONNECTION" dotnet ef database update --no-build --project src/Trainer.Infrastructure
+      - name: Install Playwright Chromium
+        run: pwsh tests/Trainer.Web.Release/bin/Debug/net10.0/playwright.ps1 install --with-deps chromium
+      - name: Release tests
+        run: dotnet test --no-build --filter-trait "Category=Release" --ignore-exit-code 8
+      - name: Upload measurements
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-perf
+          path: |
+            TestResults/perf/**
+            TestResults/release/**
           if-no-files-found: warn

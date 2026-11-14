@@ -1,22 +1,30 @@
 using System.Text.Encodings.Web;
 using System.Text.Unicode;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Localization;
 using Microsoft.AspNetCore.ResponseCompression;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Telegram.OpenIdConnect.AspNetCore;
 using Trainer.Application.Abstractions;
 using Trainer.Application.Content;
 using Trainer.Infrastructure.Content;
 using Trainer.Domain.Keys;
 using Trainer.Infrastructure;
+using Trainer.Infrastructure.Persistence;
+using Trainer.Contracts;
+using Trainer.Web.Api;
+using Trainer.Web.Auth;
 using Trainer.Web.Caching;
 using Trainer.Web.Components;
 using Trainer.Web.Components.Layout;
 using Trainer.Web.Endpoints;
+using Trainer.Web.Islands;
 using Trainer.Web.Seo;
 using Trainer.Web.ContentState;
 using Trainer.Web.Routing;
+using Trainer.Web.Security;
 using Trainer.Web.Startup;
 
 WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
@@ -26,9 +34,13 @@ StartupMigrations.EnsureAllowed(appOptions, builder.Environment);
 PublicBaseUrlValidation.EnsureValid(appOptions, builder.Environment);
 TrustedProxies trustedProxies = ForwardedHeadersSetup.Parse(appOptions.ForwardedHeaders);
 string? defaultedAllowedHost = AllowedHostsDefault.Apply(builder.Configuration, appOptions, builder.Environment);
+RateLimitOptions rateLimits = ApiRateLimits.Read(builder.Configuration);
 
 string connectionString = builder.Configuration.GetConnectionString("Trainer")
     ?? throw new InvalidOperationException("ConnectionStrings:Trainer is not configured.");
+
+// The library's own category logs the Telegram username and the client IP; SignInLogSink is the only sign-in log.
+builder.Logging.AddSignInLogRules();
 
 builder.Services.Configure<AppOptions>(builder.Configuration.GetSection(AppOptions.SectionName));
 builder.Services.Configure<ForwardedHeadersOptions>(options => ForwardedHeadersSetup.Apply(options, trustedProxies));
@@ -43,6 +55,8 @@ builder.Services.AddSingleton<IContentCacheInvalidator, OutputCacheInvalidator>(
 builder.Services.AddSingleton<ReadinessState>();
 builder.Services.AddSingleton<SiteUrls>();
 builder.Services.AddScoped<PageLinks>();
+builder.Services.AddScoped<IslandBootstrapFactory>();
+builder.Services.AddScoped<CspNonce>();
 builder.Services.AddHostedService<ContentStartupImporter>();
 builder.Services.AddOutputCache(options =>
 {
@@ -57,8 +71,24 @@ builder.Services.AddResponseCompression(options =>
     options.Providers.Add<BrotliCompressionProvider>();
     options.Providers.Add<GzipCompressionProvider>();
 });
+builder.Services.AddTrainerAuth(builder.Configuration, builder.Environment);
+// Auth and antiforgery cookies are protected with this key ring; it lives in PostgreSQL so it survives restarts (ADR 0004).
+builder.Services.AddDataProtection()
+    .SetApplicationName("dev-interview-trainer")
+    .PersistKeysToDbContext<TrainerDbContext>();
+builder.Services.AddAntiforgery(options =>
+{
+    options.HeaderName = AntiforgeryNames.Header;
+    options.Cookie.Name = AntiforgeryNames.Cookie;
+});
+// Source-generated metadata first, so /api bodies never need reflection (the WASM client uses the same context).
+builder.Services.ConfigureHttpJsonOptions(options => options.SerializerOptions.TypeInfoResolverChain.Insert(0, TrainerJsonContext.Default));
+builder.Services.AddTrainerApiRateLimits(rateLimits);
 builder.Services.AddLocalization(options => options.ResourcesPath = "Localization/Resources");
-builder.Services.AddRazorComponents();
+// Islands are WebAssembly only (spec 8.2); AddInteractiveServerComponents is never called.
+builder.Services.AddRazorComponents()
+    .AddInteractiveWebAssemblyComponents()
+    .AddAuthenticationStateSerialization(options => options.SerializationCallback = AuthenticationStateSerialization.SerializeAsync);
 // The default encoder writes every non-Latin character as a numeric entity, which triples the size of Russian pages.
 builder.Services.AddWebEncoders(options => options.TextEncoderSettings = new TextEncoderSettings(UnicodeRanges.BasicLatin, UnicodeRanges.Cyrillic));
 builder.Services.AddHealthChecks()
@@ -82,7 +112,20 @@ app.UseMiddleware<SecurityHeadersMiddleware>();
 // Outside the output cache: entries are stored uncompressed and encoded per request.
 app.UseResponseCompression();
 app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
+app.UseMiddleware<StatusPageAsGetMiddleware>();
+// Before routing, so it also wraps authentication, authorization, rate limiting, binding and unmatched /api paths.
+app.UseWhen(
+    context => context.Request.Path.StartsWithSegments(ApiEndpoints.Prefix, StringComparison.OrdinalIgnoreCase),
+    api => api.UseMiddleware<ApiErrorMiddleware>());
 app.UseRouting();
+// Before authentication on purpose: its OnStarting callback must be registered earlier than the cookie handler's, so it
+// runs after it and the handler's own no-cache headers on a reissued cookie cannot replace private, no-store.
+app.UseMiddleware<PrivateResponseMiddleware>();
+// Before the culture check: the OIDC callback /signin-telegram also matches the home page's /{Culture} route, which
+// that middleware would answer with 404 before the handler could take the callback.
+app.UseAuthentication();
+// Routing has matched the endpoint and the compression middleware has installed its feature.
+app.UseMiddleware<BreachGuardMiddleware>();
 app.UseMiddleware<CultureAndStackMiddleware>();
 app.UseRequestLocalization(options =>
 {
@@ -92,16 +135,26 @@ app.UseRequestLocalization(options =>
     options.SupportedUICultures = options.SupportedCultures;
     options.RequestCultureProviders = [new RouteCultureProvider()];
 });
+app.UseAuthorization();
+// After authentication and authorization: partitions are per user, and anonymous calls to signed-in endpoints are not counted.
+app.UseRateLimiter();
+// After authentication, so PublicPageCachePolicy sees the signed-in user and bypasses the cache.
 app.UseOutputCache();
 app.UseAntiforgery();
 
 app.MapStaticAssets();
 RootRedirectEndpoint.Map(app);
 LanguageEndpoint.Map(app);
+SignInRedirectEndpoint.Map(app);
+app.MapTelegramOidcEndpoints();
+app.MapTrainerApi();
 SitemapEndpoints.Map(app);
 app.MapHealthChecks("/health/live", new() { Predicate = _ => false });
 app.MapHealthChecks("/health/ready", new() { Predicate = check => check.Tags.Contains(ReadinessHealthCheck.Tag) });
-app.MapRazorComponents<App>();
+RazorComponentsEndpointConventionBuilder pages = app.MapRazorComponents<App>()
+    .AddInteractiveWebAssemblyRenderMode();
+pages.Add(IslandEndpointConventions.KeepRenderModesOnIslandPagesOnly);
+pages.Add(IslandEndpointConventions.KeepResourceCollectionOnServer);
 
 app.Run();
 

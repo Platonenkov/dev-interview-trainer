@@ -22,31 +22,34 @@ in `docs/adr/`.
 
 ```
 src/Trainer.Domain/          value types and keys (levels, question types, ids, slugs); no IO, no framework deps
+src/Trainer.Contracts/        wire DTOs shared by the server and the WASM client (source-generated JSON context); no references
 src/Trainer.Application/     use-case interfaces and result types
 src/Trainer.Infrastructure/  EF Core (PostgreSQL), migrations, content importer, query services
 src/Trainer.Content/         content schema, strict reader, validator, Markdown and code renderer
 src/Trainer.Snippets/        Docker sandbox that compiles and runs content snippets
-src/Trainer.Web/             Blazor Web App host: static SSR pages, routing, SEO, output cache, health checks
+src/Trainer.Web/             Blazor Web App host: static SSR pages, island pages, routing, SEO, output cache, health checks
+src/Trainer.Web.Client/      WebAssembly islands (trimmed); references only Domain and Contracts
 tools/Trainer.ContentCli/    validate / run-snippets / check-links / new-question / generate-schemas
 tests/                       xUnit v3 projects; Trainer.TestSupport holds shared fixtures,
+                             Trainer.Web.Client.Tests covers the WebAssembly client,
                              Trainer.Web.E2E holds the Playwright browser checks,
+                             Trainer.Web.Release smoke-tests and times the published Release build,
                              Trainer.ContentCli.Tests covers the CLI (link checker on a local Kestrel server)
 content/                     question bank (CC BY-SA 4.0), deployed separately from the app
-.github/workflows/           ci.yml (build-test, content, e2e), link-check.yml (weekly dead-link report)
-docs/                        architecture.md, content-guide.md, design mockups, specs and plans
+.github/workflows/           ci.yml (build-test, content, e2e, release), link-check.yml (weekly dead-link report)
+docs/                        architecture.md, content-guide.md, design mockups, specs and plans,
+                             adr/ (architecture decision records, one file per decision)
 ```
 
 Not created yet:
 
-- Plan 2: `src/Trainer.Contracts/` (DTOs shared by server and WASM client) and
-  `src/Trainer.Web.Client/` (WebAssembly interactive islands).
 - Plan 3: `deploy/` (compose files, bootstrap script for first-time VPS
-  provisioning), `deploy-app.yml`, `deploy-content.yml`, `docs/deployment.md`
-  and the `docs/adr/` folder.
+  provisioning), `deploy-app.yml`, `deploy-content.yml` and `docs/deployment.md`.
 
-Dependencies point inward: Domain references nothing; Application and Content
-reference Domain; Snippets references Content; Infrastructure references
-Application and Content; Web references Infrastructure and Application; the
+Dependencies point inward: Domain and Contracts reference nothing; Application
+references Domain and Contracts (ADR 0006); Content references Domain; Snippets references Content; Infrastructure references
+Application and Content; Web.Client references Domain and Contracts only; Web references Infrastructure, Application,
+Contracts and Web.Client; the
 content CLI references Content and Snippets. **Web never references Snippets**:
 untrusted snippet code must not be reachable from the web process.
 
@@ -90,21 +93,60 @@ untrusted snippet code must not be reachable from the web process.
 ## Blazor rules
 
 - Public, indexable pages (home, catalog, topic, question) are pure static SSR:
-  no interactive components, no `[StreamRendering]`, no forms for anonymous
-  users. Their anonymous responses must not set cookies (tests enforce this,
-  output caching depends on it). Check SEO metadata (title, description,
+  no interactive components, no `[StreamRendering]`, no POST forms or antiforgery
+  tokens for anonymous users; the one exception is the catalog search
+  `<form method="get">` (ADR 0011), which has no token and sets no cookie. Their
+  anonymous responses must not set cookies (tests enforce this, output caching
+  depends on it). A catalog request with a search term (`q`) is never cached. Check SEO metadata (title, description,
   canonical, hreflang, JSON-LD) when touching them.
-- Interactive islands use `InteractiveWebAssembly` and live only on non-indexed
-  pages (Practice, Mock, Review, profile). Do not introduce `InteractiveServer`.
+- Interactive islands use `InteractiveWebAssembly` (`IslandRenderMode.NoPrerender`)
+  and live only on non-indexed pages (Practice, Mock, Review, profile). Do not
+  introduce `InteractiveServer`. A page that hosts an island carries
+  `[InteractiveIslandPage]`: only such pages load `blazor.web.js`, carry
+  `<base href="/">`, `<ImportMap />` with a per-request nonce (ADR 0012) and get
+  the CSP with `'wasm-unsafe-eval'` and that nonce. Island pages are
+  noindex, never output-cached and never compressed (they carry an antiforgery
+  token). Fragment links on them must include the page path (`<base href="/">`).
+- Island pages start Blazor with enhanced navigation off (ADR 0009): every
+  navigation between public and island pages is a full page load. Links from
+  public pages into islands carry `data-enhance-nav="false"`: render them with
+  `IslandLink`, which adds `data-preload-runtime` for Practice and Mock entry
+  points (`runtime-preload.js` prefetches the runtime on hover, focus or touch).
+- Nothing on an island page may use inline styles (CSP): dynamic sizes use
+  `<progress>`, `<meter>` or SVG attributes. The E2E fixture fails on any CSP
+  violation; call `host.AssertNoCspViolations(tab)` in every island test.
+- A new island component goes into `Islands/IslandRoots.cs` (`[DynamicDependency]`):
+  only the server names island components, so the trimmed Release build would drop
+  it. `IslandRootsTests` (unit) fails when an island type or a server
+  `@rendermode` use has no entry; the `Release` suite boots every island.
 - Islands must not load data twice: disable prerendering and show a fixed-size
   skeleton, or use `[PersistentState(AllowUpdates = true)]` when prerendering.
-- WASM culture is fixed at startup from `<html lang>`; switching language is a
-  full page reload. Never change culture at runtime.
-- The theme is applied by an inline script before first paint. The page that
-  first loads `blazor.web.js` must also re-apply the theme on the
-  `enhancedload` event, otherwise enhanced navigation resets it.
+- WASM culture is fixed at startup from `<html lang>` (`PageCulture.Apply` in the
+  client's `Program.cs`); switching language is a full page reload. Never change
+  culture at runtime.
+- The client runs with invariant globalization (ADR 0013): no culture data. Never
+  format dates or numbers with culture patterns or read `TwoLetterISOLanguageName`
+  there; show dates with `LocalTime` (the browser's `Intl`) and get the language from
+  `UiLanguage`.
+- The theme is applied by an inline script before first paint; it also defines
+  `window.ditApplyTheme`. `islands-start.js` re-applies the theme after Blazor
+  starts and on the `enhancedload` event (a safety net: enhanced navigation is
+  off), otherwise a DOM merge would reset it. `theme-toggle.js` is a delegated
+  `document` click handler.
 - Writes from islands go through `/api` with the antiforgery header and a
   client-generated answer id via the outbox (design section 8.8).
+- Islands build question screens from the shared `Sessions/` model
+  (`QuestionAttempt`, `AnswerFactory`) and components (`QuestionCard`,
+  `OptionList`, `FeedbackPanel`, `AnswerArea`, ...), and show failures through
+  `IslandStateView`. Practice and Review answer through `AnsweringFlow`
+  (outbox first, bounded by `SlowStorage`, shortcut dispatch); change the
+  protocol there, not in one island. Review adds only the recall step
+  (`ReviewSession`). Answers given before sign-in are imported only from the
+  profile's Import button (`AnonymousImport`), never automatically. See
+  "Question sessions and island UI" in `docs/architecture.md`. Keyboard
+  shortcuts go through `KeyboardShortcuts` and `js/shortcuts.js`, which leave
+  modifier keys, text fields and Enter on buttons, links and `summary` to the
+  browser.
 - Content Markdown is untrusted: render with raw HTML disabled, only `https:`
   links, at import time on the server.
 - No heavy UI component libraries in the WASM client; keep payload small.
@@ -142,10 +184,22 @@ untrusted snippet code must not be reachable from the web process.
 
 ```bash
 dotnet build -warnaserror
-dotnet test --filter-not-trait "Category=E2E" --filter-not-trait "Category=Docker" --ignore-exit-code 8
+dotnet test --filter-not-trait "Category=E2E" --filter-not-trait "Category=Docker" --filter-not-trait "Category=Release" --ignore-exit-code 8
 dotnet test --filter-trait "Category=Docker" --ignore-exit-code 8
 dotnet test --filter-trait "Category=E2E" --ignore-exit-code 8
 dotnet run --project tools/Trainer.ContentCli -- validate
+```
+
+When a change touches the WebAssembly client, its trimming, `App.razor`, the CSP
+or static assets, also run the `Release` category against a published build (it
+skips without `DIT_RELEASE_PUBLISH_DIR` and `DIT_RELEASE_CONNECTION`; the full
+procedure and the performance profile are in `docs/performance.md`):
+
+```bash
+dotnet publish src/Trainer.Web -c Release -o artifacts/publish
+TRAINER_DB="<connection string>" dotnet ef database update --project src/Trainer.Infrastructure
+export DIT_RELEASE_PUBLISH_DIR=artifacts/publish DIT_RELEASE_CONNECTION="<connection string>"
+dotnet test --filter-trait "Category=Release" --ignore-exit-code 8
 ```
 
 `--ignore-exit-code 8` is needed because some projects have no tests in a given
@@ -171,10 +225,44 @@ Report failures as they are; do not skip or weaken tests to make them pass.
 ## Security
 
 - Telegram OIDC client secret and connection strings come from environment or
-  user secrets, never from files in git.
+  user secrets, never from files in git. `Appsettings_ContainNoClientSecret`
+  fails the test run if `ClientSecret` appears in an `appsettings*.json`.
+- Sign-in goes through `Telegram.OpenIdConnect.AspNetCore`; do not change the
+  library, configure it from `Auth/AuthServiceCollectionExtensions.cs`. The
+  gate keys on the Bot-API id (`id` claim), never the OIDC `sub` or the username.
+- `TelegramOidc:MetadataAddress` (the fake provider) is honoured only in the
+  `Testing` environment, and only there is https metadata not required; startup
+  fails if it is set anywhere else. Production fails to start without the client
+  id and secret.
+- Sign-in logs: the library's `TelegramOidc` category stays off, and the OIDC
+  handler and `Microsoft.AspNetCore.Hosting.Diagnostics` stay at Warning or
+  above (they print the callback code, state and nonce), for every logging
+  provider (`SignInLogging.AddSignInLogRules`, which also beats provider-specific
+  levels such as `Logging:Console:LogLevel:Default`). `SignInLogSink` is the only sign-in log and
+  writes an application-owned reason code, never the raw failure detail, names,
+  picture or IP. Remote `error_description` and `error_uri` are dropped before the
+  OIDC handler logs them. `SignInLoggingTests` enforce this; keep them passing.
+- Authentication runs before `CultureAndStackMiddleware` (the OIDC callback
+  matches the `/{culture}` route) and before the output cache (which must see the
+  signed-in user). Anonymous responses never contain a POST form or an
+  antiforgery token; the sign-out form is rendered only for signed-in users.
 - Response compression is on for HTTPS. A response that renders an
   antiforgery token or another secret next to reflected user input must not
-  be compressed (BREACH); disable compression for that endpoint.
+  be compressed (BREACH). `BreachGuardMiddleware` already disables it for signed-in
+  Razor component pages and `/api/antiforgery`; a new endpoint that returns a
+  token must be added there. The security middlewares act on component pages (matched
+  endpoint with `ComponentTypeMetadata`) and, for `BreachGuardMiddleware` only, on
+  `/api/antiforgery`; never on static assets. Signed-in pages are also
+  `Cache-Control: private, no-store` (`PrivateResponseMiddleware`, which must stay
+  before `UseAuthentication` so it overrides the cookie handler's headers).
+- Sessions are re-checked against the database every five minutes
+  (`TrainerCookieEvents.ValidatePrincipal`); a refresh keeps every claim except
+  `dit:uid`, `dit:stamp` and roles, because antiforgery tokens are bound to `sub`.
+  Do not add a second place that rewrites the session principal. A failed check
+  treats the request as anonymous without deleting the cookie.
+- The data protection key ring is in PostgreSQL, unencrypted at rest (ADR 0004).
+  Treat database access and backups as secrets; never delete the table's rows
+  without meaning to sign everyone out.
 - The output cache serves anonymous traffic only: it skips requests with an
   `Authorization` header or an authenticated user. Keep that check when adding
   sign-in.

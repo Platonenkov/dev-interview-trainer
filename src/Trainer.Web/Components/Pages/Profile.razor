@@ -1,0 +1,62 @@
+@page "/{Culture:length(2)}/{Stack}/profile"
+@using Microsoft.AspNetCore.Authorization
+@using Trainer.Contracts
+@using Trainer.Domain.Keys
+@using Trainer.Web.Client.Islands
+@using Trainer.Web.Islands
+@attribute [InteractiveIslandPage]
+@attribute [Authorize]
+@inject IStringLocalizer<SharedResource> L
+@inject IslandBootstrapFactory Bootstrap
+
+@* The signed-in user's statistics for one stack (ADR 0010: per stack, because statistics are per stack and the culture
+   and stack checks of the other island pages apply unchanged). An anonymous request is sent to sign in and back. No
+   output cache: an island page is noindex and its bootstrap carries the signed-in user's progress. *@
+@if (_stack is { } stack && _bootstrap is not null)
+{
+    @* SeoHead sets PageLinks, so the language switch returns here. *@
+    <SeoHead Title="@($"{L["Profile.Title"]} · {L["Site.Name"]}")"
+             Description="@L["Profile.Description"]"
+             CanonicalPathAndQuery="@PathFor(_culture)"
+             AvailableCultures="CultureKey.Supported"
+             PathForCulture="PathFor"
+             NoIndex="true" />
+
+    <h1>@L["Profile.Heading"]</h1>
+    <div class="island" data-island="profile">
+        <div class="island-skeleton" aria-hidden="true"></div>
+        <IslandBootError Href="@PathFor(_culture)" />
+        <ProfileIsland @rendermode="IslandRenderMode.NoPrerender" BootstrapJson="@_bootstrap" />
+    </div>
+}
+
+@code {
+    [Parameter]
+    public string? Culture { get; set; }
+
+    [Parameter]
+    public string? Stack { get; set; }
+
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    private CultureKey _culture;
+    private StackKey? _stack;
+    private string? _bootstrap;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        // The culture and the stack were checked by CultureAndStackMiddleware before the page ran.
+        if (HttpContext is null || !CultureKey.TryCreate(Culture, out _culture) || !StackKey.TryCreate(Stack, out StackKey stack))
+        {
+            return;
+        }
+
+        _stack = stack;
+        PracticeFiltersDto filters = new([], [], [], null, null);
+        _bootstrap = await Bootstrap.CreateJsonAsync(_culture, stack, filters, HttpContext.User, HttpContext.RequestAborted);
+    }
+
+    // The profile has no parameters, so the canonical path never carries a query.
+    private string PathFor(CultureKey target) => $"/{target.Value}/{_stack!.Value.Value}/profile";
+}

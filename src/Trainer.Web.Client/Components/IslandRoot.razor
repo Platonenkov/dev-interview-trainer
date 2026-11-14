@@ -1,0 +1,107 @@
+@using Trainer.Web.Client.Api
+@using Trainer.Web.Client.Interop
+@inject NavigationManager Navigation
+@inject MockPersistence Persistence
+@inject ServerClock Clock
+@inject IStringLocalizer<ClientResource> L
+
+@* The static skeleton next to this element is hidden by CSS as soon as it exists (islands.css). *@
+<div class="island-root"
+     data-island-ready="@(_ready ? "true" : null)"
+     data-island-culture="@CultureInfo.CurrentUICulture.Name"
+     data-island-signed-in="@(_signedIn ? "true" : "false")">
+    @* The shell's notices, the same for every island: another tab changed the account, storage cannot keep answers
+       (and leaving then asks first), answers are still waiting to be sent, answers from before sign-in can be imported
+       on the profile. *@
+    <AccountChangedNotice />
+    <StorageNotice />
+    <UnsavedGuard />
+    <SyncStatus />
+    @if (_signedIn && _anonymousMockReleased && ShowImportNotice)
+    {
+        <ImportNotice />
+    }
+    <ErrorBoundary>
+        <ChildContent>@ChildContent</ChildContent>
+        <ErrorContent>
+            <p class="island-error" role="alert">
+                @L["Island.Failed"]
+                <a href="@Navigation.Uri" data-enhance-nav="false">@L["Island.Reload"]</a>
+            </p>
+        </ErrorContent>
+    </ErrorBoundary>
+</div>
+
+@code {
+    // One WebAssembly runtime per document (ADR 0009); counted once even when a page hosts several islands.
+    private static int _runtimeCounted;
+
+    private bool _ready;
+    private bool _signedIn;
+    private bool _anonymousMockReleased;
+
+    [Parameter]
+    public RenderFragment? ChildContent { get; set; }
+
+    /// <summary>
+    /// True once the island shows something to act on (its form, a question, a state with its action), not while it
+    /// still loads. <c>data-island-ready</c> follows the first time it is true and stays: it is what tests wait for and
+    /// what docs/performance.md times as "interactive".
+    /// </summary>
+    [Parameter]
+    public bool Usable { get; set; } = true;
+
+    /// <summary>False on the profile, whose import panel is what the notice links to.</summary>
+    [Parameter]
+    public bool ShowImportNotice { get; set; } = true;
+
+    [CascadingParameter]
+    private Task<AuthenticationState>? AuthenticationState { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (AuthenticationState is not null)
+        {
+            AuthenticationState state = await AuthenticationState;
+            _signedIn = state.User.Identity?.IsAuthenticated == true;
+        }
+
+        if (_signedIn)
+        {
+            await ReleaseAnonymousMockAsync();
+        }
+    }
+
+    // A mock finished before sign-in whose hand-over was interrupted keeps its answers inside its progress document,
+    // where the anonymous import cannot see them: any signed-in island start hands it to the anonymous outbox, before
+    // the import notice reads that key. An unfinished one is left for the Mock page to offer.
+    private async Task ReleaseAnonymousMockAsync()
+    {
+        try
+        {
+            await Persistence.ReleaseAnonymousAsync(Clock, finish: false);
+        }
+#pragma warning disable CA1031 // A failed hand-over deletes nothing; the next island start tries again.
+        catch (Exception)
+#pragma warning restore CA1031
+        {
+        }
+
+        _anonymousMockReleased = true;
+    }
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (firstRender && Interlocked.Exchange(ref _runtimeCounted, 1) == 0)
+        {
+            RuntimeStarts.Count();
+        }
+
+        // After a render that showed the usable view, so the mark never precedes what it announces.
+        if (!_ready && Usable)
+        {
+            _ready = true;
+            StateHasChanged();
+        }
+    }
+}

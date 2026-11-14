@@ -46,7 +46,10 @@ public sealed class ContentRenderer : IContentRenderer
         return unsafeTargets;
     }
 
-    public string RenderCode(string source, string language)
+    public string RenderCode(string source, string language) =>
+        $"<pre class=\"code\"><code>{string.Join('\n', RenderCodeLines(source, language))}</code></pre>";
+
+    public IReadOnlyList<string> RenderCodeLines(string source, string language)
     {
         ArgumentNullException.ThrowIfNull(source);
 
@@ -56,7 +59,7 @@ public sealed class ContentRenderer : IContentRenderer
             ? WebUtility.HtmlEncode(normalized)
             : ExtractHighlightedBody(new HtmlClassFormatter().GetHtmlString(normalized, colorCodeLanguage));
 
-        return $"<pre class=\"code\"><code>{LineWrapper.Wrap(highlighted)}</code></pre>";
+        return LineWrapper.Split(highlighted);
     }
 
     /// <summary>

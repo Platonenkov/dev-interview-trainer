@@ -1,0 +1,342 @@
+@page "/{Culture}/admin"
+@using System.Data.Common
+@using System.Globalization
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Forms
+@using Trainer.Application.Admin
+@using Trainer.Application.Users
+@using Trainer.Domain.Keys
+@using Trainer.Domain.Users
+@using Trainer.Web.Auth
+@using Trainer.Web.Startup
+@attribute [Authorize(Policy = AuthServiceCollectionExtensions.AdminPolicy)]
+@inject IStringLocalizer<SharedResource> L
+@inject IAdminQueries Queries
+@inject IUserAccountService Users
+@inject ReadinessState Readiness
+
+@* No output cache: the page is private to an admin and carries antiforgery tokens, so it is also never compressed. *@
+@if (_culture is { } culture && _overview is { } overview && _users is { } users)
+{
+    <SeoHead Title="@L["Admin.Title"]"
+             Description="@L["Admin.Description"]"
+             CanonicalPathAndQuery="@PathFor(culture)"
+             AvailableCultures="CultureKey.Supported"
+             PathForCulture="PathFor"
+             NoIndex="true" />
+
+    <div class="admin">
+        <h1>@L["Admin.Heading"]</h1>
+
+        @if (NoticeText() is { } notice)
+        {
+            <p class="admin__notice@(NoticeIsWarning ? " admin__notice--warn" : "")" role="@(NoticeIsWarning ? "alert" : "status")">@notice</p>
+        }
+
+        <section aria-labelledby="admin-health">
+            <h2 id="admin-health">@L["Admin.Health.Heading"]</h2>
+            <dl class="admin__stats">
+                <div class="admin__stat">
+                    <dt>@L["Admin.Health.Content"]</dt>
+                    <dd>@ReadinessText()</dd>
+                </div>
+                <div class="admin__stat">
+                    <dt>@L["Admin.Health.Database"]</dt>
+                    <dd>@L[overview.DatabaseReachable ? "Admin.Health.DatabaseUp" : "Admin.Health.DatabaseDown"]</dd>
+                </div>
+                <div class="admin__stat">
+                    <dt>@L["Admin.Health.Users"]</dt>
+                    <dd>@overview.UserCount.ToString(CultureInfo.CurrentCulture)</dd>
+                </div>
+                <div class="admin__stat">
+                    <dt>@L["Admin.Health.Blocked"]</dt>
+                    <dd>@overview.BlockedCount.ToString(CultureInfo.CurrentCulture)</dd>
+                </div>
+                <div class="admin__stat">
+                    <dt>@L["Admin.Health.Answers"]</dt>
+                    <dd>@overview.AnswersLast24Hours.ToString(CultureInfo.CurrentCulture)</dd>
+                </div>
+            </dl>
+        </section>
+
+        <section aria-labelledby="admin-imports">
+            <h2 id="admin-imports">@L["Admin.Imports.Heading"]</h2>
+            @if (overview.RecentImports.Count == 0)
+            {
+                <p>@L["Admin.Imports.Empty"]</p>
+            }
+            else
+            {
+                <div class="table-scroll">
+                    <table class="admin-table" role="table">
+                        <thead role="rowgroup">
+                            <tr role="row">
+                                <th scope="col" role="columnheader">@L["Admin.Imports.Hash"]</th>
+                                <th scope="col" role="columnheader">@L["Admin.Imports.ImportedAt"]</th>
+                                <th scope="col" role="columnheader">@L["Admin.Imports.Questions"]</th>
+                                <th scope="col" role="columnheader">@L["Admin.Imports.Schema"]</th>
+                                <th scope="col" role="columnheader">@L["Admin.Imports.Render"]</th>
+                                <th scope="col" role="columnheader">@L["Admin.Imports.Status"]</th>
+                            </tr>
+                        </thead>
+                        <tbody role="rowgroup">
+                            @foreach (ImportRow import in overview.RecentImports)
+                            {
+                                <tr role="row">
+                                    <td role="cell" data-label="@L["Admin.Imports.Hash"]"><code>@ShortHash(import.Hash)</code></td>
+                                    <td role="cell" data-label="@L["Admin.Imports.ImportedAt"]"><time datetime="@Iso(import.ImportedAt)">@Iso(import.ImportedAt)</time></td>
+                                    <td role="cell" data-label="@L["Admin.Imports.Questions"]">@import.QuestionCount.ToString(CultureInfo.CurrentCulture)</td>
+                                    <td role="cell" data-label="@L["Admin.Imports.Schema"]">@import.SchemaVersion.ToString(CultureInfo.CurrentCulture)</td>
+                                    <td role="cell" data-label="@L["Admin.Imports.Render"]">@import.RenderVersion.ToString(CultureInfo.CurrentCulture)</td>
+                                    <td role="cell" data-label="@L["Admin.Imports.Status"]">
+                                        <span class="status-chip @(import.IsActive ? "status-chip--knew" : "status-chip--new")">@L[import.IsActive ? "Admin.Imports.Active" : "Admin.Imports.Inactive"]</span>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+
+        <section aria-labelledby="admin-users">
+            <h2 id="admin-users">@L["Admin.Users.Heading"]</h2>
+            <form class="admin__search" method="get" action="@PathFor(culture)" role="search">
+                <label for="admin-search">@L["Admin.Users.SearchLabel"]</label>
+                <div class="admin__search-row">
+                    <input id="admin-search" name="q" type="search" value="@Search" maxlength="@AdminLimits.MaxSearchLength" autocomplete="off" />
+                    <button type="submit" class="btn btn--primary">@L["Admin.Users.Search"]</button>
+                    @if (!string.IsNullOrWhiteSpace(Search))
+                    {
+                        <a class="btn" href="@PathFor(culture)">@L["Admin.Users.Reset"]</a>
+                    }
+                </div>
+            </form>
+            <p class="admin__found">@L["Admin.Users.Found", users.Total]</p>
+
+            @if (users.Rows.Count == 0)
+            {
+                <p>@L["Admin.Users.Empty"]</p>
+            }
+            else
+            {
+                <div class="table-scroll">
+                    <table class="admin-table" role="table">
+                        <thead role="rowgroup">
+                            <tr role="row">
+                                <th scope="col" role="columnheader">@L["Admin.Users.User"]</th>
+                                <th scope="col" role="columnheader">@L["Admin.Users.TelegramId"]</th>
+                                <th scope="col" role="columnheader">@L["Admin.Users.Roles"]</th>
+                                <th scope="col" role="columnheader">@L["Admin.Users.Created"]</th>
+                                <th scope="col" role="columnheader">@L["Admin.Users.LastSignIn"]</th>
+                                <th scope="col" role="columnheader">@L["Admin.Users.Status"]</th>
+                                <th scope="col" role="columnheader">@L["Admin.Users.Action"]</th>
+                            </tr>
+                        </thead>
+                        <tbody role="rowgroup">
+                            @foreach (AdminUserRow row in users.Rows)
+                            {
+                                <tr role="row">
+                                    <td role="cell" data-label="@L["Admin.Users.User"]">
+                                        <span class="admin-user__name">@DisplayName(row)</span>
+                                        @if (!string.IsNullOrEmpty(row.Username))
+                                        {
+                                            <span class="admin-user__handle">@@@row.Username</span>
+                                        }
+                                    </td>
+                                    <td role="cell" data-label="@L["Admin.Users.TelegramId"]"><code>@row.TelegramUserId.ToString(CultureInfo.InvariantCulture)</code></td>
+                                    <td role="cell" data-label="@L["Admin.Users.Roles"]">@RolesText(row)</td>
+                                    <td role="cell" data-label="@L["Admin.Users.Created"]"><time datetime="@Iso(row.CreatedAt)">@Iso(row.CreatedAt)</time></td>
+                                    <td role="cell" data-label="@L["Admin.Users.LastSignIn"]"><time datetime="@Iso(row.LastSignInAt)">@Iso(row.LastSignInAt)</time></td>
+                                    <td role="cell" data-label="@L["Admin.Users.Status"]">
+                                        <span class="status-chip @(row.IsBlocked ? "status-chip--didnt-know" : "status-chip--knew")">@L[row.IsBlocked ? "Admin.Users.StatusBlocked" : "Admin.Users.StatusActive"]</span>
+                                    </td>
+                                    <td role="cell" data-label="@L["Admin.Users.Action"]">
+                                        @if (IsConfiguredAdmin(row) && !row.IsBlocked)
+                                        {
+                                            <span class="admin-user__handle">@L["Admin.Users.ConfiguredAdmin"]</span>
+                                        }
+                                        else
+                                        {
+                                            <form method="post" @formname="@("block-" + row.Id.Value)" @onsubmit="OnBlockSubmitAsync">
+                                                <AntiforgeryToken />
+                                                <input type="hidden" name="@UserIdField" value="@row.Id.Value" />
+                                                <input type="hidden" name="@BlockedField" value="@(row.IsBlocked ? "false" : "true")" />
+                                                <button type="submit" class="btn@(row.IsBlocked ? "" : " btn--danger")">
+                                                    @L[row.IsBlocked ? "Admin.Users.Unblock" : "Admin.Users.Block"]<span class="visually-hidden"> @DisplayName(row)</span>
+                                                </button>
+                                            </form>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+
+                @if (users.PageCount > 1)
+                {
+                    <nav class="pager" aria-label="@L["Pager.Label"]">
+                        @if (users.Page > 1)
+                        {
+                            <a rel="prev" href="@PageHref(culture, users.Page - 1)">← @L["Pager.Prev"]</a>
+                        }
+                        else
+                        {
+                            <span class="pager__off">← @L["Pager.Prev"]</span>
+                        }
+                        <span>@L["Pager.Status", users.Page, users.PageCount]</span>
+                        @if (users.Page < users.PageCount)
+                        {
+                            <a rel="next" href="@PageHref(culture, users.Page + 1)">@L["Pager.Next"] →</a>
+                        }
+                        else
+                        {
+                            <span class="pager__off">@L["Pager.Next"] →</span>
+                        }
+                    </nav>
+                }
+            }
+        </section>
+    </div>
+}
+
+@code {
+    private static readonly UserPage EmptyUsers = new([], 0, 1, 1);
+
+    private const string UserIdField = "userId";
+    private const string BlockedField = "blocked";
+
+    private enum AdminNotice
+    {
+        None,
+        Blocked,
+        Unblocked,
+        ProtectedAdmin,
+        NotFound,
+    }
+
+    [Parameter]
+    public string? Culture { get; set; }
+
+    [SupplyParameterFromQuery(Name = "q")]
+    public string? Search { get; set; }
+
+    [SupplyParameterFromQuery(Name = "page")]
+    public int? PageNumber { get; set; }
+
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    private CultureKey? _culture;
+    private AdminOverview? _overview;
+    private UserPage? _users;
+    private AdminNotice _notice;
+
+    private CancellationToken RequestAborted => HttpContext?.RequestAborted ?? CancellationToken.None;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _culture = CultureKey.TryCreate(Culture, out CultureKey culture) ? culture : null;
+        if (_culture is not null)
+        {
+            await LoadAsync();
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        _overview = await Queries.GetOverviewAsync(RequestAborted);
+        _users = EmptyUsers;
+        if (!_overview.DatabaseReachable)
+        {
+            return;
+        }
+
+        try
+        {
+            _users = await Queries.GetUsersAsync(Search, PageNumber ?? 1, RequestAborted);
+        }
+        catch (DbException)
+        {
+            // The connection dropped after the overview read it: this page exists to show that state, not to fail on it.
+            _overview = _overview with { DatabaseReachable = false };
+        }
+    }
+
+    private async Task OnBlockSubmitAsync()
+    {
+        HttpContext http = HttpContext ?? throw new InvalidOperationException("The admin page needs an HTTP request.");
+        IFormCollection form = await http.Request.ReadFormAsync(http.RequestAborted);
+        if (!UserId.TryCreate(form[UserIdField].ToString(), out UserId userId)
+            || !bool.TryParse(form[BlockedField].ToString(), out bool block))
+        {
+            _notice = AdminNotice.NotFound;
+        }
+        else
+        {
+            BlockResult result = await Users.SetBlockedAsync(userId, block, http.RequestAborted);
+            _notice = result switch
+            {
+                BlockResult.Updated => block ? AdminNotice.Blocked : AdminNotice.Unblocked,
+                BlockResult.ProtectedAdmin => AdminNotice.ProtectedAdmin,
+                _ => AdminNotice.NotFound,
+            };
+        }
+
+        await LoadAsync();
+    }
+
+    private bool NoticeIsWarning => _notice is AdminNotice.ProtectedAdmin or AdminNotice.NotFound;
+
+    private string? NoticeText() => _notice switch
+    {
+        AdminNotice.Blocked => L["Admin.Notice.Blocked"].Value,
+        AdminNotice.Unblocked => L["Admin.Notice.Unblocked"].Value,
+        AdminNotice.ProtectedAdmin => L["Admin.Notice.ProtectedAdmin"].Value,
+        AdminNotice.NotFound => L["Admin.Notice.NotFound"].Value,
+        _ => null,
+    };
+
+    private string ReadinessText() => Readiness.Status switch
+    {
+        ReadinessStatus.Ready => L["Admin.Health.ContentReady"],
+        ReadinessStatus.Failed => L["Admin.Health.ContentFailed"],
+        _ => L["Admin.Health.ContentPending"],
+    };
+
+    private string DisplayName(AdminUserRow row) =>
+        !string.IsNullOrWhiteSpace(row.DisplayName) ? row.DisplayName
+        : !string.IsNullOrWhiteSpace(row.Username) ? row.Username
+        : L["Account.TelegramUser"];
+
+    // Admin is never stored, so the role in a row means the id is in App:AdminTelegramIds, which the service refuses to block.
+    private static bool IsConfiguredAdmin(AdminUserRow row) => row.Roles.Contains(Roles.Admin, StringComparer.Ordinal);
+
+    private string RolesText(AdminUserRow row) =>
+        row.Roles.Count == 0 ? L["Admin.Users.NoRoles"] : string.Join(", ", row.Roles);
+
+    private static string Iso(DateTimeOffset value) =>
+        value.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
+
+    private static string ShortHash(string hash) => hash.Length <= 12 ? hash : hash[..12];
+
+    private static string PathFor(CultureKey culture) => $"/{culture.Value}/admin";
+
+    // The search text is the only query state to carry along; the first page needs no page parameter.
+    private string PageHref(CultureKey culture, int page)
+    {
+        List<string> query = [];
+        if (!string.IsNullOrWhiteSpace(Search))
+        {
+            query.Add("q=" + Uri.EscapeDataString(Search));
+        }
+
+        if (page > 1)
+        {
+            query.Add("page=" + page.ToString(CultureInfo.InvariantCulture));
+        }
+
+        return query.Count == 0 ? PathFor(culture) : PathFor(culture) + "?" + string.Join('&', query);
+    }
+}

@@ -13,6 +13,9 @@ public sealed class OutputCacheInvalidatorTests
     {
         public Task<IReadOnlyDictionary<StackKey, IReadOnlyList<TopicKey>>> GetTaxonomyAsync(CancellationToken ct) =>
             throw new InvalidOperationException("database is down");
+
+        public Task<IReadOnlyList<TopicTitle>> GetTopicTitlesAsync(CultureKey culture, StackKey stack, CancellationToken ct) =>
+            throw new InvalidOperationException("database is down");
     }
 
     private sealed class RecordingStore : IOutputCacheStore

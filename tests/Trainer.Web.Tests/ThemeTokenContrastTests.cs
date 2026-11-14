@@ -30,6 +30,19 @@ public sealed partial class ThemeTokenContrastTests
             ("lv-senior", "bg", 4.5),
             ("lv-lead", "bg", 4.5),
             ("lv-architect", "bg", 4.5),
+            // Question screen (islands.css): sidebar items, code lines, terminal feedback, input borders (non-text).
+            ("muted", "side", 4.5),
+            ("muted", "panel", 4.5),
+            ("muted", "term", 4.5),
+            ("text", "panel", 4.5),
+            ("ok-t", "side", 4.5),
+            ("ok-t", "term", 4.5),
+            ("bad-t", "term", 4.5),
+            ("warn", "term", 4.5),
+            // Profile and import (islands.css, site.css): links, the import panel border and the progress meters on panels.
+            ("link", "panel", 4.5),
+            ("accent", "panel", 3.0),
+            ("ok", "panel", 3.0),
         ];
 
         TheoryData<string, string, string, double> data = [];

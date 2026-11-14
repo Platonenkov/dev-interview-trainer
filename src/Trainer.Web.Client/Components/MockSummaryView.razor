@@ -1,0 +1,102 @@
+@inject IStringLocalizer<ClientResource> L
+
+@* The mock summary (spec 5.3): totals, a table by topic and every question with its grade or "unanswered", linking to
+   its public page. Island pages carry <base href="/">, so the links are absolute. *@
+<section class="practice-summary mock-summary" aria-labelledby="mock-summary-heading">
+    @if (HandoffPending)
+    {
+        <p class="mock__notice mock-summary__pending">@L["Mock.HandoffPending"]</p>
+    }
+    <h2 class="practice-summary__heading" id="mock-summary-heading" tabindex="-1" @ref="Heading">@L["Mock.Summary.Heading"]</h2>
+    <p class="practice-summary__counts mock-summary__totals">@L["Mock.Summary.Totals", Total(t => t.Knew), Total(t => t.Partial), Total(t => t.DidntKnow), Total(t => t.Unanswered)]</p>
+    <div class="mock-summary__table-wrap">
+        <table class="mock-summary__table">
+            <caption>@L["Mock.Summary.ByTopic"]</caption>
+            <thead>
+                <tr>
+                    <th scope="col">@L["Mock.Summary.Topic"]</th>
+                    <th scope="col">@L["Self.Grade.Knew"]</th>
+                    <th scope="col">@L["Self.Grade.Partial"]</th>
+                    <th scope="col">@L["Self.Grade.DidntKnow"]</th>
+                    <th scope="col">@L["Mock.Summary.Unanswered"]</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (MockTopicResultDto topic in Summary.Topics)
+                {
+                    <tr>
+                        <th scope="row">@TopicTitle(topic.Topic)</th>
+                        <td>@topic.Knew</td>
+                        <td>@topic.Partial</td>
+                        <td>@topic.DidntKnow</td>
+                        <td>@topic.Unanswered</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+    <h3 class="practice-summary__title">@L["Mock.Summary.Questions"]</h3>
+    <ol class="practice-summary__list mock-summary__list">
+        @foreach (QuestionAttempt attempt in Session.Attempts)
+        {
+            <li>
+                <a class="practice-summary__link" href="@QuestionHref(attempt.Question)" data-enhance-nav="false">
+                    <span class="practice-summary__mark practice-summary__mark--@MarkKey(attempt.Grade)" aria-hidden="true">@Mark(attempt.Grade)</span>
+                    <span>@attempt.Question.Title</span>
+                    <span class="mock-summary__grade">@GradeLabel(attempt.Grade)</span>
+                </a>
+            </li>
+        }
+    </ol>
+    <div class="action-bar">
+        <button type="button" class="btn btn--primary mock-summary__new" @onclick="() => NewMock.InvokeAsync()">@L["Mock.NewMock"]</button>
+    </div>
+</section>
+
+@code {
+    [Parameter, EditorRequired]
+    public MockSession Session { get; set; } = null!;
+
+    [Parameter, EditorRequired]
+    public MockSummaryDto Summary { get; set; } = null!;
+
+    [Parameter, EditorRequired]
+    public string Culture { get; set; } = "";
+
+    [Parameter, EditorRequired]
+    public string Stack { get; set; } = "";
+
+    [Parameter]
+    public EventCallback NewMock { get; set; }
+
+    /// <summary>The results are not durable in this browser yet, so a new mock cannot replace this one.</summary>
+    [Parameter]
+    public bool HandoffPending { get; set; }
+
+    public ElementReference Heading { get; private set; }
+
+    private int Total(Func<MockTopicResultDto, int> count) => Summary.Topics.Sum(count);
+
+    private string TopicTitle(string topic) =>
+        Session.Attempts.FirstOrDefault(a => string.Equals(a.Question.Topic, topic, StringComparison.Ordinal))?.Question.TopicTitle ?? topic;
+
+    private string QuestionHref(QuestionDto question) => $"/{Culture}/{Stack}/questions/{question.Slug}";
+
+    private static string MarkKey(Grade? grade) => grade is { } value ? GradeKeys.ToKey(value) : "none";
+
+    private static string Mark(Grade? grade) => grade switch
+    {
+        Grade.Knew => "✓",
+        Grade.Partial => "~",
+        Grade.DidntKnow => "✗",
+        _ => "-",
+    };
+
+    private string GradeLabel(Grade? grade) => grade switch
+    {
+        Grade.Knew => L["Self.Grade.Knew"].Value,
+        Grade.Partial => L["Self.Grade.Partial"].Value,
+        Grade.DidntKnow => L["Self.Grade.DidntKnow"].Value,
+        _ => L["Mock.Summary.NoAnswer"].Value,
+    };
+}

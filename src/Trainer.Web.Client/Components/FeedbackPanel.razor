@@ -1,0 +1,118 @@
+@inject IStringLocalizer<ClientResource> L
+
+@* The status region is rendered empty before the answer, so screen readers announce the verdict when it appears. It
+   carries only the verdict; the terminal below is not a live region, so nothing is read twice. *@
+<p class="visually-hidden" role="status">@Announcement</p>
+@if (Attempt.IsDone)
+{
+    <section class="term feedback" aria-label="@L["Feedback.Label"]">
+        @if (Attempt.Skipped)
+        {
+            <div class="feedback__verdict">@L["Feedback.Skipped"]</div>
+        }
+        else if (Attempt.Grade is { } grade)
+        {
+            <div class="feedback__verdict feedback__verdict--@GradeKeys.ToKey(grade)">
+                <span aria-hidden="true">@Mark(grade)</span>
+                @if (Attempt.Kind == QuestionKind.SelfAssessed)
+                {
+                    @string.Format(CultureInfo.CurrentCulture, L["Feedback.Self"].Value, GradeLabel(Attempt.SelfGrade ?? grade))
+                }
+                else if (grade == Grade.DidntKnow && Attempt.Kind != QuestionKind.MultiChoice)
+                {
+                    @Expected()
+                }
+                else
+                {
+                    @L["Feedback.Verdict." + GradeKeys.ToKey(grade)]
+                }
+            </div>
+            @if (Attempt.UsedHint && grade == Grade.Partial)
+            {
+                <div class="feedback__note">@L["Feedback.HintCap"]</div>
+            }
+        }
+        @if (Attempt.Options.Count > 0)
+        {
+            <p class="term__cmd"><span class="term__prompt" aria-hidden="true">$</span> @L["Feedback.Cmd.Options"]</p>
+            <ul class="opts opts--result">
+                @foreach (OptionDto option in Attempt.Options)
+                {
+                    bool picked = Attempt.Picked.Contains(option.Id);
+                    <li class="opt @(option.Correct ? "opt--good" : picked ? "opt--bad" : null)">
+                        <strong class="opt__verdict">@(option.Correct ? "✓" : "✗") <span class="visually-hidden">@L[option.Correct ? "Feedback.Option.Correct" : "Feedback.Option.Wrong"]</span></strong>
+                        @if (picked)
+                        {
+                            <span class="opt__picked">@L["Feedback.Option.Picked"]</span>
+                        }
+                        <div class="rich">@((MarkupString)option.TextHtml)</div>
+                        @if (option.ExplanationHtml is not null)
+                        {
+                            <div class="rich opt__why">@((MarkupString)option.ExplanationHtml)</div>
+                        }
+                    </li>
+                }
+            </ul>
+        }
+        <p class="term__cmd"><span class="term__prompt" aria-hidden="true">$</span> @L["Feedback.Cmd.Explain"]</p>
+        <div class="rich">@((MarkupString)Attempt.Question.ExplanationHtml)</div>
+        @if (Attempt.Kind == QuestionKind.FindBug && Attempt.Question.FixedCodeHtml is { } fixedCode)
+        {
+            <p class="term__cmd"><span class="term__prompt" aria-hidden="true">$</span> @L["Feedback.Cmd.Fix"]</p>
+            <div class="editor editor--fixed">@((MarkupString)fixedCode)</div>
+        }
+        @if (Attempt.Question.Links.Count > 0)
+        {
+            <p class="term__cmd"><span class="term__prompt" aria-hidden="true">$</span> @L["Feedback.Cmd.Refs"]</p>
+            <ul class="refs">
+                @foreach (LinkDto link in Attempt.Question.Links)
+                {
+                    <li>
+                        <a href="@link.Url" rel="nofollow noopener noreferrer">@link.Title</a>
+                        @if (!string.Equals(link.Lang, UiLanguage.Current, StringComparison.Ordinal))
+                        {
+                            <span class="ref__lang">[@L["Feedback.LinkLang", link.Lang]]</span>
+                        }
+                    </li>
+                }
+            </ul>
+        }
+    </section>
+}
+
+@code {
+    [Parameter, EditorRequired]
+    public QuestionAttempt Attempt { get; set; } = null!;
+
+    private string Announcement =>
+        Attempt.Skipped ? L["Feedback.Skipped"].Value
+        : Attempt.Grade is not { } grade ? ""
+        : Attempt.Kind == QuestionKind.SelfAssessed
+            ? string.Format(CultureInfo.CurrentCulture, L["Feedback.Self"].Value, GradeLabel(Attempt.SelfGrade ?? grade))
+            : L["Feedback.Verdict." + GradeKeys.ToKey(grade)].Value;
+
+    private static string Mark(Grade grade) => grade switch
+    {
+        Grade.Knew => "✓",
+        Grade.Partial => "~",
+        _ => "✗",
+    };
+
+    private string GradeLabel(Grade grade) => grade switch
+    {
+        Grade.Knew => L["Self.Grade.Knew"].Value,
+        Grade.Partial => L["Self.Grade.Partial"].Value,
+        _ => L["Self.Grade.DidntKnow"].Value,
+    };
+
+    // "expected …, got …": option texts are sanitised import-time HTML, typed text is the user's own and stays encoded.
+    private RenderFragment Expected() => Attempt.Kind switch
+    {
+        QuestionKind.OutputTyped => @<text>@L["Feedback.Expected"] <code class="feedback__value">@(Attempt.Question.AcceptedOutputs is { Count: > 0 } accepted ? accepted[0] : "")</code>, @L["Feedback.Got"] <code class="feedback__value">@Attempt.Typed.Trim()</code></text>,
+        QuestionKind.FindBug => @<text>@string.Format(CultureInfo.CurrentCulture, L["Feedback.ExpectedLines"].Value, LineList(Attempt.Question.BugLineSets is { Count: > 0 } sets ? sets[0] : []), LineList([.. Attempt.SelectedLines]))</text>,
+        _ => @<text>@L["Feedback.Expected"] <span class="rich feedback__value">@((MarkupString)(Attempt.Options.FirstOrDefault(o => o.Correct)?.TextHtml ?? ""))</span>, @L["Feedback.Got"] <span class="rich feedback__value">@((MarkupString)(Attempt.Options.FirstOrDefault(o => Attempt.Picked.Contains(o.Id))?.TextHtml ?? ""))</span></text>,
+    };
+
+    private static string LineList(IReadOnlyCollection<int> lines) =>
+        string.Join(", ", lines.Order().Select(l => l.ToString(CultureInfo.CurrentCulture)));
+}

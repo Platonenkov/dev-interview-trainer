@@ -1,0 +1,55 @@
+@inject IStringLocalizer<ClientResource> L
+
+<article class="qcard" aria-labelledby="@TitleId">
+    @* Focusable by script only: the Mock island moves focus here when a question appears. *@
+    <h2 class="qcard__title" id="@TitleId" tabindex="-1" @ref="Title">@Question.Title</h2>
+    <div class="rich qcard__prompt">@((MarkupString)Question.PromptHtml)</div>
+    @if (Question.CodeLinesHtml is { Count: > 0 } lines && Attempt.Kind != QuestionKind.FindBug)
+    {
+        <CodePanel LinesHtml="lines" />
+    }
+    @if (Question.HintHtml is not null)
+    {
+        @if (Attempt.UsedHint)
+        {
+            <section class="qcard__hint" aria-label="@L["Question.Hint"]">
+                <p class="qcard__hint-label">@L["Question.Hint"]</p>
+                <div class="rich">@((MarkupString)Question.HintHtml)</div>
+            </section>
+        }
+        else if (!Attempt.IsFrozen && !Attempt.ReferenceRevealed)
+        {
+            @* A button, not a details summary: opening the hint is recorded and caps the grade, so it must be deliberate. *@
+            <button type="button" class="btn btn--quiet" aria-describedby="@HintNoteId" @onclick="RevealHintAsync">@L["Question.Hint.Show"]</button>
+            <p class="qcard__note" id="@HintNoteId">@L["Question.Hint.Note"]</p>
+        }
+    }
+    @ChildContent
+</article>
+
+@code {
+    [Parameter, EditorRequired]
+    public QuestionAttempt Attempt { get; set; } = null!;
+
+    /// <summary>The answer area: options, line selector, typed input or self-assessment.</summary>
+    [Parameter]
+    public RenderFragment? ChildContent { get; set; }
+
+    [Parameter]
+    public EventCallback Changed { get; set; }
+
+    /// <summary>The question title, focusable by script (<c>tabindex="-1"</c>).</summary>
+    public ElementReference Title { get; private set; }
+
+    private QuestionDto Question => Attempt.Question;
+
+    private string TitleId => "q-" + Attempt.ClientAnswerId;
+
+    private string HintNoteId => "hint-note-" + Attempt.ClientAnswerId;
+
+    private Task RevealHintAsync()
+    {
+        Attempt.RevealHint();
+        return Changed.InvokeAsync();
+    }
+}

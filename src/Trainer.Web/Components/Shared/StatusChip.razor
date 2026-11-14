@@ -1,0 +1,36 @@
+@using Trainer.Application.Progress
+@using System.Globalization
+@using Trainer.Domain.Grading
+@using Trainer.Web.Client.Localization
+@inject IStringLocalizer<SharedResource> L
+@inject TimeProvider Clock
+
+@if (Status is null)
+{
+    <span class="status-chip status-chip--new"><span class="visually-hidden">@L["Status.Label"] </span>@L["Status.New"]</span>
+}
+else
+{
+    @* The hidden text gives a screen reader the context ("Status: Knew, due") that sighted readers get from the border. *@
+    <span class="@Css">
+        <span class="visually-hidden">@L["Status.Label"] </span>
+        <span class="status-chip__grade">@L["Status.Grade." + GradeKeys.ToKey(Status.LastGrade)]</span><span class="visually-hidden">,</span>
+        <span class="status-chip__when">@When</span>
+    </span>
+}
+
+@code {
+    /// <summary>The user's state of the question; null means the question has not been answered yet.</summary>
+    [Parameter]
+    public QuestionStatus? Status { get; set; }
+
+    // The grade is text, never colour alone; the border colour only repeats it.
+    private string Css => $"status-chip status-chip--{GradeKeys.ToKey(Status!.LastGrade)}{(Status.IsDue ? " status-chip--due" : "")}";
+
+    // The same plural rule as the islands: Russian needs three forms, English two.
+    private string When => Status!.IsDue ? L["Status.Due"] : InDays(DaysUntilDue());
+
+    private string InDays(int days) => L[PluralForms.Key("Status.InDays", days, CultureInfo.CurrentUICulture), days];
+
+    private int DaysUntilDue() => Math.Max(1, (int)Math.Ceiling((Status!.DueAt - Clock.GetUtcNow()).TotalDays));
+}

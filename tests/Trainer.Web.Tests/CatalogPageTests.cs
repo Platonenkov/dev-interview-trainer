@@ -71,20 +71,24 @@ public sealed partial class CatalogPageTests(WebSiteFixture site) : IClassFixtur
     }
 
     [Theory]
-    [InlineData("/ru")]
-    [InlineData("/en/dotnet")]
-    [InlineData("/ru/about")]
-    [InlineData("/en/about")]
-    [InlineData("/ru/dotnet/questions")]
-    [InlineData("/en/dotnet/questions?level=middle&topic=async")]
-    public async Task Catalog_AndHome_AndAbout_HaveNoFormsAndNoSetCookie(string path)
+    [InlineData("/ru", 0)]
+    [InlineData("/en/dotnet", 0)]
+    [InlineData("/ru/about", 0)]
+    [InlineData("/en/about", 0)]
+    [InlineData("/ru/dotnet/questions", 1)]
+    [InlineData("/en/dotnet/questions?level=middle&topic=async", 1)]
+    [InlineData("/en/dotnet/questions/closure-for-loop", 0)]
+    public async Task PublicPages_HaveOnlyTheGetSearchFormAndNoSetCookie(string path, int searchForms)
     {
         (HttpResponseMessage response, string body) = await GetAsync(path);
         using HttpResponseMessage _ = response;
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.DoesNotContain("<form", body, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("blazor.web.js", body, StringComparison.Ordinal);
+        MatchCollection forms = Regex.Matches(body, @"<form[^>]*>", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        Assert.Equal(searchForms, forms.Count);
+        Assert.All(forms, form => Assert.Contains("method=\"get\"", form.Value, StringComparison.Ordinal));
+        Assert.DoesNotContain("__RequestVerificationToken", body, StringComparison.Ordinal);
+        RuntimeAssertions.AssertNoRuntime(body);
         Assert.False(response.Headers.Contains("Set-Cookie"), path);
     }
 

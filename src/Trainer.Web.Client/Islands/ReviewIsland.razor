@@ -1,0 +1,364 @@
+@using System.Text.Json
+@using Trainer.Domain.Ids
+@using Trainer.Web.Client.Api
+@using Trainer.Web.Client.Storage
+@using Trainer.Web.Client.Sync
+@implements IDisposable
+@inject TrainerApiClient Api
+@inject OutboxStore Outbox
+@inject OutboxSyncService Sync
+@inject AccountWatcher Accounts
+@inject KeyboardShortcuts Shortcuts
+@inject AnswerFactory Answers
+@inject IAnswerGrader Grader
+@inject UlidGenerator Ids
+@inject ServerClock Clock
+@inject TimeProvider Time
+@inject IStringLocalizer<ClientResource> L
+
+@* Review (spec 5.3): the signed-in user's due questions, one at a time with feedback, choice questions behind a recall
+   step. Pending answers are flushed before the queue is fetched, so a question answered a moment ago is not served
+   again; every answer goes to the outbox first (spec 8.8) and is then sent in the background. *@
+<IslandRoot Usable="_phase != Phase.Loading">
+    @if (_bootstrap is { } bootstrap)
+    {
+        @if (_flow.IsSlow)
+        {
+            <p class="storage-notice practice__slow" role="status">@L["Storage.Slow"]</p>
+        }
+        @* data-answers-saved counts the graded answers whose outbox write returned or outlasted its bound; tests wait on it. *@
+        <div class="qs" data-answers-saved="@_flow.Saved">
+            <TopicSidebar Topics="bootstrap.Topics" Me="bootstrap.Me" Culture="@bootstrap.Culture" Stack="@bootstrap.Stack" />
+            @* Focusable by script: a fetch from a button removes that button, so focus waits here meanwhile. *@
+            <div class="qs__main" tabindex="-1" @ref="_main">
+                @switch (_phase)
+                {
+                    case Phase.Loading:
+                        <IslandStateView Kind="IslandStateKind.Loading" />
+                        break;
+                    case Phase.State:
+                        <IslandStateView Kind="_state" RetryAfter="_retryAfter" Retry="RefetchAsync" />
+                        break;
+                    case Phase.Empty:
+                        <div class="island-state review-empty" role="status">
+                            <p>@L["Review.Empty"]</p>
+                            <p class="review-empty__note">@L["Review.Empty.Note"]</p>
+                            <div class="review-empty__links">
+                                <a class="btn btn--primary review-empty__practice" href="@ModeHref("practice")" data-enhance-nav="false">@L["Review.Empty.Practice"]</a>
+                                <a class="btn review-empty__profile" href="@ModeHref("profile")" data-enhance-nav="false">@L["Review.Empty.Profile"]</a>
+                            </div>
+                        </div>
+                        break;
+                    case Phase.Question when _session?.Current is { } attempt:
+                        <SessionBar Level="@attempt.Question.Level"
+                                    TopicTitle="@attempt.Question.TopicTitle"
+                                    Position="_session.Index + 1"
+                                    Count="_session.Count"
+                                    Completed="Completed"
+                                    StreakDays="bootstrap.Me?.StreakDays" />
+                        <div class="qs__body">
+                            <QuestionCard @key="attempt.ClientAnswerId" @ref="_card" Attempt="attempt" Changed="StateHasChanged">
+                                @if (_session.AwaitingRecall)
+                                {
+                                    <RecallStep AttemptId="@attempt.ClientAnswerId" Show="ShowOptions" />
+                                }
+                                else
+                                {
+                                    <AnswerArea Attempt="attempt" Flow="_flow" Graded="SelfGradeAsync" Skip="Skip" Changed="StateHasChanged" />
+                                }
+                            </QuestionCard>
+                            @* Rendered before the answer too: its live region must exist, empty, for the verdict to be announced. *@
+                            <FeedbackPanel Attempt="attempt" />
+                        </div>
+                        @if (attempt.IsDone)
+                        {
+                            <div class="action-bar">
+                                <button type="button" class="btn btn--primary review__next" @ref="_next" @onclick="Next">
+                                    @L[_session.Index + 1 == _session.Count ? "Practice.Finish" : "Practice.Next"]
+                                    <kbd class="kbd-hint" aria-hidden="true">N</kbd>
+                                </button>
+                            </div>
+                        }
+                        else if (attempt.Kind != QuestionKind.SelfAssessed && !_session.AwaitingRecall)
+                        {
+                            <div class="action-bar">
+                                <button type="button" class="btn btn--primary review__answer" disabled="@(!_session.CanSubmit)" @onclick="SubmitAsync">
+                                    @L["Practice.Answer"]
+                                    <kbd class="kbd-hint" aria-hidden="true">Enter</kbd>
+                                </button>
+                            </div>
+                        }
+                        break;
+                    case Phase.Summary when _session is not null:
+                        <section class="practice-summary review-summary" aria-labelledby="review-summary-heading">
+                            <h2 class="practice-summary__heading" id="review-summary-heading" tabindex="-1" @ref="_summaryHeading">@L["Review.Summary.Heading"]</h2>
+                            @if (_summary.Count == 0)
+                            {
+                                <p>@L["Practice.Summary.None"]</p>
+                            }
+                            @foreach (PracticeTopicSummary topic in _summary)
+                            {
+                                <section class="practice-summary__topic">
+                                    <h3 class="practice-summary__title">@topic.Title</h3>
+                                    <p class="practice-summary__counts">@L["Practice.Summary.Counts", topic.Knew, topic.Partial, topic.DidntKnow]</p>
+                                </section>
+                            }
+                            <div class="action-bar">
+                                <button type="button" class="btn btn--primary review-summary__again" @onclick="RefetchAsync">@L["Review.Summary.Again"]</button>
+                                <a class="btn" href="@ModeHref("profile")" data-enhance-nav="false">@L["Review.Summary.Profile"]</a>
+                            </div>
+                        </section>
+                        break;
+                }
+            </div>
+        </div>
+    }
+</IslandRoot>
+
+@code {
+    // How long the island waits for pending answers to reach the server before it fetches the queue that depends on them.
+    private static readonly TimeSpan FlushWait = TimeSpan.FromSeconds(5);
+
+    // One review sitting; the server serves the most overdue first and "Check for more" fetches the rest.
+    private const int SessionSize = 20;
+
+    private readonly CancellationTokenSource _lifetime = new();
+
+    private IslandBootstrapDto? _bootstrap;
+    private long? _owner;
+    private Phase _phase = Phase.Loading;
+    private IslandStateKind _state;
+    private TimeSpan? _retryAfter;
+    private ReviewSession? _session;
+    private IReadOnlyList<PracticeTopicSummary> _summary = [];
+    private QuestionCard? _card;
+    private ElementReference _main;
+    private ElementReference _next;
+    private ElementReference _summaryHeading;
+    private bool _focusTitle;
+    private bool _focusMain;
+    private bool _focusSummary;
+    private bool _fetching;
+    private AnsweringFlow _flow = null!;
+
+    /// <summary>The <c>IslandBootstrapDto</c> the server serialised with <c>TrainerJsonContext</c>.</summary>
+    [Parameter, EditorRequired]
+    public string BootstrapJson { get; set; } = "";
+
+    private enum Phase
+    {
+        Loading,
+        State,
+        Empty,
+        Question,
+        Summary,
+    }
+
+    private int Completed => _session is null ? 0 : _session.Index + (_session.Current?.IsDone == true ? 1 : 0);
+
+    protected override async Task OnInitializedAsync()
+    {
+        _flow = new AnsweringFlow(
+            new SlowStorage(Time),
+            Grader,
+            attempt => Answers.Create(attempt, AnswerMode.Review, null),
+            answer => Outbox.AddAsync(StorageKeys.UserOutbox(_owner!.Value), answer).AsTask(),
+            Sync.RequestFlush);
+        _flow.SlowChanged += OnSlowChanged;
+        _bootstrap = JsonSerializer.Deserialize(BootstrapJson, TrainerJsonContext.Default.IslandBootstrapDto)
+            ?? throw new InvalidOperationException("The island bootstrap is empty.");
+        _owner = _bootstrap.Me?.TelegramUserId;
+
+        // The watcher first: a sync bound after another tab already switched accounts must not start.
+        string pageOwner = _owner is { } owner ? owner.ToString(CultureInfo.InvariantCulture) : AccountWatcher.Anonymous;
+        // Reads name the page's account too: the server answers 409 once another tab switched it (ADR 0008).
+        Api.BindOwner(pageOwner);
+        await Accounts.StartAsync(pageOwner);
+        if (_owner is not { } bound)
+        {
+            // The page requires a sign-in; a bootstrap without a user means the session ended meanwhile.
+            _state = IslandStateKind.SignedOut;
+            _phase = Phase.State;
+            return;
+        }
+
+        Sync.Start(bound);
+        await FetchAsync(false);
+    }
+
+    // Outbox first (spec 8.8): while a graded answer is being written, the screen keeps its pre-answer state.
+    protected override bool ShouldRender() => !_flow.IsSaving;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            Shortcuts.Pressed += OnShortcut;
+            await Shortcuts.StartAsync();
+        }
+
+        // Each of these replaces the element that had focus (Show options, Answer, Next), so focus moves on deliberately.
+        if (_focusMain)
+        {
+            _focusMain = false;
+            await _main.FocusAsync();
+        }
+
+        if (_focusTitle && _phase == Phase.Question && _card is not null)
+        {
+            _focusTitle = false;
+            await _card.Title.FocusAsync();
+        }
+
+        if (_phase == Phase.Question && _session?.Current?.IsDone == true && _flow.TakeFocusNext())
+        {
+            await _next.FocusAsync();
+        }
+
+        if (_focusSummary && _phase == Phase.Summary)
+        {
+            _focusSummary = false;
+            await _summaryHeading.FocusAsync();
+        }
+    }
+
+    public void Dispose()
+    {
+        Shortcuts.Pressed -= OnShortcut;
+        if (_flow is not null)
+        {
+            _flow.SlowChanged -= OnSlowChanged;
+        }
+
+        _lifetime.Cancel();
+        _lifetime.Dispose();
+    }
+
+    private void OnSlowChanged() => _ = InvokeAsync(StateHasChanged);
+
+    // Retry and "Check for more" replace the button that was pressed.
+    private Task RefetchAsync() => FetchAsync(true);
+
+    private async Task FetchAsync(bool moveFocus)
+    {
+        // A double click or a repeated Enter must not fetch (and replace) the session twice.
+        if (_fetching || _owner is null)
+        {
+            return;
+        }
+
+        _fetching = true;
+        try
+        {
+            await FetchOnceAsync(moveFocus);
+        }
+        finally
+        {
+            _fetching = false;
+        }
+    }
+
+    private async Task FetchOnceAsync(bool moveFocus)
+    {
+        IslandBootstrapDto bootstrap = _bootstrap!;
+        _phase = Phase.Loading;
+        _focusMain = moveFocus;
+        StateHasChanged();
+
+        CancellationToken ct = _lifetime.Token;
+        // Flush-before-fetch: the queue is computed from the answers the server has. What does not make it in time stays
+        // pending and SyncStatus says so.
+        await Sync.FlushAsync(FlushWait, ct);
+        ApiResult<SessionDto> result = await Api.ReviewAsync(new ReviewSessionRequest(bootstrap.Culture, bootstrap.Stack, SessionSize), ct);
+
+        // An answer the flush could not deliver is not on the server yet, which still counts its question as due.
+        HashSet<string> pending = result.Value is { Questions.Count: > 0 } ? await PendingQuestionIdsAsync() : [];
+        IReadOnlyList<QuestionDto> due = [.. (result.Value?.Questions ?? []).Where(q => !pending.Contains(q.Id))];
+        IslandStateKind kind = IslandState.FromResult(result, result.Value is not null && due.Count == 0);
+        if (kind == IslandStateKind.Ready)
+        {
+            _session = new ReviewSession(due, Ids, Random.Shared, Clock);
+            _phase = Phase.Question;
+            _focusTitle = moveFocus;
+        }
+        else if (kind == IslandStateKind.Empty)
+        {
+            _phase = Phase.Empty;
+        }
+        else
+        {
+            _state = kind;
+            _retryAfter = result.RetryAfter;
+            _phase = Phase.State;
+        }
+    }
+
+    // A read never waits for a lock unless it has to quarantine a corrupt value; past the bound nothing is filtered.
+    private Task<HashSet<string>> PendingQuestionIdsAsync() =>
+        new SlowStorage(Time).WaitAsync(ReadPendingQuestionIdsAsync(), new HashSet<string>(StringComparer.Ordinal));
+
+    private async Task<HashSet<string>> ReadPendingQuestionIdsAsync() =>
+        new((await Outbox.ReadAsync(StorageKeys.UserOutbox(_owner!.Value))).Select(a => a.QuestionId), StringComparer.Ordinal);
+
+    private void ShowOptions()
+    {
+        if (_session is { AwaitingRecall: true })
+        {
+            _session.ShowOptions();
+            _focusTitle = true;
+        }
+    }
+
+    // Hidden options cannot be submitted: ReviewSession.CanSubmit is false during the recall step.
+    private Task SubmitAsync() => _session is { CanSubmit: true } session ? _flow.SubmitAsync(session.Current) : Task.CompletedTask;
+
+    private Task SelfGradeAsync(Grade grade) => _flow.SelfGradeAsync(_session?.Current, grade, _lifetime.Token);
+
+    private void Skip() => _flow.Skip(_session?.Current);
+
+    private void Next()
+    {
+        if (_session is null || !_flow.CanGoNext(_session.Current))
+        {
+            return;
+        }
+
+        _session.Next();
+        if (_session.IsFinished)
+        {
+            _summary = PracticeSummary.ByTopic(_session.Results);
+            _phase = Phase.Summary;
+            _focusSummary = true;
+        }
+    }
+
+    private void OnShortcut(ShortcutKey key) => _ = InvokeAsync(() => HandleShortcutAsync(key));
+
+    private async Task HandleShortcutAsync(ShortcutKey key)
+    {
+        if (_phase != Phase.Question || _flow.IsSaving || _session is null)
+        {
+            return;
+        }
+
+        if (_session.AwaitingRecall)
+        {
+            // Hidden options cannot be picked; Enter answers "Can you answer?" by showing them.
+            if (key == ShortcutKey.Submit)
+            {
+                ShowOptions();
+                StateHasChanged();
+            }
+
+            return;
+        }
+
+        if (await _flow.HandleShortcutAsync(key, _session.Current, Next, _lifetime.Token))
+        {
+            StateHasChanged();
+        }
+    }
+
+    // Island pages carry <base href="/">, so every link is absolute.
+    private string ModeHref(string mode) => $"/{_bootstrap!.Culture}/{_bootstrap.Stack}/{mode}";
+}

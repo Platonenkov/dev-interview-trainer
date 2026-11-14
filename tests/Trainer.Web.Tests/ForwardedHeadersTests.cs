@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -51,7 +52,8 @@ public sealed class ForwardedHeadersTests(PostgresFixture postgres)
 
     private static async Task<string> SwitchLanguageCookieAsync(TrainerWebFactory factory, string peer, string? forwardedProto)
     {
-        using HttpClient client = factory.CreateNonRedirectingClient();
+        // The assertions are about a plain-http request, so this client keeps the default http address.
+        using HttpClient client = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
         using HttpRequestMessage request = new(HttpMethod.Get, "/lang/en?return=%2Fen");
         request.Headers.Add(RemoteHeader, peer);
         if (forwardedProto is not null)

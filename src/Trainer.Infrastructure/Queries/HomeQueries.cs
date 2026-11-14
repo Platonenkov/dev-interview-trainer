@@ -20,7 +20,7 @@ internal sealed class HomeQueries(TrainerDbContext db) : IHomeQueries
         int typeCount = await live.Select(q => q.Type).Distinct().CountAsync(ct);
         Dictionary<string, string> titles = await LiveQuestions.TopicTitlesAsync(db, culture, stack, ct);
 
-        FacetCount[] topics = LiveQuestions.TopicFacets(topicCounts, titles);
+        FacetCount[] topics = LiveQuestions.TopicFacets(topicCounts, titles, culture);
         return new HomeStats(topicCounts.Values.Sum(), topics.Length, typeCount, topics);
     }
 }

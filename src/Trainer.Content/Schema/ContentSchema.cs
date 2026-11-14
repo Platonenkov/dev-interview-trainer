@@ -7,5 +7,5 @@ public static class ContentSchema
     public const int MaxSupported = 1;
 
     /// <summary>Bump whenever rendering or the stored payload format changes; the importer compares (hash, render version).</summary>
-    public const int RenderVersion = 2;
+    public const int RenderVersion = 3;
 }

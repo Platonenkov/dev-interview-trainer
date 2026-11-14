@@ -3,6 +3,7 @@ using Trainer.Content.Model;
 using Trainer.Content.Reading;
 using Trainer.Content.Rendering;
 using Trainer.Content.Schema;
+using Trainer.Domain.Grading;
 using Trainer.Domain.Keys;
 using Trainer.Domain.Levels;
 using Trainer.Domain.Questions;
@@ -321,8 +322,8 @@ public sealed class ContentValidator : IContentValidator
 
         if (hasAccepted && d.Expect.Value is not null)
         {
-            string expected = NormaliseOutput(d.Expect.Value);
-            if (!d.AcceptedOutputs!.Any(a => string.Equals(NormaliseOutput(a), expected, StringComparison.Ordinal)))
+            string expected = OutputText.Normalise(d.Expect.Value);
+            if (!d.AcceptedOutputs!.Any(a => string.Equals(OutputText.Normalise(a), expected, StringComparison.Ordinal)))
             {
                 Add(issues, path, IssueCodes.AcceptedOutputsMismatch, "expect.value must be one of acceptedOutputs after trimming and LF normalisation.", "acceptedOutputs");
             }
@@ -626,9 +627,6 @@ public sealed class ContentValidator : IContentValidator
 
     private static HashSet<string> StackKeys(ContentSet set) =>
         set.Stacks.Select(s => s.Key).ToHashSet(StringComparer.Ordinal);
-
-    private static string NormaliseOutput(string value) =>
-        value.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Trim();
 
     private static int CountLines(string? source)
     {

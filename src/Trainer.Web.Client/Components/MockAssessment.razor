@@ -1,0 +1,83 @@
+@inject IStringLocalizer<ClientResource> L
+
+@* The assessment phase (spec 5.3): every open and situation question with the user's notes (read-only now), the
+   reference answer, the three grades and Skip. While a grade is saved its buttons stay, disabled, with a saving note
+   (SelfAssessment Saving), so the island can move focus on without it ever falling to the page; the result line appears
+   once the save returned. Keys 1-3 grade the item that holds focus. *@
+<section class="mock-assess" aria-labelledby="mock-assess-heading">
+    <h2 class="mock-assess__heading" id="mock-assess-heading" tabindex="-1" @ref="Heading">@L["Mock.Assessment.Heading"]</h2>
+    <p class="pf__note">@L["Mock.Assessment.Intro"]</p>
+    <fieldset class="mock-assess__items" disabled="@Disabled">
+        @for (int i = 0; i < Session.Attempts.Count; i++)
+        {
+            int index = i;
+            QuestionAttempt attempt = Session.Attempts[index];
+            if (attempt.Kind != QuestionKind.SelfAssessed)
+            {
+                continue;
+            }
+
+            <article class="mock-assess__item qcard"
+                     aria-labelledby="@("assess-" + attempt.ClientAnswerId)"
+                     data-assess-index="@index"
+                     @onfocusin="() => ItemFocused.InvokeAsync(index)">
+                <h3 class="qcard__title" id="@("assess-" + attempt.ClientAnswerId)" tabindex="-1" @ref="_titles[index]">@attempt.Question.Title</h3>
+                <div class="rich qcard__prompt">@((MarkupString)attempt.Question.PromptHtml)</div>
+                <SelfAssessment Attempt="attempt"
+                                AllowSkip="true"
+                                Saving="() => Saving == index"
+                                Graded="grade => Graded.InvokeAsync((index, grade))"
+                                Skip="() => Skip.InvokeAsync(index)" />
+                @if (Saving != index)
+                {
+                    @if (attempt.Skipped)
+                    {
+                        <p class="mock-assess__result">@L["Mock.Assessment.Skipped"]</p>
+                    }
+                    else if (attempt.SelfGrade is { } grade)
+                    {
+                        <p class="mock-assess__result">@L["Mock.Assessment.Graded", GradeLabel(grade)]</p>
+                    }
+                }
+            </article>
+        }
+    </fieldset>
+</section>
+
+@code {
+    private readonly Dictionary<int, ElementReference> _titles = [];
+
+    [Parameter, EditorRequired]
+    public MockSession Session { get; set; } = null!;
+
+    /// <summary>The attempt index whose grade or skip is being saved; its result appears once the save returned.</summary>
+    [Parameter]
+    public int? Saving { get; set; }
+
+    /// <summary>Read-only (another tab owns the mock).</summary>
+    [Parameter]
+    public bool Disabled { get; set; }
+
+    [Parameter]
+    public EventCallback<(int Index, Grade Grade)> Graded { get; set; }
+
+    [Parameter]
+    public EventCallback<int> Skip { get; set; }
+
+    /// <summary>Focus entered the item at this attempt index; keyboard shortcuts act on it.</summary>
+    [Parameter]
+    public EventCallback<int> ItemFocused { get; set; }
+
+    public ElementReference Heading { get; private set; }
+
+    /// <summary>Moves focus to the title of the item at <paramref name="index"/> (an index into the attempts).</summary>
+    public ValueTask FocusItemAsync(int index) =>
+        _titles.TryGetValue(index, out ElementReference title) ? title.FocusAsync() : Heading.FocusAsync();
+
+    private string GradeLabel(Grade grade) => grade switch
+    {
+        Grade.Knew => L["Self.Grade.Knew"].Value,
+        Grade.Partial => L["Self.Grade.Partial"].Value,
+        _ => L["Self.Grade.DidntKnow"].Value,
+    };
+}

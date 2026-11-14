@@ -1,0 +1,62 @@
+@page "/{Culture:length(2)}/{Stack}/review"
+@using Microsoft.AspNetCore.Authorization
+@using Trainer.Contracts
+@using Trainer.Domain.Keys
+@using Trainer.Web.Client.Islands
+@using Trainer.Web.Islands
+@attribute [InteractiveIslandPage]
+@attribute [Authorize]
+@inject IStringLocalizer<SharedResource> L
+@inject IslandBootstrapFactory Bootstrap
+
+@* Review needs a sign-in (spec 5.3): an anonymous request is sent to sign in and back. The culture constraint keeps
+   POST /api/sessions/review (Culture "api", Stack "sessions") from matching this page. No output cache: an island
+   page is noindex and its bootstrap carries the signed-in user's progress. *@
+@if (_stack is { } stack && _bootstrap is not null)
+{
+    @* SeoHead sets PageLinks, so the language switch returns here. *@
+    <SeoHead Title="@($"{L["Review.Title"]} · {L["Site.Name"]}")"
+             Description="@L["Review.Description"]"
+             CanonicalPathAndQuery="@PathFor(_culture)"
+             AvailableCultures="CultureKey.Supported"
+             PathForCulture="PathFor"
+             NoIndex="true" />
+
+    <h1>@L["Review.Heading"]</h1>
+    <div class="island" data-island="review">
+        <div class="island-skeleton" aria-hidden="true"></div>
+        <IslandBootError Href="@PathFor(_culture)" />
+        <ReviewIsland @rendermode="IslandRenderMode.NoPrerender" BootstrapJson="@_bootstrap" />
+    </div>
+}
+
+@code {
+    [Parameter]
+    public string? Culture { get; set; }
+
+    [Parameter]
+    public string? Stack { get; set; }
+
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    private CultureKey _culture;
+    private StackKey? _stack;
+    private string? _bootstrap;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        // The culture and the stack were checked by CultureAndStackMiddleware before the page ran.
+        if (HttpContext is null || !CultureKey.TryCreate(Culture, out _culture) || !StackKey.TryCreate(Stack, out StackKey stack))
+        {
+            return;
+        }
+
+        _stack = stack;
+        PracticeFiltersDto filters = new([], [], [], null, null);
+        _bootstrap = await Bootstrap.CreateJsonAsync(_culture, stack, filters, HttpContext.User, HttpContext.RequestAborted);
+    }
+
+    // The queue has no parameters, so the canonical path never carries a query.
+    private string PathFor(CultureKey target) => $"/{target.Value}/{_stack!.Value.Value}/review";
+}

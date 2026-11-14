@@ -3,9 +3,11 @@ using System.Net;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
+using Trainer.Application.Catalog;
 using Trainer.Application.Content;
 using Trainer.Application.Questions;
 using Trainer.Domain.Keys;
+using Trainer.Domain.Questions;
 using Trainer.Infrastructure.Persistence;
 using Trainer.TestSupport;
 using Trainer.Web.Caching;
@@ -288,6 +290,48 @@ public sealed class OutputCacheTests(WebSiteFixture site, PostgresFixture postgr
         Assert.DoesNotContain(OriginalTitle, freshBody, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task InFlightRelatedListDuringImport_DoesNotRecacheStaleContent()
+    {
+        const string DeadlockPath = "/en/dotnet/questions/result-deadlock-ui-thread";
+        const string OriginalRelated = "What is ConfigureAwait(false) for, and when is it unnecessary?";
+        const string EditedRelated = "Edited related title";
+        QueryGate gate = new() { GateRelated = true };
+        await using TrainerWebFactory factory = await CreateOwnFactoryAsync(new TrainerWebFactoryOptions
+        {
+            ConfigureServices = services =>
+            {
+                ServiceDescriptor original = services.Single(d => d.ServiceType == typeof(IQuestionQueries));
+                services.Remove(original);
+                services.AddSingleton(gate);
+                services.AddScoped<IQuestionQueries>(provider => new GatedQuestionQueries(
+                    (IQuestionQueries)ActivatorUtilities.CreateInstance(provider, original.ImplementationType!),
+                    provider.GetRequiredService<QueryGate>()));
+            },
+        });
+        using HttpClient client = factory.CreateNonRedirectingClient();
+
+        // The related list is read before the import and rendered after it, under the generation of the request's start.
+        gate.Arm();
+        Task<(HttpResponseMessage Response, string Body)> inFlight = GetAsync(client, DeadlockPath);
+        await gate.Entered.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        factory.Content.Edit("dotnet/async/configureawait-false-purpose.yaml", OriginalRelated, EditedRelated);
+        await ImportAsync(factory);
+        gate.Release();
+
+        (HttpResponseMessage stale, string staleBody) = await inFlight;
+        using HttpResponseMessage _1 = stale;
+        Assert.Contains(OriginalRelated, staleBody, StringComparison.Ordinal);
+
+        (HttpResponseMessage fresh, string freshBody) = await GetAsync(client, DeadlockPath);
+        using HttpResponseMessage _2 = fresh;
+
+        Assert.False(IsHit(fresh));
+        Assert.Contains(EditedRelated, freshBody, StringComparison.Ordinal);
+        Assert.DoesNotContain(OriginalRelated, freshBody, StringComparison.Ordinal);
+    }
+
     private sealed class SqlCounter : DbCommandInterceptor
     {
         private int _count;
@@ -345,6 +389,9 @@ public sealed class OutputCacheTests(WebSiteFixture site, PostgresFixture postgr
 
         public Task Entered => _entered.Task;
 
+        /// <summary>When set, the gate waits after the related-questions read instead of after the question read.</summary>
+        public bool GateRelated { get; set; }
+
         public void Arm() => Volatile.Write(ref _armed, 1);
 
         public void Release() => _released.TrySetResult();
@@ -367,10 +414,25 @@ public sealed class OutputCacheTests(WebSiteFixture site, PostgresFixture postgr
         public async Task<QuestionPageModel?> GetAsync(CultureKey culture, StackKey stack, Slug slug, CancellationToken ct)
         {
             QuestionPageModel? model = await inner.GetAsync(culture, stack, slug, ct);
-            await gate.PassAsync(ct);
+            if (!gate.GateRelated)
+            {
+                await gate.PassAsync(ct);
+            }
+
             return model;
         }
 
         public Task<Slug?> GetRedirectAsync(StackKey stack, Slug from, CancellationToken ct) => inner.GetRedirectAsync(stack, from, ct);
+
+        public async Task<IReadOnlyList<CatalogRow>> GetRelatedAsync(CultureKey culture, StackKey stack, QuestionId id, int limit, CancellationToken ct)
+        {
+            IReadOnlyList<CatalogRow> related = await inner.GetRelatedAsync(culture, stack, id, limit, ct);
+            if (gate.GateRelated)
+            {
+                await gate.PassAsync(ct);
+            }
+
+            return related;
+        }
     }
 }

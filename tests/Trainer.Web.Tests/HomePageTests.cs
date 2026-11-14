@@ -56,13 +56,4 @@ public sealed class HomePageTests(WebSiteFixture site, PostgresFixture postgres)
 
         Assert.Contains("href=\"/en/dotnet/questions\"", body, StringComparison.Ordinal);
     }
-
-    [Fact]
-    public async Task Home_ModesAreMarkedComingSoon()
-    {
-        string body = await GetBodyAsync("/en");
-
-        Assert.Equal(3, System.Text.RegularExpressions.Regex.Count(body, "mode-card__soon"));
-        Assert.DoesNotContain("href=\"/en/dotnet/practice", body, StringComparison.Ordinal);
-    }
 }

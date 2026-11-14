@@ -11,8 +11,9 @@ internal static class LineWrapper
     private const string SpanOpenPrefix = "<span";
     private const string SpanClose = "</span>";
 
+    /// <summary>Returns one numbered <c>span.line</c> fragment per source line; each fragment is well-formed on its own.</summary>
     /// <param name="highlightedHtml">Encoded HTML containing only <c>span</c> elements and text.</param>
-    public static string Wrap(string highlightedHtml)
+    public static IReadOnlyList<string> Split(string highlightedHtml)
     {
         List<string> openSpans = [];
         List<string> lines = [];
@@ -70,19 +71,13 @@ internal static class LineWrapper
             lines.RemoveAt(lines.Count - 1);
         }
 
-        StringBuilder result = new();
+        string[] wrapped = new string[lines.Count];
         for (int i = 0; i < lines.Count; i++)
         {
-            if (i > 0)
-            {
-                result.Append('\n');
-            }
-
-            result.Append("<span class=\"line\" data-line=\"").Append(i + 1).Append("\">")
-                .Append(lines[i]).Append(SpanClose);
+            wrapped[i] = $"<span class=\"line\" data-line=\"{i + 1}\">{lines[i]}{SpanClose}";
         }
 
-        return result.ToString();
+        return wrapped;
     }
 
     private static void FlushLine(List<string> lines, StringBuilder line, List<string> openSpans)

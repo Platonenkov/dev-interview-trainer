@@ -1,0 +1,52 @@
+@using Trainer.Web.Client.Storage
+@implements IDisposable
+@inject OutboxStore Outbox
+@inject SummaryStore Summaries
+@inject IJSRuntime JS
+
+@* Asks the browser to confirm leaving the page (closing the tab, the sign-out POST, any navigation) while answers or
+   mock summaries exist only in this tab's memory, because storage did not take them. Renders nothing. *@
+
+@code {
+    private bool _armed;
+
+    protected override void OnInitialized()
+    {
+        Outbox.Changed += OnChanged;
+        Summaries.Changed += OnChanged;
+    }
+
+    protected override Task OnAfterRenderAsync(bool firstRender) => firstRender ? SyncAsync() : Task.CompletedTask;
+
+    public void Dispose()
+    {
+        Outbox.Changed -= OnChanged;
+        Summaries.Changed -= OnChanged;
+    }
+
+    private void OnChanged() => _ = InvokeAsync(SyncAsync);
+
+    private async Task SyncAsync()
+    {
+        bool unsaved = Outbox.UnsavedCount + Summaries.UnsavedCount > 0;
+        if (unsaved == _armed)
+        {
+            return;
+        }
+
+        _armed = unsaved;
+        try
+        {
+            await JS.InvokeVoidAsync("ditPageLifecycle.setUnsaved", unsaved);
+        }
+        catch (JSException)
+        {
+            // Without the script there is no prompt; StorageNotice still says the answers are kept only in this tab.
+            _armed = !unsaved;
+        }
+        catch (JSDisconnectedException)
+        {
+            // The page is going away.
+        }
+    }
+}

@@ -1,12 +1,16 @@
 @page "/{Culture}/{Stack}/questions/{Slug}"
 @using Microsoft.AspNetCore.OutputCaching
 @attribute [OutputCache(PolicyName = "public")]
+@using Trainer.Application.Catalog
+@using Trainer.Application.Progress
 @using Trainer.Application.Questions
 @using Trainer.Domain.Keys
 @using Trainer.Domain.Questions
+@using Trainer.Web.Auth
 @using Trainer.Web.Seo
 @inject IStringLocalizer<SharedResource> L
 @inject IQuestionQueries Questions
+@inject IProgressQueries Progress
 @inject NavigationManager Navigation
 
 @if (_model is not null)
@@ -36,7 +40,7 @@
             }
             <span class="chip">@L["Type." + QuestionTypeKeys.ToKey(_model.Type)]</span>
         </div>
-        <h1 class="question__title">@_model.Title</h1>
+        <h1 class="question__title">@_model.Title</h1><QuestionStatusLine SignedIn="_signedIn" Status="_status" />
         <div class="rich">@((MarkupString)_model.PromptHtml)</div>
         @if (_model.HintHtml is not null)
         {
@@ -104,6 +108,12 @@
                 }
             </div>
         </details>
+        @if (!_model.IsRetired)
+        {
+            <p class="question__practice">
+                <IslandLink Class="btn" Href="@($"/{Culture}/{Stack}/practice?first={_model.Id.Value}")" PreloadRuntime="true">@L["Question.Practise"]</IslandLink>
+            </p>
+        }
         <p class="question__meta">
             <time datetime="@_model.Verified.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)">@L["Question.Verified", _model.Verified.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)]</time>
             @if (_model.DotnetVersion is not null)
@@ -114,6 +124,18 @@
         @if (!_model.TopicIsRetired)
         {
             <p><a href="/@Culture/@Stack/topics/@_model.Topic.Value">← @L["Question.BackToTopic"]</a></p>
+        }
+        @if (_related.Count > 0)
+        {
+            <section class="related" aria-labelledby="related-heading">
+                <h2 id="related-heading" class="related__heading">@L["Question.Related"]</h2>
+                <ol class="rows">
+                    @foreach (CatalogRow row in _related)
+                    {
+                        <li><QuestionRow Row="row" Culture="@(Culture!)" Stack="@(Stack!)" Statuses="_statuses" /></li>
+                    }
+                </ol>
+            </section>
         }
     </article>
 }
@@ -132,6 +154,13 @@
     private HttpContext? HttpContext { get; set; }
 
     private QuestionPageModel? _model;
+    private bool _signedIn;
+    private QuestionStatus? _status;
+    private IReadOnlyList<CatalogRow> _related = [];
+    private IReadOnlyDictionary<QuestionId, QuestionStatus>? _statuses;
+
+    // Spec 5.1: five related questions under the answer.
+    private const int RelatedLimit = 5;
 
     private string PathFor(string? culture) => $"/{culture}/{Stack}/questions/{_model!.Slug}";
 
@@ -185,6 +214,20 @@
         if (_model is null)
         {
             Navigation.NotFound();
+            return;
+        }
+
+        // A retired question's page stays readable for old links but is a dead end: it is noindex and no longer part of the catalog.
+        if (!_model.IsRetired)
+        {
+            _related = await Questions.GetRelatedAsync(culture, stack, _model.Id, RelatedLimit, ct);
+        }
+
+        if (HttpContext.User.GetUserId() is { } user)
+        {
+            _signedIn = true;
+            _statuses = await Progress.GetStatusesAsync(user, [_model.Id, .. _related.Select(r => r.Id)], ct);
+            _status = _statuses.GetValueOrDefault(_model.Id);
         }
     }
 }

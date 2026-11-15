@@ -59,7 +59,10 @@ public sealed partial class ReleaseSmokeTests(PublishedAppFixture app)
         SessionDto session = JsonSerializer.Deserialize(exchange.ResponseBody, TrainerJsonContext.Default.SessionDto)!;
         Assert.Equal(culture, request.Culture);
         Assert.Equal("dotnet", request.Stack);
-        Assert.Equal(AllQuestionTypes.Order(StringComparer.Ordinal), session.Questions.Select(q => q.Type).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal));
+        // The session is a random draw of at most 50 questions from the real content; once a topic outgrows that,
+        // a draw can miss a type, so only membership is checked.
+        Assert.NotEmpty(session.Questions);
+        Assert.Subset(AllQuestionTypes.ToHashSet(StringComparer.Ordinal), session.Questions.Select(q => q.Type).ToHashSet(StringComparer.Ordinal));
 
         for (int i = 0; i < session.Questions.Count; i++)
         {

@@ -896,6 +896,33 @@ class LinksTests(unittest.TestCase):
         finally:
             env.cleanup()
 
+    def test_page_text_ignores_svg_titles(self):
+        html = ("<html><head><title>How Async Works - .NET Blog</title></head><body>"
+                "<svg><title>Your Privacy Choices Opt-Out Icon</title></svg><p>Body</p></body></html>")
+        title, text = wave.page_text(html)
+        self.assertEqual("How Async Works - .NET Blog", title)
+        self.assertNotIn("Opt-Out", text)
+        head_svg = "<html><head><svg><title>Icon</title></svg><title>Real Title</title></head><body></body></html>"
+        self.assertEqual("Real Title", wave.page_text(head_svg)[0])
+
+    def test_links_fetch_drops_links_no_longer_cited(self):
+        env = WaveEnv()
+        try:
+            record = env.add("testing-01")
+            old_url = "https://learn.microsoft.com/en-us/dotnet/old"
+            new_url = "https://learn.microsoft.com/en-us/dotnet/new"
+            record["evidence"]["links"] = [{"url": old_url, "status": "suspect", "title": None}]
+            docs = {record["path"]: {"links": [{"url": new_url}], "locales": {"en": {
+                "title": "T", "prompt": "", "answer": "", "explanation": ""}}}}
+
+            def fetch(u):
+                return {"status": 200, "finalUrl": u, "html": "<title>New</title>", "error": None}
+
+            wave.links_fetch(env.state, docs, env.wave_dir, env.worktree, fetch=fetch)
+            self.assertEqual([new_url], [l["url"] for l in record["evidence"]["links"]])
+        finally:
+            env.cleanup()
+
     def test_links_fetch_stores_title_excerpt_and_redirect_warning(self):
         env = WaveEnv()
         try:
@@ -1324,6 +1351,27 @@ class FinalizeTests(unittest.TestCase):
             self.assertEqual([record["path"]], edited)
             self.assertEqual("owner-edited", record["status"])
             self.assertIn("verified: 2026-11-20", path.read_text(encoding="utf-8"))
+        finally:
+            env.cleanup()
+
+    def test_report_drops_mech_link_unknown_when_fetch_evidence_is_ok(self):
+        env = VerifyEnv()
+        try:
+            record = env.add("testing-01")
+            ok_url = "https://learn.microsoft.com/en-us/dotnet/api/a"
+            bad_url = "https://learn.microsoft.com/en-us/dotnet/api/b"
+            record["evidence"]["mech"] = {"hash": "h", "ok": True, "issues": [], "result": {}, "warnings": [
+                f"link unknown: {ok_url} (429)", f"link unknown: {bad_url} (429)", "parity x: y"]}
+            record["evidence"]["links"] = [{"url": ok_url, "status": "ok", "title": "A"},
+                                           {"url": bad_url, "status": "unknown", "title": None}]
+            row = wave.report_row(record)
+            self.assertNotIn(ok_url, row["warnings"])
+            self.assertIn(f"link unknown: {bad_url} (429)", row["warnings"])
+            self.assertIn("parity x: y", row["warnings"])
+            spaced = "https://example.com/a b"
+            record["evidence"]["mech"]["warnings"] = [f"link unknown: {spaced} (429)"]
+            record["evidence"]["links"].append({"url": spaced, "status": "ok", "title": "S"})
+            self.assertIn(spaced, wave.report_row(record)["warnings"])
         finally:
             env.cleanup()
 

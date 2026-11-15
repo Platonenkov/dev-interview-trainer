@@ -2004,7 +2004,9 @@ class _TextExtractor(html.parser.HTMLParser):
     def handle_starttag(self, tag, attrs):
         if tag in self.SKIP:
             self._skip += 1
-        if tag == "title":
+        # SVG icons carry their own <title> (devblogs adds "Your Privacy Choices Opt-Out Icon"); only the
+        # document title names the page.
+        if tag == "title" and not self._skip:
             self._in_title = True
 
     def handle_endtag(self, tag):
@@ -2284,8 +2286,12 @@ def links_fetch(state: dict, docs: dict[str, dict], wave_dir: Path, worktree: Pa
         doc = docs.get(record["path"])
         if doc is None:
             continue
-        for link in doc.get("links") or []:
-            cited.setdefault(link["url"], []).append(record)
+        current = {link["url"] for link in doc.get("links") or []}
+        # A repair or an owner edit can replace a link; evidence for a URL the question no longer cites
+        # would keep flagging it in the review sheet.
+        record["evidence"]["links"] = [l for l in record["evidence"].get("links", []) if l["url"] in current]
+        for url in current:
+            cited.setdefault(url, []).append(record)
     urls = sorted(cited)
 
     paced = polite_fetch(fetch) if fetch is http_fetch else fetch
@@ -3030,7 +3036,18 @@ def report_row(record: dict, current_hash: str | None = None) -> dict:
             "executed": "yes" if result.get("executed") else "no",
             "actual_result": "" if not actual else f"{actual.get('kind')}: {actual.get('value')}",
             "links": links, "verdict_rounds": rounds,
-            "warnings": "; ".join(mech_evidence.get("warnings", []) + record.get("warnings", [])), "owner_read": ""}
+            "warnings": "; ".join(_mech_warnings_for_report(mech_evidence, record) + record.get("warnings", [])),
+            "owner_read": ""}
+
+
+def _mech_warnings_for_report(mech_evidence: dict, record: dict) -> list[str]:
+    """Mech warnings minus `link unknown` for URLs that links-fetch later resolved as ok.
+
+    The content CLI's check-links runs once per mech pass and learn.microsoft.com answers it with 429;
+    links-fetch paces per host and is the link evidence the final gate uses, so its `ok` supersedes the 429."""
+    ok_urls = {l["url"] for l in record["evidence"].get("links", []) if l.get("status") == "ok"}
+    return [w for w in mech_evidence.get("warnings", [])
+            if not (w.startswith("link unknown: ") and w[len("link unknown: "):].split(" ", 1)[0] in ok_urls)]
 
 
 def build_report(state: dict, targets: dict, group: str, seed_levels: dict,

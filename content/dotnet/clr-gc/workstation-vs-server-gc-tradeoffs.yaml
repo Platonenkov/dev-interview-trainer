@@ -1,0 +1,153 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMK34GF1GM1D0VYVTQ
+slug: workstation-vs-server-gc-tradeoffs
+stack: dotnet
+topic: clr-gc
+level: senior
+type: open
+grading: self
+tags: [gc, server-gc, workstation-gc, background-gc, datas, containers]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/workstation-server-gc
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/runtime-config/garbage-collector
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/datas
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Чем отличаются workstation GC и server GC и какой режим выбрать для сервиса в контейнере с малым лимитом памяти?
+    prompt: |
+      Сервис на ASP.NET Core под .NET 10 работает в контейнере с лимитом 2 CPU и 512 МБ памяти.
+
+      1. Чем отличаются режимы сборки мусора workstation и server?
+      2. Какой режим вы выберете для этого сервиса и на основании чего примете решение?
+      3. Как с этим выбором связана параллельная (фоновая) сборка мусора?
+    hint: Сравните, сколько куч и потоков сборки мусора создаёт каждый режим и как это сказывается на объёме памяти между сборками.
+    answer: |
+      **Различия.**
+
+      - **Workstation GC**: одна управляемая куча, сборка выполняется в том пользовательском потоке, который её
+        вызвал, с его обычным приоритетом. Объём памяти процесса меньше. Это режим по умолчанию для
+        самостоятельных (не размещённых в хосте) приложений, а на машине с одним логическим процессором
+        используется всегда, независимо от настройки.
+      - **Server GC**: отдельная куча и отдельный выделенный поток сборки мусора на каждый логический процессор
+        (в Windows эти потоки работают с приоритетом `THREAD_PRIORITY_HIGHEST`), кучи собираются одновременно.
+        Сборка на куче того же размера быстрее, пропускная способность выше, но бюджеты и сегменты обычно
+        больше, и рабочий набор процесса заметно больше.
+      - **Какой режим у ASP.NET Core.** Для размещённых приложений режим по умолчанию определяет хост. Проекты
+        на Web SDK (`Microsoft.NET.Sdk.Web`) обычно получают server GC; фактическое значение стоит проверить
+        в `System.GC.Server` в опубликованном `runtimeconfig.json`.
+      - **Фоновая (concurrent) сборка** - отдельная настройка (`System.GC.Concurrent`, `ConcurrentGarbageCollection`),
+        она включена по умолчанию и доступна в обоих режимах. Она позволяет потокам приложения продолжать работу
+        во время сборки поколения 2 и не заменяет выбор между workstation и server.
+
+      **Выбор для контейнера 2 CPU / 512 МБ.**
+
+      - В .NET 10 server GC по умолчанию работает с DATAS (Dynamic Adaptation To Application Sizes): число куч
+        подстраивается под нагрузку и объём данных приложения, а не равно сразу числу процессоров. Поэтому
+        разумный старт - оставить значения по умолчанию и измерить.
+      - Если рабочий набор приближается к лимиту или контейнер убивают по OOM, есть два пути: перейти на
+        workstation GC (`<ServerGarbageCollection>false</ServerGarbageCollection>` или `DOTNET_gcServer=0`)
+        либо оставить server GC и ограничить его (`System.GC.HeapCount`, `System.GC.HeapHardLimit` или
+        `System.GC.HeapHardLimitPercent`).
+      - Учитывать, что при заданном лимите памяти контейнера жёсткий предел кучи GC по умолчанию равен большему
+        из двух значений: 20 МБ или 75% лимита. Для 512 МБ это около 384 МБ.
+      - Решение принимать по измерениям под нагрузкой, близкой к боевой: рабочий набор, размер кучи GC,
+        % времени в GC, длительность пауз, задержка p99 и пропускная способность (например, через `dotnet-counters`).
+    explanation: |
+      Главный компромисс - пропускная способность против объёма памяти. Server GC держит по куче на каждый
+      логический процессор, и сборка идёт параллельно несколькими выделенными потоками, поэтому сервис с высокой
+      нагрузкой тратит на GC меньшую долю времени. Взамен процесс удерживает больше памяти: куч больше, сегменты
+      обычно крупнее, и между сборками успевает накопиться больше мусора. Workstation GC работает с одной кучей
+      и удерживает меньше памяти, что важно, когда лимит контейнера мал.
+
+      Server GC ещё и ресурсоёмок, когда на одной машине работает много процессов: документация приводит пример
+      с 12 процессами на server GC на машине с четырьмя логическими процессорами, которые при одновременной сборке
+      мешают друг другу. Для узла, на котором плотно упакованы контейнеры, это аргумент в пользу workstation GC
+      или ограничения числа куч.
+
+      Поведение зависит от версии: в .NET 8 DATAS включался явно, а начиная с .NET 9 он включён по умолчанию
+      для server GC, поэтому в .NET 10 разница в памяти между режимами меньше, чем в старых версиях. Именно
+      поэтому ответ «server GC всегда для сервера» или «workstation GC всегда для контейнера» слабее, чем
+      «выбрать по метрикам и при необходимости ограничить число куч или размер кучи».
+
+      Фоновая сборка - отдельная ось: она уменьшает паузы при сборке поколения 2, но не меняет число куч.
+      Её иногда отключают, когда на одной машине работает много экземпляров приложения: документация советует
+      для сотен экземпляров рассмотреть workstation GC с отключённой параллельной сборкой, чтобы уменьшить
+      число переключений контекста.
+    linkTitles:
+      - "Сборка мусора в режимах workstation и server"
+      - "Параметры конфигурации среды выполнения для сборки мусора"
+      - "Динамическая адаптация к размерам приложения (DATAS)"
+  en:
+    title: How do workstation and server GC differ, and which would you choose for a service in a memory-limited container?
+    prompt: |
+      An ASP.NET Core service on .NET 10 runs in a container limited to 2 CPUs and 512 MB of memory.
+
+      1. How do the workstation and server garbage collection modes differ?
+      2. Which mode would you choose for this service, and what would you base the decision on?
+      3. How does concurrent (background) garbage collection relate to this choice?
+    hint: Compare how many heaps and GC threads each mode creates and how that affects the memory held between collections.
+    answer: |
+      **The differences.**
+
+      - **Workstation GC**: one managed heap, and the collection runs on the user thread that triggered it, at
+        that thread's normal priority. The process memory footprint is smaller. It is the default for standalone
+        (not hosted) apps, and it is always used on a machine with a single logical CPU, regardless of the setting.
+      - **Server GC**: a separate heap and a dedicated GC thread per logical CPU (on Windows these threads run at
+        `THREAD_PRIORITY_HIGHEST`), and the heaps are collected at the same time. A collection on a heap of the
+        same size is faster and throughput is higher, but budgets and segments are usually larger, and the process
+        working set is noticeably larger.
+      - **Which mode ASP.NET Core uses.** For hosted apps the host determines the default. Projects on the Web
+        SDK (`Microsoft.NET.Sdk.Web`) typically get server GC; check the effective `System.GC.Server` value in the
+        published `runtimeconfig.json`.
+      - **Background (concurrent) GC** is a separate setting (`System.GC.Concurrent`, `ConcurrentGarbageCollection`),
+        on by default and available in both modes. It lets application threads keep running during a generation 2
+        collection, and it does not replace the choice between workstation and server.
+
+      **The choice for a 2 CPU / 512 MB container.**
+
+      - In .NET 10 server GC runs with DATAS (Dynamic Adaptation To Application Sizes) by default: the number of
+        heaps adapts to the load and the application's data size instead of being equal to the CPU count from the
+        start. So a sensible start is to keep the defaults and measure.
+      - If the working set approaches the limit or the container is OOM-killed, there are two paths: switch to
+        workstation GC (`<ServerGarbageCollection>false</ServerGarbageCollection>` or `DOTNET_gcServer=0`),
+        or keep server GC and constrain it (`System.GC.HeapCount`, `System.GC.HeapHardLimit` or
+        `System.GC.HeapHardLimitPercent`).
+      - Keep in mind that when a container memory limit is set, the default GC heap hard limit is the greater of
+        20 MB or 75% of that limit. For 512 MB that is about 384 MB.
+      - Decide by measuring under production-like load: working set, GC heap size, % time in GC, pause times,
+        p99 latency and throughput (for example with `dotnet-counters`).
+    explanation: |
+      The core trade-off is throughput against memory. Server GC keeps a heap per logical CPU, and the collection
+      runs in parallel on several dedicated threads, so a busy service spends a smaller share of its time in GC.
+      In return the process holds more memory: there are more heaps, segments are usually larger, and more garbage
+      piles up between collections. Workstation GC works with one heap and holds less memory, which matters when
+      the container limit is small.
+
+      Server GC is also resource-intensive when many processes share a machine: the documentation gives the
+      example of 12 server GC processes on a machine with four logical CPUs that interfere with each other when
+      they collect at the same time. On a node densely packed with containers, that is an argument for workstation
+      GC or for capping the heap count.
+
+      The behaviour depends on the version: in .NET 8 DATAS had to be enabled explicitly, and since .NET 9 it is
+      on by default for server GC, so in .NET 10 the memory gap between the modes is smaller than in older
+      versions. That is why "always server GC for a server" or "always workstation GC in a container" are weaker
+      answers than "choose by metrics, and cap the heap count or heap size if needed".
+
+      Background GC is a separate axis: it shortens pauses during generation 2 collections but does not change
+      the number of heaps. It is sometimes disabled when many instances of an app share a machine: the
+      documentation suggests considering workstation GC with concurrent GC disabled for hundreds of instances,
+      which reduces context switching.
+    linkTitles:
+      - "Workstation and server garbage collection"
+      - "Runtime configuration options for garbage collection"
+      - "Dynamic adaptation to application sizes (DATAS)"
+meta:
+  authors: [platonenkov]
+  verified: 1970-01-01
+  dotnetVersion: "10"

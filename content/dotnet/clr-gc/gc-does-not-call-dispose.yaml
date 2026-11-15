@@ -1,0 +1,113 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMHDFCNNRCBK5PH50T
+slug: gc-does-not-call-dispose
+stack: dotnet
+topic: clr-gc
+level: junior
+type: single
+grading: auto
+tags: [idisposable, dispose, finalization, garbage-collection]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/using-objects
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/implementing-dispose
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.object.finalize
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Вызывает ли сборщик мусора Dispose у объекта, который забыли освободить?
+    prompt: |
+      Объект типа, который реализует `IDisposable` и владеет неуправляемым ресурсом (например, дескриптором файла),
+      создали, использовали и забыли вызвать у него `Dispose`. Ссылок на объект больше не осталось, и сборщик мусора
+      его собирает. Что происходит с объектом и с ресурсом?
+    hint: Знает ли сборщик мусора что-нибудь об интерфейсе `IDisposable`, или для него это обычный интерфейс, как любой другой?
+    options:
+      a: "Сборщик мусора вызывает `Dispose` перед освобождением памяти, поэтому ресурс освобождается вместе с объектом."
+      b: "Сборщик мусора не вызывает `Dispose`. Ресурс может позже освободить финализатор, если он есть у типа; иначе ресурс утекает."
+      c: "Сборщик мусора не собирает объекты, реализующие `IDisposable`, пока у них не вызван `Dispose`, поэтому объект навсегда остаётся в памяти."
+      d: "Среда выполнения замечает, что `Dispose` не был вызван, и при сборке мусора выбрасывает `ObjectDisposedException`."
+    optionExplanations:
+      a: "Сборщик мусора ничего не знает об `IDisposable` и не вызывает `Dispose`. Единственный метод объекта, который среда выполнения может вызвать после сборки, - это финализатор, а не `Dispose`."
+      c: "Сборщик мусора решает, собирать ли объект, только по достижимости от корней. Реализует ли тип `IDisposable` и был ли вызван `Dispose`, на это не влияет."
+      d: "Среда выполнения не отслеживает вызовы `Dispose`. `ObjectDisposedException` выбрасывает сам объект, когда к нему обращаются уже после `Dispose`, а не сборщик мусора."
+    answer: "Сборщик мусора не вызывает `Dispose`: он освобождает только управляемую память. Неуправляемый ресурс может освободить лишь финализатор, если он есть у типа, и в непредсказуемый момент; без финализатора ресурс утекает."
+    explanation: |
+      В документации прямо сказано: сборщик мусора не освобождает ваши объекты через `Dispose`, потому что ничего
+      не знает о `IDisposable.Dispose()`. Он знает только, есть ли у объекта финализатор (переопределение
+      `Object.Finalize`) и когда его нужно вызвать. Сборщик мусора управляет только управляемой памятью: находит
+      недостижимые объекты и освобождает занятую ими память. О файлах, сокетах и других неуправляемых ресурсах он
+      ничего не знает.
+
+      Если у типа есть финализатор (`~MyType()`), объект после того, как стал недостижим, ставится в очередь на
+      финализацию, и финализатор выполняется позже, в момент, который программа не контролирует. Поэтому шаблон
+      Dispose использует финализатор только как страховку: он вызывает `Dispose(false)` на случай, если `Dispose`
+      забыли. Даже эта страховка не гарантирована: в .NET 10, как и во всех версиях на основе .NET Core, финализаторы
+      при завершении процесса не вызываются.
+
+      Если финализатора нет совсем, сборщик мусора ресурс не освободит вовсе, и ресурс утечёт. Дескриптор ОС в
+      лучшем случае закроет операционная система при завершении процесса, а ресурсы вне процесса (временный файл,
+      блокировка на удалённом сервере) могут так и остаться неочищенными.
+
+      Вывод: освобождать ресурсы нужно детерминированно, через `using`-оператор или `using`-объявление,
+      а не рассчитывать на сборщик мусора.
+    linkTitles:
+      - "Использование объектов, реализующих IDisposable"
+      - "Реализация метода Dispose"
+      - "Метод Object.Finalize"
+  en:
+    title: Does the garbage collector call Dispose on an object you forgot to dispose?
+    prompt: |
+      An object of a type that implements `IDisposable` and owns an unmanaged resource (for example, a file handle)
+      was created, used, and never disposed: nobody called `Dispose`. No references to the object remain, and the
+      garbage collector collects it. What happens to the object and to the resource?
+    hint: Does the garbage collector know anything about the `IDisposable` interface, or is it just an ordinary interface like any other?
+    options:
+      a: "The garbage collector calls `Dispose` before reclaiming the memory, so the resource is released together with the object."
+      b: "The garbage collector does not call `Dispose`. A finalizer, if the type has one, may release the resource later; otherwise the resource leaks."
+      c: "The garbage collector does not collect objects that implement `IDisposable` until `Dispose` has been called, so the object stays in memory forever."
+      d: "The runtime notices that `Dispose` was not called and throws `ObjectDisposedException` during the collection."
+    optionExplanations:
+      a: "The garbage collector knows nothing about `IDisposable` and does not call `Dispose`. The only method of the object the runtime may call after a collection is the finalizer, not `Dispose`."
+      c: "The garbage collector decides whether to collect an object only by its reachability from roots. Whether the type implements `IDisposable`, or whether `Dispose` was called, does not matter."
+      d: "The runtime does not track `Dispose` calls. `ObjectDisposedException` is thrown by the object itself when it is used after `Dispose`, not by the garbage collector."
+    answer: "The garbage collector does not call `Dispose`: it only reclaims managed memory. The unmanaged resource can be released only by a finalizer, if the type has one, at an unpredictable time; without a finalizer the resource leaks."
+    explanation: |
+      The documentation states it directly: the garbage collector does not release your objects through `Dispose`, because it has no
+      knowledge of `IDisposable.Dispose()`. It only knows whether an object has a finalizer (an override of
+      `Object.Finalize`) and when that finalizer needs to be called. The garbage collector manages only managed
+      memory: it finds unreachable objects and reclaims the memory they occupy. It knows nothing about files,
+      sockets or other unmanaged resources.
+
+      If the type has a finalizer (`~MyType()`), the object is queued for finalization once it becomes unreachable,
+      and the finalizer runs later, at a moment the program does not control. That is why the dispose pattern uses
+      a finalizer only as a safety net: it calls `Dispose(false)` in case `Dispose` was forgotten. Even this safety
+      net is not guaranteed: on .NET 10, as on every .NET Core-based version, finalizers are not run when the
+      process exits.
+
+      If there is no finalizer at all, the garbage collector does not release the resource at all, and the resource
+      leaks. An OS handle is at best closed by the operating system when the process exits, and resources outside
+      the process (a temporary file, a lock on a remote server) may never be cleaned up.
+
+      The takeaway: release resources deterministically with a `using` statement or a `using` declaration instead
+      of relying on the garbage collector.
+    linkTitles:
+      - "Using objects that implement IDisposable"
+      - "Implement a Dispose method"
+      - "Object.Finalize method"
+meta:
+  authors: [platonenkov]
+  verified: 1970-01-01
+  dotnetVersion: "10"

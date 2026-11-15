@@ -1,0 +1,165 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMAW56YK4R7MPM902E
+slug: static-event-keeps-subscriber-alive
+stack: dotnet
+topic: clr-gc
+level: middle
+type: find-bug
+grading: auto
+tags: [memory-leak, events, weak-reference, gc-roots]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    using System.Runtime.CompilerServices;
+
+    WeakReference closedWindow = OpenAndCloseWindow();
+    GC.Collect();
+    GC.WaitForPendingFinalizers();
+    GC.Collect();
+    Console.WriteLine(closedWindow.IsAlive);
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static WeakReference OpenAndCloseWindow()
+    {
+        ReportWindow window = new ReportWindow();
+        window.Close();
+        return new WeakReference(window);
+    }
+
+    static class AppSettings
+    {
+        public static event EventHandler Changed;
+
+        public static void NotifyChanged() => Changed?.Invoke(null, EventArgs.Empty);
+    }
+
+    class ReportWindow
+    {
+        public bool IsOpen { get; private set; } = true;
+        public int RefreshCount { get; private set; }
+
+        public ReportWindow()
+        {
+            AppSettings.Changed += OnSettingsChanged;
+        }
+
+        public void Close()
+        {
+            IsOpen = false;
+        }
+
+        private void OnSettingsChanged(object sender, EventArgs e) => RefreshCount++;
+    }
+bugLineSets: [[31]]
+fixedSource: |
+  using System.Runtime.CompilerServices;
+
+  WeakReference closedWindow = OpenAndCloseWindow();
+  GC.Collect();
+  GC.WaitForPendingFinalizers();
+  GC.Collect();
+  Console.WriteLine(closedWindow.IsAlive);
+
+  [MethodImpl(MethodImplOptions.NoInlining)]
+  static WeakReference OpenAndCloseWindow()
+  {
+      ReportWindow window = new ReportWindow();
+      window.Close();
+      return new WeakReference(window);
+  }
+
+  static class AppSettings
+  {
+      public static event EventHandler Changed;
+
+      public static void NotifyChanged() => Changed?.Invoke(null, EventArgs.Empty);
+  }
+
+  class ReportWindow
+  {
+      public bool IsOpen { get; private set; } = true;
+      public int RefreshCount { get; private set; }
+
+      public ReportWindow()
+      {
+          AppSettings.Changed += OnSettingsChanged;
+      }
+
+      public void Close()
+      {
+          IsOpen = false;
+          AppSettings.Changed -= OnSettingsChanged;
+      }
+
+      private void OnSettingsChanged(object sender, EventArgs e) => RefreshCount++;
+  }
+fixedExpect: { kind: output, value: "False" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/debug-memory-leak
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/fundamentals
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему закрытое окно, подписанное на статическое событие, не собирается сборщиком мусора?
+    prompt: |
+      Метод `OpenAndCloseWindow` создаёт окно отчёта, сразу закрывает его и возвращает слабую ссылку на него.
+      После полной сборки мусора программа должна вывести `False`: на закрытое окно больше никто не ссылается,
+      и его память должна быть освобождена. Вместо этого программа выводит `True`.
+      Щёлкните по строке, из-за которой окно остаётся достижимым.
+    hint: Кто, кроме локальной переменной `window`, хранит ссылку на окно после выхода из `OpenAndCloseWindow`, и сколько живёт этот объект?
+    answer: Строка 31, подписка `AppSettings.Changed += OnSettingsChanged`, от которой окно нигде не отписывается.
+    explanation: |
+      Подписка на событие создаёт делегат `EventHandler`, а делегат на метод экземпляра хранит ссылку на этот
+      экземпляр в своём свойстве `Target`. Делегат лежит в статическом поле события `AppSettings.Changed`, а
+      статические поля - это корни сборщика мусора. Получается цепочка «статическое поле -> делегат -> окно»,
+      поэтому окно остаётся достижимым, сборщик мусора его не освобождает, и `IsAlive` возвращает `True`.
+
+      Метод `Close` меняет только флаг `IsOpen` и не разрывает эту цепочку. Исправление - отписаться от события
+      при закрытии: `AppSettings.Changed -= OnSettingsChanged;` в `Close` (или в `Dispose`, если окно реализует
+      `IDisposable`). После этого на окно не ссылается ни один корень, и программа выводит `False`.
+
+      Вспомогательный метод помечен `NoInlining`, чтобы в `Main` не осталось локальной переменной со ссылкой на
+      окно: иначе результат зависел бы от того, как JIT продлевает жизнь локальных переменных.
+
+      В реальном приложении такая ошибка выглядит как утечка памяти: каждое открытое и закрытое окно, страница
+      или обработчик запроса, подписанный на долгоживущее событие, навсегда остаётся в куче вместе со всем, на
+      что он ссылается. В снимке кучи такие объекты видны с путём до корня через статическое поле события.
+    linkTitles:
+      - "Отладка утечки памяти в .NET"
+      - "Основы сборки мусора"
+  en:
+    title: Why is a closed window subscribed to a static event never collected by the garbage collector?
+    prompt: |
+      The `OpenAndCloseWindow` method creates a report window, closes it immediately and returns a weak reference
+      to it. After a full garbage collection the program should print `False`: nothing refers to the closed window
+      any more, so its memory should be reclaimed. Instead the program prints `True`.
+      Click the line that keeps the window reachable.
+    hint: Who, besides the local variable `window`, holds a reference to the window after `OpenAndCloseWindow` returns, and how long does that object live?
+    answer: Line 31, the subscription `AppSettings.Changed += OnSettingsChanged`, which is never undone.
+    explanation: |
+      Subscribing to an event creates an `EventHandler` delegate, and a delegate to an instance method holds a
+      reference to that instance in its `Target` property. The delegate is stored in the static field behind the
+      `AppSettings.Changed` event, and static fields are garbage collector roots. That gives the chain
+      "static field -> delegate -> window", so the window stays reachable, the garbage collector does not reclaim
+      it, and `IsAlive` returns `True`.
+
+      The `Close` method only changes the `IsOpen` flag and does not break this chain. The fix is to unsubscribe
+      when the window closes: `AppSettings.Changed -= OnSettingsChanged;` in `Close` (or in `Dispose` if the
+      window implements `IDisposable`). After that no root refers to the window, and the program prints `False`.
+
+      The helper method is marked `NoInlining` so that no local variable in `Main` refers to the window:
+      otherwise the result would depend on how the JIT extends the lifetime of local variables.
+
+      In a real application this bug shows up as a memory leak: every window, page or request handler that is
+      opened, closed and subscribed to a long-lived event stays on the heap forever, together with everything it
+      references. In a heap snapshot such objects show a path to a root through the static field of the event.
+    linkTitles:
+      - "Debug a memory leak in .NET"
+      - "Fundamentals of garbage collection"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

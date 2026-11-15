@@ -1,0 +1,115 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNNCNBC664SFS4JEK3
+slug: select-new-objects-lost-mutations
+stack: dotnet
+topic: collections-linq
+level: senior
+type: find-bug
+grading: auto
+tags: [linq, deferred-execution, select, multiple-enumeration]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    int[] ids = { 1, 2, 3 };
+    IEnumerable<Item> items = ids.Select(id => new Item(id));
+    foreach (Item item in items)
+    {
+        item.Done = true;
+    }
+    Console.WriteLine(items.Count(i => i.Done));
+
+    class Item
+    {
+        public Item(int id) => Id = id;
+        public int Id { get; }
+        public bool Done { get; set; }
+    }
+bugLineSets: [[2]]
+fixedSource: |
+  int[] ids = { 1, 2, 3 };
+  List<Item> items = ids.Select(id => new Item(id)).ToList();
+  foreach (Item item in items)
+  {
+      item.Done = true;
+  }
+  Console.WriteLine(items.Count(i => i.Done));
+
+  class Item
+  {
+      public Item(int id) => Id = id;
+      public int Id { get; }
+      public bool Done { get; set; }
+  }
+fixedExpect: { kind: output, value: "3" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/linq/deferred-execution-lazy-evaluation
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/fundamentals/code-analysis/quality-rules/ca1851
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему изменения объектов, созданных через Select, теряются и Count возвращает 0?
+    prompt: |
+      Программа создаёт три объекта `Item`, в цикле `foreach` помечает каждый как выполненный и должна вывести `3`.
+      Исключений нет, но программа выводит `0`. Щёлкните по строке, которую нужно исправить.
+    hint: Что на самом деле хранит переменная `items` - готовые объекты или способ их получить? И что происходит при каждом её перечислении?
+    answer: Строка 2, `ids.Select(id => new Item(id))` без материализации. Нужно вызвать `.ToList()` (или `.ToArray()`), чтобы объекты были созданы один раз.
+    explanation: |
+      `Select` выполняется отложенно: он возвращает объект-запрос, который хранит только источник `ids` и лямбду
+      `id => new Item(id)`. Ни одного `Item` в момент вызова не создаётся. Проекция выполняется заново при каждом
+      перечислении запроса, то есть при каждом вызове `GetEnumerator`.
+
+      В программе запрос перечисляется дважды:
+
+      1. `foreach` создаёт три новых объекта `Item` и ставит им `Done = true`. Ссылок на эти объекты больше нигде нет,
+         и после цикла они становятся мусором.
+      2. `Count(i => i.Done)` перечисляет запрос ещё раз, лямбда снова вызывает `new Item(id)`, и `Count` проверяет
+         три совершенно новых объекта, у которых `Done` равно `false`. Отсюда `0`.
+
+      Строка 7 сама по себе корректна: она лишь показывает последствия. Дефект в том, что в строке 2 результат
+      `Select` с побочным эффектом создания объектов не материализован. После `.ToList()` объекты создаются один раз,
+      а `foreach` и `Count` работают с одними и теми же экземплярами.
+
+      Это частный случай многократного перечисления `IEnumerable<T>`: помимо потерянных изменений оно повторяет
+      дорогую работу (запросы к базе, чтение файлов, вычисления). Анализатор .NET выдаёт для таких мест правило
+      CA1851, хотя по умолчанию оно не включено. Хорошее правило: если результат запроса нужен больше одного раза
+      или вы собираетесь менять созданные им объекты, материализуйте его явно.
+    linkTitles:
+      - "Отложенное выполнение и ленивые вычисления в LINQ"
+      - "CA1851: возможное многократное перечисление коллекции IEnumerable"
+  en:
+    title: Why are changes to objects created with Select lost so that Count returns 0?
+    prompt: |
+      The program creates three `Item` objects, marks each one as done in a `foreach` loop and should print `3`.
+      No exception is thrown, but the program prints `0`. Click the line that has to be fixed.
+    hint: What does the variable `items` actually hold - finished objects or a way to produce them? And what happens every time it is enumerated?
+    answer: Line 2, `ids.Select(id => new Item(id))` without materialisation. Call `.ToList()` (or `.ToArray()`) so that the objects are created once.
+    explanation: |
+      `Select` uses deferred execution: it returns a query object that stores only the source `ids` and the lambda
+      `id => new Item(id)`. No `Item` is created when it is called. The projection runs again every time the query
+      is enumerated, that is, on every `GetEnumerator` call.
+
+      The program enumerates the query twice:
+
+      1. `foreach` creates three new `Item` objects and sets `Done = true` on them. Nothing else references these
+         objects, so after the loop they are garbage.
+      2. `Count(i => i.Done)` enumerates the query again, the lambda calls `new Item(id)` again, and `Count` checks
+         three brand new objects whose `Done` is `false`. Hence `0`.
+
+      Line 7 is correct on its own: it only reveals the consequence. The defect is that line 2 leaves the result of a
+      `Select` that creates objects unmaterialised. With `.ToList()` the objects are created once, and both `foreach`
+      and `Count` work with the same instances.
+
+      This is a special case of enumerating an `IEnumerable<T>` more than once: besides lost changes it repeats
+      expensive work (database queries, file reads, computations). The .NET analyzers report such places with rule
+      CA1851, although it is not enabled by default. A good rule: if a query result is needed more than once, or you
+      are going to modify the objects it creates, materialise it explicitly.
+    linkTitles:
+      - "Deferred execution and lazy evaluation in LINQ"
+      - "CA1851: Possible multiple enumerations of IEnumerable collection"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

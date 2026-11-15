@@ -1,0 +1,125 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNNNNPYXZ5EWTTTKDS
+slug: orderby-twice-instead-of-thenby
+stack: dotnet
+topic: collections-linq
+level: middle
+type: output
+grading: auto
+tags: [linq, orderby, thenby, stable-sort, deferred-execution]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    List<Person> people = new()
+    {
+        new Person("Bob", 30),
+        new Person("Anna", 40),
+        new Person("Bob", 20),
+        new Person("Anna", 25),
+    };
+
+    var sorted = people
+        .OrderBy(p => p.Age)
+        .OrderBy(p => p.Name);
+
+    Console.Write(string.Join(", ", sorted.Select(p => $"{p.Name}:{p.Age}")));
+
+    record Person(string Name, int Age);
+expect:
+  kind: output
+  value: "Anna:25, Anna:40, Bob:20, Bob:30"
+acceptedOutputs: ["Anna:25, Anna:40, Bob:20, Bob:30"]
+options:
+  - id: a
+    correct: false
+    expect: { kind: output, value: "Bob:20, Anna:25, Bob:30, Anna:40" }
+  - id: b
+    correct: true
+    expect: { kind: output, value: "Anna:25, Anna:40, Bob:20, Bob:30" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "Anna:40, Anna:25, Bob:30, Bob:20" }
+  - id: d
+    correct: false
+    expect: { kind: compile-error }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.linq.enumerable.orderby
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.linq.enumerable.thenby
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что выведет LINQ-запрос, в котором OrderBy вызван дважды вместо ThenBy?
+    prompt: |
+      Список людей сортируют двумя вызовами `OrderBy` подряд: сначала по возрасту, затем по имени.
+      Что выведет эта программа в консоль?
+    hint: Что получает на вход второй `OrderBy`?
+    options:
+      a: "Bob:20, Anna:25, Bob:30, Anna:40"
+      b: "Anna:25, Anna:40, Bob:20, Bob:30"
+      c: "Anna:40, Anna:25, Bob:30, Bob:20"
+      d: Ошибка компиляции
+    optionExplanations:
+      a: Так отсортировал бы `OrderBy(p => p.Age).ThenBy(p => p.Name)`. Второй `OrderBy` не уточняет первую сортировку, а сортирует последовательность заново, поэтому главным ключом становится имя, а не возраст.
+      c: Так было бы, если бы первая сортировка полностью пропадала и люди с одинаковым именем шли в исходном порядке списка. Но второй `OrderBy` получает на вход уже отсортированную по возрасту последовательность и, будучи устойчивой сортировкой, сохраняет этот порядок среди равных имён.
+      d: "`OrderBy` - метод расширения для `IEnumerable<T>`, а `IOrderedEnumerable<T>`, который возвращает первый `OrderBy`, реализует `IEnumerable<T>`. Поэтому второй вызов `OrderBy` компилируется. Позиционная запись `record Person` после операторов верхнего уровня тоже допустима."
+    answer: "Anna:25, Anna:40, Bob:20, Bob:30"
+    explanation: |
+      `OrderBy` не дополняет предыдущую сортировку, а начинает новую. Второй вызов берёт результат первого как
+      обычную последовательность и сортирует её по имени, поэтому имя становится основным ключом. Оба оператора
+      выполняются отложенно: сортировка происходит, когда `string.Join` перечисляет запрос, и второй `OrderBy`
+      при этом читает результат первого.
+
+      Первая сортировка при этом не пропадает бесследно. `OrderBy` в LINQ to Objects - устойчивая сортировка:
+      элементы с равными ключами сохраняют порядок, в котором пришли. На вход второму `OrderBy` они приходят
+      уже упорядоченными по возрасту (`Bob:20, Anna:25, Bob:30, Anna:40`), поэтому среди одинаковых имён
+      младший идёт первым. В итоге запрос эквивалентен `OrderBy(p => p.Name).ThenBy(p => p.Age)`, то есть
+      обратен тому, что, скорее всего, задумывал автор.
+
+      Чтобы сортировать по возрасту, а при равном возрасте по имени, нужен `OrderBy(p => p.Age).ThenBy(p => p.Name)`:
+      `ThenBy` доступен только на `IOrderedEnumerable<T>` и добавляет вторичный ключ, не меняя главный.
+      Поведение проверено на .NET 10.
+    linkTitles:
+      - Метод Enumerable.OrderBy
+      - Метод Enumerable.ThenBy
+  en:
+    title: What does a LINQ query print when OrderBy is called twice instead of ThenBy?
+    prompt: |
+      A list of people is sorted with two `OrderBy` calls in a row: first by age, then by name.
+      What does this program print to the console?
+    hint: What does the second `OrderBy` receive as its input?
+    options:
+      a: "Bob:20, Anna:25, Bob:30, Anna:40"
+      b: "Anna:25, Anna:40, Bob:20, Bob:30"
+      c: "Anna:40, Anna:25, Bob:30, Bob:20"
+      d: Compile error
+    optionExplanations:
+      a: That is what `OrderBy(p => p.Age).ThenBy(p => p.Name)` would produce. The second `OrderBy` does not refine the first sort, it sorts the sequence again, so the name becomes the primary key, not the age.
+      c: That would happen if the first sort were lost completely and people with the same name kept the original list order. But the second `OrderBy` receives the sequence already sorted by age and, being a stable sort, keeps that order among equal names.
+      d: "`OrderBy` is an extension method on `IEnumerable<T>`, and the `IOrderedEnumerable<T>` returned by the first `OrderBy` implements `IEnumerable<T>`. So the second `OrderBy` call compiles. The positional `record Person` after the top-level statements is valid as well."
+    answer: "Anna:25, Anna:40, Bob:20, Bob:30"
+    explanation: |
+      `OrderBy` does not extend the previous sort, it starts a new one. The second call takes the result of the
+      first as an ordinary sequence and sorts it by name, so the name becomes the primary key. Both operators use
+      deferred execution: sorting happens when `string.Join` enumerates the query, and the second `OrderBy`
+      reads the result of the first one at that point.
+
+      The first sort does not vanish without a trace, though. `OrderBy` in LINQ to Objects is a stable sort:
+      elements with equal keys keep the order in which they arrived. They arrive at the second `OrderBy`
+      already ordered by age (`Bob:20, Anna:25, Bob:30, Anna:40`), so among equal names the younger person comes
+      first. As a result the query is equivalent to `OrderBy(p => p.Name).ThenBy(p => p.Age)`, which is the
+      reverse of what the author most likely intended.
+
+      To sort by age and, for equal ages, by name, use `OrderBy(p => p.Age).ThenBy(p => p.Name)`: `ThenBy` is
+      available only on `IOrderedEnumerable<T>` and adds a secondary key without changing the primary one.
+      The behaviour is verified on .NET 10.
+    linkTitles:
+      - Enumerable.OrderBy method
+      - Enumerable.ThenBy method
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"

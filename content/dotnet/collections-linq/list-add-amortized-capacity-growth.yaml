@@ -1,0 +1,101 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNQMQXH6CNMSGHNVWR
+slug: list-add-amortized-capacity-growth
+stack: dotnet
+topic: collections-linq
+level: middle
+type: open
+grading: self
+tags: [list, complexity, amortized-analysis, capacity]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.list-1.capacity
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.list-1.add
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Почему List<T>.Add называют амортизированной O(1) и когда задавать ёмкость заранее?"
+    prompt: |
+      Почему про `List<T>.Add` говорят, что он работает за амортизированное O(1), а не просто за O(1)?
+      Что происходит, когда `Count` достигает `Capacity`, и в каких случаях стоит задать ёмкость списка заранее?
+    hint: Посчитайте, сколько раз переносятся элементы за всю серию из n вызовов `Add`, а не в одном отдельном вызове.
+    answer: |
+      - **Обычный случай.** `List<T>` хранит элементы во внутреннем массиве. Пока `Count < Capacity`, `Add`
+        записывает элемент в следующую свободную ячейку и увеличивает `Count`, это O(1).
+      - **Список заполнен.** Когда `Count == Capacity`, `Add` выделяет новый массив большего размера, копирует
+        в него все `Count` элементов, а старый массив становится мусором для сборщика мусора. Такой отдельный вызов
+        стоит O(n). В реализации .NET 10 пустой список при первом добавлении получает ёмкость 4, а дальше
+        ёмкость каждый раз удваивается.
+      - **Почему в среднем O(1).** Из-за удвоения дорогие вызовы становятся всё реже. За n вызовов `Add` в сумме
+        копируется 4 + 8 + 16 + ... элементов, а это меньше 2n. Вся серия стоит O(n), значит, один вызов в среднем
+        стоит O(1). Именно это и означает слово «амортизированная»: оценка верна для серии операций, а не для
+        каждой из них.
+      - **Когда задавать ёмкость заранее.** Когда итоговый размер известен или его можно разумно оценить, например
+        при переносе данных из источника с известным `Count`: `new List<T>(capacity)`, `EnsureCapacity` (есть
+        начиная с .NET 6) или присваивание `Capacity`. Тогда массив выделяется один раз, без промежуточных
+        копирований и лишних аллокаций. Сильно завышать ёмкость не стоит: зарезервированная память занята, даже
+        если не используется. Освободить лишнее после заполнения можно через `TrimExcess`.
+    explanation: |
+      Документация описывает `Add` двумя случаями: если `Count` меньше `Capacity`, это O(1), а если ёмкость
+      нужно увеличить, вызов становится O(n), где n - это `Count`. Обе оценки верны, и они не противоречат друг
+      другу. Амортизированная сложность складывает стоимость всех операций в серии и делит на их число.
+
+      Ключевое здесь - геометрический рост ёмкости. Если бы массив каждый раз увеличивался на константу,
+      например на 10 элементов, копирования происходили бы каждые 10 вызовов и в сумме давали бы O(n²) на
+      серию. Удвоение делает число перевыделений логарифмическим, а суммарный объём копирования линейным.
+      Конкретный множитель и начальная ёмкость 4 - это детали реализации в .NET 10, а не контракт API:
+      документация обещает только автоматическое перевыделение массива.
+
+      У амортизации есть практическая цена. Отдельный `Add` на большом списке может заметно задержаться, а сразу
+      после роста до половины массива пустует. Промежуточные массивы становятся мусором, и большие из них
+      попадают в кучу больших объектов. Поэтому в горячих путях и при известном размере ёмкость задают заранее.
+    linkTitles:
+      - "Свойство List<T>.Capacity"
+      - "Метод List<T>.Add"
+  en:
+    title: "Why is List<T>.Add called amortized O(1), and when should you set the capacity up front?"
+    prompt: |
+      Why is `List<T>.Add` said to run in amortized O(1) rather than plain O(1)?
+      What happens when `Count` reaches `Capacity`, and when is it worth setting the list capacity up front?
+    hint: Count how many times elements are moved over a whole series of n `Add` calls, not in one single call.
+    answer: |
+      - **The usual case.** `List<T>` keeps its elements in an internal array. While `Count < Capacity`, `Add`
+        writes the element into the next free slot and increments `Count`, which is O(1).
+      - **The list is full.** When `Count == Capacity`, `Add` allocates a larger array, copies all `Count`
+        elements into it, and the old array becomes garbage for the garbage collector. That single call costs
+        O(n). In the .NET 10 implementation an empty list gets a capacity of 4 on the first add, and after that
+        the capacity doubles each time.
+      - **Why O(1) on average.** Because of doubling, the expensive calls become rarer and rarer. Over n `Add`
+        calls the total number of copied elements is 4 + 8 + 16 + ..., which is less than 2n. The whole series
+        costs O(n), so one call costs O(1) on average. That is what "amortized" means: the bound holds for a
+        series of operations, not for each one of them.
+      - **When to set the capacity up front.** When the final size is known or can be reasonably estimated, for
+        example when copying data from a source with a known `Count`: `new List<T>(capacity)`, `EnsureCapacity`
+        (available since .NET 6) or assigning `Capacity`. The array is then allocated once, with no intermediate
+        copies and no extra allocations. Do not overshoot by much: reserved memory is held even if unused.
+        `TrimExcess` releases the spare space after the list is filled.
+    explanation: |
+      The documentation describes `Add` in two cases: if `Count` is less than `Capacity`, it is O(1), and if the
+      capacity has to grow, the call becomes O(n), where n is `Count`. Both statements are true and they do not
+      contradict each other. Amortized complexity adds up the cost of all operations in a series and divides it
+      by their number.
+
+      The key is geometric growth of the capacity. If the array grew by a constant each time, say by 10 elements,
+      a copy would happen every 10 calls and the series would cost O(n²) in total. Doubling makes the number of
+      reallocations logarithmic and the total amount of copying linear. The exact growth factor and the initial
+      capacity of 4 are implementation details of .NET 10, not an API contract: the documentation only promises
+      that the array is reallocated automatically.
+
+      Amortization has a practical cost. A single `Add` on a large list can take noticeably longer, and right
+      after growth up to half of the array is empty. The intermediate arrays become garbage, and the large ones
+      land on the large object heap. That is why on hot paths, or when the size is known, the capacity is set
+      up front.
+    linkTitles:
+      - "List<T>.Capacity property"
+      - "List<T>.Add method"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

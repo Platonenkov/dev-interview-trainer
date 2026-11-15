@@ -1,0 +1,113 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMRDTXSRH37M4W122E
+slug: large-array-reported-as-gen2
+stack: dotnet
+topic: clr-gc
+level: middle
+type: output
+grading: auto
+tags: [gc, large-object-heap, generations]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    byte[] small = new byte[84000];
+    byte[] large = new byte[85000];
+
+    Console.Write($"{GC.GetGeneration(small)} {GC.GetGeneration(large)}");
+expect:
+  kind: output
+  value: "0 2"
+acceptedOutputs: ["0 2"]
+options:
+  - id: a
+    correct: false
+    expect: { kind: output, value: "0 0" }
+  - id: b
+    correct: true
+    expect: { kind: output, value: "0 2" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "2 2" }
+  - id: d
+    correct: false
+    expect: { kind: output, value: "0 1" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/large-object-heap
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.gc.getgeneration
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что выведет GC.GetGeneration для только что созданных массивов byte[84000] и byte[85000]?
+    prompt: |
+      Что выведет эта программа в консоль на .NET 10 (64-битный процесс, настройки сборщика мусора по умолчанию)?
+      Оба массива создаются непосредственно перед вызовом `GC.GetGeneration`, явных сборок мусора в программе нет.
+    hint: Сравните размер каждого массива в байтах с порогом, начиная с которого объект считается большим, и вспомните, с каким поколением собирается куча больших объектов.
+    options:
+      a: "0 0"
+      b: "0 2"
+      c: "2 2"
+      d: "0 1"
+    optionExplanations:
+      a: "Порог кучи больших объектов (LOH) - 85 000 байт. Массив `byte[85000]` занимает 85 000 байт данных плюс заголовок, поэтому размещается в LOH, и `GC.GetGeneration` для него возвращает 2, а не 0."
+      c: "Порог равен 85 000 байт, а не 80 КБ (81 920 байт). Массив `byte[84000]` вместе с заголовком занимает около 84 024 байт, это меньше порога, поэтому он размещается в обычной куче в поколении 0."
+      d: "В поколение 1 объект попадает, только пережив сборку поколения 0, а сборок здесь не было. Кроме того, куча больших объектов логически относится к поколению 2, а не 1."
+    answer: "0 2"
+    explanation: |
+      Сборщик мусора делит объекты на маленькие и большие. Объект размером 85 000 байт и больше (размер считается
+      вместе с заголовком объекта) размещается в куче больших объектов (large object heap, LOH). Куча больших
+      объектов собирается только вместе с поколением 2, поэтому большие объекты логически относятся к поколению 2,
+      и `GC.GetGeneration` сообщает `2` сразу после выделения, хотя ни одной сборки ещё не было.
+
+      - `byte[84000]`: 84 000 байт данных плюс заголовок массива (на 64-битной платформе 24 байта) - меньше
+        85 000 байт. Это маленький объект, он создаётся в поколении 0.
+      - `byte[85000]`: уже одни данные дотягивают до порога, с заголовком размер больше 85 000 байт. Объект
+        попадает в LOH, `GC.GetGeneration` возвращает 2.
+
+      Практическое следствие: короткоживущие большие массивы не умирают дёшево в поколении 0, их память
+      освобождается только при сборке поколения 2. Поэтому большие буферы, которые часто создаются и выбрасываются,
+      обычно берут из пула (`ArrayPool<T>.Shared`). Поведение проверено на .NET 10 с порогом по умолчанию.
+    linkTitles:
+      - Куча больших объектов в Windows
+      - Метод GC.GetGeneration
+  en:
+    title: What does GC.GetGeneration print for freshly allocated byte[84000] and byte[85000] arrays?
+    prompt: |
+      What does this program print to the console on .NET 10 (64-bit process, default garbage collector settings)?
+      Both arrays are allocated right before the `GC.GetGeneration` calls, and the program triggers no explicit collections.
+    hint: Compare the size of each array in bytes with the threshold above which an object counts as large, and recall which generation the large object heap is collected with.
+    options:
+      a: "0 0"
+      b: "0 2"
+      c: "2 2"
+      d: "0 1"
+    optionExplanations:
+      a: "The large object heap (LOH) threshold is 85,000 bytes. The `byte[85000]` array takes 85,000 bytes of data plus a header, so it is allocated on the LOH, and `GC.GetGeneration` returns 2 for it, not 0."
+      c: "The threshold is 85,000 bytes, not 80 KB (81,920 bytes). The `byte[84000]` array with its header takes about 84,024 bytes, which is below the threshold, so it is allocated on the regular heap in generation 0."
+      d: "An object reaches generation 1 only by surviving a generation 0 collection, and no collection happened here. Besides, the large object heap logically belongs to generation 2, not 1."
+    answer: "0 2"
+    explanation: |
+      The garbage collector splits objects into small and large ones. An object of 85,000 bytes or more (the size
+      includes the object header) is allocated on the large object heap (LOH). The large object heap is collected
+      only together with generation 2, so large objects logically belong to generation 2, and `GC.GetGeneration`
+      reports `2` right after allocation, even though no collection has happened yet.
+
+      - `byte[84000]`: 84,000 bytes of data plus the array header (24 bytes on a 64-bit platform) is less than
+        85,000 bytes. It is a small object and starts in generation 0.
+      - `byte[85000]`: the data alone already reaches the threshold, and with the header the size exceeds 85,000
+        bytes. The object goes to the LOH, and `GC.GetGeneration` returns 2.
+
+      The practical consequence: short-lived large arrays do not die cheaply in generation 0; their memory is
+      reclaimed only by a generation 2 collection. That is why large buffers that are created and thrown away
+      often are usually rented from a pool (`ArrayPool<T>.Shared`). The behaviour is verified on .NET 10 with the
+      default threshold.
+    linkTitles:
+      - The large object heap on Windows systems
+      - GC.GetGeneration method
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

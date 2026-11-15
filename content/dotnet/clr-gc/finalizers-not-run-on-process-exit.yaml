@@ -1,0 +1,119 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMSD13371R71NR6YPP
+slug: finalizers-not-run-on-process-exit
+stack: dotnet
+topic: clr-gc
+level: senior
+type: output
+grading: auto
+tags: [finalizers, finalization, garbage-collection, process-exit]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    Resource resource = new Resource();
+    resource = null;
+    Console.Write("End ");
+
+    class Resource
+    {
+        ~Resource() => Console.Write("Finalized ");
+    }
+expect:
+  kind: output
+  value: "End"
+acceptedOutputs: ["End"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "End" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "Finalized End" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "End Finalized" }
+  - id: d
+    correct: false
+    expect: { kind: compile-error }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/classes-and-structs/finalizers
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.object.finalize
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что выведет программа на .NET 10, если у брошенного объекта есть финализатор, печатающий строку?
+    prompt: |
+      Что выведет эта программа в консоль при запуске на .NET 10? Программа не вызывает `GC.Collect`
+      и `GC.WaitForPendingFinalizers`, а после последней строки `Console.Write` процесс завершается.
+    hint: Кто и в какой момент вызывает финализатор и происходит ли в этой программе хоть что-то, что к этому приведёт?
+    options:
+      a: "End"
+      b: "Finalized End"
+      c: "End Finalized"
+      d: Ошибка компиляции
+    optionExplanations:
+      b: Финализатор запускается только после того, как сборщик мусора обнаружит объект недостижимым. Программа выделяет слишком мало памяти, чтобы до вывода `End` произошла хотя бы одна сборка, а явных вызовов `GC.Collect` в ней нет.
+      c: Так вела себя .NET Framework, которая при завершении приложения старается вызвать финализаторы оставшихся объектов. .NET (начиная с .NET Core и .NET 5) при завершении процесса финализаторы не вызывает.
+      d: Код корректен. Финализатор с телом-выражением допустим начиная с C# 7.0, а объявление класса после операторов верхнего уровня разрешено.
+    answer: "End"
+    explanation: |
+      Финализатор не вызывается в момент, когда на объект пропадает последняя ссылка. Сначала сборщик мусора
+      должен выполнить сборку и обнаружить, что объект недостижим, затем объект попадает в очередь
+      финализации, и только потом поток финализации вызывает `~Resource()`. В этой программе ни одной сборки
+      не происходит: выделений мало, а `GC.Collect` никто не вызывает.
+
+      Остаётся завершение процесса. В .NET Framework среда выполнения при завершении приложения старалась
+      вызвать финализаторы оставшихся объектов, и там вывод мог бы содержать `Finalized`. В .NET (начиная
+      с .NET Core и .NET 5, в том числе в .NET 10) финализаторы при завершении процесса не вызываются,
+      поэтому программа выводит только `End`.
+
+      Вывод для практики: финализатор не гарантирует освобождение ресурса. Очистку, которая обязана
+      произойти, делают явно через `IDisposable` и `using` (неуправляемые дескрипторы оборачивают в
+      `SafeHandle`), а действия при завершении процесса подписывают на `AppDomain.ProcessExit`. Если бы перед
+      `Console.Write` стояли `GC.Collect()` и `GC.WaitForPendingFinalizers()`, финализатор, скорее всего,
+      успел бы отработать раньше.
+    linkTitles:
+      - Финализаторы
+      - Метод Object.Finalize
+  en:
+    title: What does a .NET 10 program print when an abandoned object has a finalizer that prints a line?
+    prompt: |
+      What does this program print to the console when it runs on .NET 10? The program does not call
+      `GC.Collect` or `GC.WaitForPendingFinalizers`, and the process ends right after the last `Console.Write`.
+    hint: Who calls a finalizer and when, and does anything in this program make that happen?
+    options:
+      a: "End"
+      b: "Finalized End"
+      c: "End Finalized"
+      d: Compile error
+    optionExplanations:
+      b: A finalizer runs only after the garbage collector finds the object unreachable. The program allocates far too little memory for any collection to happen before `End` is printed, and it has no explicit `GC.Collect` call.
+      c: That was the behaviour of .NET Framework, which makes an effort to call the finalizers of remaining objects when the application terminates. .NET (since .NET Core and .NET 5) does not call finalizers when the process exits.
+      d: The code is valid. An expression-bodied finalizer is allowed since C# 7.0, and a class declaration may follow top-level statements.
+    answer: "End"
+    explanation: |
+      A finalizer is not called at the moment the last reference to an object disappears. First the garbage
+      collector has to run a collection and find the object unreachable, then the object is put on the
+      finalization queue, and only then does the finalizer thread call `~Resource()`. No collection happens in
+      this program: it allocates very little and nobody calls `GC.Collect`.
+
+      That leaves process exit. On .NET Framework the runtime tried to call the finalizers of remaining
+      objects when the application terminated, so the output there could contain `Finalized`. On .NET (since
+      .NET Core and .NET 5, including .NET 10) finalizers are not called when the process exits, so the program
+      prints only `End`.
+
+      The practical lesson: a finalizer does not guarantee that a resource is released. Cleanup that must
+      happen is done explicitly with `IDisposable` and `using` (unmanaged handles are wrapped in `SafeHandle`),
+      and work at process exit is attached to `AppDomain.ProcessExit`. If `GC.Collect()` and
+      `GC.WaitForPendingFinalizers()` were called before `Console.Write`, the finalizer would most likely run first.
+    linkTitles:
+      - Finalizers
+      - Object.Finalize method
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

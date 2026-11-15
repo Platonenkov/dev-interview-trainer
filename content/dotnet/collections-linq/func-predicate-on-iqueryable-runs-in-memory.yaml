@@ -1,0 +1,127 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WN1MDN12KJG2CW6VVN
+slug: func-predicate-on-iqueryable-runs-in-memory
+stack: dotnet
+topic: collections-linq
+level: middle
+type: single
+grading: auto
+tags: [linq, iqueryable, expression-trees, ef-core, overload-resolution]
+code:
+  language: csharp
+  harness: none
+  source: |
+    public sealed class OrderService
+    {
+        private readonly AppDbContext _db;
+
+        public OrderService(AppDbContext db) => _db = db;
+
+        public List<Order> Find(Func<Order, bool> predicate)
+        {
+            return _db.Orders
+                .AsNoTracking()
+                .Where(predicate)
+                .ToList();
+        }
+    }
+
+    // Caller
+    List<Order> recent = service.Find(o => o.CreatedAt >= since);
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: false
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.linq.iqueryable
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/advanced-topics/expression-trees/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/ef/core/querying/client-eval
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Где выполняется фильтр, если в Where над IQueryable<T> передать Func<T, bool>?
+    prompt: |
+      Вспомогательный метод принимает условие отбора как `Func<Order, bool>` и передаёт его в `Where`
+      поверх `DbSet<Order>` из EF Core. Где фактически выполняется фильтрация заказов?
+    hint: Сравните тип параметра `predicate` с сигнатурами двух методов `Where`, в `Queryable` и в `Enumerable`. Какой из них вообще может принять этот аргумент?
+    options:
+      a: "В базе данных: EF Core переводит условие в `WHERE` в SQL-запросе"
+      b: "EF Core выбрасывает `InvalidOperationException`, потому что не может перевести делегат в SQL"
+      c: "В памяти приложения: из базы читаются все строки `Orders`, а `Enumerable.Where` отбирает их уже в процессе"
+      d: "Ошибка компиляции: в `Where` над `IQueryable<Order>` нельзя передать `Func<Order, bool>`"
+    optionExplanations:
+      a: "Перевести в SQL можно только дерево выражений (`Expression<Func<Order, bool>>`). Здесь передан скомпилированный делегат: провайдер его не видит и не может разобрать, поэтому условие в SQL не попадает."
+      b: "Исключение о невозможности перевода EF Core выбрасывает, когда разбирает дерево выражений и находит в нём непереводимую часть. Здесь провайдер вообще не получает условие: запрос без фильтра переводится успешно, а отбор идёт в памяти без ошибок."
+      d: "`IQueryable<T>` наследует `IEnumerable<T>`, поэтому метод расширения `Enumerable.Where(IEnumerable<T>, Func<T, bool>)` применим, и код компилируется без ошибок и предупреждений."
+    answer: "В памяти приложения: из базы читаются все строки `Orders`, а `Enumerable.Where` отбирает их уже в процессе."
+    explanation: |
+      У `Where` есть две версии. `Queryable.Where` принимает `Expression<Func<T, bool>>`, то есть дерево
+      выражений, которое провайдер может разобрать и перевести в SQL. `Enumerable.Where` принимает обычный
+      делегат `Func<T, bool>`, который можно только вызвать.
+
+      Лямбда в месте вызова могла бы превратиться в дерево выражений, но здесь она уже превращена в делегат на
+      границе метода, ведь параметр `predicate` имеет тип `Func<Order, bool>`. Неявного преобразования из
+      делегата в `Expression<...>` нет, поэтому `Queryable.Where` не подходит, и компилятор выбирает
+      `Enumerable.Where`, применимый потому, что `IQueryable<Order>` наследует `IEnumerable<Order>`. Дальше
+      цепочка работает как LINQ to Objects: `ToList` перечисляет `IQueryable<Order>`, EF Core выполняет
+      `SELECT` по всей таблице без `WHERE`, создаёт объект для каждой строки, и только потом делегат отбирает
+      нужные заказы.
+
+      На маленькой таблице это незаметно, на большой превращается в чтение всей таблицы на каждый вызов.
+      Исправление - объявить параметр как `Expression<Func<Order, bool>> predicate`. Код вызова менять не нужно:
+      та же лямбда `o => o.CreatedAt >= since` будет преобразована в дерево выражений, и условие уйдёт в SQL.
+    linkTitles:
+      - "Интерфейс IQueryable"
+      - "Деревья выражений"
+      - "Вычисление на клиенте и на сервере в EF Core"
+  en:
+    title: Where does the filter run if you pass a Func<T, bool> to Where over an IQueryable<T>?
+    prompt: |
+      A helper method takes the filter condition as a `Func<Order, bool>` and passes it to `Where` over an
+      EF Core `DbSet<Order>`. Where does the filtering of orders actually happen?
+    hint: Compare the type of the `predicate` parameter with the signatures of the two `Where` methods, in `Queryable` and in `Enumerable`. Which of them can accept this argument at all?
+    options:
+      a: "In the database: EF Core translates the condition into a `WHERE` clause of the SQL query"
+      b: "EF Core throws `InvalidOperationException` because it cannot translate a delegate into SQL"
+      c: "In the application's memory: all `Orders` rows are read from the database, and `Enumerable.Where` filters them in the process"
+      d: "Compile error: you cannot pass a `Func<Order, bool>` to `Where` over an `IQueryable<Order>`"
+    optionExplanations:
+      a: "Only an expression tree (`Expression<Func<Order, bool>>`) can be translated into SQL. Here a compiled delegate is passed: the provider cannot see inside it or inspect it, so the condition never reaches the SQL."
+      b: "EF Core throws the translation exception when it inspects an expression tree and finds a part it cannot translate. Here the provider never receives the condition at all: the query without a filter translates fine, and the filtering runs in memory without any error."
+      d: "`IQueryable<T>` inherits `IEnumerable<T>`, so the extension method `Enumerable.Where(IEnumerable<T>, Func<T, bool>)` is applicable, and the code compiles without errors or warnings."
+    answer: "In the application's memory: all `Orders` rows are read from the database, and `Enumerable.Where` filters them in the process."
+    explanation: |
+      `Where` exists in two versions. `Queryable.Where` takes an `Expression<Func<T, bool>>`, an expression tree
+      that a provider can inspect and translate into SQL. `Enumerable.Where` takes a plain `Func<T, bool>`
+      delegate, which can only be invoked.
+
+      The lambda at the call site could have become an expression tree, but here it has already been turned
+      into a delegate at the method boundary, because the `predicate` parameter is a `Func<Order, bool>`. There
+      is no implicit conversion from a delegate to `Expression<...>`, so `Queryable.Where` is not applicable,
+      and the compiler picks `Enumerable.Where`, which applies because `IQueryable<Order>` inherits
+      `IEnumerable<Order>`. From there the chain is LINQ to Objects: `ToList` enumerates the
+      `IQueryable<Order>`, EF Core runs a `SELECT` over the whole table with no `WHERE`, creates an object for
+      every row, and only then does the delegate pick the matching orders.
+
+      On a small table this goes unnoticed; on a large one it means reading the whole table on every call.
+      The fix is to declare the parameter as `Expression<Func<Order, bool>> predicate`. The caller does not
+      change: the same lambda `o => o.CreatedAt >= since` is converted into an expression tree, and the
+      condition goes into the SQL.
+    linkTitles:
+      - "IQueryable interface"
+      - "Expression trees"
+      - "Client vs. server evaluation in EF Core"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  noRunReason: The snippet uses EF Core types (DbContext, DbSet<T>, AsNoTracking), which are not available in the sandbox without NuGet packages.

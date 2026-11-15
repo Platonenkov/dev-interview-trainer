@@ -1,0 +1,117 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WN23WAK88YSHSBZE8J
+slug: process-terminating-exceptions
+stack: dotnet
+topic: exceptions
+level: senior
+type: multi
+grading: auto
+tags: [unhandled-exceptions, stack-overflow, process-crash, unobserved-task-exception]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+  - id: e
+    correct: true
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.stackoverflowexception
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/threading/exceptions-in-managed-threads
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.appdomain.unhandledexception
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.tasks.taskscheduler.unobservedtaskexception
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.runtime.compilerservices.runtimehelpers.ensuresufficientexecutionstack
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какие исключения завершают процесс .NET и можно ли этому помешать?
+    prompt: |
+      Сервис на .NET 10 периодически падает в production. Выберите все верные утверждения об исключениях,
+      которые завершают процесс.
+    hint: Какие исключения среда выполнения сохраняет в объект, чтобы отдать позже, а какие ей некуда деть и нечем обработать?
+    options:
+      a: "`StackOverflowException` нельзя перехватить блоком `try`/`catch`: процесс завершается."
+      b: "Блок `catch (Exception)` на верхнем уровне перехватывает переполнение стека, потому что `StackOverflowException` наследуется от `Exception`."
+      c: "Необработанное исключение в делегате, поставленном через `ThreadPool.QueueUserWorkItem`, завершает весь процесс, а не только этот рабочий элемент."
+      d: "Задача `Task`, завершившаяся с ошибкой, которую никто не дождался и не прочитал, по умолчанию роняет процесс при сборке мусора."
+      e: "Обработчик `AppDomain.CurrentDomain.UnhandledException` не может предотвратить завершение процесса: он позволяет только записать информацию об ошибке."
+    optionExplanations:
+      b: "Наследование от `Exception` здесь не помогает: начиная с .NET Framework 2.0 среда выполнения не передаёт переполнение стека в обработчики `catch`, а сразу завершает процесс. Защищаться нужно заранее: ограничивать глубину рекурсии или проверять оставшийся стек, например через `RuntimeHelpers.EnsureSufficientExecutionStack`, который при нехватке стека выбрасывает перехватываемое `InsufficientExecutionStackException`."
+      d: "Так вела себя .NET Framework 4.0. Начиная с .NET Framework 4.5 и во всех версиях .NET Core и .NET 5+ ненаблюдаемое исключение задачи только вызывает событие `TaskScheduler.UnobservedTaskException` при финализации задачи, а процесс продолжает работу."
+    answer: "`StackOverflowException` нельзя перехватить; необработанное исключение в потоке пула потоков завершает весь процесс; обработчик `AppDomain.UnhandledException` не может предотвратить завершение, а только позволяет записать информацию об ошибке."
+    explanation: |
+      - **Переполнение стека.** После переполнения у потока нет стека, на котором можно безопасно выполнить
+        обработчик, поэтому `StackOverflowException` нельзя перехватить: процесс завершается. Защита - не допускать
+        неограниченной рекурсии: счётчик глубины или проверка оставшегося стека до того, как он кончится.
+      - **Необработанное исключение в потоке.** Начиная с .NET Framework 2.0 необработанное исключение в потоке
+        завершает приложение, в каком бы потоке оно ни возникло: в основном, в созданном через `Thread` или в потоке
+        пула потоков. Исключение внутри `Task` - другой случай: задача сохраняет его и не выпускает наружу.
+        А `async void` повторно выбрасывает его в `SynchronizationContext`, который был активен при запуске метода,
+        или в пуле потоков, если контекста нет, и там оно снова становится необработанным.
+      - **`AppDomain.UnhandledException`.** Событие возникает, когда процесс уже обречён. Обработчик может записать
+        лог, сохранить состояние или сбросить метрики, но отменить завершение не может.
+      - **Ненаблюдаемые исключения задач** с .NET Framework 4.5 по умолчанию не роняют процесс, поэтому ошибки
+        фоновых задач, которые никто не ожидает через `await`, легко потерять. Подписка на
+        `TaskScheduler.UnobservedTaskException` помогает хотя бы их залогировать.
+
+      Поведение описано для .NET 10 и совпадает с поведением .NET Core и .NET 5+.
+    linkTitles:
+      - "Класс StackOverflowException"
+      - "Исключения в управляемых потоках"
+      - "Событие AppDomain.UnhandledException"
+      - "Событие TaskScheduler.UnobservedTaskException"
+      - "Метод RuntimeHelpers.EnsureSufficientExecutionStack"
+  en:
+    title: Which exceptions terminate a .NET process, and can you prevent it?
+    prompt: |
+      A .NET 10 service crashes in production from time to time. Select all true statements about exceptions
+      that terminate the process.
+    hint: Which exceptions does the runtime store in an object to hand over later, and which ones has it nowhere to put and no way to handle?
+    options:
+      a: "`StackOverflowException` cannot be caught with a `try`/`catch` block: the process is terminated."
+      b: "A top-level `catch (Exception)` block catches a stack overflow, because `StackOverflowException` derives from `Exception`."
+      c: "An unhandled exception in a delegate queued with `ThreadPool.QueueUserWorkItem` terminates the whole process, not just that work item."
+      d: "A faulted `Task` whose exception nobody awaits or reads crashes the process by default when it is garbage collected."
+      e: "An `AppDomain.CurrentDomain.UnhandledException` handler cannot prevent the process from terminating: it only lets you record information about the failure."
+    optionExplanations:
+      b: "Deriving from `Exception` does not help: since .NET Framework 2.0 the runtime does not pass a stack overflow to `catch` handlers, it terminates the process right away. The defence has to come earlier: limit recursion depth or check the remaining stack, for example with `RuntimeHelpers.EnsureSufficientExecutionStack`, which throws a catchable `InsufficientExecutionStackException` when the stack is running low."
+      d: "That was the behaviour of .NET Framework 4.0. Since .NET Framework 4.5, and in every version of .NET Core and .NET 5+, an unobserved task exception only raises the `TaskScheduler.UnobservedTaskException` event when the task is finalized, and the process keeps running."
+    answer: "`StackOverflowException` cannot be caught; an unhandled exception on a thread pool thread terminates the whole process; an `AppDomain.UnhandledException` handler cannot prevent termination and only lets you record information about the failure."
+    explanation: |
+      - **Stack overflow.** After an overflow the thread has no stack on which a handler could run safely, so
+        `StackOverflowException` cannot be caught: the process is terminated. The defence is to prevent unbounded
+        recursion: a depth counter or a check of the remaining stack before it runs out.
+      - **Unhandled exception on a thread.** Since .NET Framework 2.0 an unhandled exception on a thread
+        terminates the application whatever thread it occurs on: the main thread, a thread created with `Thread`, or
+        a thread pool thread. An exception inside a `Task` is a different case: the task stores it and does not let
+        it escape. An `async void` method, however, rethrows it on the `SynchronizationContext` that was active when
+        the method started, or on the thread pool if there was none, where it becomes unhandled again.
+      - **`AppDomain.UnhandledException`.** The event is raised when the process is already doomed. The handler
+        can write a log, save state or flush metrics, but it cannot cancel the termination.
+      - **Unobserved task exceptions** have not crashed the process by default since .NET Framework 4.5, so
+        failures of background tasks that nobody observes with `await` are easy to lose. Subscribing to
+        `TaskScheduler.UnobservedTaskException` at least lets you log them.
+
+      The behaviour is described for .NET 10 and matches .NET Core and .NET 5+.
+    linkTitles:
+      - "StackOverflowException class"
+      - "Exceptions in managed threads"
+      - "AppDomain.UnhandledException event"
+      - "TaskScheduler.UnobservedTaskException event"
+      - "RuntimeHelpers.EnsureSufficientExecutionStack method"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"

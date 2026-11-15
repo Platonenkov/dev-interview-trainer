@@ -1,0 +1,155 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNAWWSPABS640FSVC1
+slug: exception-filter-runs-before-inner-finally
+stack: dotnet
+topic: exceptions
+level: senior
+type: output
+grading: auto
+tags: [exception-filters, finally, two-pass-exception-handling]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    try
+    {
+        Work();
+    }
+    catch (InvalidOperationException) when (Log("filter"))
+    {
+        Console.Write("catch");
+    }
+
+    static void Work()
+    {
+        try
+        {
+            throw new InvalidOperationException();
+        }
+        finally
+        {
+            Console.Write("finally ");
+        }
+    }
+
+    static bool Log(string text)
+    {
+        Console.Write(text + " ");
+        return true;
+    }
+expect:
+  kind: output
+  value: "filter finally catch"
+acceptedOutputs: ["filter finally catch"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "filter finally catch" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "finally filter catch" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "filter catch finally" }
+  - id: d
+    correct: false
+    expect: { kind: output, value: "finally catch" }
+  - id: e
+    correct: false
+    expect: { kind: exception, value: System.InvalidOperationException }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/statements/exception-handling-statements
+    lang: en
+    kind: docs
+  - url: https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/botr/exceptions.md
+    lang: en
+    kind: article
+  - url: https://www.ecma-international.org/publications-and-standards/standards/ecma-335/
+    lang: en
+    kind: spec
+locales:
+  ru:
+    title: В каком порядке выполняются фильтр исключения, вложенный finally и тело catch?
+    prompt: |
+      Метод `Work` выбрасывает исключение внутри `try`, у которого есть блок `finally`. Вызывающий код
+      перехватывает исключение блоком `catch` с фильтром `when`, и фильтр пишет в консоль.
+      Что выведет эта программа в .NET 10?
+    hint: "Что выполняется раньше: вычисление условия `when` или код очистки в кадрах, через которые проходит исключение?"
+    options:
+      a: "filter finally catch"
+      b: "finally filter catch"
+      c: "filter catch finally"
+      d: "finally catch"
+      e: Необработанное исключение `InvalidOperationException`
+    optionExplanations:
+      b: Такой порядок был бы при однопроходной обработке, но среда выполнения сначала ищет обработчик и вычисляет фильтры, а `finally` выполняет только потом, при раскрутке стека.
+      c: Блок `finally` внутри `Work` относится к кадру, который лежит глубже обработчика, поэтому он выполняется при раскрутке до того, как управление попадёт в тело `catch`.
+      d: Фильтр `when` обязательно вычисляется, иначе среда выполнения не узнает, подходит ли этот `catch`. Он вызывает `Log`, и `Log` пишет `filter`.
+      e: Фильтр возвращает `true`, тип исключения совпадает, поэтому `catch` обрабатывает исключение и программа завершается нормально.
+    answer: "filter finally catch"
+    explanation: |
+      Обработка исключений в CLR двухпроходная (так её описывают ECMA-335 и документация CoreCLR "Book of
+      the Runtime"). В первом проходе среда выполнения идёт вверх по стеку и ищет подходящий обработчик:
+      проверяет типы в `catch` и вычисляет фильтры `when`. Стек в этот момент ещё не раскручен, кадр `Work`
+      жив, его `finally` не выполнялся. Поэтому первым печатается `filter`.
+
+      Когда фильтр вернул `true`, обработчик найден, и начинается второй проход: стек раскручивается до
+      найденного `catch`, и по пути выполняются все блоки `finally` во вложенных кадрах. Печатается `finally`,
+      и только после этого управление входит в тело `catch` и печатается `catch`.
+
+      Документация C# прямо говорит, что фильтр `when` не раскручивает стек: если фильтр вернул `false`,
+      исходная трассировка стека не меняется. Из двухпроходной модели вытекает и обратная сторона: фильтр
+      выполняется, пока вложенные `finally` ещё не отработали. Значит, блокировки, взятые внутренними методами,
+      ещё удерживаются, а ресурсы в `using` ещё не освобождены, поэтому фильтр должен быть коротким и не
+      должен зависеть от этого состояния.
+
+      Результат проверен для .NET 10; сам порядок задан двухпроходной моделью обработки исключений и не
+      менялся между версиями .NET.
+    linkTitles:
+      - "Операторы обработки исключений"
+      - "Book of the Runtime: исключения в CoreCLR"
+      - "ECMA-335: Common Language Infrastructure"
+  en:
+    title: In what order do an exception filter, a nested finally and the catch body run?
+    prompt: |
+      The method `Work` throws an exception inside a `try` that has a `finally` block. The caller catches the
+      exception with a `catch` that has a `when` filter, and the filter writes to the console.
+      What does this program print in .NET 10?
+    hint: "Which runs first: evaluating the `when` condition, or the cleanup code of the frames the exception passes through?"
+    options:
+      a: "filter finally catch"
+      b: "finally filter catch"
+      c: "filter catch finally"
+      d: "finally catch"
+      e: Unhandled `InvalidOperationException`
+    optionExplanations:
+      b: That order would come from single-pass handling, but the runtime first searches for a handler and evaluates filters, and runs `finally` only later, while unwinding the stack.
+      c: The `finally` block inside `Work` belongs to a frame deeper than the handler, so it runs during unwinding, before control reaches the `catch` body.
+      d: The `when` filter must be evaluated, otherwise the runtime cannot know whether this `catch` matches. It calls `Log`, and `Log` writes `filter`.
+      e: The filter returns `true` and the exception type matches, so the `catch` handles the exception and the program ends normally.
+    answer: "filter finally catch"
+    explanation: |
+      Exception handling in the CLR is two-pass (as described by ECMA-335 and the CoreCLR "Book of the
+      Runtime"). In the first pass the runtime walks up the stack looking for a matching handler: it checks the
+      `catch` types and evaluates `when` filters. The stack is not unwound yet, the `Work` frame is still alive
+      and its `finally` has not run. That is why `filter` is printed first.
+
+      Once the filter returns `true`, the handler is found and the second pass begins: the stack is unwound
+      down to that `catch`, and every `finally` block in the nested frames runs on the way. `finally` is
+      printed, and only then does control enter the `catch` body, which prints `catch`.
+
+      The C# documentation states directly that a `when` filter does not unwind the stack: if the filter returns
+      `false`, the original stack trace is unchanged. The two-pass model also has a flip side: the filter runs
+      before the nested `finally` blocks. So locks taken by inner methods are still held and `using` resources
+      are not disposed yet, which means a filter must be short and must not depend on that state.
+
+      The result was checked for .NET 10; the order itself comes from the two-pass exception handling model
+      and has not changed between .NET versions.
+    linkTitles:
+      - "Exception-handling statements"
+      - "Book of the Runtime: exceptions in CoreCLR"
+      - "ECMA-335: Common Language Infrastructure"
+meta:
+  authors: [platonenkov]
+  verified: 1970-01-01
+  dotnetVersion: "10"

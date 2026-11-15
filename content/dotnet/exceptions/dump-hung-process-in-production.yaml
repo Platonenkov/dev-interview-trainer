@@ -1,0 +1,167 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNRM35FJQ8BJW03GH1
+slug: dump-hung-process-in-production
+stack: dotnet
+topic: exceptions
+level: senior
+type: open
+grading: self
+tags: [dumps, dotnet-dump, diagnostics, production, containers, hang]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-dump
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/collect-dumps-crash
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-stack
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как снять дамп зависшего .NET-сервиса в Linux-контейнере без интерактивного отладчика?
+    prompt: |
+      .NET-сервис в Linux-контейнере перестал отвечать на запросы, но не упал: процесс жив, контейнер
+      не перезапускается. Подключать интерактивный отладчик к production-процессу нельзя.
+
+      Как вы выясните, что делают потоки сервиса, и что нужно настроить заранее, чтобы получить дамп,
+      если сервис позже упадёт?
+    hint: |
+      Что нужно сделать иначе, чем при живой отладке, чтобы не держать сервис остановленным, и что делать,
+      если процесс умрёт раньше, чем вы успеете к нему подключиться?
+    answer: |
+      1. **Получить доступ к процессу.** Запустить `dotnet-dump` внутри контейнера сервиса или в sidecar-контейнере,
+         который разделяет с сервисом пространство имён процессов и каталог `/tmp`: на Linux инструмент и целевой
+         процесс должны видеть один и тот же `TMPDIR`, где лежит диагностический IPC-сокет рантайма, иначе команда
+         завершится по тайм-ауту. `dotnet-dump` запускается от того же пользователя, что и сервис, или от root,
+         иначе он не сможет подключиться к процессу. `dotnet-dump ps` покажет .NET-процессы, в контейнере сервис
+         часто имеет PID 1. Если liveness-проба вот-вот перезапустит контейнер, её нужно временно ослабить, иначе
+         улики исчезнут вместе с процессом.
+      2. **Проверить лимит памяти контейнера.** При сборе дампа `Full` или `Heap` ОС может подгрузить в память
+         процесса большой объём его виртуальной памяти. Если у контейнера жёсткий лимит памяти и он будет превышен,
+         ОС завершит контейнер, и вы потеряете и сервис, и улики. Поэтому лимит поднимают или временно снимают,
+         а если это невозможно, начинают с `dotnet-stack report -p <pid>` (стеки потоков без дампа) или с
+         небольшого дампа `Mini` или `Triage`.
+      3. **Снять дамп.** `dotnet-dump collect -p <pid> --type Full -o /dumps/hang.dmp` (`Full` - тип по умолчанию,
+         `Heap` меньше, `Mini` и `Triage` ещё меньше, но без кучи). Каталог из `-o` должен быть примонтированным
+         томом, доступным в контейнере сервиса, а у пользователя, под которым работает сервис, должно быть право
+         записи в него. Процесс приостанавливается только на время записи дампа, а не на время отладки. Полезно
+         снять два дампа с интервалом в несколько секунд: одинаковые стеки означают настоящее зависание, разные -
+         медленный прогресс.
+      4. **Анализировать офлайн.** Скопировать файл и открыть его через `dotnet-dump analyze /dumps/hang.dmp`:
+         - `clrthreads` - управляемые потоки, число удерживаемых ими блокировок, у кого есть исключение;
+         - `clrstack -all` (или `setthread` и `clrstack`) - управляемый стек каждого потока;
+         - `syncblk` - занятые блокировки `Monitor` (`lock`), у которых есть sync block (обычно это блокировки
+           под конкуренцией), и потоки-владельцы; тонкие блокировки без конкуренции там не видны;
+         - `dumpheap -stat` - чем заполнена куча, `pe` - содержимое объекта исключения.
+
+         Типичные находки: множество потоков пула потоков ждёт в `Task.Result` или `Wait()` (sync over async
+         и голодание пула потоков), два потока ждут блокировки друг друга (deadlock), поток крутится в цикле.
+      5. **Включить дампы при падении заранее.** Задать контейнеру переменные окружения:
+         `DOTNET_DbgEnableMiniDump=1`, `DOTNET_DbgMiniDumpType=4` (1 - mini, 2 - heap, 3 - triage, 4 - full;
+         без этой переменной пишется тип 2, heap), `DOTNET_DbgMiniDumpName=/dumps/core.%p` на постоянном томе
+         и по желанию `DOTNET_EnableCrashReport=1` для JSON-отчёта о падении. Тогда при необработанном исключении
+         или фатальной ошибке рантайм сам запишет дамп до завершения процесса, и файл переживёт удаление контейнера.
+      6. **Обращаться с дампом как с секретом.** Полный дамп и дамп кучи содержат почти всю память процесса:
+         токены, строки подключения, персональные данные. Доступ к ним ограничить, после анализа удалить.
+    explanation: |
+      Интерактивный отладчик плох для production не из-за самого подключения, а из-за остановки: пока вы
+      стоите на точке останова, все потоки заморожены, сервис недоступен, а оркестратор может убить его по
+      пробе. Кроме того, отладчику нужны инструменты и права ptrace в production-образе. Дамп - это снимок:
+      сбор занимает секунды, а разбирать его можно сколько угодно долго на другой машине, не держа сервис
+      остановленным.
+
+      Но и снимок не бесплатен. Полный дамп заставляет ОС подгрузить память процесса, и в контейнере с жёстким
+      лимитом это может закончиться завершением контейнера. Поэтому перед сбором смотрят на лимит, а для первого
+      взгляда достаточно стеков потоков: `dotnet-stack report -p <pid>` выводит их без дампа, а `dotnet-counters`
+      показывает длину очереди пула потоков.
+
+      Зависание и падение требуют разных подходов. При зависании момент выбираете вы, поэтому подходит
+      внешний инструмент. При падении реагировать некому: процесс завершается за миллисекунды, поэтому дамп
+      может записать только сам рантайм, и включать это нужно заранее через переменные окружения. В .NET 10
+      они используют префикс `DOTNET_`.
+
+      Каталог для дампов должен быть томом вне файловой системы контейнера: после перезапуска контейнера
+      его собственная файловая система пропадает вместе с дампом. Учитывайте и размер: полный дамп близок к
+      объёму памяти процесса.
+    linkTitles:
+      - "Утилита dotnet-dump: сбор и анализ дампов"
+      - "Сбор дампов при падении"
+      - "Утилита dotnet-stack: стеки потоков без дампа"
+  en:
+    title: How do you dump a hung .NET service in a Linux container without an interactive debugger?
+    prompt: |
+      A .NET service in a Linux container has stopped answering requests but has not crashed: the process is
+      alive and the container is not restarting. Attaching an interactive debugger to a production process is
+      not an option.
+
+      How do you find out what the service's threads are doing, and what do you configure in advance so that
+      you get a dump if the service crashes later?
+    hint: |
+      What do you need to do differently from live debugging so the service is not kept stopped, and what do
+      you do if the process dies before you manage to connect to it?
+    answer: |
+      1. **Reach the process.** Run `dotnet-dump` inside the service container or in a sidecar container that
+         shares the process namespace and the `/tmp` directory with the service: on Linux the tool and the target
+         process must see the same `TMPDIR`, where the runtime's diagnostic IPC socket lives, otherwise the command
+         times out. `dotnet-dump` runs as the same user as the service or as root, otherwise it cannot connect to
+         the process. `dotnet-dump ps` lists .NET processes; in a container the service is often PID 1. If the
+         liveness probe is about to restart the container, relax it temporarily, otherwise the evidence
+         disappears together with the process.
+      2. **Check the container memory limit.** Collecting a `Full` or `Heap` dump can make the OS page in a large
+         part of the process's virtual memory. If the container has an enforced memory limit and it is exceeded,
+         the OS terminates the container, and you lose both the service and the evidence. So raise the limit or
+         remove it temporarily, and if that is not possible, start with `dotnet-stack report -p <pid>` (thread
+         stacks without a dump) or with a small `Mini` or `Triage` dump.
+      3. **Collect the dump.** `dotnet-dump collect -p <pid> --type Full -o /dumps/hang.dmp` (`Full` is the default
+         type, `Heap` is smaller, `Mini` and `Triage` are smaller still but omit the heap). The `-o` directory must
+         be a mounted volume that is visible in the service container, and the user the service runs as must have
+         write permission to it. The process is suspended only while the dump is written, not for a debugging
+         session. Take two dumps a few seconds apart: identical stacks mean a real hang, different stacks mean
+         slow progress.
+      4. **Analyze offline.** Copy the file and open it with `dotnet-dump analyze /dumps/hang.dmp`:
+         - `clrthreads` - managed threads, how many locks each one holds, which have an exception;
+         - `clrstack -all` (or `setthread` and `clrstack`) - the managed stack of every thread;
+         - `syncblk` - held `Monitor` (`lock`) locks that have a sync block (usually contended locks) and their
+           owner threads; uncontended thin locks do not show up there;
+         - `dumpheap -stat` - what fills the heap, `pe` - the contents of an exception object.
+
+         Typical findings: many thread pool threads waiting in `Task.Result` or `Wait()` (sync over async and
+         thread pool starvation), two threads waiting for each other's locks (a deadlock), a thread spinning in
+         a loop.
+      5. **Enable crash dumps in advance.** Set environment variables on the container:
+         `DOTNET_DbgEnableMiniDump=1`, `DOTNET_DbgMiniDumpType=4` (1 - mini, 2 - heap, 3 - triage, 4 - full;
+         without this variable type 2, heap, is written), `DOTNET_DbgMiniDumpName=/dumps/core.%p` on a persistent
+         volume, and optionally `DOTNET_EnableCrashReport=1` for a JSON crash report. Then on an unhandled
+         exception or a fatal error the runtime writes the dump itself before the process ends, and the file
+         survives the removal of the container.
+      6. **Treat the dump as a secret.** A full or heap dump contains almost all of the process memory: tokens,
+         connection strings, personal data. Restrict access to it and delete it after the analysis.
+    explanation: |
+      An interactive debugger is a poor fit for production not because of attaching but because of stopping:
+      while you sit at a breakpoint every thread is frozen, the service is unavailable and the orchestrator may
+      kill it on a probe. A debugger also needs tooling and ptrace rights in the production image. A dump is a
+      snapshot: collecting it takes seconds, and you can analyze it for as long as you need on another machine
+      without keeping the service stopped.
+
+      A snapshot is not free either. A full dump makes the OS page in the process memory, and in a container with
+      an enforced limit that can end with the container being terminated. So check the limit before collecting,
+      and for a first look thread stacks are often enough: `dotnet-stack report -p <pid>` prints them without a
+      dump, and `dotnet-counters` shows the thread pool queue length.
+
+      A hang and a crash need different approaches. In a hang you choose the moment, so an external tool fits.
+      In a crash there is nobody to react: the process ends within milliseconds, so only the runtime itself can
+      write the dump, and that has to be enabled in advance through environment variables. In .NET 10 they use
+      the `DOTNET_` prefix.
+
+      The dump directory must be a volume outside the container file system: when the container is restarted,
+      its own file system is gone, and the dump with it. Mind the size as well: a full dump is close to the
+      memory size of the process.
+    linkTitles:
+      - "dotnet-dump utility: collecting and analyzing dumps"
+      - "Collect dumps on crash"
+      - "dotnet-stack utility: thread stacks without a dump"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"

@@ -1,0 +1,141 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WN9PZZWGWZDVWN2FGP
+slug: cleanup-skipped-without-finally
+stack: dotnet
+topic: exceptions
+level: junior
+type: find-bug
+grading: auto
+tags: [finally, try-finally, cleanup]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    int openHandles = 0;
+
+    try
+    {
+        ProcessFile("data.txt");
+    }
+    catch (InvalidOperationException ex)
+    {
+        Console.WriteLine($"Error: {ex.Message}");
+    }
+
+    Console.WriteLine($"Open handles: {openHandles}");
+
+    void ProcessFile(string name)
+    {
+        openHandles++;
+        Parse(name);
+        openHandles--;
+    }
+
+    void Parse(string name)
+    {
+        throw new InvalidOperationException($"Cannot parse {name}");
+    }
+bugLineSets: [[18]]
+fixedSource: |
+  int openHandles = 0;
+
+  try
+  {
+      ProcessFile("data.txt");
+  }
+  catch (InvalidOperationException ex)
+  {
+      Console.WriteLine($"Error: {ex.Message}");
+  }
+
+  Console.WriteLine($"Open handles: {openHandles}");
+
+  void ProcessFile(string name)
+  {
+      openHandles++;
+      try
+      {
+          Parse(name);
+      }
+      finally
+      {
+          openHandles--;
+      }
+  }
+
+  void Parse(string name)
+  {
+      throw new InvalidOperationException($"Cannot parse {name}");
+  }
+fixedExpect: { kind: output, value: "Error: Cannot parse data.txt\nOpen handles: 0" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/statements/exception-handling-statements
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/statements/using
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строку, из-за которой освобождение ресурса пропускается при исключении
+    prompt: |
+      Метод `ProcessFile` увеличивает счётчик открытых дескрипторов, выполняет разбор файла и уменьшает счётчик
+      обратно. Разбор завершается исключением, вызывающий код его перехватывает и выводит счётчик. Ожидается
+      `Open handles: 0`, но программа выводит:
+
+      ```text
+      Error: Cannot parse data.txt
+      Open handles: 1
+      ```
+
+      Щёлкните по строке с дефектом.
+    hint: Какие строки метода выполняются после того, как исключение покинуло вызов внутри него?
+    answer: Строка 18, `openHandles--;`. Освобождение стоит сразу после работы, которая может выбросить исключение, а не в блоке `finally`.
+    explanation: |
+      Когда `Parse` выбрасывает исключение, управление сразу покидает `ProcessFile`: оставшиеся операторы метода
+      не выполняются, а среда выполнения ищет подходящий `catch` выше по стеку вызовов. Поэтому строка 18 не
+      выполняется, счётчик остаётся равным 1, и "дескриптор" утекает.
+
+      Сам вызов `Parse` в строке 17 - не дефект: ошибка разбора - нормальная ситуация, которую обрабатывает
+      вызывающий код. Дефект в том, что освобождение ресурса не защищено от исключения. Код очистки нужно
+      помещать в блок `finally`: он выполняется при любом выходе из `try` - обычном завершении, `return` или
+      исключении.
+
+      Для объектов, реализующих `IDisposable`, тот же эффект даёт оператор `using`: компилятор превращает его
+      в `try`/`finally` с вызовом `Dispose`.
+    linkTitles:
+      - "Операторы обработки исключений: throw, try-catch, try-finally и try-catch-finally"
+      - "Оператор using"
+  en:
+    title: Find the line that makes resource cleanup skip on an exception
+    prompt: |
+      The `ProcessFile` method increments an open-handle counter, parses a file and decrements the counter
+      again. Parsing ends with an exception, the caller catches it and prints the counter. The expected result
+      is `Open handles: 0`, but the program prints:
+
+      ```text
+      Error: Cannot parse data.txt
+      Open handles: 1
+      ```
+
+      Click the line that contains the defect.
+    hint: Which lines of a method still run after an exception has left a call inside it?
+    answer: Line 18, `openHandles--;`. The release sits right after work that can throw, instead of in a `finally` block.
+    explanation: |
+      When `Parse` throws, control leaves `ProcessFile` immediately: the remaining statements of the method do
+      not run, and the runtime searches for a matching `catch` further up the call stack. So line 18 never runs,
+      the counter stays at 1, and the "handle" leaks.
+
+      The `Parse` call on line 17 is not the defect: a parse failure is a normal situation that the caller
+      handles. The defect is that the release of the resource is not protected against an exception. Cleanup
+      code belongs in a `finally` block: it runs on every exit from `try` - normal completion, `return` or an
+      exception.
+
+      For objects that implement `IDisposable` the `using` statement gives the same effect: the compiler turns
+      it into `try`/`finally` with a call to `Dispose`.
+    linkTitles:
+      - "Exception-handling statements: throw, try-catch, try-finally, and try-catch-finally"
+      - "The using statement"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

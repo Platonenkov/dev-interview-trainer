@@ -1,0 +1,130 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMHX7S39819SSGE0AE
+slug: using-declarations-dispose-reverse-order
+stack: dotnet
+topic: clr-gc
+level: junior
+type: output
+grading: auto
+tags: [idisposable, using-declaration, dispose]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    Run();
+    Console.Write("end");
+
+    static void Run()
+    {
+        using var first = new Resource("A");
+        using var second = new Resource("B");
+        Console.Write("body ");
+    }
+
+    class Resource : IDisposable
+    {
+        private readonly string _name;
+
+        public Resource(string name) => _name = name;
+
+        // Prints the resource name when it is disposed
+        public void Dispose() => Console.Write($"{_name} ");
+    }
+expect:
+  kind: output
+  value: "body B A end"
+acceptedOutputs: ["body B A end"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "body B A end" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "body A B end" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "body end B A" }
+  - id: d
+    correct: false
+    expect: { kind: compile-error }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/statements/using
+    lang: en
+    kind: docs
+  - url: https://github.com/dotnet/csharplang/blob/main/proposals/csharp-8.0/using.md
+    lang: en
+    kind: spec
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/using-objects
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: В каком порядке освобождаются ресурсы двух объявлений using в одном методе?
+    prompt: |
+      Что выведет эта программа в консоль? Метод `Dispose` каждого ресурса печатает его имя.
+    hint: Подумайте, в каком порядке закрывались бы ресурсы, если бы каждый из них был открыт своим блоком `using` с фигурными скобками.
+    options:
+      a: "body B A end"
+      b: "body A B end"
+      c: "body end B A"
+      d: Ошибка компиляции
+    optionExplanations:
+      b: Ресурсы освобождаются не в порядке объявления, а в обратном. Второе объявление ведёт себя как вложенный блок `using`, который закрывается раньше внешнего.
+      c: "`Dispose` вызывается при выходе из области видимости, то есть в конце метода `Run`, а не в конце программы и не сборщиком мусора. Поэтому оба имени печатаются до `end`."
+      d: "Код корректен. Объявления `using var` доступны начиная с C# 8, а в .NET 10 используется C# 14. Локальная функция и объявление класса после операторов верхнего уровня тоже допустимы."
+    answer: "body B A end"
+    explanation: |
+      Объявление `using var x = ...;` (появилось в C# 8) освобождает ресурс в конце области видимости, в которой
+      оно объявлено, здесь - в конце метода `Run`. Предложение языка C# 8 об объявлениях using уточняет порядок:
+      локальные переменные из объявлений using освобождаются в порядке, обратном порядку объявления. Это то же
+      поведение, что у вложенных операторов `using`: каждое следующее объявление работает как блок внутри
+      предыдущего, а компилятор переписывает `using` в `try`/`finally`.
+
+      Поэтому сначала выполняется тело метода (`body`), затем освобождается `second` (`B`), а потом `first` (`A`).
+      Только после возврата из `Run` печатается `end`.
+
+      Обратный порядок выбран не случайно: ресурс, созданный позже, часто зависит от созданного раньше.
+      Например, `StreamWriter` поверх `FileStream` должен сбросить буфер и закрыться раньше, чем закроется сам
+      поток. Освобождение в обратном порядке гарантирует, что зависимый ресурс никогда не переживёт тот, от
+      которого он зависит.
+    linkTitles:
+      - Оператор using
+      - Объявления using (предложение для C# 8)
+      - Использование объектов, реализующих IDisposable
+  en:
+    title: In what order are the resources of two using declarations in one method disposed?
+    prompt: |
+      What does this program print to the console? The `Dispose` method of each resource prints its name.
+    hint: Think about the order in which the resources would be closed if each of them were opened by its own `using` block with braces.
+    options:
+      a: "body B A end"
+      b: "body A B end"
+      c: "body end B A"
+      d: Compile error
+    optionExplanations:
+      b: Resources are not disposed in declaration order but in reverse. The second declaration behaves like a nested `using` block, which closes before the outer one.
+      c: "`Dispose` is called when the scope is left, that is at the end of the `Run` method, not at the end of the program and not by the garbage collector. So both names are printed before `end`."
+      d: "The code is valid. `using var` declarations are available since C# 8, and .NET 10 uses C# 14. A local function and a class declaration after top-level statements are allowed too."
+    answer: "body B A end"
+    explanation: |
+      A declaration `using var x = ...;` (introduced in C# 8) disposes the resource at the end of the scope it is
+      declared in, here at the end of the `Run` method. The C# 8 language proposal for using declarations specifies
+      the order: the locals of using declarations are disposed in the reverse order in which they are declared.
+      This is the same behaviour as nested `using` statements: each later declaration acts as a block inside the
+      earlier one, and the compiler rewrites `using` into `try`/`finally`.
+
+      So the method body runs first (`body`), then `second` is disposed (`B`), and then `first` (`A`). Only after
+      `Run` returns is `end` printed.
+
+      The reverse order is deliberate: a resource created later often depends on one created earlier. For
+      example, a `StreamWriter` on top of a `FileStream` must flush its buffer and close before the stream itself
+      is closed. Disposing in reverse order guarantees that a dependent resource never outlives the resource it
+      depends on.
+    linkTitles:
+      - The using statement
+      - Using declarations (C# 8 feature proposal)
+      - Using objects that implement IDisposable
+meta:
+  authors: [platonenkov]
+  verified: 1970-01-01
+  dotnetVersion: "10"

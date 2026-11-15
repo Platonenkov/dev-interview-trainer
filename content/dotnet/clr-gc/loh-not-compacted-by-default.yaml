@@ -1,0 +1,104 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMQD1WGPX0C3FEX6CW
+slug: loh-not-compacted-by-default
+stack: dotnet
+topic: clr-gc
+level: middle
+type: single
+grading: auto
+tags: [gc, large-object-heap, fragmentation, gcsettings]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/large-object-heap
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.runtime.gcsettings.largeobjectheapcompactionmode
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему куча больших объектов (LOH) фрагментируется и какая настройка это меняет?
+    prompt: |
+      Сервис постоянно выделяет и освобождает массивы `byte[]` размером от 100 КБ до нескольких мегабайт,
+      и размеры каждый раз разные. Через несколько часов процесс занимает заметно больше памяти, чем объём
+      живых данных, а в куче больших объектов (LOH) много свободного, но разрозненного места.
+
+      Какое утверждение верно объясняет причину и называет настройку, которая меняет это поведение?
+    hint: Что сборщик мусора делает с живыми объектами в обычной куче после сборки и почему для очень больших объектов это может быть слишком дорого?
+    options:
+      a: "Сборщик мусора не собирает объекты в LOH до завершения процесса. Помогает периодический вызов `GC.Collect(0)`."
+      b: "По умолчанию сборщик мусора освобождает место в LOH, но не уплотняет её, и свободные промежутки остаются между живыми объектами. Уплотнение выполняется по запросу: например, после `GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce` LOH уплотнится при следующей полной блокирующей сборке."
+      c: "Фрагментацию LOH вызывает серверный режим сборки мусора. Достаточно переключиться на режим рабочей станции, и LOH начнёт уплотняться."
+      d: "LOH уплотняется только в режиме `GCSettings.LatencyMode = GCLatencyMode.SustainedLowLatency`, поэтому нужно включить этот режим."
+    optionExplanations:
+      a: "Объекты в LOH собираются, но вместе с поколением 2, а не при каждой сборке. `GC.Collect(0)` собирает только поколение 0 и LOH не затрагивает, а к фрагментации проблема с освобождением отношения не имеет: место освобождается, но не уплотняется."
+      c: "Ни серверный режим, ни режим рабочей станции по умолчанию не уплотняют LOH. Эти режимы определяют число куч и потоков сборки, а не то, перемещаются ли большие объекты."
+      d: "Режим задержки (`GCLatencyMode`) определяет, насколько навязчиво работает сборщик мусора. `SustainedLowLatency` как раз старается избегать полных блокирующих сборок и уплотнение LOH не включает. За него отвечает `GCSettings.LargeObjectHeapCompactionMode`."
+    answer: "По умолчанию LOH не уплотняется, только очищается. Уплотнение включается по запросу через `GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce` и выполняется при следующей полной блокирующей сборке."
+    explanation: |
+      Объекты размером 85 000 байт и больше попадают в кучу больших объектов. Копировать такие объекты дорого,
+      поэтому по умолчанию сборщик мусора их не перемещает. Когда сборка поколения 2 находит мёртвые большие
+      объекты, занятое ими место становится свободным блоком, соседние свободные блоки объединяются, но живые
+      объекты остаются на своих адресах.
+
+      Новый большой массив размещается в свободном блоке, только если помещается в него. Когда размеры массивов
+      всё время разные, многие промежутки оказываются слишком маленькими, и куче приходится расти. Это и есть
+      фрагментация: свободной памяти много, но она разрезана на неподходящие куски.
+
+      Значение `GCLargeObjectHeapCompactionMode.CompactOnce` просит сборщик уплотнить LOH при следующей полной
+      блокирующей сборке, после чего свойство само возвращается к `Default`. Сборку можно вызвать сразу,
+      например `GC.Collect()`. Уплотнение LOH дорогое и даёт заметную паузу, поэтому это разовая мера.
+      Надёжнее устранить причину: переиспользовать буферы, например через `ArrayPool<byte>.Shared`, или
+      разбивать данные на куски меньше порога LOH. Поведение описано для .NET 10 и не менялось в предыдущих версиях .NET.
+    linkTitles:
+      - "Куча больших объектов в системах Windows"
+      - "Свойство GCSettings.LargeObjectHeapCompactionMode"
+  en:
+    title: Why does the large object heap (LOH) get fragmented, and which setting changes that?
+    prompt: |
+      A service keeps allocating and releasing `byte[]` arrays from 100 KB to several megabytes, and the sizes
+      differ every time. After a few hours the process uses noticeably more memory than its live data, and
+      the large object heap (LOH) has a lot of free but scattered space.
+
+      Which statement correctly explains the cause and names the setting that changes this behaviour?
+    hint: What does the garbage collector do with live objects in the ordinary heap after a collection, and why might that be too expensive for very large objects?
+    options:
+      a: "The garbage collector does not collect objects on the LOH until the process exits. Calling `GC.Collect(0)` periodically helps."
+      b: "By default the garbage collector frees space on the LOH but does not compact it, so free gaps stay between live objects. Compaction happens on request: for example, after `GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce` the LOH is compacted during the next full blocking collection."
+      c: "LOH fragmentation is caused by server garbage collection. Switching to workstation mode is enough for the LOH to start being compacted."
+      d: "The LOH is compacted only in `GCSettings.LatencyMode = GCLatencyMode.SustainedLowLatency`, so you need to turn that mode on."
+    optionExplanations:
+      a: "Objects on the LOH are collected, but together with generation 2, not on every collection. `GC.Collect(0)` collects only generation 0 and does not touch the LOH, and the problem is not about freeing: the space is freed, it is just not compacted."
+      c: "Neither server nor workstation mode compacts the LOH by default. These modes decide the number of heaps and collection threads, not whether large objects are moved."
+      d: "A latency mode (`GCLatencyMode`) decides how intrusive the garbage collector is. `SustainedLowLatency` actually tries to avoid full blocking collections and does not turn on LOH compaction. That is the job of `GCSettings.LargeObjectHeapCompactionMode`."
+    answer: "By default the LOH is swept, not compacted. Compaction is requested with `GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce` and happens during the next full blocking collection."
+    explanation: |
+      Objects of 85,000 bytes or more go to the large object heap. Copying such objects is expensive, so by
+      default the garbage collector does not move them. When a generation 2 collection finds dead large objects,
+      their space becomes a free block, adjacent free blocks are merged, but live objects stay at their addresses.
+
+      A new large array is placed into a free block only if it fits. When array sizes keep changing, many gaps
+      are too small, and the heap has to grow. That is fragmentation: there is plenty of free memory, but it is
+      cut into pieces that do not fit.
+
+      The value `GCLargeObjectHeapCompactionMode.CompactOnce` asks the collector to compact the LOH during the
+      next full blocking collection, after which the property resets itself to `Default`. You can trigger that
+      collection right away, for example with `GC.Collect()`. Compacting the LOH is expensive and causes a
+      noticeable pause, so it is a one-off measure. A more reliable fix removes the cause: reuse buffers, for
+      example through `ArrayPool<byte>.Shared`, or split data into chunks below the LOH threshold. The behaviour
+      is described for .NET 10 and is unchanged from earlier .NET versions.
+    linkTitles:
+      - "The large object heap on Windows systems"
+      - "GCSettings.LargeObjectHeapCompactionMode property"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

@@ -1,0 +1,129 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WN0EB2AJD2KZTFC7YX
+slug: sortedset-comparer-zero-drops-items
+stack: dotnet
+topic: collections-linq
+level: senior
+type: output
+grading: auto
+tags: [sortedset, icomparer, comparer, collections]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    // Orders strings by length only
+    var byLength = Comparer<string>.Create((x, y) => x.Length.CompareTo(y.Length));
+    SortedSet<string> words = new(byLength);
+
+    words.Add("aa");
+    words.Add("bb");
+    words.Add("c");
+
+    Console.Write($"{words.Count} {string.Join(",", words)}");
+expect:
+  kind: output
+  value: "2 c,aa"
+acceptedOutputs: ["2 c,aa"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "2 c,aa" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "3 c,aa,bb" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "2 c,bb" }
+  - id: d
+    correct: false
+    expect: { kind: output, value: "2 aa,c" }
+  - id: e
+    correct: false
+    expect: { kind: exception, value: System.ArgumentException }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.sortedset-1
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.comparer-1.create
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что выведет SortedSet<string> с компаратором, который сравнивает только длину строк?
+    prompt: |
+      Что выведет эта программа в консоль? Компаратор сравнивает строки только по длине, а в множество
+      добавляются три разные строки.
+    hint: Как `SortedSet<T>` решает, что такой элемент в нём уже есть, - через `Equals` или через что-то другое?
+    options:
+      a: "2 c,aa"
+      b: "3 c,aa,bb"
+      c: "2 c,bb"
+      d: "2 aa,c"
+      e: Исключение `ArgumentException`
+    optionExplanations:
+      b: "`SortedSet<T>` не хранит дубликаты, а дубликатом для него считается элемент, для которого компаратор вернул 0. Для `\"aa\"` и `\"bb\"` длины равны, поэтому `\"bb\"` в множество не попадает."
+      c: "`Add` не заменяет найденный элемент новым: он возвращает `false` и оставляет множество без изменений. В множестве остаётся `\"aa\"`, добавленная первой."
+      d: "`SortedSet<T>` перечисляет элементы в порядке компаратора, а не в порядке добавления. Строка `\"c\"` короче, поэтому идёт первой."
+      e: "`SortedSet<T>.Add` при дубликате не выбрасывает исключение, а возвращает `false`. Исключение `ArgumentException` при повторном ключе выбрасывает, например, `SortedDictionary<TKey, TValue>.Add`, но не множество."
+    answer: "2 c,aa"
+    explanation: |
+      `SortedSet<T>` построен на сбалансированном двоичном дереве (красно-чёрном) и не использует ни `Equals`,
+      ни `GetHashCode`. Позицию нового элемента он ищет только вызовами компаратора, и результат 0 означает
+      для него «такой элемент уже есть». Компаратор здесь сравнивает только длину, поэтому `"aa"` и `"bb"`
+      для множества одинаковы: второй вызов `Add` возвращает `false`, и в множестве остаётся `"aa"`.
+      Строка `"c"` короче, добавляется и при перечислении идёт первой. Итог: `Count` равен 2, элементы - `c,aa`.
+
+      То же правило действует для ключей `SortedDictionary<TKey, TValue>` и `SortedList<TKey, TValue>`: там
+      повторный `Add` с «равным» по компаратору ключом выбрасывает `ArgumentException`, а индексатор молча
+      перезаписывает значение. Поэтому компаратор для сортированной коллекции должен возвращать 0 только
+      для элементов, которые действительно считаются одинаковыми. Если нужна сортировка по длине без потери
+      данных, добавьте вторичный критерий:
+      `x.Length != y.Length ? x.Length.CompareTo(y.Length) : string.CompareOrdinal(x, y)`.
+
+      Сравните с `OrderBy`: в LINQ результат 0 означает лишь равенство при сортировке, и элементы не теряются.
+      Поведение проверено на .NET 10.
+    linkTitles:
+      - "Класс SortedSet<T>"
+      - "Метод Comparer<T>.Create"
+  en:
+    title: What does a SortedSet<string> print when its comparer compares only string length?
+    prompt: |
+      What does this program print to the console? The comparer compares strings by length only, and three
+      different strings are added to the set.
+    hint: How does a `SortedSet<T>` decide that an element is already in it - through `Equals`, or through something else?
+    options:
+      a: "2 c,aa"
+      b: "3 c,aa,bb"
+      c: "2 c,bb"
+      d: "2 aa,c"
+      e: "`ArgumentException`"
+    optionExplanations:
+      b: "`SortedSet<T>` does not keep duplicates, and for it a duplicate is an element for which the comparer returns 0. `\"aa\"` and `\"bb\"` have the same length, so `\"bb\"` never gets into the set."
+      c: "`Add` does not replace the existing element with the new one: it returns `false` and leaves the set unchanged. The set keeps `\"aa\"`, which was added first."
+      d: "`SortedSet<T>` enumerates elements in comparer order, not in insertion order. `\"c\"` is shorter, so it comes first."
+      e: "`SortedSet<T>.Add` does not throw on a duplicate, it returns `false`. `ArgumentException` on a repeated key is thrown by, for example, `SortedDictionary<TKey, TValue>.Add`, not by the set."
+    answer: "2 c,aa"
+    explanation: |
+      `SortedSet<T>` is built on a balanced binary tree (a red-black tree) and uses neither `Equals` nor
+      `GetHashCode`. It finds the position of a new element only by calling the comparer, and a result of 0
+      means "this element is already here". The comparer here compares only length, so `"aa"` and `"bb"` are
+      the same to the set: the second `Add` returns `false` and the set keeps `"aa"`. The string `"c"` is
+      shorter, so it is added and comes first during enumeration. The result: `Count` is 2 and the elements
+      are `c,aa`.
+
+      The same rule applies to the keys of `SortedDictionary<TKey, TValue>` and `SortedList<TKey, TValue>`:
+      there a repeated `Add` with a key that is "equal" by the comparer throws `ArgumentException`, and the
+      indexer silently overwrites the value. So a comparer for a sorted collection must return 0 only for
+      elements that really count as the same. If you need ordering by length without losing data, add a
+      secondary criterion:
+      `x.Length != y.Length ? x.Length.CompareTo(y.Length) : string.CompareOrdinal(x, y)`.
+
+      Compare this with `OrderBy`: in LINQ a result of 0 only means a tie in the sort, and no elements are lost.
+      The behaviour is verified on .NET 10.
+    linkTitles:
+      - "SortedSet<T> class"
+      - "Comparer<T>.Create method"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

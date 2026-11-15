@@ -1,0 +1,118 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMG9EAE3KR84A479H5
+slug: streamwriter-not-flushed-memorystream-empty
+stack: dotnet
+topic: clr-gc
+level: middle
+type: find-bug
+grading: auto
+tags: [idisposable, streamwriter, buffering, using]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    MemoryStream stream = new MemoryStream();
+    WriteGreeting(stream);
+    Console.WriteLine(stream.Length);
+
+    static void WriteGreeting(Stream target)
+    {
+        StreamWriter writer = new StreamWriter(target);
+        writer.Write("Hello");
+    }
+bugLineSets: [[7], [8]]
+fixedSource: |
+  MemoryStream stream = new MemoryStream();
+  WriteGreeting(stream);
+  Console.WriteLine(stream.Length);
+
+  static void WriteGreeting(Stream target)
+  {
+      using StreamWriter writer = new StreamWriter(target, leaveOpen: true);
+      writer.Write("Hello");
+  }
+fixedExpect: { kind: output, value: "5" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.io.streamwriter.autoflush
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/using-objects
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/statements/using
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему MemoryStream пуст после записи через StreamWriter?
+    prompt: |
+      Метод `WriteGreeting` должен записать строку `"Hello"` в переданный поток. После его вызова программа должна
+      вывести длину потока `5`, но выводит `0`. Исключений нет.
+
+      Щёлкните по строке с дефектом. Если не хватает оператора, щёлкните по строке, после которой он должен стоять.
+    hint: Куда попадают символы после `writer.Write` и что происходит с объектом `writer`, когда метод `WriteGreeting` завершается?
+    answer: Строка 7 (или строка 8) - объект `StreamWriter` создаётся без `using` и не сбрасывается, поэтому метод `WriteGreeting` завершается, а символы так и остаются во внутреннем буфере.
+    explanation: |
+      `StreamWriter` буферизует вывод: `Write` складывает символы во внутренний буфер, а в нижележащий поток
+      байты попадают при `Flush`, `Dispose` (или `Close`) либо когда буфер заполнится. Свойство `AutoFlush`
+      по умолчанию равно `false`, поэтому после `writer.Write("Hello")` в `MemoryStream` ещё ничего нет.
+
+      Дефект в методе `WriteGreeting`: объект `StreamWriter` реализует `IDisposable`, но в строке 7 создан без
+      `using`, и метод завершается, так и не сбросив буфер. Выход локальной переменной из области видимости
+      ничего не вызывает, а сборщик мусора не вызывает `Dispose`, поэтому символы остаются в буфере брошенного
+      объекта и теряются. Строка 3 корректна: она читает длину уже после того, как метод должен был закончить
+      запись.
+
+      Исправление - объявить `using StreamWriter writer = new StreamWriter(target, leaveOpen: true);`. Объявление
+      `using` вызывает `Dispose` в конце области видимости, то есть при выходе из `WriteGreeting`, до чтения
+      `Length`, а `Dispose` сбрасывает буфер в поток. Параметр `leaveOpen: true` нужен потому, что по умолчанию
+      `Dispose` у `StreamWriter` закрывает и сам поток, а чтение `Length` у закрытого `MemoryStream` выбрасывает
+      `ObjectDisposedException`.
+
+      Строка 8 тоже принимается: если вставить `writer.Flush()` после `Write`, программа выведет `5`. Но объект
+      `StreamWriter` при этом остаётся неосвобождённым, поэтому `using` - более правильное исправление.
+
+      В .NET 10 кодировка `StreamWriter` по умолчанию - UTF-8 без BOM, поэтому пять ASCII-символов дают ровно 5 байт.
+    linkTitles:
+      - "Свойство StreamWriter.AutoFlush"
+      - "Использование объектов, реализующих IDisposable"
+      - "Оператор using"
+  en:
+    title: Why is a MemoryStream empty after writing to it through a StreamWriter?
+    prompt: |
+      The `WriteGreeting` method should write the string `"Hello"` to the stream it receives. After the call the
+      program should print the stream length `5`, but it prints `0`. No exception is thrown.
+
+      Click the line that contains the defect. If a statement is missing, click the line after which it belongs.
+    hint: Where do the characters go after `writer.Write`, and what happens to the `writer` object when `WriteGreeting` returns?
+    answer: Line 7 (or line 8) - the `StreamWriter` is created without `using` and never flushed, so `WriteGreeting` returns while the characters are still in its internal buffer.
+    explanation: |
+      `StreamWriter` buffers its output: `Write` puts the characters into an internal buffer, and bytes reach the
+      underlying stream on `Flush`, `Dispose` (or `Close`), or when the buffer fills up. `AutoFlush` is `false` by
+      default, so after `writer.Write("Hello")` the `MemoryStream` is still empty.
+
+      The defect is in `WriteGreeting`: the `StreamWriter` object implements `IDisposable`, but on line 7 it is
+      created without `using`, and the method returns without flushing the buffer. A local variable going out of
+      scope calls nothing, and the garbage collector does not call `Dispose`, so the characters stay in the buffer
+      of an abandoned object and are lost. Line 3 is correct: it reads the length after the method was supposed
+      to finish writing.
+
+      The fix is to declare `using StreamWriter writer = new StreamWriter(target, leaveOpen: true);`. A `using`
+      declaration calls `Dispose` at the end of its scope, that is when `WriteGreeting` returns, before `Length`
+      is read, and `Dispose` flushes the buffer to the stream. `leaveOpen: true` is needed because by default
+      `Dispose` on a `StreamWriter` also closes the stream, and reading `Length` of a closed `MemoryStream` throws
+      `ObjectDisposedException`.
+
+      Line 8 is accepted too: inserting `writer.Flush()` after `Write` makes the program print `5`. But the
+      `StreamWriter` object is still never disposed, so `using` is the better fix.
+
+      On .NET 10 the default encoding of `StreamWriter` is UTF-8 without a BOM, so five ASCII characters give
+      exactly 5 bytes.
+    linkTitles:
+      - "StreamWriter.AutoFlush property"
+      - "Using objects that implement IDisposable"
+      - "The using statement"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"

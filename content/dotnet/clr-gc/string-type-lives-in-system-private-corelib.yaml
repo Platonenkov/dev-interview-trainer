@@ -1,0 +1,123 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMQMQHV0XX0N0CYT88
+slug: string-type-lives-in-system-private-corelib
+stack: dotnet
+topic: clr-gc
+level: middle
+type: output
+grading: auto
+tags: [assemblies, type-forwarding, reflection, corelib]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    // Which assembly actually defines System.String at run time?
+    Console.Write(typeof(string).Assembly.GetName().Name);
+expect:
+  kind: output
+  value: "System.Private.CoreLib"
+acceptedOutputs: ["System.Private.CoreLib"]
+options:
+  - id: a
+    correct: false
+    expect: { kind: output, value: "mscorlib" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "System.Runtime" }
+  - id: c
+    correct: true
+    expect: { kind: output, value: "System.Private.CoreLib" }
+  - id: d
+    correct: false
+    expect: { kind: output, value: "netstandard" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.type.assembly
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/assembly/type-forwarding
+    lang: en
+    kind: docs
+  - url: https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/botr/corelib.md
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/assembly/
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: В какой сборке определён тип string в .NET 10?
+    prompt: |
+      Что выведет эта программа в консоль при запуске на .NET 10?
+    hint: Откуда среда выполнения загружает тип во время работы программы и на какую сборку ссылался проект при компиляции?
+    options:
+      a: "mscorlib"
+      b: "System.Runtime"
+      c: "System.Private.CoreLib"
+      d: "netstandard"
+    optionExplanations:
+      a: "`mscorlib` - так называется основная библиотека .NET Framework, и в .NET Framework этот код вывел бы именно её. В .NET 10 `String` определён не в этой сборке."
+      b: "`System.Runtime` - эталонная сборка, против которой компилируется проект: в метаданных вашего кода ссылка на `String` указывает на неё. Но во время выполнения тип перенаправляется в другую сборку, а `Type.Assembly` возвращает сборку, в которой тип действительно объявлен."
+      d: "`netstandard` - сборка, на которую ссылаются библиотеки, собранные под .NET Standard. Она описывает API для компиляции таких библиотек, а в .NET 10 `String` определён не в ней."
+    answer: "System.Private.CoreLib"
+    explanation: |
+      В .NET (ранее .NET Core) базовые типы, включая `System.String`, реализованы в сборке `System.Private.CoreLib`.
+      Эта сборка тесно связана со средой выполнения и не предназначена для прямых ссылок из кода приложения.
+
+      При компиляции проект ссылается на эталонные сборки, в частности на `System.Runtime`, поэтому в
+      метаданных вашего кода тип `string` записан как тип из `System.Runtime`. Во время выполнения сборка
+      `System.Runtime` содержит перенаправление типа: запись о том, что тип находится в `System.Private.CoreLib`,
+      и среда выполнения загружает его оттуда. Свойство `Type.Assembly` возвращает сборку, в которой тип
+      объявлен, а не ту, на которую ссылался компилятор. Поэтому `GetName().Name` даёт `System.Private.CoreLib`.
+
+      Перенаправление типов позволяет перенести тип в другую сборку, не ломая код, скомпилированный против
+      старой. Для среды выполнения имя сборки входит в идентичность типа, поэтому без такой записи ссылка на
+      `String` из `System.Runtime` не разрешилась бы.
+
+      Поведение описано для .NET 10. В .NET Framework тот же код вывел бы `mscorlib`: пример на странице
+      `Type.Assembly` показывает это для `System.Array`.
+    linkTitles:
+      - "Свойство Type.Assembly"
+      - "Перенаправление типов в среде CLR"
+      - "System.Private.CoreLib и вызовы в среду выполнения"
+      - "Сборки в .NET"
+  en:
+    title: Which assembly defines the string type in .NET 10?
+    prompt: |
+      What does this program print to the console when it runs on .NET 10?
+    hint: Where does the runtime load the type from while the program runs, and which assembly did the project reference at compile time?
+    options:
+      a: "mscorlib"
+      b: "System.Runtime"
+      c: "System.Private.CoreLib"
+      d: "netstandard"
+    optionExplanations:
+      a: "`mscorlib` is the name of the core library of .NET Framework, and on .NET Framework this code would print exactly that. On .NET 10 `String` is not defined in this assembly."
+      b: "`System.Runtime` is the reference assembly the project compiles against: in your code's metadata the reference to `String` points to it. At run time, however, the type is forwarded to another assembly, and `Type.Assembly` returns the assembly where the type is actually declared."
+      d: "`netstandard` is the assembly that libraries built for .NET Standard reference. It describes the API those libraries compile against, and on .NET 10 `String` is not defined there."
+    answer: "System.Private.CoreLib"
+    explanation: |
+      In .NET (formerly .NET Core) the core types, including `System.String`, are implemented in the
+      `System.Private.CoreLib` assembly. It is tightly coupled to the runtime and is not meant to be referenced
+      directly by application code.
+
+      At compile time the project references reference assemblies, in particular `System.Runtime`, so your
+      code's metadata records `string` as a type from `System.Runtime`. At run time the `System.Runtime`
+      assembly contains a type forward: a record saying that the type lives in `System.Private.CoreLib`, and the
+      runtime loads it from there. The `Type.Assembly` property returns the assembly in which the type is
+      declared, not the one the compiler referenced. That is why `GetName().Name` gives `System.Private.CoreLib`.
+
+      Type forwarding lets a type move to another assembly without breaking code compiled against the old one.
+      To the runtime the assembly name is part of a type's identity, so without the forward a reference to
+      `String` from `System.Runtime` could not be resolved.
+
+      The behaviour is described for .NET 10. On .NET Framework the same code would print `mscorlib`: the
+      example on the `Type.Assembly` page shows this for `System.Array`.
+    linkTitles:
+      - "Type.Assembly property"
+      - "Type forwarding in the common language runtime"
+      - "System.Private.CoreLib and calling into the runtime"
+      - "Assemblies in .NET"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"

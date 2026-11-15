@@ -1,0 +1,113 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMX5V381EM28EZ8823
+slug: gc-roots-that-keep-objects-alive
+stack: dotnet
+topic: clr-gc
+level: middle
+type: multi
+grading: auto
+tags: [gc, gc-roots, weak-reference, gchandle, reachability]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: true
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/fundamentals
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.runtime.interopservices.gchandletype
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/weak-references
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какие ссылки сборщик мусора .NET считает корнями?
+    prompt: |
+      Сборщик мусора считает объект живым, если до него можно дойти по ссылкам от корней.
+      Выберите все варианты, в которых ссылка на объект сама по себе является корнем и не даёт сборщику
+      мусора освободить этот объект.
+    hint: "Сборщик мусора начинает пометку с фиксированного набора отправных точек и идёт дальше по ссылкам. Какие из вариантов являются такой отправной точкой, а какие имеют значение, только если до них уже кто-то дошёл?"
+    options:
+      a: "Статическое поле класса, в котором лежит ссылка на объект"
+      b: "Локальная переменная или параметр выполняющегося метода, которые этот метод ещё будет использовать"
+      c: "Сильный дескриптор, созданный через `GCHandle.Alloc(obj)` или `GCHandle.Alloc(obj, GCHandleType.Normal)` и ещё не освобождённый"
+      d: "Объект, на который указывает свойство `Target` экземпляра `WeakReference`"
+      e: "Поле другого объекта, если до этого другого объекта уже нельзя дойти ни от одного корня"
+    optionExplanations:
+      d: "`WeakReference` - это слабая ссылка, по смыслу она соответствует типу дескриптора `GCHandleType.Weak`. Сборщик мусора отслеживает такой объект, но не считает ссылку на него корнем. Если сильных ссылок не осталось, объект освобождается, и у короткой слабой ссылки (вариант по умолчанию) `Target` начинает возвращать `null`."
+      e: "Поле объекта - это не корень, а обычное ребро графа ссылок. Если сам объект-владелец недостижим, то и всё, на что он ссылается, недостижимо. Даже циклические ссылки между такими объектами их не спасают: .NET не использует подсчёт ссылок."
+    answer: "Статическое поле, локальная переменная или параметр выполняющегося метода, которые ещё используются, и сильный дескриптор `GCHandle`."
+    explanation: |
+      Во время сборки сборщик мусора начинает с корней и обходит граф ссылок, помечая все объекты, до которых
+      можно дойти. Всё непомеченное считается мусором. Документация называет три источника корней: корни стека
+      (переменные, которые сообщают JIT и обходчик стека), дескрипторы сборки мусора и статические данные.
+
+      - **Статические поля** продолжают ссылаться на объект, пока их не перезапишут, поэтому объект в
+        статическом поле не освобождается. Это частая причина утечек памяти: статические кэши и коллекции.
+      - **Локальные переменные и параметры** выполняющихся методов являются корнями, пока они ещё нужны.
+        Документация отмечает, что оптимизации JIT могут удлинять или укорачивать участки кода, на которых
+        переменная сообщается сборщику мусора. В оптимизированном коде переменная может перестать быть корнем
+        после последнего использования, даже если метод ещё не закончился.
+      - **Сильный дескриптор** (`GCHandleType.Normal`) явно удерживает объект, пока дескриптор не освобождён
+        через `Free`. Документация предлагает его для случая, когда единственную ссылку на управляемый объект
+        держит неуправляемый код, которую сборщик мусора сам не видит.
+
+      Слабая ссылка (`WeakReference`, `GCHandleType.Weak`) специально устроена так, чтобы не удерживать
+      объект. А ссылка из поля недостижимого объекта ничего не удерживает: достижимость определяется только
+      путём от корня, а не наличием входящих ссылок.
+    linkTitles:
+      - "Основы сборки мусора"
+      - "Перечисление GCHandleType"
+      - "Слабые ссылки"
+  en:
+    title: Which references does the .NET garbage collector treat as roots?
+    prompt: |
+      The garbage collector considers an object live if it can be reached by following references from roots.
+      Select every option in which the reference to an object is itself a root and prevents the garbage
+      collector from reclaiming that object.
+    hint: "The garbage collector starts marking from a fixed set of starting points and follows references from there. Which of these options is such a starting point, and which only matter if something else already reaches them?"
+    options:
+      a: "A static field of a class that holds a reference to the object"
+      b: "A local variable or parameter of an executing method that the method will still use"
+      c: "A strong handle created with `GCHandle.Alloc(obj)` or `GCHandle.Alloc(obj, GCHandleType.Normal)` that has not been freed yet"
+      d: "The object that the `Target` property of a `WeakReference` instance points to"
+      e: "A field of another object, when that other object can no longer be reached from any root"
+    optionExplanations:
+      d: "`WeakReference` is a weak reference; its semantics match the `GCHandleType.Weak` handle type. The garbage collector tracks such an object but does not treat the reference to it as a root. If no strong references remain, the object is reclaimed, and for a short weak reference (the default) `Target` starts returning `null`."
+      e: "A field of an object is not a root but an ordinary edge in the reference graph. If the owning object is unreachable, everything it references is unreachable too. Even cyclic references between such objects do not save them: .NET does not use reference counting."
+    answer: "A static field, a local variable or parameter of an executing method that is still in use, and a strong `GCHandle`."
+    explanation: |
+      During a collection the garbage collector starts from the roots and walks the reference graph, marking
+      every object it can reach. Everything left unmarked is garbage. The documentation names three sources of
+      roots: stack roots (variables reported by the JIT and the stack walker), garbage collection handles, and
+      static data.
+
+      - **Static fields** keep referencing the object until they are overwritten, so an object in a static field
+        is not reclaimed. This is a common cause of memory leaks: static caches and collections.
+      - **Local variables and parameters** of executing methods are roots while they are still needed. The
+        documentation notes that JIT optimizations can lengthen or shorten the regions of code within which a
+        stack variable is reported to the garbage collector. In optimized code a variable may stop being a root
+        after its last use, even before the method returns.
+      - **A strong handle** (`GCHandleType.Normal`) explicitly keeps the object alive until the handle is
+        released with `Free`. The documentation recommends it for the case when unmanaged code holds the only
+        reference to a managed object, a reference the garbage collector cannot see on its own.
+
+      A weak reference (`WeakReference`, `GCHandleType.Weak`) is designed precisely not to keep the object
+      alive. A reference from a field of an unreachable object keeps nothing alive: reachability is decided only
+      by a path from a root, not by the existence of incoming references.
+    linkTitles:
+      - "Fundamentals of garbage collection"
+      - "GCHandleType enum"
+      - "Weak references"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

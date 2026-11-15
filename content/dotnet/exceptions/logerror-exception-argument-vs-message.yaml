@@ -1,0 +1,100 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WN6FVP5VZC1HG0P7KQ
+slug: logerror-exception-argument-vs-message
+stack: dotnet
+topic: exceptions
+level: middle
+type: single
+grading: auto
+tags: [logging, ilogger, structured-logging, exceptions]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/core/extensions/logging
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/microsoft.extensions.logging.loggerextensions.logerror
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/fundamentals/code-analysis/quality-rules/ca2254
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как правильно записать пойманное исключение через ILogger?
+    prompt: |
+      В блоке `catch (Exception ex)` нужно записать в лог ошибку обработки заказа `orderId`. Какой вызов
+      `ILogger` передаёт провайдеру логирования само исключение, чтобы в логе оказались его тип, стек вызовов
+      и вложенные исключения, а шаблон сообщения остался структурированным?
+    hint: Посмотрите на сигнатуру `ILogger.Log`. Есть ли у неё отдельный параметр для исключения, и какой из вызовов его заполняет?
+    options:
+      a: '`logger.LogError($"Order {orderId} failed: {ex.Message}")`'
+      b: '`logger.LogError(ex, "Order {Id} failed", orderId)`'
+      c: '`logger.LogError("Order {Id} failed: {Error}", orderId, ex.Message)`'
+      d: '`logger.LogInformation(ex.ToString())`'
+    optionExplanations:
+      a: "В лог попадает только строка с текстом `ex.Message`: тип исключения, стек вызовов и `InnerException` теряются, а параметр исключения остаётся `null`. Интерполяция к тому же делает каждое сообщение уникальным шаблоном без свойства `Id` (на это указывает анализатор CA2254)."
+      c: "Шаблон здесь структурированный, но в аргументы передаётся только строка `ex.Message`. Само исключение провайдер не получает, поэтому стек вызовов, тип и вложенные исключения теряются."
+      d: "Текст `ex.ToString()` попадает в лог как обычное сообщение, а параметр исключения остаётся `null`, поэтому провайдеры не могут обработать его как исключение. Кроме того, уровень `Information` скрывает ошибку от фильтров и оповещений по уровню `Error`."
+    answer: '`logger.LogError(ex, "Order {Id} failed", orderId)`'
+    explanation: |
+      Методы расширения `LogError`, `LogWarning` и другие в итоге вызывают
+      `ILogger.Log<TState>(LogLevel, EventId, TState, Exception?, Func<TState, Exception?, string>)`. У этого
+      метода есть отдельный параметр для исключения, и его заполняют только перегрузки, которые принимают
+      `Exception` первым аргументом. Провайдер получает сам объект исключения и сам решает, как его записать:
+      консольный провайдер, например, выводит полный текст исключения со стеком вызовов и вложенными
+      исключениями под сообщением, а системы мониторинга сохраняют тип и стек в отдельных полях.
+
+      Сообщение при этом остаётся постоянным шаблоном `"Order {Id} failed"`, а `orderId` становится
+      структурированным свойством `Id`, по которому можно искать и группировать записи.
+
+      Если передать только `ex.Message`, теряется всё, кроме текста сообщения, а интерполированная строка ещё
+      и превращает каждый вызов в отдельный шаблон.
+    linkTitles:
+      - "Логирование в C# и .NET"
+      - "Метод LoggerExtensions.LogError"
+      - "CA2254: шаблон должен быть статическим выражением"
+  en:
+    title: How do you log a caught exception correctly with ILogger?
+    prompt: |
+      Inside `catch (Exception ex)` you need to log that processing of order `orderId` failed. Which `ILogger`
+      call passes the exception itself to the log provider, so that the log gets its type, stack trace and
+      inner exceptions, while the message template stays structured?
+    hint: Look at the signature of `ILogger.Log`. Does it have a separate parameter for the exception, and which of the calls fills it?
+    options:
+      a: '`logger.LogError($"Order {orderId} failed: {ex.Message}")`'
+      b: '`logger.LogError(ex, "Order {Id} failed", orderId)`'
+      c: '`logger.LogError("Order {Id} failed: {Error}", orderId, ex.Message)`'
+      d: '`logger.LogInformation(ex.ToString())`'
+    optionExplanations:
+      a: "Only a string with the text of `ex.Message` reaches the log: the exception type, stack trace and `InnerException` are lost, and the exception parameter stays `null`. Interpolation also makes every message a unique template without an `Id` property (the CA2254 analyzer warns about this)."
+      c: "The template is structured, but only the string `ex.Message` is passed as an argument. The provider never receives the exception itself, so the stack trace, type and inner exceptions are lost."
+      d: "The text of `ex.ToString()` is logged as a plain message and the exception parameter stays `null`, so providers cannot treat it as an exception. Also, the `Information` level hides the failure from filters and alerts on the `Error` level."
+    answer: '`logger.LogError(ex, "Order {Id} failed", orderId)`'
+    explanation: |
+      `LogError`, `LogWarning` and the other extension methods end up calling
+      `ILogger.Log<TState>(LogLevel, EventId, TState, Exception?, Func<TState, Exception?, string>)`. That
+      method has a separate parameter for the exception, and only the overloads that take an `Exception` as the
+      first argument fill it. The provider receives the exception object and decides how to write it: the
+      console provider, for example, prints the full exception text with the stack trace and inner exceptions
+      below the message, and monitoring systems store the type and stack trace in separate fields.
+
+      The message stays a constant template `"Order {Id} failed"`, and `orderId` becomes the structured
+      property `Id`, which you can search and group by.
+
+      Passing only `ex.Message` loses everything except the message text, and an interpolated string also turns
+      every call into a separate template.
+    linkTitles:
+      - "Logging in C# and .NET"
+      - "LoggerExtensions.LogError method"
+      - "CA2254: Template should be a static expression"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

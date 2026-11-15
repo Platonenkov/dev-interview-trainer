@@ -1,0 +1,148 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WN23ZGKVJMPF1NKT7Q
+slug: repository-exposes-iqueryable-decision
+stack: dotnet
+topic: collections-linq
+level: lead
+type: situation
+grading: self
+tags: [iqueryable, ienumerable, repository, ef-core, code-review]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/architecture/microservices/microservice-ddd-cqrs-patterns/infrastructure-persistence-layer-design
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/architecture/microservices/microservice-ddd-cqrs-patterns/cqrs-microservice-reads
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/ef/core/querying/client-eval
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/ef/core/logging-events-diagnostics/simple-logging
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/microsoft.entityframeworkcore.entityframeworkqueryableextensions.toquerystring
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Репозитории должны возвращать IQueryable<T> или IEnumerable<T>: как закрыть спор после двух инцидентов?"
+    prompt: |
+      За квартал было два инцидента: сервис загружал в память целую таблицу, и под нагрузкой это заканчивалось
+      таймаутами и ростом потребления памяти. После разбора команда разделилась. Одни требуют, чтобы репозитории
+      возвращали только `IEnumerable<T>`, другие - чтобы `IQueryable<T>`, "тогда фильтр всегда уйдёт в базу".
+      Спор идёт уже несколько недель и тормозит ревью.
+
+      Вы техлид. Как вы закроете спор и что сделаете, чтобы инцидент не повторился?
+    hint: Где именно в этих двух инцидентах выполнение ушло в память, и что в команде позволило этому пройти ревью? Как заметить следующий такой случай до production?
+    answer: |
+      1. **Разобрать инциденты по фактам, а не спорить о типах.** По логам SQL найти запросы без `WHERE` и место
+         в коде, где выполнение перешло в память или где запрос материализовался целиком. Типичные причины:
+         репозиторий объявлен как возвращающий `IEnumerable<T>`, а внутри отдаёт неисполненный `DbSet`, и `Where`
+         вызывающего кода привязывается к `Enumerable.Where`; ранний `ToList()` или `AsEnumerable()`; фильтр,
+         переданный как `Func<T, bool>`; метод вида `GetAll()` без фильтра и пагинации. Обычно оказывается, что
+         виноват не тип, а размытая граница: непонятно, где запрос должен выполняться и кто отвечает за его объём.
+      2. **Принять явное решение и записать его (ADR).** Жизнеспособных вариантов два:
+         - **`IQueryable<T>` не выходит из слоя данных.** Репозиторий даёт методы под конкретные сценарии,
+           например `GetActiveOrdersPageAsync(customerId, page, pageSize)`, которые фильтруют, проецируют,
+           ограничивают выборку и возвращают материализованный результат (`IReadOnlyList<T>`). Граница чёткая,
+           каждый запрос виден и тестируется, цена - больше методов в репозитории.
+         - **`IQueryable<T>` разрешён осознанно и в оговорённых местах**, например в обработчиках запросов на
+           чтение (CQRS), которые обходят репозитории и строят запросы напрямую (через `DbContext` или микро-ORM).
+           Это гибко, но граница хранилища протекает: вызывающий код может собрать тяжёлый или непереводимый
+           запрос, и ответственность за SQL размазана.
+
+         Недопустим только неявный вариант: тип `IEnumerable<T>`, за которым скрыт неисполненный запрос.
+         Критерии выбора записать в ADR: размер команды, нужна ли гибкость чтения, насколько важна изоляция
+         предметной области от EF Core.
+      3. **Закрепить решение механически, а не только на ревью.** Пункт в чек-листе code review; архитектурные
+         тесты или анализатор запрещённых API, которые не дают протащить `IQueryable<T>` или `DbSet` за пределы
+         разрешённых слоёв; обязательная пагинация и верхний предел (`Take`) для любых списков.
+      4. **Сделать проблему видимой.** Логирование SQL в разработке и тестах (`LogTo`); в production - метрики
+         и алерты на медленные запросы и большие выборки; интеграционные тесты на реальной СУБД в контейнере,
+         которые проверяют сгенерированный SQL через `ToQueryString()` или считают выполненные команды.
+      5. **Закрыть цикл с командой.** Показать разбор инцидентов всем, объяснить, почему выбран этот вариант,
+         и назначить дату пересмотра решения, например через несколько месяцев, по фактам из метрик.
+    explanation: |
+      Спор "`IQueryable<T>` против `IEnumerable<T>`" сам по себе не решает проблему. В EF Core начиная с
+      версии 3.0 (и в EF Core 10) непереводимое выражение вне финальной проекции не выполняется молча на
+      клиенте, а приводит к исключению. Поэтому целая таблица попадает в память, как правило, в двух случаях:
+      код явно переключился на LINQ to Objects (через тип `IEnumerable<T>`, `AsEnumerable()`, ранний `ToList()`
+      или делегат вместо дерева выражений), либо запрос без фильтра и пагинации просто материализован целиком,
+      например `GetAll().ToListAsync()`. `IEnumerable<T>` поверх неисполненного запроса особенно коварен: выглядит
+      безопасно, но фильтр вызывающего кода выполняется в памяти. `IQueryable<T>` сохраняет перевод в SQL, зато
+      выносит детали хранилища наружу и не защищает от запроса без ограничений.
+
+      Задача лида - перевести спор из плоскости вкусов в плоскость критериев: найти реальную причину, выбрать
+      один из компромиссов, записать его и поддержать проверками, которые срабатывают без участия человека.
+      Ревью само по себе такие ошибки пропускает: строка `.Where(...)` выглядит одинаково и над
+      `IQueryable<T>`, и над `IEnumerable<T>`. Логирование SQL и тесты на сгенерированный запрос ловят
+      повторение раньше, чем пользователи.
+    linkTitles:
+      - "Проектирование уровня сохранения инфраструктуры (общие сведения о шаблоне репозитория)"
+      - "Реализация чтения и запросов в микрослужбе CQRS"
+      - "Вычисление на клиенте и на сервере в EF Core"
+      - "Простое логирование в EF Core"
+      - "Метод EntityFrameworkQueryableExtensions.ToQueryString"
+  en:
+    title: "Should repositories return IQueryable<T> or IEnumerable<T>: how do you settle it after two incidents?"
+    prompt: |
+      There were two incidents in a quarter: the service loaded a whole table into memory, and under load this
+      ended in timeouts and growing memory use. After the post-mortem the team split. Some want repositories to
+      return only `IEnumerable<T>`, others want `IQueryable<T>`, "so the filter always goes to the database".
+      The argument has lasted for weeks and is slowing down reviews.
+
+      You are the tech lead. How do you settle the argument, and what do you do so the incident does not happen again?
+    hint: Where exactly did execution move into memory in the two incidents, and what let it through review? How would you spot the next case before production?
+    answer: |
+      1. **Analyse the incidents with facts instead of arguing about types.** Use the SQL logs to find the
+         queries without a `WHERE` and the place in code where execution moved into memory or where the query was
+         materialised in full. Typical causes: a repository declared to return `IEnumerable<T>` hands out an
+         unexecuted `DbSet`, so the caller's `Where` binds to `Enumerable.Where`; an early `ToList()` or
+         `AsEnumerable()`; a filter passed as `Func<T, bool>`; a `GetAll()`-style method with no filter or paging.
+         Usually the culprit is not the type but a blurred boundary: nobody knows where the query should run and
+         who is responsible for its size.
+      2. **Make an explicit decision and record it (ADR).** There are two viable options:
+         - **`IQueryable<T>` never leaves the data layer.** The repository offers purpose-built methods, for
+           example `GetActiveOrdersPageAsync(customerId, page, pageSize)`, which filter, project, limit the result
+           and return a materialised result (`IReadOnlyList<T>`). The boundary is clear and every query is
+           visible and testable; the price is more repository methods.
+         - **`IQueryable<T>` is allowed deliberately and in agreed places**, for example in read-side query
+           handlers (CQRS) that bypass repositories and build queries directly (through `DbContext` or a micro-ORM).
+           This is flexible, but the persistence boundary leaks: callers can compose a heavy or untranslatable
+           query, and responsibility for the SQL is spread out.
+
+         The only unacceptable option is the implicit one: an `IEnumerable<T>` type hiding an unexecuted query.
+         Write the selection criteria into the ADR: team size, how much read flexibility is needed, how important
+         it is to isolate the domain from EF Core.
+      3. **Enforce the decision mechanically, not only in review.** An item in the code review checklist;
+         architecture tests or a banned-API analyzer that stop `IQueryable<T>` or `DbSet` from leaking outside the
+         allowed layers; mandatory paging and an upper bound (`Take`) on every list.
+      4. **Make the problem visible.** SQL logging in development and tests (`LogTo`); in production, metrics and
+         alerts on slow queries and large result sets; integration tests against a real database in a container
+         that check the generated SQL with `ToQueryString()` or count the executed commands.
+      5. **Close the loop with the team.** Walk everyone through the incident analysis, explain why this option
+         was chosen, and set a date to revisit the decision, for example in a few months, based on the metrics.
+    explanation: |
+      The "`IQueryable<T>` versus `IEnumerable<T>`" argument does not fix the problem by itself. In EF Core
+      since version 3.0 (and in EF Core 10) an untranslatable expression outside the final projection is not
+      silently evaluated on the client; it causes an exception. So a whole table usually ends up in memory in one
+      of two ways: the code switched to LINQ to Objects (through an `IEnumerable<T>` type, `AsEnumerable()`, an
+      early `ToList()` or a delegate instead of an expression tree), or it simply materialised an unfiltered,
+      unpaged query, for example `GetAll().ToListAsync()`. `IEnumerable<T>` over an unexecuted query is especially
+      treacherous: it looks safe, but the caller's filter runs in memory. `IQueryable<T>` keeps the translation
+      to SQL, but pushes persistence details outward and does not protect against an unbounded query.
+
+      The lead's job is to move the argument from taste to criteria: find the real cause, pick one of the
+      trade-offs, write it down and back it with checks that fire without a human. Review alone misses these
+      bugs: a `.Where(...)` line looks the same over `IQueryable<T>` and over `IEnumerable<T>`. SQL logging and
+      tests on the generated query catch a repeat before users do.
+    linkTitles:
+      - "Designing the infrastructure persistence layer (repository pattern background)"
+      - "Implement reads/queries in a CQRS microservice"
+      - "Client vs. server evaluation in EF Core"
+      - "Simple logging in EF Core"
+      - "EntityFrameworkQueryableExtensions.ToQueryString method"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"

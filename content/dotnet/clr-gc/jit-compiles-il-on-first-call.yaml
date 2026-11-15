@@ -1,0 +1,85 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMZP0056YTMRSSMJBN
+slug: jit-compiles-il-on-first-call
+stack: dotnet
+topic: clr-gc
+level: junior
+type: open
+grading: self
+tags: [jit, il, clr, startup]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/managed-execution-process
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/clr
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что делает JIT-компилятор и когда IL-код метода становится машинным кодом?
+    prompt: |
+      Что делает JIT-компилятор в .NET? В какой момент промежуточный код (IL) конкретного метода превращается
+      в машинный код и что происходит при повторных вызовах этого метода в том же процессе?
+    hint: Нужно ли тратить время на компиляцию метода, который программа так ни разу и не вызовет?
+    answer: |
+      - Компилятор C# создаёт сборку с IL-кодом и метаданными, а не с машинным кодом. IL не привязан к конкретному
+        процессору.
+      - Во время выполнения JIT-компилятор (just-in-time) среды CLR переводит IL в машинный код для того
+        процессора и ОС, на которых запущена программа.
+      - Компиляция идёт по методам и по требованию: метод компилируется при **первом вызове**. Когда тип
+        загружается, у каждого его метода есть заглушка. Первый вызов через заглушку передаёт управление
+        JIT-компилятору, тот компилирует IL метода и перенаправляет заглушку на готовый машинный код.
+      - Готовый машинный код хранится в памяти процесса, и последующие вызовы идут сразу в него, без повторной
+        компиляции. На диск он не сохраняется: при следующем запуске программы метод снова компилируется.
+      - Следствие: первый вызов метода медленнее остальных (время на компиляцию), а методы, которые ни разу
+        не вызывались, не компилируются вовсе.
+    explanation: |
+      Компиляция по требованию экономит время: часть кода программы за конкретный запуск может так и не
+      понадобиться, и компилировать его заранее незачем. Кроме того, JIT-компилятор знает, на каком именно
+      процессоре он работает, и генерирует код под него. Цена этого подхода - прогрев: первые вызовы методов,
+      например первый запрос к веб-сервису после старта, заметно медленнее, потому что включают время компиляции.
+
+      Модель «скомпилировать один раз при первом вызове» - базовая, но упрощённая. В .NET 10 по умолчанию
+      включена многоуровневая компиляция (tiered compilation): при первом вызове метод быстро компилируется
+      без полной оптимизации, а часто вызываемые методы позже перекомпилируются с оптимизациями. Существуют и
+      способы заранее подготовить машинный код, чтобы сократить прогрев: ReadyToRun и Native AOT. Но главное
+      для понимания остаётся тем же: IL превращается в машинный код во время выполнения, а не при сборке проекта.
+    linkTitles:
+      - "Процесс управляемого выполнения"
+      - "Общеязыковая среда выполнения (CLR)"
+  en:
+    title: What does the JIT compiler do, and when does a method's IL become native code?
+    prompt: |
+      What does the JIT compiler do in .NET? At what moment does the intermediate language (IL) of a particular
+      method turn into native code, and what happens on later calls to that method in the same process?
+    hint: Is it worth spending time compiling a method that the program may never call at all?
+    answer: |
+      - The C# compiler produces an assembly with IL and metadata, not native machine code. IL is not tied to
+        a specific processor.
+      - At run time the JIT (just-in-time) compiler of the CLR translates IL into native code for the processor
+        and OS the program is running on.
+      - Compilation happens method by method and on demand: a method is compiled on its **first call**. When a
+        type is loaded, each of its methods has a stub. The first call goes through the stub to the JIT compiler,
+        which compiles the method's IL and points the stub at the generated native code.
+      - The native code is kept in the memory of the process, and later calls go straight to it with no
+        recompilation. It is not saved to disk: the next time the program starts, the method is compiled again.
+      - Consequence: the first call of a method is slower than the rest (it pays for compilation), and methods
+        that are never called are never compiled.
+    explanation: |
+      On-demand compilation saves time: part of the program may never be needed during a given run, so there is
+      no point compiling it up front. The JIT compiler also knows exactly which processor it runs on and generates
+      code for it. The price is warm-up: the first calls of methods, for example the first request to a web service
+      after it starts, are noticeably slower because they include compilation time.
+
+      The "compile once on the first call" model is the basic one, but it is simplified. In .NET 10 tiered
+      compilation is on by default: on the first call a method is compiled quickly without full optimization, and
+      frequently called methods are later recompiled with optimizations. There are also ways to prepare native code
+      ahead of time to reduce warm-up: ReadyToRun and Native AOT. The key point stays the same: IL becomes native
+      code at run time, not when the project is built.
+    linkTitles:
+      - "Managed execution process"
+      - "Common Language Runtime (CLR) overview"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

@@ -1,0 +1,126 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNWRWDV3QQT53GY03R
+slug: equals-without-gethashcode-dictionary-key
+stack: dotnet
+topic: collections-linq
+level: middle
+type: find-bug
+grading: auto
+tags: [hashing, dictionary, equality, gethashcode]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    Dictionary<Point, string> names = new();
+    names[new Point(1, 2)] = "A";
+
+    Point key = new Point(1, 2);
+    Console.WriteLine($"{key.Equals(new Point(1, 2))} {names.ContainsKey(key)}");
+
+    class Point
+    {
+        public Point(int x, int y)
+        {
+            X = x;
+            Y = y;
+        }
+
+        public int X { get; }
+        public int Y { get; }
+
+        public override bool Equals(object obj) => obj is Point p && X == p.X && Y == p.Y;
+    }
+bugLineSets: [[18], [7]]
+fixedSource: |
+  Dictionary<Point, string> names = new();
+  names[new Point(1, 2)] = "A";
+
+  Point key = new Point(1, 2);
+  Console.WriteLine($"{key.Equals(new Point(1, 2))} {names.ContainsKey(key)}");
+
+  class Point
+  {
+      public Point(int x, int y)
+      {
+          X = x;
+          Y = y;
+      }
+
+      public int X { get; }
+      public int Y { get; }
+
+      public override bool Equals(object obj) => obj is Point p && X == p.X && Y == p.Y;
+
+      public override int GetHashCode() => HashCode.Combine(X, Y);
+  }
+fixedExpect: { kind: output, value: "True True" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.object.gethashcode
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.hashcode.combine
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему Dictionary не находит ключ, у которого переопределён только Equals?
+    prompt: |
+      Класс `Point` используется как ключ словаря. Программа должна вывести `True True`: ключ `key` равен
+      сохранённому ключу, поэтому словарь должен его найти. На деле программа выводит `True False`:
+      `Equals` считает точки равными, а `ContainsKey` ключ не находит.
+      Щёлкните по строке с дефектом.
+    hint: Какой метод словарь вызывает для ключа ещё до `Equals`, и что этот метод возвращает для двух разных объектов класса `Point`?
+    answer: |
+      Строка 18: класс переопределяет `Equals`, но не переопределяет `GetHashCode`. Принимается и строка 7,
+      объявление класса, на которое компилятор выдаёт предупреждение CS0659. Исправление - добавить
+      `public override int GetHashCode() => HashCode.Combine(X, Y);`.
+    explanation: |
+      `Dictionary<TKey, TValue>` ищет ключ в два шага. Сначала он вызывает `GetHashCode` у ключа, по хеш-коду
+      выбирает корзину и отбирает записи с тем же хеш-кодом. Только для них вызывается `Equals`. Если
+      хеш-коды разные, до `Equals` дело не доходит.
+
+      `Point` наследует `GetHashCode` от `object`. Для ссылочного типа эта реализация привязана к конкретному
+      объекту, а не к его полям, поэтому у двух разных экземпляров `new Point(1, 2)` хеш-коды почти наверняка
+      различаются. В результате `Equals` возвращает `True`, а `ContainsKey` - `False`.
+
+      Нарушено правило из документации `Object.GetHashCode`: если два объекта равны по `Equals`, их `GetHashCode`
+      обязан возвращать одно и то же значение. Поэтому `Equals` и `GetHashCode` переопределяют только вместе и по
+      одним и тем же полям. `HashCode.Combine(X, Y)` даёт одинаковый хеш для одинаковых `X` и `Y`. Другие варианты -
+      объявить тип как `record`, где компилятор генерирует оба метода согласованно, или передать в словарь свой
+      `IEqualityComparer<Point>`. Поведение проверено на .NET 10.
+    linkTitles:
+      - "Метод Object.GetHashCode"
+      - "Метод HashCode.Combine"
+  en:
+    title: Why does a Dictionary not find a key whose class overrides only Equals?
+    prompt: |
+      The class `Point` is used as a dictionary key. The program should print `True True`: `key` is equal to the
+      stored key, so the dictionary should find it. Instead the program prints `True False`: `Equals` says the
+      points are equal, but `ContainsKey` does not find the key.
+      Click the line that contains the defect.
+    hint: Which method does the dictionary call on the key before `Equals`, and what does that method return for two different `Point` objects?
+    answer: |
+      Line 18: the class overrides `Equals` but does not override `GetHashCode`. Line 7, the class declaration that
+      the compiler flags with warning CS0659, is accepted too. The fix is to add
+      `public override int GetHashCode() => HashCode.Combine(X, Y);`.
+    explanation: |
+      `Dictionary<TKey, TValue>` looks up a key in two steps. First it calls `GetHashCode` on the key, uses the
+      hash code to pick a bucket and keeps only the entries with the same hash code. Only for those does it call
+      `Equals`. If the hash codes differ, `Equals` is never reached.
+
+      `Point` inherits `GetHashCode` from `object`. For a reference type that implementation is tied to the
+      particular object, not to its fields, so two separate `new Point(1, 2)` instances almost certainly get
+      different hash codes. As a result `Equals` returns `True` while `ContainsKey` returns `False`.
+
+      This breaks the rule stated in the `Object.GetHashCode` documentation: if two objects are equal by `Equals`,
+      their `GetHashCode` must return the same value. That is why `Equals` and `GetHashCode` are overridden only
+      together and over the same fields. `HashCode.Combine(X, Y)` gives the same hash for the same `X` and `Y`.
+      Other options are to declare the type as a `record`, for which the compiler generates both methods
+      consistently, or to pass your own `IEqualityComparer<Point>` to the dictionary. The behaviour is verified on .NET 10.
+    linkTitles:
+      - "Object.GetHashCode method"
+      - "HashCode.Combine method"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

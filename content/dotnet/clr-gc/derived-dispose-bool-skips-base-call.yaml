@@ -1,0 +1,181 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMQ2A959JTBGT55P46
+slug: derived-dispose-bool-skips-base-call
+stack: dotnet
+topic: clr-gc
+level: senior
+type: find-bug
+grading: auto
+tags: [idisposable, dispose-pattern, inheritance]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    var reader = new ReportReader();
+    reader.Dispose();
+    Console.WriteLine($"Base open: {reader.BaseStream.CanRead}, report open: {reader.ReportStream.CanRead}");
+
+    class StreamOwner : IDisposable
+    {
+        private bool _disposed;
+        public MemoryStream BaseStream { get; } = new MemoryStream();
+
+        public void Dispose()
+        {
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        protected virtual void Dispose(bool disposing)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+            if (disposing)
+            {
+                BaseStream.Dispose();
+            }
+            _disposed = true;
+        }
+    }
+
+    class ReportReader : StreamOwner
+    {
+        private bool _disposed;
+        public MemoryStream ReportStream { get; } = new MemoryStream();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+            if (disposing)
+            {
+                ReportStream.Dispose();
+            }
+            _disposed = true;
+        }
+    }
+bugLineSets: [[45], [35]]
+fixedSource: |
+  var reader = new ReportReader();
+  reader.Dispose();
+  Console.WriteLine($"Base open: {reader.BaseStream.CanRead}, report open: {reader.ReportStream.CanRead}");
+
+  class StreamOwner : IDisposable
+  {
+      private bool _disposed;
+      public MemoryStream BaseStream { get; } = new MemoryStream();
+
+      public void Dispose()
+      {
+          Dispose(true);
+          GC.SuppressFinalize(this);
+      }
+
+      protected virtual void Dispose(bool disposing)
+      {
+          if (_disposed)
+          {
+              return;
+          }
+          if (disposing)
+          {
+              BaseStream.Dispose();
+          }
+          _disposed = true;
+      }
+  }
+
+  class ReportReader : StreamOwner
+  {
+      private bool _disposed;
+      public MemoryStream ReportStream { get; } = new MemoryStream();
+
+      protected override void Dispose(bool disposing)
+      {
+          if (_disposed)
+          {
+              return;
+          }
+          if (disposing)
+          {
+              ReportStream.Dispose();
+          }
+          _disposed = true;
+          base.Dispose(disposing);
+      }
+  }
+fixedExpect: { kind: output, value: "Base open: False, report open: False" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/implementing-dispose
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/fundamentals/code-analysis/quality-rules/ca2215
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите ошибку в переопределении Dispose(bool), из-за которой ресурс базового класса остаётся открытым
+    prompt: |
+      Класс `ReportReader` наследует `StreamOwner` и реализует шаблон освобождения ресурсов (dispose pattern).
+      После `reader.Dispose()` оба потока должны быть закрыты, и программа должна вывести
+      `Base open: False, report open: False`, но выводит `Base open: True, report open: False`.
+
+      Щёлкните по строке с дефектом. Если не хватает оператора, щёлкните по строке, после которой он должен стоять.
+    hint: Проследите, какие методы и в каком порядке выполняются после вызова `reader.Dispose()`.
+    answer: Строка 45 (или объявление метода в строке 35) - переопределение `Dispose(bool)` в `ReportReader` после освобождения своего ресурса не вызывает `base.Dispose(disposing)`.
+    explanation: |
+      Открытый метод `Dispose()` объявлен только в базовом классе и не виртуальный. Он вызывает виртуальный
+      `Dispose(true)`, и из-за динамической диспетчеризации выполняется переопределение из `ReportReader`.
+      Это переопределение закрывает `ReportStream`, ставит свой флаг `_disposed` и на этом заканчивается.
+      Реализация `StreamOwner.Dispose(bool)` не вызывается ни разу, поэтому `BaseStream` остаётся открытым,
+      и `CanRead` возвращает `True`.
+
+      В шаблоне освобождения каждый производный класс отвечает только за свои ресурсы, а ресурсы базового
+      класса освобождает базовая реализация. Поэтому каждое переопределение `Dispose(bool)` должно в конце
+      вызвать `base.Dispose(disposing)`, причём передать тот же аргумент: если базовый класс владеет
+      неуправляемым ресурсом и имеет финализатор, вызов `Dispose(false)` из финализатора тоже должен дойти
+      до базовой реализации. Сначала освобождаются ресурсы производного класса, затем базового - в порядке,
+      обратном созданию.
+
+      Исправление - добавить `base.Dispose(disposing);` после строки 45. Такую ошибку находит анализатор
+      CA2215, а если класс не предназначен для наследования, проще объявить его `sealed` и не вводить
+      виртуальный `Dispose(bool)` вовсе.
+    linkTitles:
+      - "Реализация метода Dispose"
+      - "CA2215: методы Dispose должны вызывать Dispose базового класса"
+  en:
+    title: Find the bug in a Dispose(bool) override that leaves the base class resource open
+    prompt: |
+      The class `ReportReader` derives from `StreamOwner` and implements the dispose pattern.
+      After `reader.Dispose()` both streams should be closed and the program should print
+      `Base open: False, report open: False`, but it prints `Base open: True, report open: False`.
+
+      Click the line that contains the defect. If a statement is missing, click the line after which it belongs.
+    hint: Trace which methods run, and in what order, after `reader.Dispose()` is called.
+    answer: Line 45 (or the method declaration on line 35) - the `Dispose(bool)` override in `ReportReader` releases its own resource but never calls `base.Dispose(disposing)`.
+    explanation: |
+      The public `Dispose()` method is declared only in the base class and is not virtual. It calls the virtual
+      `Dispose(true)`, and virtual dispatch runs the override from `ReportReader`. That override closes
+      `ReportStream`, sets its own `_disposed` flag and returns. `StreamOwner.Dispose(bool)` never runs, so
+      `BaseStream` stays open and `CanRead` returns `True`.
+
+      In the dispose pattern every derived class is responsible only for its own resources, and the resources
+      of the base class are released by the base implementation. That is why every override of `Dispose(bool)`
+      must end with `base.Dispose(disposing)` and pass the same argument: if the base class owns an unmanaged
+      resource and has a finalizer, the `Dispose(false)` call from the finalizer must also reach the base
+      implementation. The derived resources are released first and the base ones after them, in the reverse
+      order of creation.
+
+      The fix is to add `base.Dispose(disposing);` after line 45. The CA2215 analyzer reports this mistake,
+      and if a class is not meant to be inherited, it is simpler to make it `sealed` and not introduce a virtual
+      `Dispose(bool)` at all.
+    linkTitles:
+      - "Implement a Dispose method"
+      - "CA2215: Dispose methods should call base class dispose"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

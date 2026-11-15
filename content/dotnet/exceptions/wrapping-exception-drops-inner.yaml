@@ -1,0 +1,124 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNQ3ZE2XANZBWP1Y49
+slug: wrapping-exception-drops-inner
+stack: dotnet
+topic: exceptions
+level: middle
+type: find-bug
+grading: auto
+tags: [exceptions, inner-exception, exception-wrapping, null-reference]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    try
+    {
+        Import("12x");
+    }
+    catch (InvalidOperationException ex)
+    {
+        Console.WriteLine($"{ex.Message}: {ex.InnerException.Message}");
+    }
+
+    static void Import(string line)
+    {
+        try
+        {
+            ParseQuantity(line);
+        }
+        catch (FormatException)
+        {
+            throw new InvalidOperationException("Import failed");
+        }
+    }
+
+    static int ParseQuantity(string text) =>
+        int.TryParse(text, out int value) ? value : throw new FormatException($"Bad quantity '{text}'");
+bugLineSets: [[18], [16, 18]]
+fixedSource: |
+  try
+  {
+      Import("12x");
+  }
+  catch (InvalidOperationException ex)
+  {
+      Console.WriteLine($"{ex.Message}: {ex.InnerException.Message}");
+  }
+
+  static void Import(string line)
+  {
+      try
+      {
+          ParseQuantity(line);
+      }
+      catch (FormatException ex)
+      {
+          throw new InvalidOperationException("Import failed", ex);
+      }
+  }
+
+  static int ParseQuantity(string text) =>
+      int.TryParse(text, out int value) ? value : throw new FormatException($"Bad quantity '{text}'");
+fixedExpect: { kind: output, value: "Import failed: Bad quantity '12x'" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.exception.innerexception
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/exceptions/best-practices-for-exceptions
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему обёрнутое исключение теряет причину и InnerException равно null?
+    prompt: |
+      Метод `Import` перехватывает `FormatException` и выбрасывает `InvalidOperationException` с сообщением
+      `Import failed`. Вызывающий код хочет показать причину и ожидает вывод `Import failed: Bad quantity '12x'`,
+      но вместо этого программа падает с необработанным `NullReferenceException` внутри блока `catch`.
+      Щёлкните по строке с дефектом.
+    hint: Откуда у нового исключения может взяться значение свойства `InnerException`?
+    answer: Строка 18, `new InvalidOperationException("Import failed")` создаётся без перехваченного исключения в качестве `innerException`.
+    explanation: |
+      Свойство `InnerException` заполняется только тогда, когда исходное исключение передано в конструктор
+      нового, например `InvalidOperationException(string message, Exception innerException)`. В строке 18
+      используется конструктор только с сообщением, поэтому `InnerException` равно `null`. Вызывающий код в
+      строке 7 обращается к `ex.InnerException.Message`, получает `NullReferenceException`, и это исключение
+      уже никто не перехватывает.
+
+      Хуже падения то, что причина потеряна совсем: сообщение `FormatException` и его стек вызовов нигде
+      не сохранились, и в логе останется только `Import failed`. Исправление - дать перехваченному исключению
+      имя (`catch (FormatException ex)`, строка 16) и передать его вторым аргументом конструктора. Тогда
+      `InnerException` указывает на исходное исключение, а `ToString()` внешнего исключения выводит всю цепочку
+      вместе со стеками вызовов.
+
+      Заменить в вызывающем коде `.` на `?.` недостаточно: падение исчезнет, но причина всё равно потеряна.
+    linkTitles:
+      - "Свойство Exception.InnerException"
+      - "Рекомендации по работе с исключениями"
+  en:
+    title: Why does a wrapped exception lose its cause and leave InnerException null?
+    prompt: |
+      The `Import` method catches `FormatException` and throws an `InvalidOperationException` with the message
+      `Import failed`. The caller wants to show the cause and expects the output `Import failed: Bad quantity '12x'`,
+      but instead the program crashes with an unhandled `NullReferenceException` inside the `catch` block.
+      Click the line that contains the defect.
+    hint: Where can the new exception get the value of its `InnerException` property from?
+    answer: Line 18, `new InvalidOperationException("Import failed")` is created without the caught exception as its `innerException`.
+    explanation: |
+      The `InnerException` property is set only when the original exception is passed to the constructor of
+      the new one, for example `InvalidOperationException(string message, Exception innerException)`. Line 18
+      uses the message-only constructor, so `InnerException` is `null`. The caller on line 7 reads
+      `ex.InnerException.Message`, gets a `NullReferenceException`, and nothing catches that exception.
+
+      Worse than the crash, the cause is gone: the `FormatException` message and its stack trace are not kept
+      anywhere, and the log would show only `Import failed`. The fix is to name the caught exception
+      (`catch (FormatException ex)`, line 16) and pass it as the second constructor argument. Then
+      `InnerException` points to the original exception, and `ToString()` of the outer exception prints the
+      whole chain with the stack traces.
+
+      Changing `.` to `?.` in the caller is not enough: the crash disappears, but the cause is still lost.
+    linkTitles:
+      - "Exception.InnerException property"
+      - "Best practices for exceptions"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

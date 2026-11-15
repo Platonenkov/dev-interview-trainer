@@ -1,0 +1,129 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNRHXVJ0GCZGD8TCMK
+slug: hashset-mutated-key-not-found
+stack: dotnet
+topic: collections-linq
+level: middle
+type: output
+grading: auto
+tags: [hashset, hashing, gethashcode, mutability]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    HashSet<Item> items = new();
+    Item item = new Item { Id = 1 };
+    items.Add(item);
+
+    item.Id = 2;
+
+    Console.Write($"{items.Contains(item)} {items.Count}");
+
+    class Item
+    {
+        public int Id { get; set; }
+
+        public override bool Equals(object obj) => obj is Item other && other.Id == Id;
+
+        public override int GetHashCode() => Id;
+    }
+expect:
+  kind: output
+  value: "False 1"
+acceptedOutputs: ["False 1"]
+options:
+  - id: a
+    correct: false
+    expect: { kind: output, value: "True 1" }
+  - id: b
+    correct: true
+    expect: { kind: output, value: "False 1" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "False 0" }
+  - id: d
+    correct: false
+    expect: { kind: exception, value: System.InvalidOperationException }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.object.gethashcode
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.hashset-1
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что выведет HashSet<T>.Contains после изменения свойства, от которого зависит GetHashCode?
+    prompt: |
+      Что выведет эта программа в консоль? Методы `Equals` и `GetHashCode` класса `Item` зависят от изменяемого
+      свойства `Id`. После добавления в множество у того же самого объекта меняется `Id`.
+    hint: С чего хеш-множество начинает поиск элемента и в какой момент был вычислен хеш-код, по которому уже добавленный объект размещён в множестве?
+    options:
+      a: "True 1"
+      b: "False 1"
+      c: "False 0"
+      d: Исключение `InvalidOperationException`
+    optionExplanations:
+      a: "Так было бы, если бы `HashSet<T>` сравнивал ссылки или пересчитывал хеш-коды уже добавленных элементов. На деле `Contains` вычисляет хеш-код по текущему `Id` (2) и ищет среди элементов, размещённых под этим хеш-кодом. Объект был размещён под хеш-кодом 1 при вызове `Add`, поэтому он не попадает в число кандидатов и до сравнения через `Equals` дело не доходит."
+      c: "Изменение `Id` не удаляет объект из множества: `HashSet<T>` вообще не знает об этом изменении. `Count` считает хранимые элементы, а элемент по-прежнему один."
+      d: "`HashSet<T>` не отслеживает изменения внутри своих элементов, и состояние множества никак не помечается как испорченное. `Contains` просто возвращает `False`, исключения нет."
+    answer: "False 1"
+    explanation: |
+      При `Add` множество вызывает `GetHashCode` (здесь он возвращает 1) и размещает элемент в соответствии с этим
+      хеш-кодом. Позже `item.Id = 2` меняет объект, но множество об этом не узнаёт: элемент остаётся там, куда
+      его поместил хеш-код 1.
+
+      `Contains(item)` заново вызывает `GetHashCode`, получает 2 и ищет среди элементов, размещённых под этим
+      хеш-кодом. Поиск идёт сначала по хеш-коду, а `Equals` вызывается только для найденных так кандидатов,
+      поэтому элемент, размещённый под хеш-кодом 1, вообще не сравнивается, хотя передана та же самая ссылка.
+      Итог: `Contains` возвращает `False`, а `Count` остаётся равным 1. Объект физически лежит в множестве, но
+      найти или удалить его через `Contains` и `Remove` уже нельзя. Повторный `Add(item)` по той же причине
+      вернёт `true`, и в множестве окажутся два элемента с одной и той же ссылкой.
+
+      Правило для хеш-коллекций: хеш-код объекта не должен меняться, пока объект в ней лежит. Поэтому для
+      изменяемого ссылочного типа `GetHashCode` и `Equals` строят только на полях, которые не меняются
+      (например, `init`-свойства или `record` с неизменяемыми свойствами), либо гарантируют, что объект не
+      меняют, пока он в коллекции: удаляют его из множества до изменения и добавляют обратно после. Поведение
+      проверено на .NET 10.
+    linkTitles:
+      - Метод Object.GetHashCode
+      - Класс HashSet<T>
+  en:
+    title: What does HashSet<T>.Contains print after the property used by GetHashCode changes?
+    prompt: |
+      What does this program print to the console? The `Equals` and `GetHashCode` methods of `Item` depend on
+      the mutable property `Id`. After the object is added to the set, the `Id` of that very object is changed.
+    hint: Where does a hash set start when it looks for an element, and when was the hash code computed by which an already added object was placed in the set?
+    options:
+      a: "True 1"
+      b: "False 1"
+      c: "False 0"
+      d: "`InvalidOperationException`"
+    optionExplanations:
+      a: "That would be true if `HashSet<T>` compared references or recomputed the hash codes of stored elements. In fact `Contains` computes the hash code of the current `Id` (2) and searches among the elements placed under that hash code. The object was placed under hash code 1 by the `Add` call, so it is not among the candidates and `Equals` is never even called for it."
+      c: "Changing `Id` does not remove the object from the set: `HashSet<T>` does not know about the change at all. `Count` counts stored elements, and there is still one element."
+      d: "`HashSet<T>` does not track changes inside its elements, and nothing marks the set as corrupted. `Contains` simply returns `False`, no exception is thrown."
+    answer: "False 1"
+    explanation: |
+      On `Add` the set calls `GetHashCode` (here it returns 1) and places the element according to that hash code.
+      Later `item.Id = 2` changes the object, but the set is not told: the element stays where hash code 1 put it.
+
+      `Contains(item)` calls `GetHashCode` again, gets 2 and searches among the elements placed under that hash
+      code. The lookup goes by hash code first and calls `Equals` only for the candidates found that way, so the
+      element placed under hash code 1 is never compared, even though the very same reference is passed. As a
+      result `Contains` returns `False`, while `Count` stays 1. The object is physically in the set, but
+      `Contains` and `Remove` can no longer find it. For the same reason a second `Add(item)` would return `true`,
+      leaving two elements that hold the same reference.
+
+      The rule for hash-based collections: an object's hash code must not change while the object is in one.
+      So for a mutable reference type, base `GetHashCode` and `Equals` only on fields that do not change (for
+      example `init` properties or a `record` with immutable properties), or make sure the object is not modified
+      while it is in the collection: remove it from the set before changing it and add it back afterwards. The
+      behaviour is verified on .NET 10.
+    linkTitles:
+      - Object.GetHashCode method
+      - HashSet<T> class
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"

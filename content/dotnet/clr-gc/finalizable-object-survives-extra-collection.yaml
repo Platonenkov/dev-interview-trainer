@@ -1,0 +1,136 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WM6JV3WX652DECA3X0
+slug: finalizable-object-survives-extra-collection
+stack: dotnet
+topic: clr-gc
+level: senior
+type: single
+grading: auto
+tags: [finalization, finalizer, garbage-collection, generations, idisposable]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: false
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.object.finalize
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/fundamentals
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/implementing-dispose
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/large-object-heap
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему недостижимый объект с финализатором не освобождается в той сборке мусора, которая его нашла?
+    prompt: |
+      У типа есть финализатор (`~Resource()`). Экземпляр этого типа стал недостижим, `Dispose` для него не вызывали.
+      Сборщик мусора .NET 10 выполняет сборку поколения 0 и обнаруживает, что ссылок на объект больше нет.
+      Что происходит с объектом в этой сборке и во что это обходится приложению?
+    hint: Где находится объект в промежутке между моментом, когда сборщик мусора понял, что объект недостижим, и моментом, когда отработал его финализатор?
+    options:
+      a: "Сборщик мусора вызывает финализатор прямо во время сборки и в этой же сборке освобождает память объекта."
+      b: "Объект переживает сборку, но только он сам: объекты, на которые он ссылается, освобождаются в этой же сборке, поэтому задерживается лишь память самого объекта."
+      c: "Объект переносится в очередь объектов, ожидающих финализатора, а эта очередь является корнем сборщика мусора. Объект и всё, на что он ссылается, переживают сборку и продвигаются в следующее поколение, а память освобождает одна из следующих сборок, уже после того, как финализатор отработал."
+      d: "Типы с финализатором сразу размещаются в куче больших объектов, а она собирается только вместе с поколением 2, поэтому сборка поколения 0 их не затрагивает."
+      e: "Объект остаётся в куче, пока для него не вызовут `Dispose`: без вызова `Dispose` его память не освобождается никогда."
+    optionExplanations:
+      a: "Финализаторы не выполняются внутри сборки мусора. Среда выполнения вызывает их уже после сборки, на потоке, который документация не уточняет. До этого момента объект должен оставаться в памяти, ведь финализатор обращается к его полям."
+      b: "Очередь объектов, ожидающих финализации, - это корень, а от корня достижим весь граф объекта. Поэтому вместе с объектом выживают и продвигаются в следующее поколение все объекты, на которые он ссылается, например большие буферы."
+      d: "Куча больших объектов определяется размером объекта (от 85 000 байт), а не наличием финализатора. Небольшой финализируемый объект создаётся в поколении 0, как и любой другой."
+      e: "Сборщик мусора никогда не вызывает `Dispose` и не ждёт его. Без `Dispose` память объекта всё равно будет освобождена, просто позже: после выполнения финализатора."
+    answer: "Объект попадает в очередь объектов, ожидающих финализатора, которая является корнем, поэтому он и весь его граф переживают эту сборку и продвигаются в следующее поколение. Память освобождается только одной из следующих сборок, после того как финализатор отработает."
+    explanation: |
+      Когда создаётся объект типа с финализатором, среда выполнения добавляет запись о нём во внутреннюю
+      структуру - очередь финализации. Документация `Object.Finalize` прямо говорит, что в ней лежат объекты,
+      код финализации которых должен выполниться, прежде чем сборщик мусора сможет освободить их память.
+
+      Если сборка находит такой объект недостижимым, сборщик не освобождает память, а переносит объект в очередь
+      ожидающих финализатора (в CoreCLR её называют очередью f-reachable). Документация по основам сборки мусора
+      относит очередь финализации к корням, поэтому объект снова достижим, а вместе с ним всё, на что он ссылается.
+      Весь этот граф переживает сборку, а выжившие объекты продвигаются в следующее поколение: из 0 в 1
+      (или из 1 в 2).
+
+      Финализатор выполняется уже после сборки. Только после этого на объект не остаётся ссылок, и его память
+      освобождает следующая сборка того поколения, в котором он теперь лежит. Отсюда цена:
+
+      - память удерживается минимум на одну сборку дольше, причём не только сам объект, но и его граф;
+      - продвижение в старшее поколение означает, что освободить память сможет только более редкая и дорогая
+        сборка поколения 1 или 2;
+      - если финализатор работает медленно или блокируется, объекты, ожидающие финализации, копятся, а другие
+        финализаторы могут не выполниться вовсе.
+
+      Поэтому финализатор пишут только как страховку, а основной путь - `Dispose`. В шаблоне освобождения
+      `Dispose` вызывает `GC.SuppressFinalize(this)`: сборщик мусора больше не будет вызывать финализатор, и объект
+      освобождается в первой же сборке, которая найдёт его недостижимым. Для неуправляемых ресурсов обычно
+      лучше обернуть дескриптор в `SafeHandle`, чем писать собственный финализатор. Очереди и поколения - детали
+      реализации сборщика мусора; описание соответствует .NET 10.
+    linkTitles:
+      - "Метод Object.Finalize"
+      - "Основы сборки мусора"
+      - "Реализация метода Dispose"
+      - "Куча больших объектов в системах Windows"
+  en:
+    title: Why is an unreachable object with a finalizer not reclaimed in the garbage collection that finds it?
+    prompt: |
+      A type has a finalizer (`~Resource()`). An instance of that type has become unreachable, and `Dispose` was never called on it.
+      The .NET 10 garbage collector runs a generation 0 collection and finds that nothing references the object anymore.
+      What happens to the object in this collection, and what does it cost the application?
+    hint: Where does the object live between the moment the garbage collector sees that it is unreachable and the moment its finalizer has run?
+    options:
+      a: "The garbage collector calls the finalizer during the collection itself and frees the object's memory in that same collection."
+      b: "The object survives the collection, but only the object itself: the objects it references are freed in this same collection, so only the object's own memory is held longer."
+      c: "The object is moved to the queue of objects waiting for their finalizer, and that queue is a garbage collector root. The object and everything it references survive the collection and are promoted to the next generation, and the memory is freed by a later collection, after the finalizer has run."
+      d: "Types with a finalizer are always allocated on the large object heap, which is collected only together with generation 2, so a generation 0 collection does not touch them."
+      e: "The object stays on the heap until `Dispose` is called on it: without a call to `Dispose` its memory is never freed."
+    optionExplanations:
+      a: "Finalizers do not run inside a garbage collection. The runtime calls them after the collection, on a thread that the documentation leaves unspecified. Until then the object must stay in memory, because the finalizer reads its fields."
+      b: "The queue of objects waiting for finalization is a root, and the whole graph of the object is reachable from that root. So every object it references, for example a large buffer, also survives and is promoted to the next generation."
+      d: "The large object heap is chosen by object size (85,000 bytes or more), not by having a finalizer. A small finalizable object is allocated in generation 0 like any other object."
+      e: "The garbage collector never calls `Dispose` and never waits for it. Without `Dispose` the object's memory is still freed, just later: after the finalizer has run."
+    answer: "The object goes to the queue of objects waiting for their finalizer, which is a root, so the object and its whole graph survive this collection and are promoted to the next generation. The memory is freed only by a later collection, after the finalizer has run."
+    explanation: |
+      When an object of a type with a finalizer is created, the runtime adds an entry for it to an internal
+      structure, the finalization queue. The `Object.Finalize` documentation says that this queue holds the objects
+      whose finalization code must run before the garbage collector can reclaim their memory.
+
+      If a collection finds such an object unreachable, the collector does not free its memory but moves the object
+      to the queue of objects waiting for their finalizer (in CoreCLR it is called the f-reachable queue). The
+      garbage collection fundamentals page lists the finalize queue among the roots, so the object becomes reachable
+      again, and so does everything it references. The whole graph survives the collection, and survivors are
+      promoted to the next generation: from 0 to 1 (or from 1 to 2).
+
+      The finalizer runs after the collection. Only after that does nothing reference the object, and its memory is
+      freed by the next collection of the generation it now lives in. Hence the cost:
+
+      - memory is held for at least one more collection, and not only the object but its whole graph;
+      - promotion to an older generation means that only a rarer and more expensive generation 1 or 2 collection
+        can free that memory;
+      - if a finalizer is slow or blocks, objects waiting for finalization pile up, and other finalizers may never
+        run at all.
+
+      That is why a finalizer is only a safety net and `Dispose` is the main path. In the dispose pattern `Dispose`
+      calls `GC.SuppressFinalize(this)`: the garbage collector will no longer run the finalizer, and the object is
+      freed by the first collection that finds it unreachable. For unmanaged resources it is usually better to wrap
+      the handle in a `SafeHandle` than to write your own finalizer. Queues and generations are implementation
+      details of the garbage collector; the description matches .NET 10.
+    linkTitles:
+      - "Object.Finalize method"
+      - "Fundamentals of garbage collection"
+      - "Implement a Dispose method"
+      - "The large object heap on Windows systems"
+meta:
+  authors: [platonenkov]
+  verified: 1970-01-01
+  dotnetVersion: "10"

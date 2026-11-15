@@ -1,0 +1,141 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNTVFTJJV8925H4B3Q
+slug: throw-ex-resets-stack-trace
+stack: dotnet
+topic: exceptions
+level: junior
+type: output
+grading: auto
+tags: [rethrow, stack-trace, throw]
+code:
+  language: csharp
+  harness: program
+  source: |
+    using System.Runtime.CompilerServices;
+
+    class Program
+    {
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static void ParseConfig()
+        {
+            throw new InvalidOperationException("bad config");
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static void Load()
+        {
+            try
+            {
+                ParseConfig();
+            }
+            catch (InvalidOperationException ex)
+            {
+                throw ex;
+            }
+        }
+
+        static void Main()
+        {
+            try
+            {
+                Load();
+            }
+            catch (InvalidOperationException ex)
+            {
+                Console.Write(ex.StackTrace.Contains("ParseConfig"));
+            }
+        }
+    }
+expect:
+  kind: output
+  value: "False"
+acceptedOutputs: ["False"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "False" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "True" }
+  - id: c
+    correct: false
+    expect: { kind: compile-error }
+  - id: d
+    correct: false
+    expect: { kind: exception, value: System.InvalidOperationException }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/exceptions/best-practices-for-exceptions
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/statements/exception-handling-statements
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Сохраняется ли исходный стек вызовов после throw ex?
+    prompt: |
+      Метод `ParseConfig` выбрасывает исключение, `Load` перехватывает его и выбрасывает снова через `throw ex;`.
+      Внешний обработчик в `Main` проверяет, есть ли в `StackTrace` имя метода `ParseConfig`.
+      Что выведет эта программа в консоль?
+    hint: Какое место `throw ex;` считает точкой, откуда было выброшено исключение?
+    options:
+      a: "False"
+      b: "True"
+      c: Ошибка компиляции
+      d: Необработанное исключение `InvalidOperationException`
+    optionExplanations:
+      b: "`True` получилось бы при `throw;` без операнда. `throw ex;` начинает стек вызовов заново с метода `Load`, и кадр `ParseConfig` теряется."
+      c: "`throw ex;` - корректный код C#. Анализатор может выдать предупреждение CA2200, но сборку оно не останавливает."
+      d: Повторный выброс не меняет тип исключения, поэтому `catch (InvalidOperationException ex)` в `Main` его перехватывает.
+    answer: "False"
+    explanation: |
+      Когда в `catch` пишут `throw ex;`, исключение выбрасывается как будто впервые: среда выполнения
+      перезаписывает стек вызовов, и он начинается с метода, где стоит `throw ex;`, то есть с `Load`.
+      Кадр `ParseConfig`, где ошибка возникла на самом деле, пропадает, поэтому `Contains("ParseConfig")`
+      возвращает `false`, а `Console.Write` печатает `False`.
+
+      Атрибут `[MethodImpl(MethodImplOptions.NoInlining)]` запрещает JIT встраивать методы, поэтому их кадры
+      гарантированно попадают в стек. Поведение проверено для .NET 10.
+
+      Чтобы сохранить исходный стек, используйте `throw;` без операнда. Если исключение нужно выбросить
+      позже, вне блока `catch`, подходит `ExceptionDispatchInfo.Capture(ex).Throw()`. Если нужно добавить
+      контекст, создайте новое исключение и передайте исходное как `innerException`.
+    linkTitles:
+      - "Рекомендации по работе с исключениями"
+      - "Операторы обработки исключений: throw, try-catch, try-finally"
+  en:
+    title: Is the original stack trace kept after throw ex?
+    prompt: |
+      The `ParseConfig` method throws an exception, `Load` catches it and throws it again with `throw ex;`.
+      The outer handler in `Main` checks whether `StackTrace` contains the name of the `ParseConfig` method.
+      What does this program print to the console?
+    hint: Which place does `throw ex;` treat as the point the exception was thrown from?
+    options:
+      a: "False"
+      b: "True"
+      c: Compile error
+      d: Unhandled `InvalidOperationException`
+    optionExplanations:
+      b: "`True` is what a bare `throw;` would give. `throw ex;` restarts the stack trace at the `Load` method, and the `ParseConfig` frame is lost."
+      c: "`throw ex;` is valid C#. An analyzer may report warning CA2200, but it does not stop the build."
+      d: Rethrowing does not change the exception type, so `catch (InvalidOperationException ex)` in `Main` catches it.
+    answer: "False"
+    explanation: |
+      When a `catch` block uses `throw ex;`, the exception is thrown as if for the first time: the runtime
+      overwrites the stack trace, and it starts at the method that contains `throw ex;`, which is `Load`.
+      The `ParseConfig` frame, where the error really happened, is gone, so `Contains("ParseConfig")`
+      returns `false` and `Console.Write` prints `False`.
+
+      The `[MethodImpl(MethodImplOptions.NoInlining)]` attribute stops the JIT from inlining the methods, so
+      their frames are guaranteed to appear in the trace. The behaviour is verified for .NET 10.
+
+      To keep the original trace, use a bare `throw;`. If the exception has to be rethrown later, outside the
+      `catch` block, use `ExceptionDispatchInfo.Capture(ex).Throw()`. If you need to add context, create a new
+      exception and pass the original one as `innerException`.
+    linkTitles:
+      - "Best practices for exceptions"
+      - "Exception-handling statements: throw, try-catch, try-finally"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

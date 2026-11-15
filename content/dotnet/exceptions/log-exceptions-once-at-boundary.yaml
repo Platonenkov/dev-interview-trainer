@@ -1,0 +1,140 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNG3HAJVMGHX1ZMP1Q
+slug: log-exceptions-once-at-boundary
+stack: dotnet
+topic: exceptions
+level: lead
+type: open
+grading: self
+tags: [exceptions, logging, ilogger, code-review, analyzers]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/exceptions/best-practices-for-exceptions
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/extensions/logging
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как сделать так, чтобы одна ошибка не попадала в лог пять раз?
+    prompt: |
+      В сервисе вашей команды каждая ошибка видна в логах пять раз. Репозиторий, доменный сервис, сервис
+      приложения, контроллер и `middleware` по очереди перехватывают исключение, пишут его в лог и выбрасывают
+      дальше. Иногда стек вызовов в последней записи указывает на блок `catch`, а не на настоящий источник ошибки.
+      Какую политику обработки и логирования исключений вы установите для команды и как добьётесь, чтобы её
+      соблюдали?
+    hint: |
+      Для каждого блока `catch` задайте вопрос: что он делает с исключением такого, чего вызывающий код не сделал бы
+      так же хорошо?
+    answer: |
+      **Политика**
+
+      1. **Перехватывать только с целью.** Блок `catch` допустим, если код может обработать сбой (повтор, запасной
+         вариант, перевод в ожидаемый результат), если он добавляет контекст, которого нет у верхнего слоя, или если
+         это граница приложения. Перехват ради «залогировать и выбросить снова» запрещён.
+      2. **Контекст добавлять обёрткой, а не записью в лог.** Нижний слой выбрасывает более осмысленное исключение и
+         передаёт перехваченное как `innerException`. Если исключение нужно выбросить повторно без изменений -
+         только `throw;`, никогда `throw ex;`: он сбрасывает стек вызовов.
+      3. **Логировать один раз, на границе.** Одно место на каждую точку входа: обработчик исключений для HTTP
+         (`UseExceptionHandler`, в ASP.NET Core начиная с .NET 8 - `IExceptionHandler`), верхний цикл
+         `BackgroundService`, обработчик сообщения в потребителе очереди. Запись делается с самим объектом
+         исключения: `logger.LogError(ex, "Order {OrderId} failed", orderId)`, чтобы тип, стек и вложенные
+         исключения дошли до провайдера. Общий контекст запроса (идентификатор запроса, пользователь, trace id)
+         добавляется через области логирования (`BeginScope`) и трассировку, открытые на той же границе.
+      4. **Ожидаемые сбои - не ошибки.** Валидация, «не найдено», конфликты превращаются в результаты или
+         конкретные ответы и логируются на более низком уровне или не логируются вовсе. Исключение, которое
+         сознательно проглатывают, логируется там, где его проглатывают: больше его никто не увидит.
+
+      **Как закрепить**
+
+      - Центральный обработчик входит в шаблон сервиса, чтобы правильный путь был путём по умолчанию.
+      - Короткий письменный регламент (ADR) с примерами допустимых `catch` и пункт чек-листа code review:
+        «зачем здесь этот `catch`?».
+      - Анализаторы в `.editorconfig` с повышенной серьёзностью: CA2200 (повторный выброс с сохранением стека),
+        CA1031 (не перехватывать общие типы исключений) с обоснованными подавлениями на границах, CA2254
+        (статический шаблон сообщения лога). При необходимости - свой анализатор или архитектурный тест на шаблон
+        «залогировал и выбросил».
+      - Измерение: число записей об ошибке на один trace id должно упасть до одной. Существующий код чистится
+        постепенно, начиная с самых шумных путей.
+    explanation: |
+      Логирование в каждом слое кажется надёжным, но делает хуже: число ошибок умножается, алерты срабатывают на
+      шум, и непонятно, какая запись описывает источник. При этом каждый нижний слой знает меньше, чем граница,
+      которой известны запрос, пользователь и trace id. А `throw ex;` начинает стек заново с точки повторного
+      выброса, и исходный кадр теряется.
+
+      Правило «обработай или пропусти дальше, логируй один раз» работает, потому что исключение уже несёт свою
+      историю: стек вызовов и цепочка `InnerException` описывают путь, а граница записывает объект целиком.
+      Контекст, известный только нижнему слою, попадает в оборачивающее исключение, а не в отдельную строку лога.
+      Области логирования, открытые в нижнем слое, к моменту записи на границе уже закрыты, поэтому полагаться на
+      них для такого контекста нельзя.
+
+      Для лида сама политика - только половина работы. Она держится, если шаблон сервиса по умолчанию делает
+      правильно, анализаторы ловят механические ошибки, а code review закрывает то, чего анализаторы не видят.
+      Допустимые исключения из правила (проглоченное исключение, попытка повтора на уровне `Warning`) записаны в
+      регламенте, чтобы не выглядеть нарушениями.
+    linkTitles:
+      - "Рекомендации по работе с исключениями"
+      - "Логирование в C# и .NET"
+  en:
+    title: How do you stop one failure from being logged five times across layers?
+    prompt: |
+      In your team's service every failure appears in the logs five times. The repository, the domain service,
+      the application service, the controller and the `middleware` each catch the exception, log it and throw it
+      again. Sometimes the stack trace in the last entry points at a `catch` block instead of the real source of
+      the error. What exception handling and logging policy do you set for the team, and how do you make sure it
+      is followed?
+    hint: |
+      For each `catch` block, ask what it does with the exception that the calling code could not do just as
+      well.
+    answer: |
+      **Policy**
+
+      1. **Catch only for a purpose.** A `catch` is allowed when the code can handle the failure (retry, fallback,
+         translation into an expected result), when it adds context the upper layer does not have, or when it is a
+         boundary of the application. Catching just to "log and rethrow" is forbidden.
+      2. **Add context by wrapping, not by logging.** The lower layer throws a more meaningful exception and passes
+         the caught one as `innerException`. If the exception must be rethrown unchanged, use only `throw;`, never
+         `throw ex;`: it resets the stack trace.
+      3. **Log once, at the boundary.** One place per entry point: the exception handler for HTTP
+         (`UseExceptionHandler`, and in ASP.NET Core since .NET 8 `IExceptionHandler`), the top-level loop of a
+         `BackgroundService`, the message handler of a queue consumer. The entry is written with the exception
+         object itself: `logger.LogError(ex, "Order {OrderId} failed", orderId)`, so the type, stack trace and
+         inner exceptions reach the provider. Request-wide context (request id, user, trace id) comes from logging
+         scopes (`BeginScope`) and tracing opened at that same boundary.
+      4. **Expected failures are not errors.** Validation, "not found" and conflicts become results or specific
+         responses and are logged at a lower level or not at all. An exception that is deliberately swallowed is
+         logged where it is swallowed: nobody else will ever see it.
+
+      **Enforcement**
+
+      - The central handler is part of the service template, so the right path is the default path.
+      - A short written guideline (an ADR) with examples of allowed `catch` blocks, and a code review checklist
+        item: "why is this `catch` here?".
+      - Analyzers in `.editorconfig` with raised severity: CA2200 (rethrow to preserve stack details), CA1031
+        (do not catch general exception types) with justified suppressions at boundaries, CA2254 (static log
+        message template). If needed, a custom analyzer or an architecture test for the "log and rethrow" shape.
+      - Measurement: the number of error entries per trace id should drop to one. Existing code is cleaned up
+        gradually, starting with the noisiest paths.
+    explanation: |
+      Logging in every layer looks safe but makes things worse: the error count is multiplied, alerts fire on
+      noise, and it is unclear which entry describes the source. Each lower layer also knows less than the
+      boundary, which knows the request, the user and the trace id. And `throw ex;` restarts the stack trace at
+      the rethrow point, so the original frame is lost.
+
+      The rule "handle or let it propagate, log once" works because an exception already carries its history: the
+      stack trace and the chain of `InnerException` describe the path, and the boundary logs the whole object.
+      Context that only the lower layer knows goes into the wrapping exception, not into a separate log line.
+      Logging scopes opened in a lower layer are already disposed when the boundary writes the entry, so they
+      cannot be relied on for that context.
+
+      For a lead the policy itself is only half of the job. It holds when the service template does the right
+      thing by default, analyzers catch the mechanical mistakes, and code review covers what analyzers cannot
+      see. Accepted exceptions to the rule (a swallowed exception, a retry attempt logged at `Warning`) are written
+      into the guideline so they do not look like violations.
+    linkTitles:
+      - "Best practices for exceptions"
+      - "Logging in C# and .NET"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

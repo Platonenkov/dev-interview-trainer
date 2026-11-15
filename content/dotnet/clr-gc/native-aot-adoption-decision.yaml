@@ -1,0 +1,128 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMXG81G0NB9SPGYG0Z
+slug: native-aot-adoption-decision
+stack: dotnet
+topic: clr-gc
+level: lead
+type: open
+grading: self
+tags: [native-aot, jit, trimming, startup, deployment]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/native-aot
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/deploying/ready-to-run
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как решить, стоит ли публиковать все бэкенд-сервисы с Native AOT, и как это внедрять?
+    prompt: |
+      Команда предлагает публиковать все бэкенд-сервисы на .NET 10 с Native AOT (`<PublishAot>true</PublishAot>`),
+      чтобы сократить время запуска. Вы техлид. Как вы примете решение, какие риски оцените и как будете
+      внедрять изменение?
+    hint: Что теряет процесс, в котором нет JIT-компилятора, и каким из ваших сервисов время запуска действительно важно?
+    answer: |
+      1. **Уточнить цель.** Время запуска важно сервисам, которые часто стартуют: масштабирование до нуля,
+         бессерверные функции, резкое автомасштабирование, короткоживущие задачи и консольные утилиты.
+         Долгоживущий сервис под ровной нагрузкой платит за запуск один раз, и выигрыш для него мал.
+      2. **Назвать цену.** Native AOT в .NET 10 убирает JIT во время работы: быстрее запуск, меньше память
+         и размер развёртывания. Взамен:
+         - нет динамической загрузки сборок и генерации кода (`Reflection.Emit`), а рефлексия работает только
+           по тому, что компилятор видит статически;
+         - обязателен тримминг, поэтому зависимости должны быть совместимы с триммингом и AOT (сериализация через
+           генераторы исходного кода, без сканирования сборок рефлексией);
+         - совместимы не все библиотеки: в ASP.NET Core не поддерживаются, например, MVC-контроллеры, а часть
+           других библиотек, например EF Core, совместима с AOT не полностью, поэтому каждую зависимость нужно
+           проверить;
+         - нет многоуровневой компиляции и динамического PGO, поэтому пропускная способность в установившемся
+           режиме может быть ниже, чем у JIT;
+         - сборка идёт под конкретную ОС и архитектуру, меняются отладка и диагностика.
+      3. **Оценить каждый сервис отдельно.** Включить `PublishAot` в ветке и собрать: предупреждения тримминга
+         (`IL2xxx`) и AOT (например, `IL3050`) показывают, что сломается. Цель - ноль предупреждений, иначе
+         поведение после публикации может отличаться от поведения под JIT.
+      4. **Измерить.** Сравнить JIT, ReadyToRun и Native AOT по времени запуска, памяти, пропускной способности,
+         задержке p99, размеру образа и времени сборки на реалистичной нагрузке.
+      5. **Внедрять постепенно.** Пилот на одном сервисе, где запуск критичен; тесты против опубликованного
+         нативного бинарника, а не только под `dotnet test`, ведь при локальном запуске проект с `PublishAot`
+         по-прежнему работает под JIT; сборка под целевые платформы в CI; канареечный выпуск; сохранить
+         возможность вернуться к JIT-сборке. Зафиксировать критерии и правила кода (без рефлексии, сериализация
+         JSON через генераторы исходного кода) для команды.
+      6. **Решение.** Native AOT - выбор для отдельных сервисов по измеренным критериям, а не общее правило.
+    explanation: |
+      Native AOT построен на модели закрытого мира: весь код, который может выполниться, должен быть известен
+      при публикации. Компилятор и тримминг удаляют всё, на что нет статических ссылок, а несовместимые с AOT
+      возможности отключены и выбрасывают исключения во время работы. Поэтому код, который находит типы
+      рефлексией или генерирует их во время работы, может упасть только в продакшене. Главный ранний сигнал -
+      предупреждения анализаторов, а тесты против опубликованного нативного бинарника - вторая проверка. Поэтому
+      критерий «ноль предупреждений» важнее, чем «тесты прошли под JIT».
+
+      Кроме того, без JIT процесс не может перекомпилировать горячие методы с учётом реального профиля.
+      Быстрый запуск покупается возможной потерей пиковой производительности, и для сервиса под постоянной
+      нагрузкой это может быть плохим обменом. ReadyToRun - промежуточный вариант: часть кода скомпилирована
+      заранее, но JIT и все возможности среды выполнения сохраняются.
+
+      Задача лида - перевести предложение «давайте везде» в управляемый риск: понятная цель, измерения, пилот,
+      путь отката и правила, которые команда сможет соблюдать. Описанные ограничения относятся к .NET 10.
+    linkTitles:
+      - "Развёртывание Native AOT"
+      - "Поддержка Native AOT в ASP.NET Core"
+      - "Компиляция ReadyToRun"
+  en:
+    title: How do you decide whether to publish all backend services with Native AOT, and how do you roll it out?
+    prompt: |
+      The team proposes publishing all backend services on .NET 10 with Native AOT (`<PublishAot>true</PublishAot>`)
+      to cut startup time. You are the tech lead. How do you make the decision, which risks do you assess, and
+      how do you roll the change out?
+    hint: What does a process lose when it has no JIT compiler, and which of your services actually care about startup time?
+    answer: |
+      1. **Clarify the goal.** Startup time matters for services that start often: scale to zero, serverless
+         functions, sharp autoscaling, short-lived jobs and console tools. A long-running service under steady
+         load pays for startup once, so it gains little.
+      2. **Name the cost.** Native AOT on .NET 10 removes the JIT at run time: faster startup, less memory and a
+         smaller deployment. In exchange:
+         - no dynamic assembly loading or code generation (`Reflection.Emit`), and reflection works only over what
+           the compiler can see statically;
+         - trimming is mandatory, so dependencies must be trim and AOT compatible (serialization through source
+           generators, no assembly scanning by reflection);
+         - not every library is compatible: in ASP.NET Core, for example, MVC controllers are not supported, and
+           some other libraries, such as EF Core, are not fully AOT compatible, so every dependency has to be checked;
+         - there is no tiered compilation and no dynamic PGO, so steady-state throughput can be lower than with
+           the JIT;
+         - the build targets a specific OS and architecture, and debugging and diagnostics change.
+      3. **Assess each service separately.** Turn on `PublishAot` in a branch and build: trim warnings (`IL2xxx`)
+         and AOT warnings (for example `IL3050`) show what will break. The target is zero warnings, otherwise
+         behaviour after publishing can differ from behaviour under the JIT.
+      4. **Measure.** Compare JIT, ReadyToRun and Native AOT on startup time, memory, throughput, p99 latency,
+         image size and build time under realistic load.
+      5. **Roll out gradually.** A pilot on one service where startup is critical; tests against the published
+         native binary, not only under `dotnet test`, because a project with `PublishAot` still runs under the JIT
+         locally; builds for the target platforms in CI; a canary release; keep the option to go back to the JIT
+         build. Write down the criteria and the coding rules (no reflection, JSON serialization through source
+         generators) for the team.
+      6. **Decision.** Native AOT is a choice made per service against measured criteria, not a blanket rule.
+    explanation: |
+      Native AOT is built on a closed-world model: all code that can run must be known at publish time. The
+      compiler and the trimmer remove everything that has no static reference, and features that are not
+      compatible with AOT are disabled and throw exceptions at run time. So code that finds types by reflection
+      or generates them at run time may fail only in production. The main early signal is the analyzer warnings,
+      with tests against the published native binary as a second check. That is why "zero warnings" is a stronger
+      criterion than "tests passed under the JIT".
+
+      Also, without a JIT the process cannot recompile hot methods using the real profile. Fast startup is bought
+      with a possible loss of peak performance, and for a service under constant load that can be a bad trade.
+      ReadyToRun is the middle ground: part of the code is precompiled, but the JIT and every runtime feature remain.
+
+      The lead's job is to turn "let's do it everywhere" into a managed risk: a clear goal, measurements, a pilot,
+      a rollback path and rules the team can follow. The limitations described apply to .NET 10.
+    linkTitles:
+      - "Native AOT deployment"
+      - "ASP.NET Core support for Native AOT"
+      - "ReadyToRun compilation"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"

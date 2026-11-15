@@ -1,0 +1,131 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNVBZ8897JBVDMPWFD
+slug: dictionary-hash-collisions-degrade-lookup
+stack: dotnet
+topic: collections-linq
+level: senior
+type: open
+grading: self
+tags: [dictionary, hashing, gethashcode, complexity, performance]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.dictionary-2
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.object.gethashcode
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.hashcode
+    lang: en
+    kind: docs
+  - url: https://github.com/dotnet/runtime/blob/main/src/libraries/System.Private.CoreLib/src/System/Collections/Generic/Dictionary.cs
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как Dictionary<TKey, TValue> находит ключ и что коллизии хеш-кодов делают с его производительностью?
+    prompt: |
+      Объясните, как `Dictionary<TKey, TValue>` находит ключ внутри. Что произойдёт со скоростью поиска и вставки,
+      если `GetHashCode` у типа ключа возвращает одно и то же значение для множества разных ключей, например
+      `public override int GetHashCode() => 0;`? Как такую проблему заметить и исправить?
+    hint: Хеш-код подсказывает словарю, где начинать поиск. Что словарю приходится делать со всеми ключами, которые попали в одно и то же место?
+    answer: |
+      - **Устройство.** В реализации .NET 10 словарь хранит два массива: корзины (buckets) и записи (entries).
+        Каждая запись содержит ключ, значение, сохранённый хеш-код ключа и индекс следующей записи той же корзины,
+        поэтому записи одной корзины образуют цепочку.
+      - **Поиск.** Словарь вычисляет хеш-код ключа через компаратор (`EqualityComparer<TKey>.Default` или тот,
+        что передан в конструктор), по остатку от деления на число корзин выбирает корзину и идёт по её цепочке.
+        Для каждой записи он сначала сравнивает сохранённый хеш-код и только при совпадении вызывает `Equals`.
+        Вставка проходит ту же цепочку, чтобы убедиться, что такого ключа ещё нет.
+      - **Хорошее распределение.** Цепочки короткие, поэтому поиск, вставка и удаление в среднем занимают O(1).
+      - **Одинаковый хеш-код у многих ключей.** Все они попадают в одну корзину, цепочка растёт до n записей, а
+        сравнение хеш-кодов ничего не отсекает, поэтому `Equals` вызывается для каждой записи цепочки. Поиск,
+        вставка и удаление деградируют до O(n), а заполнение словаря n такими ключами стоит O(n²).
+      - **Корректность не страдает.** `GetHashCode() => 0` формально допустим: равные объекты дают равные
+        хеш-коды. Словарь работает правильно, но превращается в медленный линейный список.
+      - **Диагностика.** В профилировщике время уходит в `Equals` типа ключа под вызовами `TryGetValue`,
+        `ContainsKey`, индексатора или `Add`. Быстрая проверка - сравнить число ключей с числом различных хеш-кодов
+        среди них.
+      - **Исправление.** Считать хеш-код из тех же полей, что участвуют в `Equals`, например через
+        `HashCode.Combine`, либо объявить ключ как `record` или `record struct`, либо передать в конструктор
+        словаря свой `IEqualityComparer<TKey>`. Поля, из которых считается хеш-код, не должны меняться, пока
+        объект лежит в словаре.
+    explanation: |
+      Хеш-таблица быстра только потому, что хеш-код сужает поиск до нескольких кандидатов. Документация
+      `Dictionary<TKey, TValue>` прямо говорит, что получение значения по ключу близко к O(1), но скорость
+      зависит от качества алгоритма хеширования типа `TKey`. Контракт `GetHashCode` требует лишь, чтобы равные
+      объекты имели равные хеш-коды. Различные хеш-коды для различных объектов он не гарантирует, поэтому
+      качество распределения - ответственность автора типа ключа, и компилятор плохой хеш-код не заметит.
+
+      Сохранённый в записи хеш-код - это дешёвый фильтр перед дорогим `Equals`. Когда хеш-коды совпадают у всех
+      ключей, фильтр перестаёт работать, и каждый поиск сводится к линейному перебору с вызовом `Equals`.
+
+      У проблемы есть и сторона безопасности. Если ключи приходят извне и атакующий может подобрать ключи с
+      одинаковым хеш-кодом (hash flooding), каждый запрос превращается в квадратичную работу. Поэтому
+      `string.GetHashCode` в .NET Core и .NET 5+ рандомизирован для каждого процесса, а словарь со строковыми
+      ключами и компаратором по умолчанию начинает с более быстрого нерандомизированного хеша и переключается на
+      рандомизированный, если цепочка становится слишком длинной. У собственных типов ключей такой защиты нет.
+
+      Описанная раскладка массивов - деталь реализации .NET 10 (и предыдущих версий .NET Core), а не часть
+      публичного контракта. Документация гарантирует только поведение, близкое к O(1), при хорошем хешировании.
+    linkTitles:
+      - "Класс Dictionary<TKey,TValue>"
+      - "Метод Object.GetHashCode"
+      - "Структура HashCode"
+      - "Исходный код Dictionary<TKey,TValue> в dotnet/runtime"
+  en:
+    title: How does Dictionary<TKey, TValue> find a key, and what do hash collisions do to its performance?
+    prompt: |
+      Explain how `Dictionary<TKey, TValue>` finds a key internally. What happens to the speed of lookup and
+      insertion if the key type's `GetHashCode` returns the same value for many different keys, for example
+      `public override int GetHashCode() => 0;`? How do you spot and fix the problem?
+    hint: The hash code tells the dictionary where to start looking. What does the dictionary have to do with all the keys that land in the same place?
+    answer: |
+      - **Structure.** In the .NET 10 implementation the dictionary keeps two arrays: buckets and entries.
+        Each entry holds the key, the value, the cached hash code of the key and the index of the next entry in
+        the same bucket, so the entries of one bucket form a chain.
+      - **Lookup.** The dictionary computes the key's hash code through the comparer
+        (`EqualityComparer<TKey>.Default` or the one passed to the constructor), picks a bucket by the remainder
+        of division by the number of buckets and walks that bucket's chain. For each entry it first compares the
+        cached hash code and calls `Equals` only when they match. Insertion walks the same chain to make sure the
+        key is not there yet.
+      - **Good distribution.** Chains are short, so lookup, insertion and removal take O(1) on average.
+      - **Many keys with the same hash code.** They all land in one bucket, the chain grows to n entries, and the
+        hash code comparison filters nothing out, so `Equals` is called for every entry in the chain. Lookup,
+        insertion and removal degrade to O(n), and filling the dictionary with n such keys costs O(n²).
+      - **Correctness is not affected.** `GetHashCode() => 0` is formally legal: equal objects get equal hash
+        codes. The dictionary still works correctly, but it turns into a slow linear list.
+      - **Diagnosis.** A profiler shows time spent in the key type's `Equals` under `TryGetValue`, `ContainsKey`,
+        the indexer or `Add`. A quick check is to compare the number of keys with the number of distinct hash
+        codes among them.
+      - **Fix.** Compute the hash code from the same fields that `Equals` uses, for example with
+        `HashCode.Combine`, or declare the key as a `record` or `record struct`, or pass your own
+        `IEqualityComparer<TKey>` to the dictionary constructor. The fields that feed the hash code must not change
+        while the object is in the dictionary.
+    explanation: |
+      A hash table is fast only because the hash code narrows the search down to a few candidates. The
+      `Dictionary<TKey, TValue>` documentation states that retrieving a value by its key is close to O(1), but
+      that the speed depends on the quality of the hashing algorithm of the `TKey` type. The `GetHashCode`
+      contract only requires equal objects to have equal hash codes. It does not promise distinct hash codes for
+      distinct objects, so the quality of the distribution is the job of the key type's author, and the compiler
+      will not notice a poor hash code.
+
+      The hash code cached in each entry is a cheap filter in front of the expensive `Equals`. When all keys share
+      a hash code, the filter stops working and every lookup becomes a linear scan that calls `Equals`.
+
+      The problem also has a security side. If keys come from outside and an attacker can choose keys with the
+      same hash code (hash flooding), every request turns into quadratic work. That is why `string.GetHashCode`
+      in .NET Core and .NET 5+ is randomized per process, and a dictionary with string keys and the default
+      comparer starts with a faster non-randomized hash and switches to a randomized one when a chain gets too
+      long. Custom key types get no such protection.
+
+      The array layout described here is an implementation detail of .NET 10 (and earlier .NET Core versions),
+      not part of the public contract. The documentation only promises close to O(1) behaviour with good hashing.
+    linkTitles:
+      - "Dictionary<TKey,TValue> class"
+      - "Object.GetHashCode method"
+      - "HashCode struct"
+      - "Dictionary<TKey,TValue> source in dotnet/runtime"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

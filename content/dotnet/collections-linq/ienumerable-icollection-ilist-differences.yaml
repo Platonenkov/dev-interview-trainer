@@ -1,0 +1,101 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WN85EN3Z0RBRF3YM5Q
+slug: ienumerable-icollection-ilist-differences
+stack: dotnet
+topic: collections-linq
+level: junior
+type: open
+grading: self
+tags: [collections, interfaces, ienumerable, icollection, ilist]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.icollection-1
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.ilist-1
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.ienumerable-1
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Чем отличаются IEnumerable<T>, ICollection<T> и IList<T> и какой из них принимать в параметре метода?
+    prompt: |
+      Что добавляет каждый из интерфейсов `IEnumerable<T>`, `ICollection<T>` и `IList<T>` по сравнению с предыдущим?
+      Какой из них лучше указать типом параметра метода и почему?
+    hint: Подумайте, что метод на самом деле делает с переданной коллекцией - только перебирает её, меняет её состав или обращается к элементам по номеру.
+    answer: |
+      - `IEnumerable<T>` умеет только одно: выдать перечислитель (`GetEnumerator`), то есть перебрать элементы
+        по очереди вперёд. Количество элементов и доступ по индексу он не даёт.
+      - `ICollection<T>` наследует `IEnumerable<T>` и добавляет `Count`, `Add`, `Remove`, `Contains`, `Clear`,
+        `CopyTo` и `IsReadOnly`. Это коллекция с известным размером, состав которой можно менять.
+      - `IList<T>` наследует `ICollection<T>` и добавляет работу с позициями: индексатор `this[int]`, `IndexOf`,
+        `Insert` и `RemoveAt`.
+      - Параметр метода должен требовать самый «бедный» интерфейс, которого методу достаточно. Если метод только
+        перебирает элементы - `IEnumerable<T>`, если ему нужно менять состав - `ICollection<T>`, и только если нужен
+        доступ по индексу - `IList<T>`. Для чтения с размером или индексом без изменения подходят
+        `IReadOnlyCollection<T>` и `IReadOnlyList<T>`.
+    explanation: |
+      Каждый следующий интерфейс расширяет предыдущий, поэтому его реализует меньше типов. `IEnumerable<T>`
+      реализуют массивы, `List<T>`, `HashSet<T>`, `Dictionary<TKey, TValue>` (как последовательность пар),
+      результаты запросов LINQ и методы-итераторы с `yield return`. `ICollection<T>` уже не реализуют запросы LINQ
+      и итераторы, а `IList<T>` не реализует `HashSet<T>`: у множества нет понятия позиции.
+
+      Поэтому параметр типа `List<T>` или `IList<T>` у метода, который только перебирает элементы, мешает
+      вызывающему коду: чтобы передать множество или запрос, придётся вызывать `ToList()` и копировать данные.
+      Параметр `IEnumerable<T>` принимает всё это без копий и заодно сообщает читателю, что метод не меняет
+      коллекцию и не зависит от порядка хранения.
+
+      Есть и обратная сторона. `IEnumerable<T>` может оказаться ленивым запросом: если метод перебирает его
+      дважды (например, сначала `Count()`, потом `foreach`), запрос выполнится дважды. Если методу нужны и размер,
+      и перебор, честнее принять `IReadOnlyCollection<T>` или один раз материализовать данные внутри метода.
+
+      Ещё одна ловушка: наличие интерфейса не гарантирует, что все его методы работают. Массив реализует `IList<T>`,
+      но `Add` и `Remove` у него выбрасывают `NotSupportedException`, потому что размер массива фиксирован.
+      Перед изменением коллекции через `ICollection<T>` можно проверить `IsReadOnly`.
+    linkTitles:
+      - "Интерфейс ICollection<T>"
+      - "Интерфейс IList<T>"
+      - "Интерфейс IEnumerable<T>"
+  en:
+    title: How do IEnumerable<T>, ICollection<T> and IList<T> differ, and which should a method parameter accept?
+    prompt: |
+      What does each of the interfaces `IEnumerable<T>`, `ICollection<T>` and `IList<T>` add compared to the previous one?
+      Which of them should you use as the type of a method parameter, and why?
+    hint: Think about what the method actually does with the collection it receives - only iterates over it, changes its contents, or accesses elements by position.
+    answer: |
+      - `IEnumerable<T>` can do only one thing: hand out an enumerator (`GetEnumerator`), that is, go through the
+        elements one by one, forward. It gives neither the number of elements nor access by index.
+      - `ICollection<T>` inherits `IEnumerable<T>` and adds `Count`, `Add`, `Remove`, `Contains`, `Clear`, `CopyTo`
+        and `IsReadOnly`. It is a collection with a known size whose contents can be changed.
+      - `IList<T>` inherits `ICollection<T>` and adds positional operations: the `this[int]` indexer, `IndexOf`,
+        `Insert` and `RemoveAt`.
+      - A method parameter should ask for the least capable interface the method needs. If the method only iterates,
+        use `IEnumerable<T>`; if it must change the contents, `ICollection<T>`; and only if it needs index access,
+        `IList<T>`. For reading with a size or an index but without changes, there are `IReadOnlyCollection<T>`
+        and `IReadOnlyList<T>`.
+    explanation: |
+      Each interface extends the previous one, so fewer types implement it. `IEnumerable<T>` is implemented by arrays,
+      `List<T>`, `HashSet<T>`, `Dictionary<TKey, TValue>` (as a sequence of pairs), LINQ query results and iterator
+      methods with `yield return`. LINQ queries and iterators do not implement `ICollection<T>`, and `HashSet<T>`
+      does not implement `IList<T>`: a set has no notion of position.
+
+      That is why a parameter of type `List<T>` or `IList<T>` on a method that only iterates gets in the caller's way:
+      to pass a set or a query, the caller has to call `ToList()` and copy the data. An `IEnumerable<T>` parameter
+      accepts all of them without copies, and it also tells the reader that the method does not modify the collection
+      and does not depend on how it is stored.
+
+      There is a flip side. An `IEnumerable<T>` may be a lazy query: if the method enumerates it twice (for example,
+      `Count()` first and then `foreach`), the query runs twice. If the method needs both the size and the iteration,
+      it is more honest to accept `IReadOnlyCollection<T>`, or to materialise the data once inside the method.
+
+      One more trap: implementing an interface does not guarantee that all its methods work. An array implements
+      `IList<T>`, but its `Add` and `Remove` throw `NotSupportedException`, because the size of an array is fixed.
+      Before changing a collection through `ICollection<T>` you can check `IsReadOnly`.
+    linkTitles:
+      - "ICollection<T> interface"
+      - "IList<T> interface"
+      - "IEnumerable<T> interface"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

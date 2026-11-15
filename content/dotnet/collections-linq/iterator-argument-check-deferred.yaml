@@ -1,0 +1,145 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WN8B580Y7XQQ96C580
+slug: iterator-argument-check-deferred
+stack: dotnet
+topic: collections-linq
+level: senior
+type: output
+grading: auto
+tags: [iterators, yield, deferred-execution, argument-validation]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    IEnumerable<int> source = null;
+    IEnumerable<int> evens = source.WhereEven();
+    Console.Write("created ");
+    try
+    {
+        foreach (int n in evens)
+        {
+            Console.Write(n);
+        }
+    }
+    catch (Exception ex)
+    {
+        Console.Write(ex.GetType().Name);
+    }
+
+    static class Extensions
+    {
+        public static IEnumerable<int> WhereEven(this IEnumerable<int> source)
+        {
+            if (source is null)
+            {
+                throw new ArgumentNullException(nameof(source));
+            }
+
+            foreach (int n in source)
+            {
+                if (n % 2 == 0)
+                {
+                    yield return n;
+                }
+            }
+        }
+    }
+expect:
+  kind: output
+  value: "created ArgumentNullException"
+acceptedOutputs: ["created ArgumentNullException"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "created ArgumentNullException" }
+  - id: b
+    correct: false
+    expect: { kind: exception, value: System.ArgumentNullException }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "created NullReferenceException" }
+  - id: d
+    correct: false
+    expect: { kind: compile-error }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/statements/yield
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/linq/deferred-execution-lazy-evaluation
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Когда срабатывает проверка аргумента на null в методе-итераторе с yield return?
+    prompt: |
+      Метод расширения `WhereEven` проверяет аргумент на `null` и бросает `ArgumentNullException`.
+      Его вызывают с `null`, печатают маркер, а затем перебирают результат внутри `try`.
+      Что выведет эта программа в консоль?
+    hint: Чем вызов метода, в теле которого есть `yield return`, отличается от вызова обычного метода?
+    options:
+      a: "created ArgumentNullException"
+      b: Необработанное исключение `ArgumentNullException`, маркер `created` не выводится
+      c: "created NullReferenceException"
+      d: Ошибка компиляции
+    optionExplanations:
+      b: Так было бы, если бы проверка выполнялась в момент вызова `source.WhereEven()`, то есть до `try`. Но тело метода-итератора, включая проверку аргумента, при вызове не выполняется, поэтому маркер успевает напечататься, а исключение возникает уже внутри `try`.
+      c: "`NullReferenceException` появился бы, если бы проверки не было и `foreach` по `source` начался с `null`. Здесь первой строкой тела выполняется явная проверка, и она бросает `ArgumentNullException` раньше, чем код дойдёт до `foreach` по источнику."
+      d: Код корректен. Метод расширения - это статический метод, поэтому его можно вызвать на переменной со значением `null`, а объявление статического класса допустимо после операторов верхнего уровня.
+    answer: "created ArgumentNullException"
+    explanation: |
+      Метод `WhereEven` содержит `yield return`, поэтому компилятор превращает его в итератор: генерирует класс
+      с конечным автоматом, а вызов `source.WhereEven()` только создаёт объект этого класса и сохраняет в нём
+      аргумент. Ни одна строка тела при этом не выполняется. Проверка на `null` - тоже часть тела, поэтому
+      она откладывается вместе со всем остальным.
+
+      Порядок событий такой: печатается `created `, затем `foreach` вызывает `GetEnumerator` и первый
+      `MoveNext`. Только теперь тело начинает выполняться, проверка срабатывает и бросает
+      `ArgumentNullException` - уже внутри `try`, где его ловит `catch` и печатает имя типа.
+
+      Практическое следствие: ошибка в аргументах проявляется далеко от места вызова - в другом методе, в другом
+      потоке или вообще никогда, если результат не перечисляют. Стандартные операторы LINQ, например
+      `Enumerable.Where`, проверяют аргументы сразу. Для этого метод разбивают на два: открытый метод без
+      `yield` проверяет аргументы (например, через `ArgumentNullException.ThrowIfNull`) и возвращает результат
+      закрытого итератора или локальной функции, в которой уже находится `yield return`.
+    linkTitles:
+      - Оператор yield
+      - Отложенное выполнение и ленивые вычисления в LINQ
+  en:
+    title: When does a null argument check run in an iterator method with yield return?
+    prompt: |
+      The extension method `WhereEven` checks its argument for `null` and throws `ArgumentNullException`.
+      It is called with `null`, a marker is printed, and then the result is enumerated inside `try`.
+      What does this program print to the console?
+    hint: How does calling a method whose body contains `yield return` differ from calling an ordinary method?
+    options:
+      a: "created ArgumentNullException"
+      b: An unhandled `ArgumentNullException`, the marker `created` is not printed
+      c: "created NullReferenceException"
+      d: Compile error
+    optionExplanations:
+      b: That would happen if the check ran when `source.WhereEven()` is called, before the `try`. But the body of an iterator method, including the argument check, does not run at the call, so the marker is printed and the exception is thrown later, inside the `try`.
+      c: "`NullReferenceException` would appear if there were no check and the `foreach` over `source` started with `null`. Here the explicit check is the first statement of the body, and it throws `ArgumentNullException` before the code reaches the `foreach` over the source."
+      d: The code is valid. An extension method is a static method, so it can be called on a variable that holds `null`, and a static class declaration may follow top-level statements.
+    answer: "created ArgumentNullException"
+    explanation: |
+      `WhereEven` contains `yield return`, so the compiler turns it into an iterator: it generates a class with a
+      state machine, and the call `source.WhereEven()` only creates an instance of that class and stores the
+      argument in it. Not a single line of the body runs at that point. The `null` check is part of the body
+      too, so it is deferred along with everything else.
+
+      The order of events is: `created ` is printed, then `foreach` calls `GetEnumerator` and the first
+      `MoveNext`. Only now does the body start to run; the check fires and throws `ArgumentNullException`,
+      already inside the `try`, where `catch` catches it and prints the type name.
+
+      The practical consequence: a bad argument surfaces far from the call site - in another method, on another
+      thread, or never at all if the result is not enumerated. The standard LINQ operators such as
+      `Enumerable.Where` validate their arguments immediately. To get that behaviour, split the method in two:
+      a public method without `yield` validates the arguments (for example with
+      `ArgumentNullException.ThrowIfNull`) and returns the result of a private iterator or a local function
+      that contains the `yield return`.
+    linkTitles:
+      - The yield statement
+      - Deferred execution and lazy evaluation in LINQ
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

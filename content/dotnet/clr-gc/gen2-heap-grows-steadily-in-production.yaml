@@ -1,0 +1,156 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMXX2HMBMYNPAXKRMA
+slug: gen2-heap-grows-steadily-in-production
+stack: dotnet
+topic: clr-gc
+level: senior
+type: situation
+grading: self
+tags: [memory-leak, gc, diagnostics, dotnet-gcdump, dotnet-counters]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/debug-memory-leak
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-gcdump
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-counters
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Память сервиса и поколение 2 растут несколько дней, пока контейнер не убивает OOM. Как найти утечку?
+    prompt: |
+      Сервис на ASP.NET Core под .NET 10 работает в контейнере с лимитом памяти. По метрикам его память и размер
+      поколения 2 управляемой кучи растут несколько дней подряд почти линейно, после чего контейнер завершается
+      по OOM и перезапускается. Нагрузка за это время не растёт.
+
+      Как вы будете искать причину и в каком порядке? Что сделаете до того, как менять код?
+    hint: |
+      Как дёшево, ещё до тяжёлых инструментов, понять, какая именно память растёт? И что можно сравнить, чтобы
+      увидеть не просто сколько занято памяти, а что в ней накапливается?
+    answer: |
+      1. **Подтвердить, что растёт управляемая куча.** Подключить `dotnet-counters monitor -p <pid>` и смотреть
+         `dotnet.gc.last_collection.heap.size` по поколениям (gen2 и loh), число сборок поколения 2 в
+         `dotnet.gc.collections` и `dotnet.process.memory.working_set`. Если сборки поколения 2 происходят, а
+         размер поколения 2 после них всё равно растёт, объекты остаются достижимыми. Если растёт рабочий набор, а
+         куча GC стабильна, утечка в неуправляемой памяти, и снимки управляемой кучи её не покажут.
+      2. **Снять два снимка кучи с промежутком, начиная заранее.** `dotnet-gcdump collect -p <pid>` вскоре после
+         перезапуска, пока есть запас памяти, и ещё раз через несколько часов роста, заметно раньше лимита.
+         - Снятие снимка запускает сборку поколения 2 и приостанавливает процесс, поэтому лучше делать это на одном
+           экземпляре, выведенном из балансировки.
+         - Буфер событий принадлежит самому сервису и может вырасти до 256 МБ, и сама утилита тоже потребляет
+           память. Снимок, снятый у самого лимита, может сам вызвать OOM-завершение контейнера.
+         - Утилите нужен доступ к диагностическому сокету процесса: запускать её в том же контейнере или в sidecar
+           с общим `TMPDIR` (по умолчанию `/tmp`), от того же пользователя, что и процесс, или от root.
+         - На .NET 10 `dotnet-gcdump` собирает события с буферизацией, допускающей потери, поэтому для большой кучи
+           снимок может оказаться неполным. Тогда нужен полный дамп процесса через `dotnet-dump collect`.
+      3. **Сравнить снимки.** Открыть оба файла в Visual Studio или PerfView (или посмотреть
+         `dotnet-gcdump report`) и найти типы, у которых число экземпляров и занятый размер выросли между
+         снимками. Интересны не самые большие типы, а те, что растут.
+      4. **Пройти от растущих объектов к корню.** Посмотреть пути до корней: кто держит эти объекты. Типичные
+         находки - статический словарь или кэш без вытеснения и ограничения размера, подписка на событие
+         долгоживущего объекта без отписки, не освобождённый `Timer`, замыкание или scoped-объект, захваченный
+         singleton-сервисом.
+      5. **Исправить и проверить.** Исправить владельца ссылки (вытеснение в кэше, отписка, `Dispose`),
+         затем под той же нагрузкой убедиться по `dotnet-counters`, что размер поколения 2 выходит на плато.
+      6. **Закрепить.** Оповещение по тренду размера кучи после полных сборок, а не только по OOM, и при
+         необходимости нагрузочный тест длительностью в часы.
+
+      Увеличивать лимит памяти или перезапускать сервис по расписанию можно только как временную меру: это
+      откладывает падение, но не устраняет причину.
+    explanation: |
+      Сборщик мусора освобождает только недостижимые объекты. Если поколение 2 растёт несмотря на полные сборки,
+      значит, какой-то корень (статическое поле, делегат в событии, очередь таймеров, кэш) продолжает ссылаться
+      на объекты, которые коду уже не нужны. Утечка в .NET - это почти всегда забытая ссылка, а не ошибка GC.
+
+      Порядок шагов важен. Счётчики дёшевы и сразу отделяют управляемую утечку от неуправляемой, а также от
+      ситуации, когда куча просто ещё не собиралась. Один снимок показывает только, что в памяти много объектов,
+      но не что именно растёт. Разница между двумя снимками указывает на кандидата, а путь до корня показывает,
+      какой код держит ссылку. Менять код до этого - значит угадывать: можно исправить то, что выглядит
+      подозрительно, и не задеть настоящую причину.
+
+      Время снятия снимков тоже важно. `dotnet-gcdump` вызывает сборку поколения 2 и собирает события сборщика
+      мусора в буфер внутри целевого процесса, поэтому процессу, который уже упирается в лимит контейнера, может
+      не хватить памяти на сам снимок. Отсюда правило: первый снимок снимать рано, второй - с запасом до лимита.
+      Начиная с .NET 11 утилита использует блокирующую буферизацию без потерь событий; на .NET 10 снимок большой
+      кучи может быть неполным, и тогда помогает полный дамп процесса.
+
+      `dotnet-gcdump` снимает граф объектов кучи и небольшой по сравнению с полным дампом. Если нужно посмотреть
+      значения полей конкретных объектов, используют полный дамп через `dotnet-dump` и команды SOS
+      `dumpheap -stat` и `gcroot`.
+    linkTitles:
+      - Отладка утечки памяти в .NET
+      - Утилита dotnet-gcdump
+      - Утилита dotnet-counters
+  en:
+    title: Service memory and gen 2 grow for days until the container is OOM-killed. How do you find the leak?
+    prompt: |
+      An ASP.NET Core service on .NET 10 runs in a container with a memory limit. Its metrics show that its memory
+      and the generation 2 size of the managed heap grow almost linearly for several days, then the container is
+      OOM-killed and restarted. The load does not grow during that time.
+
+      How do you look for the cause, and in what order? What do you do before you change any code?
+    hint: |
+      Before reaching for heavy tools, how can you cheaply tell which kind of memory is growing? And what can you
+      compare to see not just how much memory is in use, but what is accumulating?
+    answer: |
+      1. **Confirm that the managed heap grows.** Attach `dotnet-counters monitor -p <pid>` and watch
+         `dotnet.gc.last_collection.heap.size` per generation (gen2 and loh), the number of generation 2
+         collections in `dotnet.gc.collections`, and `dotnet.process.memory.working_set`. If generation 2
+         collections happen and the generation 2 size still grows after them, the objects remain reachable. If the
+         working set grows while the GC heap is stable, the leak is in unmanaged memory, and managed heap
+         snapshots will not show it.
+      2. **Take two heap snapshots some time apart, starting early.** Run `dotnet-gcdump collect -p <pid>` soon
+         after a restart, while there is still memory headroom, and again after several hours of growth, well
+         before the limit.
+         - Taking a snapshot triggers a generation 2 collection and pauses the process, so do it on one instance
+           taken out of the load balancer.
+         - The event buffer is owned by the service itself and can grow up to 256 MB, and the tool uses memory
+           too. A snapshot taken right at the limit can itself trigger the OOM kill.
+         - The tool needs the process diagnostic socket: run it in the same container or in a sidecar that shares
+           `TMPDIR` (`/tmp` by default), as the same user as the process or as root.
+         - On .NET 10 `dotnet-gcdump` collects events with lossy buffering, so on a large heap the snapshot can be
+           incomplete. In that case take a full process dump with `dotnet-dump collect`.
+      3. **Compare the snapshots.** Open both files in Visual Studio or PerfView (or look at
+         `dotnet-gcdump report`) and find the types whose instance count and size grew between the snapshots.
+         What matters is not the largest types but the ones that grow.
+      4. **Follow the growing objects to a root.** Look at the paths to roots: who holds these objects. Typical
+         findings are a static dictionary or cache with no eviction or size limit, a subscription to an event of
+         a long-lived object that is never removed, a `Timer` that is never disposed, a closure or a scoped object
+         captured by a singleton service.
+      5. **Fix and verify.** Fix the owner of the reference (cache eviction, unsubscribing, `Dispose`), then under
+         the same load confirm with `dotnet-counters` that the generation 2 size reaches a plateau.
+      6. **Lock it in.** An alert on the trend of heap size after full collections, not only on OOM, and if
+         needed a load test that runs for hours.
+
+      Raising the memory limit or restarting the service on a schedule is only a stopgap: it postpones the crash
+      but does not remove the cause.
+    explanation: |
+      The garbage collector frees only unreachable objects. If generation 2 grows despite full collections, some
+      root (a static field, a delegate in an event, the timer queue, a cache) keeps referencing objects that code
+      no longer needs. A leak in .NET is almost always a forgotten reference, not a GC bug.
+
+      The order of the steps matters. Counters are cheap and immediately separate a managed leak from an
+      unmanaged one, and from a heap that simply has not been collected yet. One snapshot only shows that memory
+      holds many objects, not what is growing. The difference between two snapshots points to a candidate, and
+      the path to a root shows which code holds the reference. Changing code before that is guessing: you may fix
+      something that looks suspicious and miss the real cause.
+
+      The timing of the snapshots matters too. `dotnet-gcdump` induces a generation 2 collection and collects the
+      garbage collector events into a buffer inside the target process, so a process that is already close to the
+      container limit may not have enough memory for the snapshot itself. Hence the rule: take the first snapshot
+      early and the second one with headroom left. Starting with .NET 11 the tool uses blocking buffering that does
+      not lose events; on .NET 10 a snapshot of a large heap can be incomplete, and a full process dump helps.
+
+      `dotnet-gcdump` captures the object graph of the heap and is small compared with a full dump. If you need
+      the field values of specific objects, take a full dump with `dotnet-dump` and use the SOS commands
+      `dumpheap -stat` and `gcroot`.
+    linkTitles:
+      - Debug a memory leak in .NET
+      - dotnet-gcdump tool
+      - dotnet-counters tool
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"

@@ -1,0 +1,108 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMCEKQB3WFME1EBMBX
+slug: object-generation-promotion-after-collect
+stack: dotnet
+topic: clr-gc
+level: middle
+type: output
+grading: auto
+tags: [gc, generations, promotion, gc-collect]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    object data = new object();
+    Console.Write(GC.GetGeneration(data));
+
+    GC.Collect();
+    Console.Write($" {GC.GetGeneration(data)}");
+
+    GC.Collect();
+    Console.Write($" {GC.GetGeneration(data)}");
+expect:
+  kind: output
+  value: "0 1 2"
+acceptedOutputs: ["0 1 2"]
+options:
+  - id: a
+    correct: false
+    expect: { kind: output, value: "0 0 0" }
+  - id: b
+    correct: true
+    expect: { kind: output, value: "0 1 2" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "0 2 2" }
+  - id: d
+    correct: false
+    expect: { kind: output, value: "0 1 1" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/fundamentals
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.gc.getgeneration
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как меняется поколение объекта после двух вызовов GC.Collect?
+    prompt: |
+      Что выведет эта программа в консоль? Переменная `data` используется после каждого вызова `GC.Collect`,
+      поэтому объект остаётся достижимым всё время работы программы.
+    hint: Что сборщик мусора делает с объектом, который пережил сборку, и есть ли у поколений верхняя граница?
+    options:
+      a: "0 0 0"
+      b: "0 1 2"
+      c: "0 2 2"
+      d: "0 1 1"
+    optionExplanations:
+      a: Объект, переживший сборку, не остаётся в своём поколении, а переводится в следующее. Поколение 0 предназначено только для новых объектов, которые ещё не пережили ни одной сборки.
+      c: "`GC.Collect()` собирает все поколения, но выжившие объекты продвигаются только на одно поколение за сборку: из поколения 0 в поколение 1, а не сразу в поколение 2."
+      d: Поколение 1 - не последнее. Объект, переживший сборку поколения 1, переходит в поколение 2, а вторая полная сборка как раз собирает поколение 1.
+    answer: "0 1 2"
+    explanation: |
+      Новый небольшой объект размещается в поколении 0, поэтому первый вызов `GC.GetGeneration` возвращает `0`.
+
+      `GC.Collect()` без аргументов запускает принудительную блокирующую сборку всех поколений. Объект
+      достижим через локальную переменную `data`, которая используется дальше, поэтому он выживает. Выжившие
+      объекты продвигаются на одно поколение: из 0 в 1 после первой сборки и из 1 в 2 после второй.
+
+      Поколение 2 - старшее (`GC.MaxGeneration` равно 2), поэтому дальнейшие сборки оставили бы объект в
+      поколении 2. Поколения - деталь реализации сборщика мусора; ответ описывает поведение .NET 10 с
+      настройками по умолчанию.
+    linkTitles:
+      - Основы сборки мусора
+      - Метод GC.GetGeneration
+  en:
+    title: How does an object's generation change after two GC.Collect calls?
+    prompt: |
+      What does this program print to the console? The variable `data` is used after every `GC.Collect` call,
+      so the object stays reachable for the whole run.
+    hint: What does the garbage collector do with an object that survives a collection, and do generations have an upper bound?
+    options:
+      a: "0 0 0"
+      b: "0 1 2"
+      c: "0 2 2"
+      d: "0 1 1"
+    optionExplanations:
+      a: An object that survives a collection does not stay in its generation, it is promoted to the next one. Generation 0 is only for new objects that have not survived any collection yet.
+      c: "`GC.Collect()` collects all generations, but surviving objects are promoted by only one generation per collection: from generation 0 to generation 1, not straight to generation 2."
+      d: Generation 1 is not the last one. An object that survives a collection of generation 1 moves to generation 2, and the second full collection does collect generation 1.
+    answer: "0 1 2"
+    explanation: |
+      A new small object is allocated in generation 0, so the first `GC.GetGeneration` call returns `0`.
+
+      `GC.Collect()` without arguments forces an immediate blocking collection of all generations. The object is
+      reachable through the local variable `data`, which is used later, so it survives. Surviving objects are
+      promoted by one generation: from 0 to 1 after the first collection and from 1 to 2 after the second.
+
+      Generation 2 is the oldest (`GC.MaxGeneration` is 2), so further collections would leave the object in
+      generation 2. Generations are an implementation detail of the garbage collector; the answer describes the
+      behaviour of .NET 10 with default settings.
+    linkTitles:
+      - Fundamentals of garbage collection
+      - GC.GetGeneration method
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

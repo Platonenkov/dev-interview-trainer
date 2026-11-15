@@ -1,0 +1,121 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WND8PQ5PEM3HF4GDN8
+slug: rebuild-per-environment-artifact-drift
+stack: dotnet
+topic: devops
+level: lead
+type: situation
+grading: self
+tags: [ci-cd, deployment-pipeline, build-once, artifacts, configuration]
+links:
+  - url: https://martinfowler.com/bliki/DeploymentPipeline.html
+    lang: en
+    kind: article
+  - url: https://12factor.net/build-release-run
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/configuration/
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Конвейер собирает приложение отдельно для staging и production, и баг из production не воспроизводится на staging
+    prompt: |
+      В вашей команде CI/CD-конвейер собирает приложение из одного и того же коммита дважды: отдельной сборкой
+      для staging и отдельной сборкой для production. В production появился баг, который на staging не
+      воспроизводится, хотя версия кода формально одна. Вы техлид.
+
+      Какое изменение процесса вы предложите команде, как обоснуете его и как будете внедрять, не останавливая
+      поставку?
+    hint: Что именно было протестировано на staging и что на самом деле уехало в production - это один и тот же файл?
+    answer: |
+      1. **Разобраться с текущим багом и подтвердить гипотезу.** Сравнить то, что реально развёрнуто: digest
+         образов, хеши сборок, версии NuGet-пакетов, версию SDK на агентах сборки. Типичные источники расхождения:
+         плавающие версии пакетов, плавающий тег базового образа без digest, разный SDK на агентах, условная
+         компиляция и трансформации конфигурации под окружение во время сборки. Для воспроизведения развернуть на
+         staging именно production-артефакт, а не пересобирать его.
+      2. **Сформулировать правило: собираем один раз, продвигаем один и тот же артефакт.** Конвейер собирает
+         неизменяемый версионированный артефакт (образ контейнера, адресуемый по digest, или пакет в хранилище
+         артефактов) с привязкой к коммиту. Этот же артефакт без пересборки проходит dev, staging и production.
+      3. **Вынести различия окружений в конфигурацию.** Строки подключения, адреса сервисов, флаги - через
+         переменные окружения, `appsettings.{Environment}.json`, выбираемый в рантайме по
+         `ASPNETCORE_ENVIRONMENT` или `DOTNET_ENVIRONMENT`, и хранилище секретов. Никаких `#if PRODUCTION` и
+         сборок "под окружение". Конфигурацию тоже версионировать и ревьюить.
+      4. **Сделать саму сборку воспроизводимой.** Закрепить SDK в `global.json`, включить lock-файлы NuGet
+         (`RestorePackagesWithLockFile` и `dotnet restore --locked-mode` в CI), закрепить базовые образы по digest.
+      5. **Внедрять поэтапно.** Показать команде разбор инцидента как аргумент, договориться о правиле на
+         встрече, а не приказом. Пилот на одном сервисе, затем шаблон конвейера для остальных. Технически
+         закрепить правило: job развёртывания в production принимает только версию артефакта, прошедшую staging,
+         и не умеет собирать из исходников. Откат - повторное развёртывание предыдущего артефакта.
+      6. **Проверить результат и назвать ограничения.** Следить за числом инцидентов "не воспроизводится" и за
+         временем отката. Честно сказать команде, что это убирает различия в бинарниках, но не в данных, нагрузке
+         и конфигурации: их нужно сближать отдельно.
+    explanation: |
+      Смысл конвейера поставки в том, что каждая стадия даёт уверенность в конкретном артефакте. Если перед
+      production приложение собирается заново, тесты на staging проверили другой файл, и уверенность не
+      переносится: достаточно другой версии транзитивного пакета, другого SDK или другого базового образа.
+      Поэтому одинаковый коммит не гарантирует одинаковых бинарников.
+
+      Принцип "собрать один раз и продвигать" разделяет сборку и выпуск: выпуск - это артефакт плюс конфигурация
+      окружения. Тогда расхождение между staging и production может быть только в конфигурации, данных и
+      инфраструктуре, а это гораздо более узкий круг поиска.
+
+      На уровне лида важен не только технический ответ, но и внедрение: правило должно быть понятно команде,
+      закреплено в самом конвейере (иначе к нему вернутся "в обход" при первом срочном релизе) и вводиться
+      постепенно, чтобы не останавливать поставку.
+    linkTitles:
+      - "Martin Fowler: Deployment Pipeline"
+      - "The Twelve-Factor App: Build, release, run"
+      - "Конфигурация в ASP.NET Core"
+  en:
+    title: The pipeline builds the app separately for staging and production, and a production bug does not reproduce on staging
+    prompt: |
+      Your team's CI/CD pipeline builds the app from the same commit twice: one build for staging and a separate
+      build for production. A bug shows up in production that does not reproduce on staging, even though the code
+      version is formally the same. You are the tech lead.
+
+      What process change do you propose to the team, how do you justify it, and how do you roll it out without
+      stopping delivery?
+    hint: Is what was tested on staging and what actually went to production the same file?
+    answer: |
+      1. **Handle the current bug and confirm the hypothesis.** Compare what is actually deployed: image digests,
+         assembly hashes, NuGet package versions, the SDK version on the build agents. Typical sources of drift:
+         floating package versions, a floating base image tag without a digest, different SDKs on agents,
+         conditional compilation and per-environment config transforms at build time. To reproduce, deploy the
+         production artifact itself to staging instead of rebuilding it.
+      2. **State the rule: build once, promote the same artifact.** The pipeline builds an immutable, versioned
+         artifact (a container image referenced by digest, or a package in an artifact repository) linked to the
+         commit. That same artifact moves through dev, staging and production without being rebuilt.
+      3. **Move environment differences into configuration.** Connection strings, service addresses and flags
+         come from environment variables, `appsettings.{Environment}.json` selected at run time by
+         `ASPNETCORE_ENVIRONMENT` or `DOTNET_ENVIRONMENT`, and a secret store. No `#if PRODUCTION` and no
+         "per-environment builds". Configuration is versioned and reviewed too.
+      4. **Make the build itself reproducible.** Pin the SDK in `global.json`, enable NuGet lock files
+         (`RestorePackagesWithLockFile` and `dotnet restore --locked-mode` in CI), pin base images by digest.
+      5. **Roll it out in steps.** Use the incident review as the argument, agree on the rule with the team in a
+         meeting rather than by decree. Pilot on one service, then a pipeline template for the rest. Enforce the
+         rule technically: the production deploy job accepts only an artifact version that passed staging and
+         cannot build from source. Rollback means redeploying the previous artifact.
+      6. **Check the outcome and name the limits.** Track the number of "cannot reproduce" incidents and the time
+         to roll back. Be honest with the team that this removes differences in binaries, not in data, load and
+         configuration: those have to be brought closer separately.
+    explanation: |
+      The point of a deployment pipeline is that each stage builds confidence in a specific artifact. If the app
+      is rebuilt before production, the staging tests checked a different file, and the confidence does not carry
+      over: a different transitive package version, a different SDK or a different base image is enough. That is
+      why the same commit does not guarantee the same binaries.
+
+      The "build once and promote" principle separates build from release: a release is the artifact plus the
+      environment's configuration. Then a difference between staging and production can only come from
+      configuration, data and infrastructure, which is a much narrower area to search.
+
+      At lead level the answer is not only technical but also about adoption: the rule must make sense to the
+      team, be enforced by the pipeline itself (otherwise people bypass it during the first urgent release), and
+      be introduced gradually so that delivery does not stop.
+    linkTitles:
+      - "Martin Fowler: Deployment Pipeline"
+      - "The Twelve-Factor App: Build, release, run"
+      - "Configuration in ASP.NET Core"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

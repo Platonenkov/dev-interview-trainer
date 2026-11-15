@@ -1,0 +1,144 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WRZ9YSPE5ZP54M43X2
+slug: maui-bindingcontext-inheritance
+stack: dotnet
+topic: ui-dotnet
+level: middle
+type: open
+grading: self
+tags: [maui, data-binding, bindingcontext, datatemplate, mvvm]
+code:
+  language: xml
+  harness: none
+  source: |
+    <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+                 xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+                 x:Class="Shop.OrdersPage">
+        <VerticalStackLayout>
+            <Label Text="{Binding Title}" />
+            <CollectionView ItemsSource="{Binding Orders}">
+                <CollectionView.ItemTemplate>
+                    <DataTemplate>
+                        <HorizontalStackLayout>
+                            <Label Text="{Binding Number}" />
+                            <Button Text="Delete" Command="{Binding DeleteCommand}" />
+                        </HorizontalStackLayout>
+                    </DataTemplate>
+                </CollectionView.ItemTemplate>
+            </CollectionView>
+        </VerticalStackLayout>
+    </ContentPage>
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/maui/fundamentals/data-binding/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/maui/fundamentals/data-binding/relative-bindings
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/maui/fundamentals/data-binding/compiled-bindings
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как BindingContext распространяется по странице .NET MAUI и почему команда в DataTemplate не срабатывает?
+    prompt: |
+      В конструкторе страницы задано `BindingContext = new OrdersViewModel()`. У модели представления есть
+      свойства `Title`, `Orders` (коллекция объектов `Order` со свойством `Number`) и `DeleteCommand`.
+      Заголовок и номера заказов отображаются, но нажатие кнопки Delete ничего не делает, исключения нет.
+
+      Объясните, как `BindingContext` распространяется по элементам страницы, почему кнопка не работает,
+      как это исправить и какие ещё ошибки возникают, когда у дочернего элемента контекст не тот, что ожидает
+      разработчик.
+    hint: Относительно какого объекта вычисляется путь привязки у элемента, созданного из шаблона элемента списка?
+    answer: |
+      - **Наследование.** `BindingContext` - привязываемое свойство, значение которого наследуется вниз по
+        визуальному дереву. Контекст страницы получают все дочерние элементы, пока какой-то элемент не задаст
+        собственный `BindingContext`: тогда новый контекст наследуют уже его потомки.
+      - **Как вычисляется привязка.** `{Binding Path}` без `Source` ищет путь в `BindingContext` своего элемента.
+        `Source` в привязке подменяет источник только для этой привязки.
+      - **DataTemplate.** `CollectionView` создаёт элементы из шаблона для каждого объекта коллекции и делает этот
+        объект их `BindingContext`. Поэтому `{Binding Number}` работает, а `{Binding DeleteCommand}` ищется в
+        `Order`, где такого свойства нет. Привязка тихо не срабатывает: исключения нет, в лучшем случае
+        сообщение в отладочном выводе.
+      - **Исправление.** Указать источник явно: `Command="{Binding Source={RelativeSource AncestorType={x:Type local:OrdersViewModel}}, Path=DeleteCommand}"`
+        или дать странице `x:Name="page"` и написать `{Binding Source={x:Reference page}, Path=BindingContext.DeleteCommand}`.
+        Сам заказ передать через `CommandParameter="{Binding .}"`. Переносить команду в модель элемента ради
+        этого не нужно.
+      - **Чужой контекст у дочернего элемента.** Если, например, на `Grid` задать
+        `BindingContext="{Binding SelectedOrder}"`, все привязки внутри него, включая привязки к свойствам
+        страницы, начнут искать пути в `SelectedOrder` и молча отдадут пустые значения. Задавать контекст
+        дочерним элементам стоит осознанно и только для поддерева, которому он действительно нужен.
+      - **Диагностика.** Включить скомпилированные привязки через `x:DataType`: на странице - тип модели
+        представления, на `DataTemplate` - тип элемента. Тогда неверный путь даёт ошибку сборки, а не пустой экран.
+    explanation: |
+      Наследование контекста сделано для удобства: один раз задать модель представления странице и не
+      повторять её в каждой привязке. Обратная сторона в том, что любой элемент, который меняет
+      `BindingContext`, меняет его для всего своего поддерева. Шаблон элемента списка - самый частый такой
+      случай: тот же шаблон используется для каждого объекта коллекции, и привязки в нём естественно
+      вычисляются относительно этого объекта, а не страницы.
+
+      Поэтому команда уровня страницы в шаблоне требует явного источника. Если `AncestorType` в `RelativeSource`
+      указывает не на элемент интерфейса, а на тип модели представления, MAUI ищет ближайшего предка, у
+      которого `BindingContext` имеет этот тип, и привязывается к этому контексту. `x:Reference` решает ту же
+      задачу через имя элемента.
+
+      Ошибки привязки в MAUI не выбрасывают исключений, поэтому симптом - просто пустое поле или кнопка без
+      реакции. Скомпилированные привязки с `x:DataType` переносят проверку путей на этап сборки и заодно
+      быстрее привязок через отражение.
+    linkTitles:
+      - "Привязка данных в .NET MAUI"
+      - "Относительные привязки в .NET MAUI"
+      - "Скомпилированные привязки в .NET MAUI"
+  en:
+    title: How does BindingContext flow through a .NET MAUI page, and why does a command in a DataTemplate not fire?
+    prompt: |
+      The page constructor sets `BindingContext = new OrdersViewModel()`. The view model has the properties
+      `Title`, `Orders` (a collection of `Order` objects with a `Number` property) and `DeleteCommand`.
+      The title and the order numbers are shown, but tapping the Delete button does nothing, and there is no
+      exception.
+
+      Explain how `BindingContext` flows through the elements of the page, why the button does not work, how to
+      fix it, and what else goes wrong when a child element has a different context than the developer expects.
+    hint: Against which object is a binding path resolved for an element created from a list item template?
+    answer: |
+      - **Inheritance.** `BindingContext` is a bindable property whose value is inherited down the visual tree.
+        Every child gets the page context until some element sets its own `BindingContext`: from then on its
+        descendants inherit the new context.
+      - **How a binding resolves.** `{Binding Path}` without `Source` looks up the path on its element's
+        `BindingContext`. `Source` in a binding replaces the source for that binding only.
+      - **DataTemplate.** `CollectionView` creates elements from the template for each object in the collection
+        and makes that object their `BindingContext`. So `{Binding Number}` works, while `{Binding DeleteCommand}`
+        is looked up on `Order`, which has no such property. The binding silently fails: no exception, at most a
+        message in the debug output.
+      - **The fix.** Give the source explicitly: `Command="{Binding Source={RelativeSource AncestorType={x:Type local:OrdersViewModel}}, Path=DeleteCommand}"`,
+        or name the page `x:Name="page"` and write `{Binding Source={x:Reference page}, Path=BindingContext.DeleteCommand}`.
+        Pass the order itself with `CommandParameter="{Binding .}"`. There is no need to move the command into
+        the item model for this.
+      - **A foreign context on a child.** If you set, for example, `BindingContext="{Binding SelectedOrder}"` on a
+        `Grid`, every binding inside it, including bindings to page properties, starts looking up paths on
+        `SelectedOrder` and silently yields empty values. Set a child context deliberately and only for the
+        subtree that really needs it.
+      - **Diagnosis.** Turn on compiled bindings with `x:DataType`: the view model type on the page and the item
+        type on the `DataTemplate`. Then a wrong path is a build error, not an empty screen.
+    explanation: |
+      Context inheritance exists for convenience: set the view model on the page once and do not repeat it in
+      every binding. The flip side is that any element that changes `BindingContext` changes it for its whole
+      subtree. A list item template is the most common such case: the same template is used for every object
+      in the collection, so its bindings naturally resolve against that object, not against the page.
+
+      That is why a page-level command inside a template needs an explicit source. When `AncestorType` in
+      `RelativeSource` names a view model type rather than a UI element, MAUI looks for the nearest ancestor
+      whose `BindingContext` is of that type and binds to that context. `x:Reference` solves the same problem
+      through an element name.
+
+      Binding failures in MAUI throw no exceptions, so the symptom is just an empty field or an unresponsive
+      button. Compiled bindings with `x:DataType` move path checking to build time and are also faster than
+      reflection-based bindings.
+    linkTitles:
+      - "Data binding in .NET MAUI"
+      - "Relative bindings in .NET MAUI"
+      - "Compiled bindings in .NET MAUI"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  noRunReason: XAML markup for a .NET MAUI page; it needs the MAUI workload and a UI host, which the sandbox does not provide.

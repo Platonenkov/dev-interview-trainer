@@ -1,0 +1,100 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNQ0ZVB9D58098CVW7
+slug: structured-logging-message-template-forms
+stack: dotnet
+topic: devops
+level: middle
+type: multi
+grading: auto
+tags: [logging, structured-logging, loggermessage, message-template]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: false
+  - id: d
+    correct: true
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/core/extensions/logging
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/extensions/logger-message-generator
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какие вызовы ILogger сохраняют OrderId как отдельное структурированное свойство?
+    prompt: |
+      В сервисе на .NET 10 поле `_logger` имеет тип `ILogger<OrderService>`, а `order.Id` - это `int`.
+      Логи отправляются в приёмник, который хранит структурированные свойства (JSON-консоль, Seq,
+      экспортёр OpenTelemetry). Выберите все способы записи, при которых `OrderId` попадёт в приёмник
+      отдельным свойством, по которому можно фильтровать, а не только частью текста сообщения.
+    hint: Что получает провайдер логирования - уже готовую строку или шаблон и значения по отдельности?
+    options:
+      a: '`_logger.LogInformation("Order {OrderId} created", order.Id);`'
+      b: '`_logger.LogInformation($"Order {order.Id} created");`'
+      c: '`_logger.LogInformation("Order " + order.Id + " created");`'
+      d: 'Метод `static partial void LogOrderCreated(ILogger logger, int orderId);` с атрибутом `[LoggerMessage(Level = LogLevel.Information, Message = "Order {OrderId} created")]`'
+    optionExplanations:
+      b: 'Интерполяция вычисляет строку до вызова `LogInformation`. В метод приходит готовый текст без заполнителей, поэтому значение заказа остаётся только внутри сообщения.'
+      c: 'Конкатенация, как и интерполяция, склеивает значение в строку до вызова. Шаблона с заполнителем нет, и отдельного свойства `OrderId` приёмник не получит.'
+    answer: Варианты a и d - шаблон сообщения с именованным заполнителем и метод, сгенерированный через `[LoggerMessage]`.
+    explanation: |
+      Методы `ILogger` воспринимают первый строковый аргумент как шаблон сообщения, а не как готовый текст.
+      В варианте a провайдер получает шаблон `Order {OrderId} created` и значение отдельно: состояние записи -
+      это список пар ключ-значение с ключами `OrderId` и `{OriginalFormat}`. Структурированный приёмник
+      сохраняет `OrderId` отдельным полем, по которому можно искать и строить выборки.
+
+      Генератор исходного кода `[LoggerMessage]` (появился в .NET 6, в .NET 10 работает так же) разбирает тот же
+      шаблон во время компиляции и создаёт строго типизированный метод, который передаёт `OrderId` отдельным
+      свойством. Имена заполнителей сопоставляются с именами параметров без учёта регистра, поэтому `{OrderId}`
+      связывается с `orderId`. Заодно метод кэширует разобранный шаблон и проверяет `IsEnabled` до форматирования.
+
+      При интерполяции и конкатенации значение подставляется в строку ещё до вызова логгера. Шаблон не содержит
+      заполнителей, приёмник видит только плоский текст вроде `Order 42 created`, а каждый заказ даёт свой
+      уникальный шаблон, что ломает и группировку по сообщению. Анализатор CA2254 предупреждает о таких
+      непостоянных шаблонах.
+    linkTitles:
+      - "Логирование в C# и .NET"
+      - "Генерация кода логирования во время компиляции"
+  en:
+    title: Which ILogger calls keep OrderId as a separate structured property?
+    prompt: |
+      In a .NET 10 service the field `_logger` is an `ILogger<OrderService>` and `order.Id` is an `int`.
+      Logs go to a sink that stores structured properties (JSON console, Seq, an OpenTelemetry exporter).
+      Select every way of writing the log call that makes `OrderId` reach the sink as a separate property
+      you can filter on, not only as part of the message text.
+    hint: What does the logging provider receive - a finished string, or a template and the values separately?
+    options:
+      a: '`_logger.LogInformation("Order {OrderId} created", order.Id);`'
+      b: '`_logger.LogInformation($"Order {order.Id} created");`'
+      c: '`_logger.LogInformation("Order " + order.Id + " created");`'
+      d: 'A method `static partial void LogOrderCreated(ILogger logger, int orderId);` with the attribute `[LoggerMessage(Level = LogLevel.Information, Message = "Order {OrderId} created")]`'
+    optionExplanations:
+      b: 'Interpolation builds the string before `LogInformation` is called. The method receives finished text with no placeholders, so the order value exists only inside the message.'
+      c: 'Concatenation, like interpolation, bakes the value into the string before the call. There is no template placeholder, so the sink gets no separate `OrderId` property.'
+    answer: Options a and d - a message template with a named placeholder and a method generated with `[LoggerMessage]`.
+    explanation: |
+      `ILogger` methods treat the first string argument as a message template, not as finished text. In option a
+      the provider receives the template `Order {OrderId} created` and the value separately: the state of the
+      entry is a list of key-value pairs with the keys `OrderId` and `{OriginalFormat}`. A structured sink stores
+      `OrderId` as its own field that you can search and aggregate on.
+
+      The `[LoggerMessage]` source generator (introduced in .NET 6, works the same way in .NET 10) parses the same
+      template at compile time and generates a strongly typed method that passes `OrderId` as a separate
+      property. Placeholder names are matched to parameter names case-insensitively, so `{OrderId}` binds to
+      `orderId`. The generated method also caches the parsed template and checks `IsEnabled` before formatting.
+
+      With interpolation or concatenation the value is put into the string before the logger is called. The
+      template has no placeholders, the sink sees only flat text such as `Order 42 created`, and every order
+      produces its own unique template, which also breaks grouping by message. The CA2254 analyzer warns about
+      such non-constant templates.
+    linkTitles:
+      - "Logging in C# and .NET"
+      - "Compile-time logging source generation"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

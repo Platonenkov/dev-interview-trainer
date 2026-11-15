@@ -1,0 +1,133 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WN0V57MB8KYT9AK2J1
+slug: otel-collector-vendor-neutral-telemetry-pipeline
+stack: dotnet
+topic: devops
+level: architect
+type: open
+grading: self
+tags: [opentelemetry, otlp, observability, collector, tracing, metrics, logging]
+links:
+  - url: https://opentelemetry.io/docs/collector/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/observability-with-otel
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как построить сбор телеметрии десятков .NET-сервисов, чтобы бэкенд наблюдаемости можно было сменить без изменения кода?
+    prompt: |
+      В компании несколько десятков .NET-сервисов. Логи, метрики и трассировки сейчас уходят в один коммерческий
+      бэкенд наблюдаемости, и через год его, возможно, придётся заменить или добавить второй.
+
+      Как вы спроектируете сбор телеметрии, чтобы смена или добавление бэкенда не требовала менять и
+      перевыпускать код сервисов? Какие компоненты будут в цепочке, где принимаются решения о сэмплировании и
+      маршрутизации и чем вы платите за такую архитектуру?
+    hint: Где в цепочке должно жить знание о конкретном бэкенде - в коде сервиса, в его конфигурации или в отдельном компоненте инфраструктуры?
+    answer: |
+      1. **Код зависит только от нейтральных API.** Сервисы пишут логи через `ILogger`, трассировки через
+         `ActivitySource` и `Activity`, метрики через `Meter` из `System.Diagnostics.Metrics`. В .NET именно эти
+         типы реализуют API OpenTelemetry, и на них же опирается встроенная инструментация ASP.NET Core и
+         `HttpClient`. Никаких SDK или агентов конкретного вендора в коде нет.
+      2. **Один экспортёр - OTLP.** OpenTelemetry .NET SDK подключается в одном месте, лучше в общем внутреннем
+         пакете с методом расширения, который используют все сервисы. Экспортёр один - OTLP (`AddOtlpExporter`).
+         Адрес приёмника и атрибуты ресурса (`service.name`, версия, окружение) берутся из конфигурации или
+         переменных окружения `OTEL_*`, а не из кода.
+      3. **OpenTelemetry Collector между сервисами и бэкендами.** Сервисы отправляют OTLP только в Collector.
+         Типичная схема в два уровня:
+         - агент рядом с сервисом (sidecar или DaemonSet на узел): быстро принимает данные, добавляет метаданные
+           инфраструктуры, ограничивает память, группирует отправку;
+         - масштабируемый шлюз (gateway): централизованные политики - tail-based сэмплирование, фильтрация и
+           удаление персональных данных, нормализация атрибутов, маршрутизация в один или несколько экспортёров.
+      4. **Смена бэкенда - изменение конфигурации Collector.** В конвейер шлюза добавляется экспортёр нового
+         бэкенда, какое-то время данные идут в оба (параллельная запись для сравнения), затем старый экспортёр
+         удаляется. Сервисы не пересобираются и не перевыпускаются.
+      5. **Единые контракты данных.** Семантические соглашения OpenTelemetry для имён атрибутов и метрик,
+         обязательные атрибуты ресурса, правила по кардинальности тегов. Ими владеет платформенная команда, иначе
+         переносить между бэкендами придётся несогласованный набор данных.
+      6. **Надёжность конвейера.** Экспорт из SDK асинхронный, с ограниченной очередью: при недоступности
+         Collector телеметрия теряется, но запросы пользователей не страдают. Collector запускается в нескольких
+         репликах, с ограничением памяти, очередями и повторами отправки, его собственные метрики мониторятся.
+         Для tail-based сэмплирования все спаны одной трассировки должны попасть в один экземпляр, поэтому перед
+         ним нужна балансировка по trace id.
+      7. **Цена решения.** Ещё один компонент, который надо эксплуатировать, обновлять и масштабировать; часть
+         проприетарных возможностей вендоров (их агенты и автоматические профилировщики) недоступна; перевод OTLP
+         в формат бэкенда может отличаться в деталях (временная агрегация метрик, гистограммы). Дашборды, алерты
+         и запросы к данным Collector не переносит - их миграцию всё равно надо планировать.
+    explanation: |
+      Привязка к вендору возникает там, где код знает о бэкенде: вызывает его SDK, использует его форматы или
+      адреса. Архитектура разрывает эту связь на двух уровнях. Код знает только про стандартные API и протокол
+      OTLP, а знание о бэкендах переносится в Collector - отдельный процесс с конвейерами из приёмников
+      (receivers), обработчиков (processors) и экспортёров (exporters), которые описываются конфигурацией.
+
+      Централизация в Collector даёт больше, чем просто смену бэкенда. Политики сэмплирования, удаление
+      чувствительных данных и обогащение атрибутами меняются в одном месте для всех сервисов, без согласования
+      релизов десятков команд. Tail-based сэмплирование вообще возможно только там, где видна вся трассировка
+      целиком, то есть не в отдельном сервисе.
+
+      Сильный ответ называет и границы подхода: Collector переносит данные, но не переносит то, что построено
+      поверх них в старом бэкенде. Поэтому вендорно-нейтральный конвейер снижает стоимость смены бэкенда, но не
+      делает её нулевой, а сам конвейер становится критичной для эксплуатации инфраструктурой.
+    linkTitles:
+      - "OpenTelemetry Collector"
+      - "Наблюдаемость в .NET с OpenTelemetry"
+  en:
+    title: How do you build telemetry collection for dozens of .NET services so the observability backend can change without code changes?
+    prompt: |
+      A company runs several dozen .NET services. Logs, metrics and traces currently go to one commercial
+      observability backend, and within a year it may have to be replaced, or a second one added.
+
+      How do you design telemetry collection so that changing or adding a backend does not require changing and
+      redeploying service code? Which components are in the chain, where are sampling and routing decided, and
+      what do you pay for this architecture?
+    hint: Where in the chain should the knowledge of a specific backend live - in the service code, in its configuration or in a separate infrastructure component?
+    answer: |
+      1. **Code depends only on neutral APIs.** Services log through `ILogger`, trace through `ActivitySource` and
+         `Activity`, and record metrics through `Meter` from `System.Diagnostics.Metrics`. In .NET these very types
+         implement the OpenTelemetry API, and the built-in instrumentation of ASP.NET Core and `HttpClient` uses
+         them too. There is no vendor SDK or agent in the code.
+      2. **One exporter: OTLP.** The OpenTelemetry .NET SDK is wired in one place, ideally a shared internal
+         package with an extension method that every service calls. The only exporter is OTLP
+         (`AddOtlpExporter`). The receiver address and resource attributes (`service.name`, version, environment)
+         come from configuration or `OTEL_*` environment variables, not from code.
+      3. **An OpenTelemetry Collector between services and backends.** Services send OTLP only to the Collector.
+         A typical two-tier layout:
+         - an agent next to the service (a sidecar or a DaemonSet per node): accepts data quickly, adds
+           infrastructure metadata, limits memory, batches the export;
+         - a horizontally scaled gateway: central policies - tail-based sampling, filtering and removal of
+           personal data, attribute normalisation, routing to one or more exporters.
+      4. **Changing the backend is a Collector configuration change.** The gateway pipeline gets an exporter for
+         the new backend, data flows to both for a while (dual writing to compare them), then the old exporter is
+         removed. Services are not rebuilt or redeployed.
+      5. **Shared data contracts.** OpenTelemetry semantic conventions for attribute and metric names, required
+         resource attributes, rules on tag cardinality. The platform team owns them, otherwise what you move
+         between backends is an inconsistent data set.
+      6. **A reliable pipeline.** Export from the SDK is asynchronous with a bounded queue: if the Collector is
+         down, telemetry is lost but user requests do not suffer. The Collector runs as several replicas with a
+         memory limit, sending queues and retries, and its own metrics are monitored. For tail-based sampling all
+         spans of a trace must reach the same instance, so it needs load balancing by trace id in front of it.
+      7. **The cost.** One more component to operate, upgrade and scale; some proprietary vendor features (their
+         agents and automatic profilers) are not available; translating OTLP into a backend format may differ in
+         details (metric temporality, histograms). The Collector does not move dashboards, alerts and queries -
+         their migration still has to be planned.
+    explanation: |
+      Vendor lock-in appears where code knows about the backend: it calls the vendor SDK, uses its formats or its
+      addresses. This architecture cuts that link at two levels. Code knows only the standard APIs and the OTLP
+      protocol, and the knowledge of backends moves into the Collector - a separate process with pipelines of
+      receivers, processors and exporters described by configuration.
+
+      Centralising in the Collector gives more than a backend switch. Sampling policies, removal of sensitive
+      data and attribute enrichment change in one place for every service, without coordinating releases of
+      dozens of teams. Tail-based sampling is only possible where the whole trace is visible, which is never a
+      single service.
+
+      A strong answer also names the limits: the Collector moves data, but not what was built on top of it in the
+      old backend. A vendor-neutral pipeline therefore lowers the cost of switching backends without making it
+      zero, and the pipeline itself becomes infrastructure that operations depend on.
+    linkTitles:
+      - "OpenTelemetry Collector"
+      - ".NET observability with OpenTelemetry"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

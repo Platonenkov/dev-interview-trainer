@@ -1,0 +1,123 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WR8R39FTZ0KFJB7ZZ8
+slug: blazor-shared-cart-state-across-components
+stack: dotnet
+topic: ui-dotnet
+level: middle
+type: situation
+grading: self
+tags: [blazor, state-management, dependency-injection, rendering]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/state-management
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/components/cascading-values-and-parameters
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Как обновлять счётчик корзины в шапке Blazor, если товар добавляют глубоко внутри страницы?"
+    prompt: |
+      Приложение Blazor Web App на .NET 10 с глобальной интерактивностью в режиме `InteractiveServer`.
+      В `MainLayout` есть компонент `CartCounter`, который показывает число товаров в корзине. Кнопка
+      «В корзину» находится в компоненте `AddToCartButton`, вложенном на несколько уровней внутрь страницы
+      `ProductPage`.
+
+      Сейчас список товаров корзины хранится в поле `ProductPage`, и счётчик в шапке не меняется. Коллега
+      предлагает либо статическое поле, либо пробросить колбэк через все промежуточные компоненты.
+
+      Как вы спроектируете общее состояние корзины и что учтёте?
+    hint: |
+      Где должно жить состояние, которое нужно двум далёким друг от друга компонентам, и что заставит
+      перерисоваться компонент, который сам ничего не нажимал?
+    answer: |
+      1. **Вынести состояние в сервис-контейнер.** Класс `CartState` хранит позиции корзины, отдаёт `Count`,
+         меняется только через методы `Add` и `Remove`, а после каждого изменения вызывает событие
+         `OnChange` (`event Action`).
+      2. **Выбрать правильное время жизни.** Регистрация `builder.Services.AddScoped<CartState>()`. В режиме
+         Interactive Server scope совпадает с цепью (circuit) одного пользователя. Статическое поле или singleton
+         на сервере общие для всех пользователей: корзины смешаются, и появится состояние гонки.
+      3. **Писатель просто вызывает метод.** `AddToCartButton` внедряет `CartState` через `@inject` и вызывает
+         `Add`. Промежуточным компонентам не нужны ни параметры, ни колбэки.
+      4. **Читатель подписывается и отписывается.** `CartCounter` внедряет тот же сервис, в `OnInitialized`
+         подписывается на `OnChange`, в обработчике вызывает `InvokeAsync(StateHasChanged)`, реализует
+         `IDisposable` и в `Dispose` отписывается.
+      5. **Проверить границы.** Без глобальной интерактивности layout отрисовывается статически, и счётчик
+         надо сделать интерактивным. Серверные и WebAssembly-компоненты не делят один экземпляр сервиса,
+         а при пререндеринге используется отдельный scope. Если корзина должна пережить разрыв цепи или
+         перезагрузку страницы, сохранять её в базе или в хранилище браузера (например, `ProtectedLocalStorage`).
+    explanation: |
+      Изменение данных внутри сервиса само по себе не вызывает отрисовку. Компонент на базе `ComponentBase`
+      перерисовывается автоматически после своих обработчиков событий, после получения новых параметров и
+      после методов жизненного цикла. `CartCounter` ничего из этого не получал, поэтому ему нужно явное
+      уведомление - событие сервиса - и вызов `StateHasChanged`.
+
+      `InvokeAsync` нужен потому, что событие может быть вызвано не из контекста синхронизации рендерера
+      (например, если корзину обновит фоновая задача), а `StateHasChanged` должен выполняться на диспетчере
+      рендерера. `InvokeAsync` корректен в обоих случаях. Отписка в `Dispose` обязательна: сервис живёт всю
+      цепь и держит делегат на компонент, поэтому без отписки после навигации остаются утечка памяти и вызовы
+      на уже удалённом компоненте.
+
+      Каскадные параметры передают значение от предка вниз по одному поддереву. Изменение объекта внутри
+      каскадного значения тоже не перерисует шапку: нужен владелец, который вызовет отрисовку, и тогда
+      перерисуются все получатели. Кроме того, каскадные параметры не пересекают границы режимов отрисовки.
+      Проброс колбэка через каждый уровень связывает несвязанные компоненты и ломается при любой перестройке
+      дерева. Описанное поведение режимов отрисовки относится к Blazor Web App начиная с .NET 8 и верно для .NET 10.
+    linkTitles:
+      - "Управление состоянием в Blazor"
+      - "Каскадные значения и параметры в Blazor"
+  en:
+    title: "How do you update a cart counter in a Blazor header when an item is added deep inside a page?"
+    prompt: |
+      A Blazor Web App on .NET 10 uses global interactivity with the `InteractiveServer` render mode.
+      `MainLayout` contains a `CartCounter` component that shows the number of items in the cart. The
+      "Add to cart" button lives in an `AddToCartButton` component nested several levels inside the
+      `ProductPage` page.
+
+      Right now the cart items are stored in a field of `ProductPage`, and the header counter never changes.
+      A colleague suggests either a static field or passing a callback through every intermediate component.
+
+      How do you design the shared cart state, and what do you take into account?
+    hint: |
+      Where should state live when two distant components need it, and what makes a component re-render
+      when it did not handle any click itself?
+    answer: |
+      1. **Move the state into a state container service.** A `CartState` class holds the cart lines, exposes
+         `Count`, changes only through `Add` and `Remove` methods, and raises an `OnChange` event
+         (`event Action`) after every change.
+      2. **Pick the right lifetime.** Register it with `builder.Services.AddScoped<CartState>()`. In Interactive
+         Server mode the scope matches one user's circuit. A static field or a singleton on the server is shared
+         by all users: carts get mixed and you add a race condition.
+      3. **The writer just calls a method.** `AddToCartButton` injects `CartState` with `@inject` and calls `Add`.
+         The intermediate components need no parameters and no callbacks.
+      4. **The reader subscribes and unsubscribes.** `CartCounter` injects the same service, subscribes to
+         `OnChange` in `OnInitialized`, calls `InvokeAsync(StateHasChanged)` in the handler, implements
+         `IDisposable` and unsubscribes in `Dispose`.
+      5. **Check the boundaries.** Without global interactivity the layout is rendered statically, so the counter
+         must be made interactive. Server and WebAssembly components do not share one service instance, and
+         prerendering uses a separate scope. If the cart must survive a lost circuit or a page reload, store it
+         in a database or in browser storage (for example `ProtectedLocalStorage`).
+    explanation: |
+      Changing data inside a service does not trigger rendering by itself. A `ComponentBase` component
+      re-renders automatically after its own event handlers, after it receives new parameters and after
+      lifecycle methods. `CartCounter` got none of these, so it needs an explicit notification - the service
+      event - and a call to `StateHasChanged`.
+
+      `InvokeAsync` is needed because the event may be raised outside the renderer's synchronization context
+      (for example when a background task updates the cart), while `StateHasChanged` must run on the
+      renderer's dispatcher. `InvokeAsync` is correct in both cases. Unsubscribing in `Dispose` is mandatory:
+      the service lives for the whole circuit and holds a delegate to the component, so without it you get a
+      memory leak and calls on a component that was already removed after navigation.
+
+      Cascading parameters pass a value from an ancestor down one subtree. Mutating an object inside a cascading
+      value does not re-render the header either: an owner has to trigger rendering, and then every receiver
+      re-renders. Cascading parameters also do not cross render mode boundaries. Passing a callback through
+      every level couples unrelated components and breaks whenever the tree is restructured. The render mode
+      behaviour described here applies to Blazor Web Apps since .NET 8 and holds for .NET 10.
+    linkTitles:
+      - "Blazor state management"
+      - "Blazor cascading values and parameters"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

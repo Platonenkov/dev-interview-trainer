@@ -1,0 +1,105 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNRKP0ZYH5B7P78VJR
+slug: metric-tag-cardinality-safe-choices
+stack: dotnet
+topic: devops
+level: senior
+type: multi
+grading: auto
+tags: [metrics, cardinality, opentelemetry]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: true
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+  - id: f
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/metrics-instrumentation
+    lang: en
+    kind: docs
+  - url: https://opentelemetry.io/docs/specs/semconv/http/http-metrics/
+    lang: en
+    kind: spec
+locales:
+  ru:
+    title: Какие теги безопасно добавлять к метрике длительности HTTP-запросов?
+    prompt: |
+      Сервис записывает длительность каждого HTTP-запроса в гистограмму `System.Diagnostics.Metrics` и
+      экспортирует её в бэкенд метрик. Выберите все теги, которые можно добавить к этой метрике, не вызывая
+      взрывного роста числа временных рядов в бэкенде.
+    hint: Оцените, сколько различных значений может принять каждый тег за сутки трафика и растёт ли это число вместе с нагрузкой.
+    options:
+      a: "Шаблон маршрута, например `/orders/{id}`"
+      b: "HTTP-метод: `GET`, `POST` и так далее"
+      c: "Код состояния ответа, например `200` или `404`"
+      d: "Идентификатор аутентифицированного пользователя"
+      e: "Фактический путь запроса, например `/orders/18342`"
+      f: "Уникальный идентификатор запроса"
+    optionExplanations:
+      d: "Число пользователей растёт вместе с продуктом и не ограничено, поэтому каждый новый пользователь порождает новые временные ряды."
+      e: "Путь содержит идентификаторы, и каждое новое значение даёт новый ряд. Для метрик нужен шаблон маршрута, а не фактический путь."
+      f: "Каждый запрос уникален, поэтому каждый запрос создаёт собственный ряд, и метрика перестаёт быть агрегатом."
+    answer: Шаблон маршрута, HTTP-метод и код состояния ответа.
+    explanation: |
+      Каждая уникальная комбинация значений тегов - отдельный временной ряд: SDK держит для неё агрегат в памяти
+      процесса, а бэкенд (например, Prometheus) хранит и индексирует её отдельно. Число рядов равно произведению
+      числа различных значений всех тегов, а у гистограммы каждый ряд ещё содержит набор бакетов.
+
+      Шаблон маршрута, метод и код состояния ограничены: десятки маршрутов, несколько методов и десяток-другой
+      кодов дают тысячи комбинаций, и это число не растёт с трафиком. Идентификатор пользователя, фактический путь
+      и идентификатор запроса растут вместе с числом пользователей и запросов, поэтому число рядов не ограничено, и
+      память SDK и бэкенда заканчивается. Именно поэтому семантические соглашения OpenTelemetry для HTTP-метрик
+      используют `http.route`, а не полный путь, и требуют сводить нестандартные методы к значению `_OTHER`.
+
+      Значениям с высокой кардинальностью место в атрибутах спанов трассировки и в логах, где каждая запись и
+      так хранится отдельно.
+    linkTitles:
+      - "Создание метрик в .NET"
+      - "Семантические соглашения OpenTelemetry для HTTP-метрик"
+  en:
+    title: Which tags are safe to add to an HTTP request duration metric?
+    prompt: |
+      A service records the duration of every HTTP request in a `System.Diagnostics.Metrics` histogram and
+      exports it to a metrics backend. Select all tags that can be added to this metric without causing an
+      explosion in the number of time series in the backend.
+    hint: Estimate how many distinct values each tag can take over a day of traffic, and whether that number grows with load.
+    options:
+      a: "The route template, for example `/orders/{id}`"
+      b: "The HTTP method: `GET`, `POST` and so on"
+      c: "The response status code, for example `200` or `404`"
+      d: "The id of the authenticated user"
+      e: "The actual request path, for example `/orders/18342`"
+      f: "The unique id of the request"
+    optionExplanations:
+      d: "The number of users grows with the product and has no bound, so every new user creates new time series."
+      e: "The path contains ids, and every new value creates a new series. Metrics need the route template, not the actual path."
+      f: "Every request is unique, so every request creates its own series and the metric stops being an aggregate."
+    answer: The route template, the HTTP method and the response status code.
+    explanation: |
+      Every unique combination of tag values is a separate time series: the SDK keeps an aggregate for it in
+      process memory, and the backend (for example Prometheus) stores and indexes it separately. The number of
+      series is the product of the distinct value counts of all tags, and for a histogram every series also holds
+      a set of buckets.
+
+      The route template, method and status code are bounded: dozens of routes, a few methods and a dozen or two
+      codes give thousands of combinations, and that number does not grow with traffic. The user id, the actual
+      path and the request id grow with the number of users and requests, so the series count has no bound and
+      the memory of the SDK and the backend runs out. That is why the OpenTelemetry semantic conventions for HTTP
+      metrics use `http.route` rather than the full path, and require non-standard methods to be reduced to the
+      value `_OTHER`.
+
+      High-cardinality values belong in trace span attributes and in logs, where every record is stored
+      separately anyway.
+    linkTitles:
+      - "Creating metrics in .NET"
+      - "OpenTelemetry semantic conventions for HTTP metrics"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

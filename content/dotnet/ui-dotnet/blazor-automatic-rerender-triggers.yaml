@@ -1,0 +1,95 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WRAR3RZE23JVS7HHQE
+slug: blazor-automatic-rerender-triggers
+stack: dotnet
+topic: ui-dotnet
+level: middle
+type: multi
+grading: auto
+tags: [blazor, rendering, statehaschanged, componentbase]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: true
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/components/rendering
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/components/lifecycle
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Когда компонент Blazor перерисовывается без явного вызова StateHasChanged?
+    prompt: |
+      Компонент Blazor наследует `ComponentBase` и не переопределяет `ShouldRender`. Выберите все случаи, в которых
+      компонент перерисуется сам, без явного вызова `StateHasChanged` в его коде (.NET 10).
+    hint: "Кто вызывает код, который меняет поле: сам фреймворк или что-то внешнее по отношению к нему?"
+    options:
+      a: "Пользователь нажимает кнопку, у которой `@onclick` указывает на метод этого компонента, и метод меняет поле."
+      b: "Родительский компонент перерисовывается и передаёт другое значение в свойство `[Parameter]` этого компонента."
+      c: "`OnInitializedAsync` дожидается загрузки данных и записывает результат в поле."
+      d: "Обратный вызов `System.Threading.Timer`, запущенного компонентом, срабатывает по истечении интервала и меняет поле."
+      e: "Внедрённый сервис состояния вызывает своё C#-событие из фоновой операции (не из обработчика события этого компонента), а обработчик этого события в компоненте меняет поле."
+    optionExplanations:
+      d: "Таймер вызывает свой обратный вызов из пула потоков в обход рендерера, и `ComponentBase` не знает об изменении. Нужно вызвать `InvokeAsync(StateHasChanged)`."
+      e: "Событие сервиса, вызванное из фоновой операции, проходит в обход рендерера, поэтому обработчик должен сам вызвать `InvokeAsync(StateHasChanged)` и отписаться в `Dispose`."
+    answer: "Обработчик события компонента, новые параметры от родителя и завершение метода жизненного цикла (варианты a, b, c)."
+    explanation: |
+      `ComponentBase` сам вызывает `StateHasChanged` только там, где он управляет вызовом:
+
+      - после обработчика события, который рендерер вызвал через `IHandleEvent.HandleEventAsync` (для асинхронного
+        обработчика ещё и при первом незавершённом `await`);
+      - при получении параметров в `SetParametersAsync` (в том числе новых значений от перерисовавшегося родителя):
+        после завершения `OnInitialized{Async}` и `OnParametersSet{Async}`, а для асинхронных методов также при
+        первом незавершённом `await` и после завершения их задачи.
+
+      Таймер и событие сервиса из фоновой операции меняют поле вне этих точек: рендерер о них не знает, и интерфейс
+      остаётся прежним до следующей перерисовки по другой причине. В таких местах нужно явно вызвать
+      `StateHasChanged`, причём через `InvokeAsync`, потому что код выполняется не на диспетчере рендерера.
+    linkTitles:
+      - "Отрисовка компонентов Razor"
+      - "Жизненный цикл компонентов Razor"
+  en:
+    title: When does a Blazor component re-render without an explicit StateHasChanged call?
+    prompt: |
+      A Blazor component derives from `ComponentBase` and does not override `ShouldRender`. Select every case in which
+      the component re-renders on its own, without an explicit `StateHasChanged` call in its code (.NET 10).
+    hint: "Who calls the code that changes the field: the framework, or something external to it?"
+    options:
+      a: "The user clicks a button whose `@onclick` points to a method of this component, and the method changes a field."
+      b: "The parent component re-renders and passes a different value to a `[Parameter]` property of this component."
+      c: "`OnInitializedAsync` awaits a data load and stores the result in a field."
+      d: "A callback of a `System.Threading.Timer` started by the component fires when the interval elapses and changes a field."
+      e: "An injected state service raises its own C# event from a background operation (not from an event handler of this component), and the component's handler for that event changes a field."
+    optionExplanations:
+      d: "The timer invokes its callback from the thread pool, bypassing the renderer, so `ComponentBase` does not learn about the change. You need `InvokeAsync(StateHasChanged)`."
+      e: "A service event raised from a background operation bypasses the renderer, so the handler must call `InvokeAsync(StateHasChanged)` itself and unsubscribe in `Dispose`."
+    answer: "The component's event handler, new parameters from the parent and a completed lifecycle method (options a, b, c)."
+    explanation: |
+      `ComponentBase` calls `StateHasChanged` itself only where it controls the call:
+
+      - after an event handler that the renderer invoked through `IHandleEvent.HandleEventAsync` (for an async
+        handler also at the first incomplete `await`);
+      - when it receives parameters in `SetParametersAsync` (including new values from a re-rendering parent):
+        after `OnInitialized{Async}` and `OnParametersSet{Async}` complete, and for the async methods also at the
+        first incomplete `await` and after their task completes.
+
+      A timer and a service event raised from a background operation change the field outside these points: the
+      renderer does not know about them, and the UI stays the same until the next render for some other reason. In
+      such places you must call `StateHasChanged` explicitly, and through `InvokeAsync`, because the code does not
+      run on the renderer's dispatcher.
+    linkTitles:
+      - "ASP.NET Core Razor component rendering"
+      - "ASP.NET Core Razor component lifecycle"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"

@@ -1,0 +1,147 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WRZ596P36T8636JPJZ
+slug: icommand-canexecutechanged-button-stays-disabled
+stack: dotnet
+topic: ui-dotnet
+level: middle
+type: single
+grading: auto
+tags: [mvvm, icommand, data-binding, wpf, maui]
+code:
+  language: csharp
+  harness: none
+  source: |
+    public class SaveOrderCommand : ICommand
+    {
+        private readonly OrderViewModel _vm;
+
+        public SaveOrderCommand(OrderViewModel vm) => _vm = vm;
+
+        public event EventHandler CanExecuteChanged;
+
+        public bool CanExecute(object parameter) => _vm.IsValid;
+
+        public void Execute(object parameter) => _vm.Save();
+    }
+
+    public class OrderViewModel : INotifyPropertyChanged
+    {
+        private string _name;
+
+        public OrderViewModel() => SaveCommand = new SaveOrderCommand(this);
+
+        public event PropertyChangedEventHandler PropertyChanged;
+
+        public ICommand SaveCommand { get; }
+
+        public string Name
+        {
+            get => _name;
+            set
+            {
+                _name = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Name)));
+            }
+        }
+
+        public bool IsValid => !string.IsNullOrWhiteSpace(Name);
+
+        public void Save() { /* persist the order */ }
+    }
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.windows.input.icommand
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.windows.input.icommand.canexecutechanged
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/maui/fundamentals/data-binding/commanding
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему кнопка с привязанной ICommand остаётся неактивной, когда CanExecute уже вернул бы true?
+    prompt: |
+      Кнопка привязана к команде из модели представления: `<Button Text="Save" Command="{Binding SaveCommand}" />`,
+      поле ввода привязано к `Name`. При открытии экрана `Name` пустое, и кнопка неактивна, как и задумано.
+      Пользователь вводит имя, свойство `Name` обновляется, `IsValid` теперь возвращает `true`, но кнопка
+      так и остаётся неактивной. Чего не хватает в коде?
+    hint: Откуда кнопка узнаёт, что результат `CanExecute` мог измениться?
+    options:
+      a: "Команда не вызывает событие `CanExecuteChanged` при изменении `Name`, поэтому кнопка больше не спрашивает `CanExecute`."
+      b: "Сеттер `Name` не вызывает `PropertyChanged` для свойства `IsValid`, а кнопка следит именно за ним."
+      c: "Привязка `Command` должна иметь `Mode=TwoWay`, иначе кнопка не получает новое состояние команды."
+      d: "Метод `Execute` должен сам проверять `IsValid` и выходить, если данные некорректны."
+    optionExplanations:
+      b: "Кнопка не привязана к `IsValid`. Доступность кнопки с командой определяет `CanExecute`, а повторно его вызывают только по событию `CanExecuteChanged`. Уведомление об `IsValid` обновит лишь привязки к самому `IsValid`."
+      c: "Режим привязки задаёт, в какую сторону передаётся значение свойства `Command`, то есть сам объект команды. Он не меняется, а состояние доступности кнопка получает от команды, а не через привязку."
+      d: "Проверка в `Execute` полезна как защита, но не влияет на то, активна ли кнопка: это решает только результат `CanExecute`."
+    answer: "Команда должна вызывать `CanExecuteChanged`, когда меняется условие, проверяемое в `CanExecute`."
+    explanation: |
+      Элемент управления, привязанный к `ICommand`, вызывает `CanExecute` при получении команды и подписывается
+      на `CanExecuteChanged`. Он не опрашивает команду по таймеру и не следит за свойствами модели представления:
+      следующий вызов `CanExecute` будет только тогда, когда команда вызовет это событие. В коде событие
+      объявлено, но никогда не вызывается, поэтому кнопка навсегда запоминает первый результат `false`.
+
+      Исправление - добавить в команду метод вроде `RaiseCanExecuteChanged()`, который вызывает
+      `CanExecuteChanged?.Invoke(this, EventArgs.Empty)`, и вызывать его из сеттера `Name`. Готовые реализации
+      делают то же самое: в .NET MAUI это `Command.ChangeCanExecute()`, в CommunityToolkit.Mvvm -
+      `RelayCommand.NotifyCanExecuteChanged()`.
+
+      В WPF многие самописные команды перенаправляют подписку на `CanExecuteChanged` в
+      `CommandManager.RequerySuggested`, который WPF вызывает при вводе и смене фокуса. Поэтому там кнопка
+      иногда «оживает» сама, а команда с обычным полем-событием, как в примере, так и остаётся неактивной.
+    linkTitles:
+      - "Интерфейс ICommand"
+      - "Событие ICommand.CanExecuteChanged"
+      - "Команды в .NET MAUI"
+  en:
+    title: Why does a button bound to an ICommand stay disabled when CanExecute would now return true?
+    prompt: |
+      A button is bound to a view model command: `<Button Text="Save" Command="{Binding SaveCommand}" />`,
+      and an input field is bound to `Name`. When the screen opens, `Name` is empty and the button is disabled,
+      as intended. The user types a name, the `Name` property is updated, `IsValid` now returns `true`, but the
+      button stays disabled. What is missing in the code?
+    hint: How does the button learn that the result of `CanExecute` may have changed?
+    options:
+      a: "The command does not raise `CanExecuteChanged` when `Name` changes, so the button never asks `CanExecute` again."
+      b: "The `Name` setter does not raise `PropertyChanged` for `IsValid`, and the button watches that property."
+      c: "The `Command` binding needs `Mode=TwoWay`, otherwise the button does not receive the new command state."
+      d: "The `Execute` method must check `IsValid` itself and return early when the data is invalid."
+    optionExplanations:
+      b: "The button is not bound to `IsValid`. The enabled state of a command button comes from `CanExecute`, and it is called again only on `CanExecuteChanged`. A notification for `IsValid` only refreshes bindings to `IsValid` itself."
+      c: "The binding mode controls how the value of the `Command` property, the command object itself, flows. That object does not change, and the button gets its enabled state from the command, not through the binding."
+      d: "A check in `Execute` is a useful guard, but it does not affect whether the button is enabled: only the result of `CanExecute` decides that."
+    answer: "The command must raise `CanExecuteChanged` whenever the condition checked by `CanExecute` changes."
+    explanation: |
+      A control bound to an `ICommand` calls `CanExecute` when it receives the command and subscribes to
+      `CanExecuteChanged`. It does not poll the command on a timer and does not watch view model properties: the
+      next `CanExecute` call happens only when the command raises that event. In the code the event is declared
+      but never raised, so the button keeps the first result, `false`, forever.
+
+      The fix is to add a method such as `RaiseCanExecuteChanged()` to the command that calls
+      `CanExecuteChanged?.Invoke(this, EventArgs.Empty)`, and to call it from the `Name` setter. Ready-made
+      implementations do the same: in .NET MAUI it is `Command.ChangeCanExecute()`, in CommunityToolkit.Mvvm it is
+      `RelayCommand.NotifyCanExecuteChanged()`.
+
+      In WPF many hand-written commands forward the `CanExecuteChanged` subscription to
+      `CommandManager.RequerySuggested`, which WPF raises on input and focus changes. That is why a button there
+      sometimes comes back to life on its own, while a command with a plain field-like event, as in the example,
+      stays disabled.
+    linkTitles:
+      - "ICommand interface"
+      - "ICommand.CanExecuteChanged event"
+      - "Commanding in .NET MAUI"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  noRunReason: The scenario needs a WPF or .NET MAUI window with a bound Button; the sandbox has no UI framework.

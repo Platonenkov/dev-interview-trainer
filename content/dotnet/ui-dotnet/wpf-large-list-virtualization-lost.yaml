@@ -1,0 +1,130 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WRBTAKZV2YHT7F7F3R
+slug: wpf-large-list-virtualization-lost
+stack: dotnet
+topic: ui-dotnet
+level: senior
+type: situation
+grading: self
+tags: [wpf, virtualization, performance, layout]
+code:
+  language: xml
+  harness: none
+  source: |
+    <ScrollViewer>
+        <StackPanel>
+            <TextBlock Text="Orders" FontSize="20" />
+            <ListBox ItemsSource="{Binding Orders}"
+                     VirtualizingPanel.VirtualizationMode="Recycling" />
+        </StackPanel>
+    </ScrollViewer>
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/desktop/wpf/advanced/optimizing-performance-controls
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.windows.controls.virtualizingpanel
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: ListBox в WPF со 100 000 элементов стал открываться секундами после переноса в StackPanel
+    prompt: |
+      Экран заказов в WPF-приложении показывает `ListBox`, привязанный к коллекции из 100 000 элементов, и раньше
+      открывался мгновенно. При редизайне список поместили в `StackPanel` внутри `ScrollViewer` (разметка
+      показана в коде к вопросу). Теперь экран открывается несколько секунд, процесс занимает сотни мегабайт
+      памяти, а прокрутка идёт рывками. Как вы найдёте причину и что исправите?
+    hint: |
+      Какое ограничение по высоте получает `ScrollViewer` из шаблона `ListBox` от родительских элементов и что
+      панель списка делает с этим ограничением?
+    answer: |
+      1. **Подтвердить, что виртуализация пропала.** Открыть Live Visual Tree в Visual Studio (или Snoop) и
+         посчитать `ListBoxItem`: при работающей виртуализации их десятки, здесь - около 100 000. Посмотреть
+         `ActualHeight` у `ListBox`: она равна высоте всего содержимого, а не окна. Профилировщик покажет, что
+         время уходит на создание контейнеров, применение шаблонов, привязки и `Measure`/`Arrange`.
+      2. **Понять причину.** `VirtualizingStackPanel` создаёт контейнеры только для элементов, попадающих в
+         область просмотра, а размер этой области задаёт `ScrollViewer` из шаблона `ListBox`. Вертикальный
+         `StackPanel` и внешний `ScrollViewer` измеряют дочерний элемент с бесконечной высотой, поэтому `ListBox`
+         растягивается на всё содержимое, его собственному `ScrollViewer` нечего прокручивать, и «видимыми»
+         считаются все элементы.
+      3. **Вернуть ограниченную разметку.** Заменить `StackPanel` на `Grid`, где у строки со списком
+         `Height="*"` (или на `DockPanel`), чтобы `ListBox` занимал оставшееся место окна, и убрать внешний
+         `ScrollViewer`. Если страница должна прокручиваться целиком, задать списку фиксированную высоту или
+         `MaxHeight`.
+      4. **Проверить другие причины отключения виртуализации.** `ScrollViewer.CanContentScroll` остаётся `True`:
+         значение `False` отключает виртуализацию. `VirtualizingPanel.IsVirtualizing` не выключен. `ItemsPanel`
+         не заменён на панель без виртуализации, например обычный `StackPanel` или `WrapPanel`. Элементы не
+         добавлены в список как готовые `ListBoxItem`, а контейнеры одного типа. Если список сгруппирован,
+         виртуализацией при группировке управляет отдельное присоединённое свойство
+         `VirtualizingPanel.IsVirtualizingWhenGrouping`: проверить, что оно равно `True`.
+      5. **Оставить переиспользование контейнеров.** `VirtualizationMode="Recycling"` и лёгкий `ItemTemplate`
+         снижают стоимость прокрутки.
+      6. **Закрепить.** Комментарий в разметке о том, почему список должен быть ограничен по высоте, и проверка
+         числа контейнеров при code review или в UI-тесте. Если тяжела уже загрузка 100 000 объектов данных,
+         это отдельная задача: постраничная загрузка или виртуализация данных.
+    explanation: |
+      Виртуализация UI в WPF - это не свойство коллекции, а договорённость между панелью и `ScrollViewer`:
+      панель создаёт контейнеры только для элементов, которые помещаются в область просмотра. Если область
+      просмотра не ограничена, виртуализировать нечего, и WPF честно создаёт контейнер, визуальное дерево
+      шаблона и привязки для каждого из 100 000 элементов. Отсюда секунды на открытие и рост памяти.
+
+      Поэтому `VirtualizationMode="Recycling"` в исходной разметке не помог: настройки виртуализации
+      включены, но разметка лишила панель ограничения по высоте. Виртуализацию так же незаметно отключают
+      `CanContentScroll="False"`, `IsVirtualizing="False"`, `ItemsPanel` без виртуализации и явно добавленные
+      `ListBoxItem`. Лечится восстановлением ограниченной разметки, а не тонкой настройкой шаблона элемента.
+    linkTitles:
+      - "Оптимизация производительности: элементы управления"
+      - "Класс VirtualizingPanel"
+  en:
+    title: A WPF ListBox with 100,000 items takes seconds to open after it was moved into a StackPanel
+    prompt: |
+      An orders screen in a WPF application shows a `ListBox` bound to a collection of 100,000 items, and it
+      used to open instantly. In a redesign the list was placed in a `StackPanel` inside a `ScrollViewer` (the
+      markup is shown in the code of the question). Now the screen takes several seconds to open, the process
+      uses hundreds of megabytes of memory, and scrolling stutters. How do you find the cause and what do you fix?
+    hint: |
+      What height constraint does the `ScrollViewer` in the `ListBox` template receive from its parents, and what
+      does the list panel do with that constraint?
+    answer: |
+      1. **Confirm that virtualization is gone.** Open Live Visual Tree in Visual Studio (or Snoop) and count
+         the `ListBoxItem` elements: with working virtualization there are dozens, here about 100,000. Check
+         the `ActualHeight` of the `ListBox`: it equals the height of all content, not of the window. A profiler
+         shows the time going into creating containers, applying templates, bindings and `Measure`/`Arrange`.
+      2. **Understand the cause.** `VirtualizingStackPanel` creates containers only for items that fall into
+         the viewport, and the viewport size comes from the `ScrollViewer` in the `ListBox` template. A vertical
+         `StackPanel` and the outer `ScrollViewer` measure their child with infinite height, so the `ListBox`
+         grows to fit all its content, its own `ScrollViewer` has nothing to scroll, and every item counts as
+         "visible".
+      3. **Restore a constrained layout.** Replace the `StackPanel` with a `Grid` whose list row has
+         `Height="*"` (or with a `DockPanel`) so the `ListBox` fills the remaining space of the window, and remove
+         the outer `ScrollViewer`. If the page must scroll as a whole, give the list a fixed height or a
+         `MaxHeight`.
+      4. **Check the other ways to lose virtualization.** `ScrollViewer.CanContentScroll` stays `True`: the value
+         `False` disables virtualization. `VirtualizingPanel.IsVirtualizing` is not turned off. `ItemsPanel` is
+         not replaced with a panel that does not virtualize, such as a plain `StackPanel` or `WrapPanel`. Items
+         are not added to the list as ready-made `ListBoxItem` objects, and the containers are of one type. If the
+         list is grouped, virtualization under grouping is controlled by a separate attached property,
+         `VirtualizingPanel.IsVirtualizingWhenGrouping`: check that it is `True`.
+      5. **Keep container recycling.** `VirtualizationMode="Recycling"` and a light `ItemTemplate` reduce the
+         cost of scrolling.
+      6. **Lock it in.** A comment in the markup that explains why the list must have a bounded height, and a
+         check of the container count in code review or a UI test. If loading 100,000 data objects is itself
+         too heavy, that is a separate task: paging or data virtualization.
+    explanation: |
+      UI virtualization in WPF is not a property of the collection but a contract between the panel and the
+      `ScrollViewer`: the panel creates containers only for the items that fit into the viewport. If the
+      viewport is unbounded there is nothing to virtualize, and WPF dutifully creates a container, the visual
+      tree of its template and its bindings for each of the 100,000 items. That is where the seconds of opening
+      time and the memory growth come from.
+
+      This is why `VirtualizationMode="Recycling"` in the original markup did not help: virtualization is
+      enabled, but the layout took away the height constraint from the panel. Virtualization is switched off
+      just as quietly by `CanContentScroll="False"`, `IsVirtualizing="False"`, an `ItemsPanel` that does not
+      virtualize and explicitly added `ListBoxItem` objects. The cure is to restore a constrained layout, not to
+      tune the item template.
+    linkTitles:
+      - "Optimizing performance: controls"
+      - "VirtualizingPanel class"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  noRunReason: XAML markup of a WPF window; the sandbox runs only C# console snippets and has no WPF.

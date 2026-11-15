@@ -1,0 +1,129 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WN9WQ6XBGBJW7ZNAE8
+slug: blue-green-vs-canary-trade-offs
+stack: dotnet
+topic: devops
+level: senior
+type: open
+grading: self
+tags: [deployment, blue-green, canary-release, rollback]
+links:
+  - url: https://martinfowler.com/bliki/BlueGreenDeployment.html
+    lang: en
+    kind: article
+  - url: https://martinfowler.com/bliki/CanaryRelease.html
+    lang: en
+    kind: article
+  - url: https://martinfowler.com/bliki/ParallelChange.html
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: "Blue-green или canary: что выбрать для высоконагруженного сервиса?"
+    prompt: |
+      Высоконагруженный сервис на .NET выкатывается несколько раз в неделю. В каких случаях вы выберете
+      blue-green deployment, а в каких canary release? Чем каждая из стратегий обходится по инфраструктуре,
+      рискам и процессу?
+    hint: "Сравните, какая доля пользователей видит выкатываемую версию в момент переключения. И что должно быть верно, чтобы две версии могли работать одновременно?"
+    answer: |
+      - **Blue-green.** Есть два одинаковых боевых окружения. Следующая версия разворачивается в простаивающем
+        окружении и проверяется там. Затем маршрутизатор переключает на неё весь трафик сразу. Откат - переключить
+        маршрутизатор обратно.
+        - Плюсы. Переключение атомарное, а откат почти мгновенный. Релиз проверяется на боевой инфраструктуре до того,
+          как получит трафик. В каждый момент пользователей обслуживает одна версия, кроме запросов, которые
+          выполняются в момент переключения.
+        - Цена:
+          - нужна двойная мощность, как минимум на время релиза;
+          - дефект, не пойманный проверками до переключения, сразу видят 100% пользователей;
+          - простаивающее окружение стартует холодным (кэши, пулы соединений, JIT) и требует прогрева;
+          - база данных общая, поэтому схема должна подходить обеим версиям, иначе откат невозможен.
+      - **Canary.** Следующая версия получает небольшую долю трафика, например 1%, затем 5%, 25% и 100%. Каждый шаг
+        разрешается только после сравнения её доли ошибок и задержек с предыдущей версией.
+        - Плюсы. Радиус поражения мал: дефект, который проявляется только в production, затрагивает лишь долю
+          canary. Дополнительная мощность почти не нужна.
+        - Цена:
+          - нужны метрики и логи с разбивкой по версии, а также автоматическое или строго соблюдаемое ручное сравнение;
+          - выкатка занимает часы, а не минуты;
+          - всё это время обе версии работают вместе, поэтому API, контракты сообщений, кэши и схема базы должны быть
+            совместимы в обе стороны;
+          - пользователям может понадобиться липкая маршрутизация, чтобы они не прыгали между версиями.
+      - **Когда что выбирать.**
+        - **Blue-green** подходит, если нужно атомарное переключение в коротком окне. Он подходит и тогда, когда нет
+          метрик с разбивкой по версиям или когда запасная мощность дешёвая. Ещё один случай - две версии нельзя
+          надолго оставлять под трафиком вместе.
+        - **Canary** подходит, если главный риск - поведение, которое проявляется только на реальном трафике, а полный
+          отказ стоит дорого. На высоконагруженном сервисе сигнал от canary быстро становится статистически значимым,
+          и это довод в пользу canary.
+        - Стратегии можно совмещать: переводить трафик на green-окружение не сразу, а постепенно.
+    explanation: |
+      Главное различие - в том, как растёт охват пользователей. Blue-green - это скачок от 0 до 100%, canary -
+      плавный рост. Поэтому blue-green переносит контроль риска на этап до переключения, то есть на проверки
+      green-окружения. Canary переносит его на этап после переключения, то есть на наблюдение за реальным трафиком.
+      Дефект, который видно только под реальной нагрузкой или на реальных данных, blue-green покажет сразу всем, а
+      canary - малой доле запросов.
+
+      Обе стратегии опираются на миграции базы в стиле expand and contract (parallel change). Схема меняется
+      обратно совместимыми шагами, предыдущая версия продолжает работать, а откату не нужна обратная миграция.
+
+      Типичных ошибок две. Первая - считать откат в blue-green бесплатным, хотя разрушающая миграция уже выполнена.
+      Вторая - запускать canary без метрик с тегом версии: тогда ошибки 1% трафика теряются на фоне остальных 99%.
+    linkTitles:
+      - "Martin Fowler: BlueGreenDeployment"
+      - "Martin Fowler: CanaryRelease"
+      - "Martin Fowler: ParallelChange (expand and contract)"
+  en:
+    title: "Blue-green or canary: which one fits a high-traffic service?"
+    prompt: |
+      A high-traffic .NET service is deployed several times a week. When would you choose a blue-green deployment
+      over a canary release, and when the other way round? What does each strategy cost you in infrastructure,
+      risk and process?
+    hint: "Compare what share of users sees the version being released at the moment of the switch. And what has to be true for two versions to run at the same time?"
+    answer: |
+      - **Blue-green.** There are two identical production environments. The next version is deployed to the idle
+        environment and checked there. Then the router switches all traffic to it at once. Rollback means switching
+        the router back.
+        - Gains. The switch is atomic and rollback is almost instant. The release is checked on production
+          infrastructure before it gets traffic. At any moment one version serves users, apart from requests that
+          are in flight during the switch.
+        - Costs:
+          - you need double capacity, at least for the release window;
+          - a defect that the pre-switch checks missed hits 100% of users at once;
+          - the idle environment starts cold (caches, connection pools, JIT) and needs warm-up;
+          - the database is shared, so the schema must work for both versions, otherwise rollback is impossible.
+      - **Canary.** The next version gets a small share of traffic, for example 1%, then 5%, 25% and 100%. Each step
+        is allowed only after its error rate and latency are compared with the previous version.
+        - Gains. The blast radius is small: a defect that shows up only in production affects just the canary
+          share. Little extra capacity is needed.
+        - Costs:
+          - you need metrics and logs split by version, plus an automated or strictly followed manual comparison;
+          - the rollout takes hours rather than minutes;
+          - during that time both versions run together, so APIs, message contracts, caches and the database schema
+            must be compatible in both directions;
+          - users may need sticky routing so that they do not flip between versions.
+      - **When to choose which.**
+        - **Blue-green** fits when you need an atomic cutover in a short window. It also fits when you have no
+          per-version metrics, or when spare capacity is cheap. Another case is when two versions must not stay
+          under traffic together for long.
+        - **Canary** fits when the main risk is behaviour that only real traffic reveals, and a full outage is
+          expensive. On a high-traffic service the canary signal becomes statistically meaningful quickly, which
+          is an argument for canary.
+        - The strategies can be combined: shift traffic to the green environment gradually instead of all at once.
+    explanation: |
+      The key difference is how exposure grows. Blue-green is a step from 0 to 100%, canary is a ramp. So
+      blue-green puts risk control before the switch, in the checks of the green environment. Canary puts it after
+      the switch, in watching real traffic. A defect that only real load or real data reveals reaches every user
+      with blue-green, and only a small share of requests with canary.
+
+      Both strategies depend on expand and contract (parallel change) database migrations. The schema changes in
+      backward-compatible steps, the previous version keeps working, and rollback needs no reverse migration.
+
+      There are two typical mistakes. The first is treating blue-green rollback as free after a destructive
+      migration has already run. The second is running a canary without version-tagged metrics: the errors of 1%
+      of traffic are then lost in the noise of the other 99%.
+    linkTitles:
+      - "Martin Fowler: BlueGreenDeployment"
+      - "Martin Fowler: CanaryRelease"
+      - "Martin Fowler: ParallelChange (expand and contract)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

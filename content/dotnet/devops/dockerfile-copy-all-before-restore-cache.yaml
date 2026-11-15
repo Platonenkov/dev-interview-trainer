@@ -1,0 +1,87 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNW0SPH0P16P1XFJPY
+slug: dockerfile-copy-all-before-restore-cache
+stack: dotnet
+topic: devops
+level: middle
+type: find-bug
+grading: auto
+tags: [docker, dockerfile, build-cache, dotnet-restore]
+code:
+  language: dockerfile
+  harness: none
+  source: |
+    FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+    WORKDIR /src
+    COPY . .
+    RUN dotnet restore MyApp/MyApp.csproj
+    RUN dotnet publish MyApp/MyApp.csproj -c Release -o /app/publish --no-restore
+
+    FROM mcr.microsoft.com/dotnet/aspnet:10.0
+    WORKDIR /app
+    COPY --from=build /app/publish .
+    ENTRYPOINT ["dotnet", "MyApp.dll"]
+bugLineSets: [[3]]
+links:
+  - url: https://docs.docker.com/build/cache/
+    lang: en
+    kind: docs
+  - url: https://docs.docker.com/build/cache/optimize/
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какая строка Dockerfile заставляет dotnet restore выполняться при каждой правке кода?
+    prompt: |
+      Образ собирается правильно, но после любой правки одного `.cs`-файла повторная сборка снова выполняет
+      `dotnet restore`, заново скачивает все пакеты NuGet и идёт несколько минут, хотя зависимости не менялись.
+      Щёлкните по строке, из-за которой кэш слоя с восстановлением пакетов не переиспользуется.
+    hint: Docker проверяет кэш инструкций по порядку. Что именно уже скопировано в образ к моменту выполнения `dotnet restore`?
+    answer: Строка 3, `COPY . .` перед `RUN dotnet restore`.
+    explanation: |
+      Docker кэширует каждую инструкцию как слой и проверяет кэш по порядку. Если файлы, которые копирует
+      `COPY`, изменились, слой этой инструкции становится недействительным, а вместе с ним и все слои после него.
+      `COPY . .` копирует весь контекст сборки, поэтому правка любого `.cs`-файла делает этот слой
+      недействительным. `RUN dotnet restore` идёт следом, поэтому выполняется заново и снова скачивает пакеты,
+      хотя список зависимостей в `.csproj` не изменился.
+
+      Исправление - разделить копирование. Сначала скопировать только то, от чего зависит restore:
+      `COPY MyApp/MyApp.csproj MyApp/`, а также `nuget.config`, `Directory.Build.props` и
+      `Directory.Packages.props`, если они есть. Затем выполнить `RUN dotnet restore MyApp/MyApp.csproj`, и только
+      после этого `COPY . .` и `dotnet publish ... --no-restore`. Тогда при правке кода слой restore берётся из
+      кэша, а заново выполняется только публикация.
+
+      Дополнительно стоит завести `.dockerignore`, который исключает `bin/` и `obj/`: локальные артефакты сборки
+      не попадут в контекст и не будут лишний раз делать кэш `COPY` недействительным.
+    linkTitles:
+      - "Docker: кэш сборки"
+      - "Docker: оптимизация использования кэша сборки"
+  en:
+    title: Which Dockerfile line makes dotnet restore run again on every code change?
+    prompt: |
+      The image builds correctly, but after any edit to a single `.cs` file the next build runs `dotnet restore`
+      again, downloads every NuGet package again and takes several minutes, although the dependencies did not change.
+      Click the line that prevents the cached package restore layer from being reused.
+    hint: Docker checks the cache instruction by instruction, in order. What exactly has already been copied into the image by the time `dotnet restore` runs?
+    answer: Line 3, `COPY . .` before `RUN dotnet restore`.
+    explanation: |
+      Docker caches every instruction as a layer and checks the cache in order. If the files that a `COPY`
+      copies have changed, the layer of that instruction is invalidated, along with every layer after it.
+      `COPY . .` copies the whole build context, so an edit to any `.cs` file invalidates that layer.
+      `RUN dotnet restore` comes right after it, so it runs again and downloads the packages again, even though
+      the dependency list in the `.csproj` did not change.
+
+      The fix is to split the copy. First copy only what restore depends on: `COPY MyApp/MyApp.csproj MyApp/`,
+      plus `nuget.config`, `Directory.Build.props` and `Directory.Packages.props` if they exist. Then run
+      `RUN dotnet restore MyApp/MyApp.csproj`, and only after that `COPY . .` and `dotnet publish ... --no-restore`.
+      A code edit then reuses the cached restore layer, and only the publish step runs again.
+
+      It also helps to add a `.dockerignore` that excludes `bin/` and `obj/`: local build output then stays out of
+      the context and does not invalidate the `COPY` cache for no reason.
+    linkTitles:
+      - "Docker build cache"
+      - "Optimize cache usage in builds"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  noRunReason: The snippet is a Dockerfile, not C#. The sandbox only builds and runs C# snippets, and the defect is about Docker layer caching across repeated builds.

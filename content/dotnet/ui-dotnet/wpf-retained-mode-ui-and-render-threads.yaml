@@ -1,0 +1,102 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WR6R4D0JF2JDMHEPGV
+slug: wpf-retained-mode-ui-and-render-threads
+stack: dotnet
+topic: ui-dotnet
+level: senior
+type: open
+grading: self
+tags: [wpf, rendering, dispatcher, threading]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/desktop/wpf/advanced/wpf-architecture
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/desktop/wpf/advanced/threading-model
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как WPF отрисовывает окно и что делают поток UI и поток отрисовки?
+    prompt: |
+      Опишите, как WPF выводит окно на экран. Что такое сохраняемое (retained) визуальное дерево, за что
+      отвечает поток UI и за что - поток отрисовки (render thread)? Почему долгий синхронный обработчик
+      события перестаёт пропускать ввод, хотя уже нарисованное окно может продолжать перерисовываться?
+    hint: |
+      Что WPF хранит между кадрами и какой поток должен поработать, чтобы это хранимое содержимое изменилось?
+    answer: |
+      - **Сохраняемый режим.** Приложение не рисует окно заново по каждому `WM_PAINT`. Оно строит дерево
+        объектов `Visual` (элементы и инструкции рисования, записанные в `OnRender` через `DrawingContext`), и
+        WPF хранит это дерево между кадрами. Визуальное дерево передаётся композиционной системе WPF, которая
+        выводит его на экран в потоке отрисовки.
+      - **Поток UI.** Владеет `Dispatcher`, к нему привязаны все `DispatcherObject` (элементы и незамороженные
+        `Freezable`); обращение из другого потока даёт `InvalidOperationException` через `VerifyAccess`. Он
+        обрабатывает сообщения Windows и ввод, маршрутизирует события, выполняет обработчики, обновляет
+        привязки, делает `Measure`/`Arrange`, вызывает `OnRender` и передаёт изменения дерева на отрисовку.
+      - **Поток отрисовки.** Скрытый фоновый поток, который выводит полученное дерево на экран (через DirectX
+        или программно). Он не выполняет код приложения, разметку и привязки.
+      - **Долгий синхронный обработчик.** Пока он работает, `Dispatcher` не разбирает очередь: нет ввода,
+        нет разметки, нет обновления привязок и нового содержимого кадра. Но последнее переданное дерево уже
+        есть у композиционной системы, поэтому окно показывает последний кадр и может вывести его снова без
+        кода приложения. Через несколько секунд Windows помечает окно как «Не отвечает», потому что очередь
+        сообщений не обрабатывается.
+      - **Исправление.** Выносить работу с потока UI: `await` настоящего асинхронного ввода-вывода,
+        `Task.Run` для вычислений, возврат результата в поток UI через продолжение `await` или
+        `Dispatcher.InvokeAsync`.
+    explanation: |
+      В непосредственном режиме (классический Win32 с GDI) окно перерисовывает по запросу системы сам код
+      приложения в его же потоке, поэтому зависшее приложение не может перерисоваться, и его клиентская область
+      может остаться пустой или испорченной. WPF разделяет две задачи: поток UI решает, *что* должно быть на
+      экране, и меняет дерево, а поток отрисовки решает, *как* показать уже готовое дерево. Отсюда и наблюдаемое
+      поведение: картинка остаётся на месте, но ничего не меняется и не реагирует.
+
+      Важно, что поток отрисовки - не второй поток UI. Он не может выполнить обработчик, пересчитать разметку
+      или применить привязку, поэтому любое изменение картинки, которому нужен управляемый код, ждёт, пока
+      освободится `Dispatcher`. По той же причине элемент нельзя создать в фоновом потоке и вставить в окно: он
+      принадлежит своему `Dispatcher`. Общие кисти и геометрию можно разделить между потоками, только вызвав
+      `Freeze`.
+    linkTitles:
+      - "Архитектура WPF"
+      - "Модель потоков WPF"
+  en:
+    title: How does WPF render a window, and what do the UI thread and the render thread do?
+    prompt: |
+      Describe how WPF puts a window on the screen. What is the retained visual tree, what is the UI thread
+      responsible for and what is the render thread responsible for? Why does a long synchronous event handler
+      stop input from being processed, while a window that is already drawn can still be redrawn?
+    hint: |
+      What does WPF keep between frames, and which thread has to do some work for that kept content to change?
+    answer: |
+      - **Retained mode.** The application does not redraw the window on every `WM_PAINT`. It builds a tree of
+        `Visual` objects (elements and drawing instructions recorded in `OnRender` through `DrawingContext`), and
+        WPF keeps that tree between frames. The visual tree is passed to the WPF composition system, which puts
+        it on the screen on the render thread.
+      - **UI thread.** Owns the `Dispatcher`, and every `DispatcherObject` (elements and unfrozen `Freezable`
+        objects) is bound to it; access from another thread throws `InvalidOperationException` through
+        `VerifyAccess`. It processes Windows messages and input, routes events, runs handlers, updates bindings,
+        runs `Measure`/`Arrange`, calls `OnRender` and passes the tree changes on for rendering.
+      - **Render thread.** A hidden background thread that puts the tree it received on the screen (with DirectX
+        or in software). It runs no application code, no layout and no bindings.
+      - **A long synchronous handler.** While it runs, the `Dispatcher` does not drain its queue: no input, no
+        layout, no binding updates and no new frame content. But the composition system already has the last
+        tree that was passed to it, so the window shows the last frame and can present it again without
+        application code. After a few seconds Windows marks the window as "Not Responding" because its message
+        queue is not processed.
+      - **The fix.** Move work off the UI thread: `await` real asynchronous I/O, use `Task.Run` for computation,
+        and return the result to the UI thread through the `await` continuation or `Dispatcher.InvokeAsync`.
+    explanation: |
+      In immediate mode (classic Win32 with GDI) the window is repainted on request by the application's own
+      code on its own thread, so a hung application cannot repaint, and its client area may stay blank or
+      garbled. WPF splits the two jobs: the UI thread decides *what* should be on screen and changes the tree,
+      and the render thread decides *how* to show the tree it already has. That explains the observed behaviour:
+      the picture stays in place, but nothing changes and nothing reacts.
+
+      The render thread is not a second UI thread. It cannot run a handler, recompute layout or apply a
+      binding, so any change of the picture that needs managed code waits until the `Dispatcher` is free. For
+      the same reason you cannot create an element on a background thread and insert it into the window: it
+      belongs to its `Dispatcher`. Shared brushes and geometry can cross threads only after `Freeze` is called.
+    linkTitles:
+      - "WPF architecture"
+      - "Threading model"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

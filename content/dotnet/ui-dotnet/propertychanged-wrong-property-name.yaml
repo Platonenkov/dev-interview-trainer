@@ -1,0 +1,156 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WR1CHEVRAE29GQ3QK8
+slug: propertychanged-wrong-property-name
+stack: dotnet
+topic: ui-dotnet
+level: middle
+type: find-bug
+grading: auto
+tags: [inotifypropertychanged, data-binding, mvvm, callermembername]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    using System.ComponentModel;
+
+    var vm = new PersonViewModel();
+    vm.PropertyChanged += (_, e) => Console.WriteLine(e.PropertyName);
+    vm.FirstName = "Ada";
+    vm.LastName = "Lovelace";
+
+    class PersonViewModel : INotifyPropertyChanged
+    {
+        private string firstName = "";
+        private string lastName = "";
+
+        public event PropertyChangedEventHandler PropertyChanged;
+
+        public string FirstName
+        {
+            get => firstName;
+            set
+            {
+                firstName = value;
+                OnPropertyChanged("FirstName");
+            }
+        }
+
+        public string LastName
+        {
+            get => lastName;
+            set
+            {
+                lastName = value;
+                OnPropertyChanged("FirstName");
+            }
+        }
+
+        private void OnPropertyChanged(string propertyName) =>
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+    }
+bugLineSets: [[31]]
+fixedSource: |
+  using System.ComponentModel;
+  using System.Runtime.CompilerServices;
+
+  var vm = new PersonViewModel();
+  vm.PropertyChanged += (_, e) => Console.WriteLine(e.PropertyName);
+  vm.FirstName = "Ada";
+  vm.LastName = "Lovelace";
+
+  class PersonViewModel : INotifyPropertyChanged
+  {
+      private string firstName = "";
+      private string lastName = "";
+
+      public event PropertyChangedEventHandler PropertyChanged;
+
+      public string FirstName
+      {
+          get => firstName;
+          set
+          {
+              firstName = value;
+              OnPropertyChanged();
+          }
+      }
+
+      public string LastName
+      {
+          get => lastName;
+          set
+          {
+              lastName = value;
+              OnPropertyChanged();
+          }
+      }
+
+      // The compiler passes the name of the calling property.
+      private void OnPropertyChanged([CallerMemberName] string propertyName = null) =>
+          PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+  }
+fixedExpect: { kind: output, value: "FirstName\nLastName" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.componentmodel.inotifypropertychanged
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.runtime.compilerservices.callermembernameattribute
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строку, из-за которой изменение свойства не доходит до привязки
+    prompt: |
+      Модель представления должна сообщать подписчикам о каждом изменённом свойстве. Подписчик печатает имя
+      свойства из события, поэтому программа должна вывести `FirstName`, а затем `LastName`. Вместо этого она
+      дважды выводит `FirstName`, а привязка к `LastName` в окне WPF или MAUI показывала бы старое значение.
+      Щёлкните по строке с дефектом.
+    hint: "По какому признаку подписчик на `PropertyChanged` решает, какое свойство нужно перечитать?"
+    answer: |
+      Строка 31: сеттер `LastName` вызывает `OnPropertyChanged("FirstName")`, то есть сообщает об изменении
+      другого свойства.
+    explanation: |
+      Механизм привязки подписывается на `PropertyChanged` и сравнивает `e.PropertyName` с путём каждой
+      привязки. Значение перечитывают только привязки с совпадающим именем. Сеттер `LastName` скопирован из
+      `FirstName` вместе со строкой `"FirstName"`, поэтому привязки к `FirstName` перечитываются зря, а привязки
+      к `LastName` не узнают об изменении никогда. Исключения при этом нет: экран просто показывает устаревшие
+      данные, и такую ошибку легко пропустить.
+
+      Строковые литералы с именами свойств компилятор не проверяет, и переименование свойства их не меняет.
+      Надёжнее `nameof(LastName)`: имя проверяется при компиляции и меняется при переименовании. Ещё удобнее
+      необязательный параметр с атрибутом `[CallerMemberName]` в `OnPropertyChanged`: компилятор сам подставляет
+      имя вызывающего члена, для сеттера это имя свойства. Именно так исправлен код: сеттеры вызывают
+      `OnPropertyChanged()` без аргумента, и программа выводит `FirstName`, а затем `LastName`.
+    linkTitles:
+      - "Интерфейс INotifyPropertyChanged"
+      - "Класс CallerMemberNameAttribute"
+  en:
+    title: Find the line that keeps a property change from reaching the binding
+    prompt: |
+      The view model should notify subscribers about every changed property. The subscriber prints the
+      property name from the event, so the program should print `FirstName` and then `LastName`. Instead it
+      prints `FirstName` twice, and a binding to `LastName` in a WPF or MAUI window would show a stale value.
+      Click the line that contains the defect.
+    hint: "How does a `PropertyChanged` subscriber decide which property it has to re-read?"
+    answer: |
+      Line 31: the `LastName` setter calls `OnPropertyChanged("FirstName")`, so it reports a change of a
+      different property.
+    explanation: |
+      The binding engine subscribes to `PropertyChanged` and compares `e.PropertyName` with the path of each
+      binding. Only the bindings with a matching name re-read the value. The `LastName` setter was copied from
+      `FirstName` together with the string `"FirstName"`, so the `FirstName` bindings re-read for nothing and
+      the `LastName` bindings never learn about the change. No exception is thrown: the screen just shows stale
+      data, which makes this bug easy to miss.
+
+      The compiler does not check string literals with property names, and a rename does not update them.
+      `nameof(LastName)` is safer: the name is checked at compile time and follows a rename. An optional
+      parameter marked `[CallerMemberName]` on `OnPropertyChanged` is even more convenient: the compiler passes
+      the name of the calling member, which for a setter is the property name. That is how the code is fixed:
+      the setters call `OnPropertyChanged()` with no argument, and the program prints `FirstName` and then
+      `LastName`.
+    linkTitles:
+      - "INotifyPropertyChanged interface"
+      - "CallerMemberNameAttribute class"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

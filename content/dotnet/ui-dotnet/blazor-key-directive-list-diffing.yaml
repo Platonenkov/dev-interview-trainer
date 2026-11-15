@@ -1,0 +1,112 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WRDSF181A742KE6GFC
+slug: blazor-key-directive-list-diffing
+stack: dotnet
+topic: ui-dotnet
+level: senior
+type: open
+grading: self
+tags: [blazor, rendering, diffing, key-directive]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/components/element-component-model-relationships
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/components/lifecycle
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Почему в списке Blazor без @key поля ввода показывают чужие значения и как это исправляет @key?"
+    prompt: |
+      Компонент выводит список через `@foreach (var item in Items) { <TodoRow Item="item" /> }`. После удаления
+      первого элемента или сортировки пользователи видят, что в поле ввода остался текст от другой строки, а
+      раскрытой оказывается не та строка.
+
+      Объясните, почему так происходит без `@key`, как `@key` это исправляет и какие у `@key` есть
+      ограничения и цена.
+    hint: |
+      Как алгоритм сравнения деревьев отрисовки отличает друг от друга элементы, порождённые одной и той же
+      строкой разметки внутри цикла?
+    answer: |
+      - После каждой отрисовки Blazor сравнивает новое дерево отрисовки со старым (diff) и применяет к DOM и
+        экземплярам компонентов минимальный набор изменений.
+      - Все элементы цикла порождены одной строкой разметки и имеют одинаковый номер последовательности,
+        поэтому без `@key` diff сопоставляет их **по позиции**: i-й старый с i-м новым. После удаления первого
+        элемента экземпляр, показывавший элемент 0, получает параметры элемента 1 и так далее, а удаляется
+        последний экземпляр.
+      - Всё, что не выводится из параметров, остаётся на месте и оказывается у другого элемента: поля дочернего
+        компонента (флаг раскрытия, буфер, заполненный в `OnInitialized`, который повторно не вызывается - вызывается
+        только `OnParametersSet`) и состояние DOM (несвязанный текст в `<input>`, фокус, выделение, прокрутка).
+      - `@key="item.Id"` заставляет diff сопоставлять **по значению ключа**: совпавший ключ сохраняет экземпляр
+        или элемент (при перестановке он перемещается), пропавший ключ удаляет его, новый ключ создаёт новый.
+      - Ограничения и цена: ключи уникальны среди соседей одного родителя, дубликат приводит к исключению;
+        `@key` ставится на элемент или компонент непосредственно в теле цикла; индекс цикла в роли ключа
+        бесполезен, потому что снова даёт сопоставление по позиции; ключ лучше брать стабильным идентификатором,
+        а не экземпляром модели, который пересоздаётся при повторной загрузке. Сопоставление по ключам стоит
+        дополнительной работы diff, поэтому `@key` нужен там, где сохранение состояния действительно важно.
+    explanation: |
+      Blazor и так старается переиспользовать элементы и экземпляры компонентов. Проблема не в том, что состояние
+      теряется, а в том, что diff сам выбирает, какой старый экземпляр соответствует какому элементу модели.
+      При позиционном сопоставлении эта связь ломается при любой вставке, удалении или сортировке не в конце
+      списка.
+
+      Особенно коварен дочерний компонент, который копирует параметр в поле в `OnInitialized`: переиспользованный
+      экземпляр получает новый параметр, но `OnInitialized` для него больше не вызывается, и он продолжает
+      показывать данные старого элемента. Несвязанное значение `<input>` и фокус живут в самом DOM-узле, поэтому
+      переезжают вместе с узлом к соседнему элементу.
+
+      Ключи сопоставляются по равенству значений. Если список каждый раз загружается заново, а ключом служит
+      экземпляр модели, который не переопределяет `Equals`, новый экземпляр не равен старому: ни один ключ не
+      совпадёт, и все строки будут пересозданы. Состояние не перепутается, но и не сохранится. Стабильный `Id`
+      решает обе задачи. Тот же механизм можно использовать вне цикла: `@key` со значением, которое меняется,
+      гарантирует пересоздание поддерева при его смене.
+    linkTitles:
+      - "Сохранение связей между элементами и компонентами с помощью @key"
+      - "Жизненный цикл компонентов Razor"
+  en:
+    title: "Why do inputs in a Blazor list without @key show another item's values, and how does @key fix it?"
+    prompt: |
+      A component renders a list with `@foreach (var item in Items) { <TodoRow Item="item" /> }`. After the first
+      item is removed or the list is sorted, users see text from another row left in an input, and the wrong row
+      ends up expanded.
+
+      Explain why this happens without `@key`, how `@key` fixes it, and what limits and cost `@key` has.
+    hint: |
+      How does the render tree diff tell apart elements that come from the same line of markup inside a loop?
+    answer: |
+      - After each render Blazor compares the new render tree with the old one (the diff) and applies a minimal
+        set of changes to the DOM and to component instances.
+      - All loop items come from one line of markup and share the same sequence number, so without `@key` the
+        diff matches them **by position**: the i-th old with the i-th new. After the first item is removed, the
+        instance that showed item 0 receives the parameters of item 1 and so on, and the last instance is removed.
+      - Anything not derived from parameters stays in place and ends up with another item: child component fields
+        (an expanded flag, a buffer filled in `OnInitialized`, which does not run again - only `OnParametersSet`
+        does) and DOM state (unbound text in an `<input>`, focus, selection, scroll position).
+      - `@key="item.Id"` makes the diff match **by key value**: a matching key keeps the instance or element
+        (moving it on reorder), a missing key removes it, a new key creates a new one.
+      - Limits and cost: keys must be unique among siblings of one parent, and a duplicate causes an exception;
+        `@key` goes on the element or component directly in the loop body; the loop index as a key is useless,
+        because it brings back matching by position; prefer a stable identifier over a model instance that is
+        recreated on reload. Matching by key costs extra diff work, so use `@key` where preserving state actually
+        matters.
+    explanation: |
+      Blazor already tries to reuse elements and component instances. The problem is not that state is lost but
+      that the diff itself decides which old instance corresponds to which model item. With positional matching
+      that link breaks on any insert, removal or sort that does not happen at the end of the list.
+
+      A child component that copies a parameter into a field in `OnInitialized` is especially tricky: the reused
+      instance receives the new parameter, but `OnInitialized` never runs for it again, so it keeps showing the old
+      item's data. Unbound `<input>` values and focus live in the DOM node itself, so they move with the node to the
+      neighbouring item.
+
+      Keys are matched by value equality. If the list is reloaded every time and the key is a model instance that
+      does not override `Equals`, a new instance is not equal to the old one: no key matches and every row is
+      recreated. State is not mixed up, but it is not preserved either. A stable `Id` solves both. The same
+      mechanism works outside a loop: `@key` bound to a value that changes guarantees that the subtree is recreated
+      when the value changes.
+    linkTitles:
+      - "Retain element, component, and model relationships with @key"
+      - "Razor component lifecycle"
+meta:
+  authors: [platonenkov]
+  verified: 1970-01-01

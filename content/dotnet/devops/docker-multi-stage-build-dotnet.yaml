@@ -1,0 +1,93 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNXT2SYB34PG0YH8VX
+slug: docker-multi-stage-build-dotnet
+stack: dotnet
+topic: devops
+level: junior
+type: open
+grading: self
+tags: [docker, multi-stage-build, containers]
+links:
+  - url: https://docs.docker.com/build/building/multi-stage/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/docker/build-container
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Зачем Dockerfile для .NET-приложения использует многоэтапную сборку?
+    prompt: |
+      Типичный Dockerfile для приложения ASP.NET Core состоит из двух этапов. Первый этап собирает проект
+      в образе `mcr.microsoft.com/dotnet/sdk` и выполняет `dotnet publish`. Второй этап строится на образе
+      `mcr.microsoft.com/dotnet/aspnet` и копирует из первого только опубликованные файлы.
+
+      Зачем так делать, если приложение можно собрать и запустить в одном образе с SDK?
+    hint: Какой из этапов в итоге становится образом, который попадает в реестр и запускается на сервере?
+    answer: |
+      - В многоэтапной сборке каждый `FROM` начинает новый этап, и образом становится только последний этап
+        (если не выбрать другой через `--target`). Файлы из предыдущих этапов попадают в него только явно,
+        через `COPY --from=build ...`.
+      - Этапу сборки нужен SDK: компилятор, MSBuild, NuGet, исходный код, каталоги `obj` и `bin`, кэш пакетов.
+        Во время работы приложению всё это не нужно: результат `dotnet publish` запускается на одной среде
+        выполнения, а для ASP.NET Core это образ `aspnet` (среда выполнения .NET плюс общий фреймворк ASP.NET Core).
+      - Поэтому итоговый образ в разы меньше: он быстрее скачивается и разворачивается и занимает меньше места в реестре.
+      - У него меньше поверхность атаки: нет компилятора, инструментов SDK и лишних пакетов, в которых могут
+        найтись уязвимости или которые пригодятся атакующему. Исходный код и служебные файлы сборки, например
+        `nuget.config` с токеном приватного фида, не попадают в поставляемый образ.
+    explanation: |
+      Окружению сборки и окружению запуска нужны разные вещи. Одноэтапный образ на базе SDK работает, но вместе
+      с приложением в production уезжает всё, что использовалось при сборке: образ заметно больше, а каждый лишний
+      инструмент и пакет - это то, что придётся обновлять из-за уязвимостей, и то, чем может воспользоваться
+      атакующий, если получит доступ к контейнеру.
+
+      Многоэтапная сборка разделяет эти окружения в одном Dockerfile: этап сборки может быть сколь угодно тяжёлым,
+      а последний этап берёт только результат публикации. Слои этапа сборки в поставляемый образ не входят.
+
+      Ту же идею можно развить дальше: автономное (self-contained) приложение можно запускать на ещё меньшем образе
+      `runtime-deps`, а Microsoft публикует и chiseled-образы на базе Ubuntu без оболочки и менеджера пакетов.
+      Тег образа среды выполнения должен соответствовать целевой платформе приложения, например `aspnet:10.0`
+      для `net10.0`, а версия SDK должна быть не ниже неё.
+    linkTitles:
+      - "Многоэтапные сборки (документация Docker)"
+      - "Руководство: контейнеризация приложения .NET"
+  en:
+    title: Why does a Dockerfile for a .NET app use a multi-stage build?
+    prompt: |
+      A typical Dockerfile for an ASP.NET Core app has two stages. The first stage builds the project in the
+      `mcr.microsoft.com/dotnet/sdk` image and runs `dotnet publish`. The second stage is based on the
+      `mcr.microsoft.com/dotnet/aspnet` image and copies only the published files from the first one.
+
+      Why do this, if the app could be built and run in a single image with the SDK?
+    hint: Which of the stages ends up as the image that is pushed to the registry and run on the server?
+    answer: |
+      - In a multi-stage build every `FROM` starts a new stage, and only the last stage becomes the image
+        (unless another one is selected with `--target`). Files from earlier stages get into it only explicitly,
+        through `COPY --from=build ...`.
+      - The build stage needs the SDK: the compiler, MSBuild, NuGet, the source code, the `obj` and `bin` folders,
+        the package cache. The running app needs none of that: the output of `dotnet publish` runs on the runtime
+        alone, and for ASP.NET Core that is the `aspnet` image (the .NET runtime plus the ASP.NET Core shared framework).
+      - So the final image is several times smaller: it is pulled and deployed faster and takes less registry space.
+      - Its attack surface is smaller: there is no compiler, no SDK tools and no extra packages that may contain
+        vulnerabilities or help an attacker. The source code and build-only files, such as a `nuget.config`
+        with a private feed token, do not end up in the shipped image.
+    explanation: |
+      The build environment and the runtime environment need different things. A single-stage image based on the
+      SDK works, but everything used for the build ships to production with the app: the image is much larger, and
+      every extra tool and package is something you must patch for vulnerabilities and something an attacker can
+      use after getting into the container.
+
+      A multi-stage build separates the two environments in one Dockerfile: the build stage can be as heavy as it
+      needs to be, and the last stage takes only the publish output. The layers of the build stage are not part of
+      the shipped image.
+
+      The same idea goes further: a self-contained app can run on the even smaller `runtime-deps` image, and
+      Microsoft also publishes chiseled Ubuntu-based images with no shell and no package manager. The runtime image
+      tag must match the target framework of the app, for example `aspnet:10.0` for `net10.0`, and the SDK must be
+      at least that version.
+    linkTitles:
+      - "Multi-stage builds (Docker docs)"
+      - "Tutorial: Containerize a .NET app"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

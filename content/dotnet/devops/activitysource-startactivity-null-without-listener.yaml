@@ -1,0 +1,96 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNGDZZ5W892YAPF7QY
+slug: activitysource-startactivity-null-without-listener
+stack: dotnet
+topic: devops
+level: middle
+type: find-bug
+grading: auto
+tags: [tracing, activity-source, null-reference]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    using System.Diagnostics;
+
+    ActivitySource source = new("Shop.Orders");
+
+    int ProcessOrder(int orderId)
+    {
+        using Activity activity = source.StartActivity("ProcessOrder");
+        activity.SetTag("order.id", orderId);
+        return orderId * 2;
+    }
+
+    Console.WriteLine(ProcessOrder(21));
+bugLineSets: [[8]]
+fixedSource: |
+  using System.Diagnostics;
+
+  ActivitySource source = new("Shop.Orders");
+
+  int ProcessOrder(int orderId)
+  {
+      using Activity activity = source.StartActivity("ProcessOrder");
+      activity?.SetTag("order.id", orderId);
+      return orderId * 2;
+  }
+
+  Console.WriteLine(ProcessOrder(21));
+fixedExpect: { kind: output, value: "42" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/distributed-tracing-instrumentation-walkthroughs
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.diagnostics.activitysource.startactivity
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему код с ActivitySource падает с NullReferenceException без настроенной трассировки?
+    prompt: |
+      Метод `ProcessOrder` инструментирован для распределённой трассировки через `ActivitySource`. В сервисе,
+      где подключён OpenTelemetry, он работает, а в консольной программе без настроенной трассировки
+      завершается с `NullReferenceException` вместо вывода `42`. Щёлкните по строке с дефектом.
+    hint: Какое значение может оказаться в переменной, которую возвращает `StartActivity`?
+    answer: Строка 8, вызов `activity.SetTag(...)` без проверки `activity` на `null`.
+    explanation: |
+      `ActivitySource.StartActivity` возвращает `null`, если у источника нет ни одного `ActivityListener` или ни
+      один слушатель не заинтересован в записи операции (сэмплирование вернуло `ActivitySamplingResult.None`). Так
+      выключенная трассировка почти ничего не стоит: объект `Activity` просто не создаётся. В консольной
+      программе слушателей нет, поэтому `activity` равна `null`, и вызов `SetTag` в строке 8 выбрасывает
+      `NullReferenceException`. Строка 7 корректна: объявление `using` со значением `null` просто не вызывает
+      `Dispose`.
+
+      Исправление - оператор `?.` при каждом обращении к активности. Если вычислять значения тегов дорого,
+      один раз проверьте `activity is not null` (при желании затем ещё и `activity.IsAllDataRequested`) и только
+      потом заполняйте теги. Обращаться к `IsAllDataRequested` до проверки на `null` нельзя: это свойство
+      экземпляра, и на `null` оно выбросит то же исключение.
+    linkTitles:
+      - "Добавление распределённой трассировки в .NET: пошаговые примеры"
+      - "Метод ActivitySource.StartActivity"
+  en:
+    title: Why does ActivitySource code throw NullReferenceException when tracing is not configured?
+    prompt: |
+      The `ProcessOrder` method is instrumented for distributed tracing with `ActivitySource`. In a service
+      with OpenTelemetry configured it works, but in a console program without any tracing setup it ends
+      with `NullReferenceException` instead of printing `42`. Click the line that contains the defect.
+    hint: Which value might the variable returned by `StartActivity` hold?
+    answer: Line 8, the call `activity.SetTag(...)` without checking `activity` for `null`.
+    explanation: |
+      `ActivitySource.StartActivity` returns `null` when the source has no `ActivityListener`, or when no
+      listener is interested in recording the operation (sampling returned `ActivitySamplingResult.None`). This
+      keeps disabled tracing almost free: no `Activity` object is created. The console program has no listeners,
+      so `activity` is `null` and the `SetTag` call on line 8 throws `NullReferenceException`. Line 7 is fine: a
+      `using` declaration with a `null` value simply skips `Dispose`.
+
+      The fix is the `?.` operator on every access to the activity. If tag values are expensive to compute,
+      check `activity is not null` once (and, if you like, `activity.IsAllDataRequested` after that) and only
+      then fill in the tags. Do not read `IsAllDataRequested` before the check for `null`: it is an instance property,
+      and on `null` it throws the same exception.
+    linkTitles:
+      - "Adding distributed tracing instrumentation: walkthroughs"
+      - "ActivitySource.StartActivity method"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-15

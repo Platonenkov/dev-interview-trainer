@@ -1,0 +1,95 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNSZWPP6QCNAZBAMPK
+slug: metrics-histogram-for-request-duration
+stack: dotnet
+topic: devops
+level: middle
+type: single
+grading: auto
+tags: [metrics, histogram, system-diagnostics-metrics, latency]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: false
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/metrics-instrumentation
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.diagnostics.metrics.histogram-1
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Каким инструментом System.Diagnostics.Metrics записывать длительность запросов для p95 и p99?
+    prompt: |
+      Сервис на .NET 10 обрабатывает запросы, и вы добавляете собственную метрику через `System.Diagnostics.Metrics`.
+      Нужно записывать длительность каждого обработанного запроса так, чтобы на дашбордах можно было
+      показать перцентили p95 и p99. Какой инструмент выбрать?
+    hint: Какой инструмент сохраняет не только сумму или текущее значение, но и то, как измерения распределены?
+    options:
+      a: '`Counter<double>`, созданный через `Meter.CreateCounter<double>`'
+      b: '`UpDownCounter<double>`, созданный через `Meter.CreateUpDownCounter<double>`'
+      c: '`Histogram<double>`, созданный через `Meter.CreateHistogram<double>`'
+      d: '`ObservableGauge<double>`, созданный через `Meter.CreateObservableGauge<double>`'
+    optionExplanations:
+      a: '`Counter<T>` только суммирует добавленные значения. Из общей суммы миллисекунд нельзя узнать, сколько запросов были медленными, поэтому перцентили не вычислить.'
+      b: '`UpDownCounter<T>` хранит текущий итог, который может расти и уменьшаться, например число активных запросов или длину очереди. Распределения отдельных измерений он не сохраняет.'
+      d: '`ObservableGauge<T>` вызывает обратный вызов в момент сбора и сообщает одно текущее значение. Длительности отдельных запросов между сборами теряются.'
+    answer: "`Histogram<double>`: каждое измерение записывается через `Record`, и из распределения можно вычислить перцентили."
+    explanation: |
+      `Histogram<T>.Record(value, tags)` передаёт каждое измерение в агрегацию, которая сохраняет распределение
+      значений, а не одно число. В OpenTelemetry по умолчанию это гистограмма с явными границами корзин: количество
+      измерений в каждой корзине плюс общая сумма и счётчик. Бэкенд, например Prometheus через `histogram_quantile`,
+      оценивает по корзинам p95 и p99. Это оценка: точность зависит от выбранных границ корзин.
+
+      Остальные инструменты сводят измерения к одному числу. `Counter<T>` подходит для "сколько всего"
+      (число запросов, байт), `UpDownCounter<T>` - для текущего итога, который меняется в обе стороны,
+      наблюдаемый gauge - для значения, снимаемого в момент сбора. Ни из одного из них перцентиль не получить.
+
+      Так же устроены встроенные метрики: в .NET 10 ASP.NET Core публикует длительность запросов
+      `http.server.request.duration` именно как гистограмму в секундах.
+    linkTitles:
+      - "Создание метрик"
+      - "Класс Histogram<T>"
+  en:
+    title: Which System.Diagnostics.Metrics instrument should record request duration for p95 and p99?
+    prompt: |
+      A .NET 10 service processes requests, and you add your own metric with `System.Diagnostics.Metrics`.
+      You need to record the duration of each processed request so that dashboards can show the p95 and
+      p99 percentiles. Which instrument do you choose?
+    hint: Which instrument keeps not only a sum or a current value, but how the measurements are distributed?
+    options:
+      a: '`Counter<double>` created with `Meter.CreateCounter<double>`'
+      b: '`UpDownCounter<double>` created with `Meter.CreateUpDownCounter<double>`'
+      c: '`Histogram<double>` created with `Meter.CreateHistogram<double>`'
+      d: '`ObservableGauge<double>` created with `Meter.CreateObservableGauge<double>`'
+    optionExplanations:
+      a: '`Counter<T>` only sums the values added to it. A total of milliseconds cannot tell how many requests were slow, so percentiles cannot be computed.'
+      b: '`UpDownCounter<T>` keeps a current total that can go up and down, such as the number of active requests or a queue length. It does not keep the distribution of individual measurements.'
+      d: '`ObservableGauge<T>` runs a callback at collection time and reports a single current value. The durations of individual requests between collections are lost.'
+    answer: "`Histogram<double>`: every measurement is recorded with `Record`, and percentiles can be computed from the distribution."
+    explanation: |
+      `Histogram<T>.Record(value, tags)` passes each measurement to an aggregation that keeps the distribution of
+      values, not a single number. In OpenTelemetry the default is an explicit bucket histogram: the count of
+      measurements per bucket plus the total sum and count. A backend, for example Prometheus with
+      `histogram_quantile`, estimates p95 and p99 from the buckets. It is an estimate: the accuracy depends on the
+      chosen bucket boundaries.
+
+      The other instruments reduce measurements to one number. `Counter<T>` fits "how many in total" (requests,
+      bytes), `UpDownCounter<T>` fits a current total that moves both ways, and an observable gauge fits a value
+      sampled at collection time. None of them can give a percentile.
+
+      The built-in metrics follow the same design: in .NET 10 ASP.NET Core publishes the request duration
+      `http.server.request.duration` as a histogram in seconds.
+    linkTitles:
+      - "Creating metrics"
+      - "Histogram<T> class"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

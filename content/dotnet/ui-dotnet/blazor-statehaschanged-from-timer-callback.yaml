@@ -1,0 +1,99 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WR5C3YA340CWM9Z02V
+slug: blazor-statehaschanged-from-timer-callback
+stack: dotnet
+topic: ui-dotnet
+level: middle
+type: find-bug
+grading: auto
+tags: [blazor, rendering, statehaschanged, dispatcher, timer]
+code:
+  language: razor
+  harness: none
+  source: |
+    @page "/clock"
+    @rendermode InteractiveServer
+    @implements IDisposable
+
+    <p>Ticks: @ticks</p>
+
+    @code {
+        private int ticks;
+        private System.Threading.Timer? timer;
+
+        protected override void OnInitialized()
+        {
+            timer = new System.Threading.Timer(_ =>
+            {
+                ticks++;
+                StateHasChanged();
+            }, null, 1000, 1000);
+        }
+
+        public void Dispose() => timer?.Dispose();
+    }
+bugLineSets: [[16]]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/components/synchronization-context
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/components/rendering
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему вызов StateHasChanged из обратного вызова таймера ломает компонент Blazor?
+    prompt: |
+      Компонент Blazor работает в режиме отрисовки `InteractiveServer` (появился в .NET 8, поведение проверяется для .NET 10).
+      Он должен раз в секунду увеличивать счётчик и показывать его на странице. Но примерно через секунду после
+      открытия страницы выбрасывается `InvalidOperationException` с сообщением
+      `The current thread is not associated with the Dispatcher`. Щёлкните по строке, которая падает во время выполнения.
+    hint: В каком потоке выполняется обратный вызов `System.Threading.Timer` и кто вызывает остальные методы компонента?
+    answer: Строка 16, прямой вызов `StateHasChanged()` из обратного вызова таймера.
+    explanation: |
+      У каждого цепа (circuit) Blazor Server есть рендерер со своим `Dispatcher`: он выстраивает в очередь всю работу с
+      компонентами, и методы жизненного цикла и обработчики событий выполняются через него. Обратный вызов
+      `System.Threading.Timer` приходит в поток пула потоков, ничего не зная об этом диспетчере. `StateHasChanged`
+      ставит компонент в очередь отрисовки, а рендерер перед этим проверяет, что вызов идёт через его `Dispatcher`,
+      и выбрасывает `InvalidOperationException`. Исключение никто не перехватывает: оно уходит из обратного вызова
+      таймера как необработанное.
+
+      Исправление - переключиться на диспетчер через `InvokeAsync`, причём лучше перенести туда и изменение поля,
+      чтобы оно тоже выполнялось последовательно с отрисовкой:
+      `_ = InvokeAsync(() => { ticks++; StateHasChanged(); });`.
+
+      В Blazor WebAssembly с одним потоком тот же код может не упасть, но правильный вариант и там - `InvokeAsync`:
+      компонент не должен зависеть от того, в каком режиме отрисовки его запустят.
+    linkTitles:
+      - "Контекст синхронизации Blazor"
+      - "Отрисовка компонентов Razor"
+  en:
+    title: Why does calling StateHasChanged from a timer callback break a Blazor component?
+    prompt: |
+      A Blazor component runs in the `InteractiveServer` render mode (introduced in .NET 8, the behaviour is checked for .NET 10).
+      It should increase a counter every second and show it on the page. But about a second after the page opens,
+      an `InvalidOperationException` is thrown with the message
+      `The current thread is not associated with the Dispatcher`. Click the line that fails at run time.
+    hint: On which thread does a `System.Threading.Timer` callback run, and who calls the other methods of the component?
+    answer: Line 16, the direct call to `StateHasChanged()` from the timer callback.
+    explanation: |
+      Every Blazor Server circuit has a renderer with its own `Dispatcher`: it queues all work on components, and
+      lifecycle methods and event handlers run through it. A `System.Threading.Timer` callback arrives on a thread
+      pool thread that knows nothing about this dispatcher. `StateHasChanged` queues the component for rendering, and
+      the renderer first checks that the call comes through its `Dispatcher` and throws `InvalidOperationException`.
+      Nothing catches the exception: it leaves the timer callback unhandled.
+
+      The fix is to switch to the dispatcher with `InvokeAsync`, and it is better to move the field change there too,
+      so that it is also serialized with rendering:
+      `_ = InvokeAsync(() => { ticks++; StateHasChanged(); });`.
+
+      In single-threaded Blazor WebAssembly the same code may not fail, but `InvokeAsync` is the correct form there
+      as well: a component should not depend on the render mode it happens to run in.
+    linkTitles:
+      - "ASP.NET Core Blazor synchronization context"
+      - "ASP.NET Core Razor component rendering"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"
+  noRunReason: "A Blazor component needs the ASP.NET Core renderer and a SignalR circuit, which the BCL-only sandbox does not provide."

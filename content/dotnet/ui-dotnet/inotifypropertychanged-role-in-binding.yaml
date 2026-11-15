@@ -1,0 +1,99 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WRJ8WD18JTXD8K82RC
+slug: inotifypropertychanged-role-in-binding
+stack: dotnet
+topic: ui-dotnet
+level: junior
+type: open
+grading: self
+tags: [data-binding, inotifypropertychanged, mvvm, wpf, maui]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.componentmodel.inotifypropertychanged
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/desktop/wpf/data/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/maui/fundamentals/data-binding/
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Зачем модели представления реализовывать INotifyPropertyChanged при привязке данных?
+    prompt: |
+      Модель представления привязана к элементам управления WPF или .NET MAUI. Зачем ей реализовывать
+      `INotifyPropertyChanged`? Что увидит пользователь, если код модели изменит значение обычного свойства,
+      но не вызовет событие `PropertyChanged`?
+    hint: |
+      Откуда механизм привязки узнаёт, что значение в источнике стало другим? Опрашивает ли он свойства сам?
+    answer: |
+      - Механизм привязки не опрашивает источник. При создании привязки он читает значение свойства и, если
+        источник реализует `INotifyPropertyChanged`, подписывается на событие `PropertyChanged`.
+      - Когда событие приходит, механизм смотрит на `PropertyName` и перечитывает значение только для привязок,
+        путь которых ведёт к свойству с этим именем. Остальные привязки не обновляются.
+      - Без события элемент управления продолжает показывать значение, прочитанное при создании привязки или
+        при установке `DataContext` (`BindingContext` в MAUI). Если код модели меняет обычное свойство CLR
+        напрямую, новое значение на экран не попадёт, хотя в объекте оно уже другое.
+      - Обратное направление, из элемента в источник (`TwoWay`), работает и без события: привязка сама вызывает
+        сеттер. Поэтому типичный симптом такой: ввод пользователя доходит до модели, а изменения из кода
+        (загрузка данных, сброс формы, вычисляемые свойства) на экране не видны.
+    explanation: |
+      Привязка устроена как подписка, а не как опрос. У обычного свойства CLR нет встроенного способа сообщить
+      об изменении, и `INotifyPropertyChanged` даёт его: одно событие с именем изменившегося свойства. Механизм
+      привязки подписывается на него и обновляет те привязки, которые зависят от этого имени. Поэтому для
+      привязок `OneWay` и `TwoWay` источник должен уведомлять об изменениях.
+
+      У элементов управления самих фреймворков уведомления об изменениях встроены: это свойства зависимостей
+      (`DependencyProperty`) в WPF и привязываемые свойства (`BindableProperty`) в MAUI. Модель представления
+      обычно делают простым классом с `INotifyPropertyChanged`, чтобы она не зависела от UI-фреймворка и легко
+      тестировалась.
+
+      На практике событие вызывают в сеттере только при реальном изменении значения, а имя свойства передают
+      через `nameof` или `[CallerMemberName]`, чтобы опечатка в строке не оставила привязку без обновлений.
+      В .NET MAUI механизм привязки сам переносит обновления по `PropertyChanged` в поток UI, но на изменения
+      `ObservableCollection<T>` это не распространяется.
+    linkTitles:
+      - "Интерфейс INotifyPropertyChanged"
+      - "Обзор привязки данных в WPF"
+      - "Привязка данных в .NET MAUI"
+  en:
+    title: Why does a view model implement INotifyPropertyChanged for data binding?
+    prompt: |
+      A view model is bound to WPF or .NET MAUI controls. Why does it implement `INotifyPropertyChanged`?
+      What does the user see if the view model code changes the value of a plain property but does not raise
+      the `PropertyChanged` event?
+    hint: |
+      How does the binding engine learn that the value in the source has changed? Does it poll the properties itself?
+    answer: |
+      - The binding engine does not poll the source. When the binding is created, it reads the property value
+        and, if the source implements `INotifyPropertyChanged`, subscribes to the `PropertyChanged` event.
+      - When the event arrives, the engine looks at `PropertyName` and re-reads the value only for the bindings
+        whose path leads to the property with that name. The other bindings are not refreshed.
+      - Without the event, the control keeps showing the value read when the binding was created or when
+        `DataContext` (`BindingContext` in MAUI) was set. If view model code changes a plain CLR property
+        directly, the new value does not reach the screen, even though the object already holds it.
+      - The other direction, from the control to the source (`TwoWay`), works without the event: the binding
+        calls the setter itself. So the typical symptom is that user input reaches the view model, while changes
+        made in code (loading data, resetting a form, computed properties) are not visible on screen.
+    explanation: |
+      A binding is a subscription, not polling. A plain CLR property has no built-in way to report a change,
+      and `INotifyPropertyChanged` provides one: a single event carrying the name of the changed property.
+      The binding engine subscribes to it and refreshes the bindings that depend on that name. That is why
+      `OneWay` and `TwoWay` bindings need a source that reports its changes.
+
+      The frameworks' own controls have change notification built in: dependency properties
+      (`DependencyProperty`) in WPF and bindable properties (`BindableProperty`) in MAUI. A view model is usually
+      a plain class with `INotifyPropertyChanged`, so that it does not depend on the UI framework and is easy to
+      test.
+
+      In practice the setter raises the event only when the value really changes, and the property name is
+      passed with `nameof` or `[CallerMemberName]`, so a typo in a string cannot leave a binding without updates.
+      In .NET MAUI the binding engine itself marshals updates from `PropertyChanged` to the UI thread, but this
+      does not apply to changes of an `ObservableCollection<T>`.
+    linkTitles:
+      - "INotifyPropertyChanged interface"
+      - "Data binding overview in WPF"
+      - "Data binding in .NET MAUI"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

@@ -1,0 +1,138 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WN1M9PJVTQ7H6MD7ZZ
+slug: head-sampling-loses-error-traces
+stack: dotnet
+topic: devops
+level: senior
+type: situation
+grading: self
+tags: [tracing, opentelemetry, sampling, tail-sampling]
+links:
+  - url: https://opentelemetry.io/docs/concepts/sampling/
+    lang: en
+    kind: docs
+  - url: https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/processor/tailsamplingprocessor
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "При головном сэмплировании 1% трассы падающих запросов почти не сохраняются: что изменить?"
+    prompt: |
+      Сервисы на .NET экспортируют трассы через OpenTelemetry с сэмплером `ParentBasedSampler` поверх
+      `TraceIdRatioBasedSampler(0.01)`. Нужно разобрать редкий сбой, который случается примерно в 0,1% запросов.
+      Но его трассы почти никогда не попадают в бэкенд трассировки. Поднять долю до 100% во всех сервисах слишком
+      дорого для бэкенда. Что вы измените и чего это будет стоить?
+    hint: "Какая информация о запросе доступна в момент, когда стартует его первый спан?"
+    answer: |
+      1. **Объяснить причину.** Головной сэмплер решает при старте корневого спана. Он опирается только на trace id и
+         флаг родителя, а исход запроса ещё неизвестен. При доле 1% сохраняется лишь один сбой из ста.
+         `ParentBasedSampler` передаёт решение дальше через флаг sampled в `traceparent`, поэтому нижестоящие сервисы
+         тоже отбрасывают эту трассу. Повысить долю можно только по признакам, известным на старте: маршрут,
+         тенант, отладочный заголовок. Правило «сохранять все ошибки» так не выразить.
+      2. **Сразу не терять сбои в логах.** Проверить, что логи ошибок содержат `TraceId` и `SpanId`. Тогда сбой хотя бы
+         виден в логах и связан между сервисами, даже если трасса не сохранена.
+      3. **Перенести решение в хвост.** Сервисы сэмплируют всё: `ParentBasedSampler` поверх `AlwaysOnSampler`. Спаны
+         уходят по OTLP в OpenTelemetry Collector с процессором `tail_sampling`. Политики объединяются по «или»:
+         трасса сохраняется, если её выбрала хотя бы одна из них.
+         - `status_code` - сохранять трассы со статусом ERROR;
+         - `latency` - сохранять трассы дольше порога;
+         - `probabilistic` - около 1% всех трасс как базовая выборка (она частично пересекается с ошибочными и
+           медленными трассами).
+
+         Объём в бэкенде остаётся близким к прежнему, но теперь в нём есть все ошибочные и медленные трассы.
+      4. **Правильно масштабировать коллектор.** Хвостовому сэмплеру нужны все спаны одной трассы на одном экземпляре.
+         Поэтому коллектор строят в два слоя. Первый слой с экспортером `loadbalancing` распределяет спаны по trace id.
+         Второй слой выполняет хвостовое сэмплирование и держит трассы в кольцевом буфере размером `num_traces`.
+         Буфер должен вмещать все трассы, пришедшие за `decision_wait` (поток трасс в секунду, умноженный на
+         `decision_wait`, с запасом), а память оценивают по этому числу трасс, числу спанов в трассе и среднему
+         размеру спана. Нужно следить за метрикой `otelcol_processor_tail_sampling_sampling_trace_dropped_too_early`:
+         она растёт, когда трассы вытесняются из буфера до принятия решения. Также стоит следить за опоздавшими спанами.
+      5. **Сделать ошибки видимыми для политики.** Инструментирование HTTP по семантическим соглашениям
+         OpenTelemetry ставит статус Error серверным спанам при ответах 5xx (ответ 4xx на сервере ошибкой не
+         считается), а клиентским спанам - при 4xx и 5xx. Точное поведение зависит от версии пакета
+         инструментирования. Обработанные исключения и бизнес-сбои нужно помечать явно через
+         `Activity.SetStatus(ActivityStatusCode.Error)`, иначе политика `status_code` их не увидит.
+      6. **Принять цену и проверить.**
+         - Сервисы и сеть теперь передают в коллектор 100% спанов.
+         - Коллектору нужны память и CPU.
+         - Трассы появляются в бэкенде с задержкой на время ожидания решения.
+         - Выборка больше не пропорциональна трафику, поэтому частоты и доли нужно брать из метрик.
+
+         Внедрение стоит проверить искусственным сбоем: его трасса должна появиться в бэкенде.
+    explanation: |
+      Головное сэмплирование дешёвое и согласованное: решение принимается один раз, распространяется в
+      `traceparent`, и ненужные спаны даже не экспортируются. Но решение принимается до того, как известен исход.
+      Поэтому редкие ошибки отбрасываются с той же вероятностью, что и успешные запросы. Повышение доли помогает
+      лишь пропорционально: сохраняется та же доля сбоев, что и успешных запросов. Чтобы поймать большинство
+      сбоев, нужна доля, близкая к 100%, а это слишком дорого.
+
+      Хвостовое сэмплирование решает после завершения трассы, когда известны статус и длительность. Платить за это
+      приходится буферизацией. Коллектор держит в памяти все спаны трассы до решения, а сервисы отправляют
+      ему всё. Отсюда требования к маршрутизации по trace id и к размеру буфера: если буфер мал, трассы вытесняются
+      до решения. Кроме того, спаны, пришедшие после решения, могут потеряться.
+    linkTitles:
+      - "OpenTelemetry: Sampling"
+      - "Tail Sampling Processor в opentelemetry-collector-contrib"
+  en:
+    title: "With 1% head sampling the traces of failing requests are almost never kept: what do you change?"
+    prompt: |
+      .NET services export traces through OpenTelemetry with a `ParentBasedSampler` over
+      `TraceIdRatioBasedSampler(0.01)`. You need to investigate a rare failure that happens in about 0.1% of
+      requests. But its traces almost never reach the tracing backend. Raising the ratio to 100% in every service is
+      too expensive for the backend. What do you change, and what does it cost?
+    hint: "Which information about a request is available when its first span starts?"
+    answer: |
+      1. **Explain the cause.** The head sampler decides when the root span starts. It relies only on the trace id and
+         the parent flag, and the outcome of the request is not known yet. At 1% only one failure in a hundred is
+         kept. `ParentBasedSampler` passes the decision on through the sampled flag in `traceparent`, so downstream
+         services drop that trace as well. You can raise the ratio only for attributes known at the start: route,
+         tenant, a debug header. A rule like "keep all errors" cannot be expressed this way.
+      2. **Stop losing failures in the logs right away.** Check that error logs carry `TraceId` and `SpanId`. Then a
+         failure is at least visible in the logs and correlated across services, even when the trace is not kept.
+      3. **Move the decision to the tail.** Services sample everything: `ParentBasedSampler` over `AlwaysOnSampler`.
+         Spans go over OTLP to an OpenTelemetry Collector with the `tail_sampling` processor. The policies are
+         combined with OR: a trace is kept if at least one of them selects it.
+         - `status_code` - keep traces with status ERROR;
+         - `latency` - keep traces above a threshold;
+         - `probabilistic` - about 1% of all traces as a baseline sample (it partly overlaps with the failing and
+           slow traces).
+
+         The backend volume stays close to what it was, but it now holds every failing and slow trace.
+      4. **Scale the collector correctly.** The tail sampler needs all spans of one trace on one instance. So the
+         collector is built in two tiers. The first tier uses the `loadbalancing` exporter to route spans by trace
+         id. The second tier does the tail sampling and holds traces in a circular buffer of size `num_traces`.
+         The buffer must fit every trace that arrives during `decision_wait` (the trace rate per second multiplied
+         by `decision_wait`, with headroom), and memory is estimated from that number of traces, the spans per
+         trace and the average span size. Watch the metric
+         `otelcol_processor_tail_sampling_sampling_trace_dropped_too_early`: it grows when traces are evicted from
+         the buffer before a decision. Also watch for late spans.
+      5. **Make errors visible to the policy.** Following the OpenTelemetry semantic conventions, HTTP
+         instrumentation sets Error status on server spans for 5xx responses (a 4xx is not an error on the server),
+         and on client spans for both 4xx and 5xx. The exact behaviour depends on the instrumentation package
+         version. Handled exceptions and business failures must be marked explicitly with
+         `Activity.SetStatus(ActivityStatusCode.Error)`, otherwise the `status_code` policy does not see them.
+      6. **Accept the cost and verify.**
+         - Services and the network now carry 100% of spans to the collector.
+         - The collector needs memory and CPU.
+         - Traces appear in the backend only after the decision wait.
+         - The sample is no longer proportional to traffic, so take rates and ratios from metrics.
+
+         Verify the change with an injected failure: its trace must show up in the backend.
+    explanation: |
+      Head sampling is cheap and consistent: the decision is made once, propagated in `traceparent`, and unwanted
+      spans are not even exported. But the decision is made before the outcome is known. So rare errors are dropped
+      with the same probability as successful requests. Raising the ratio helps only proportionally: you keep the
+      same fraction of failures as of successes. Catching most failures needs a ratio near 100%, which is the cost
+      you cannot pay.
+
+      Tail sampling decides after the trace is complete, when its status and duration are known. The price is
+      buffering. The collector holds all spans of a trace in memory until the decision, and services send it
+      everything. That is where the requirements for routing by trace id and for buffer size come from: if the
+      buffer is too small, traces are evicted before a decision. Also, spans that arrive after the decision can be
+      lost.
+    linkTitles:
+      - "OpenTelemetry: Sampling"
+      - "Tail Sampling Processor in opentelemetry-collector-contrib"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

@@ -1,0 +1,117 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WPQBHDEY67Q9BYSKE9
+slug: memorycache-getorcreate-not-atomic
+stack: dotnet
+topic: performance
+level: senior
+type: multi
+grading: auto
+tags: [memorycache, caching, cache-stampede, concurrency]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: false
+  - id: d
+    correct: true
+  - id: e
+    correct: false
+  - id: f
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/performance/caching/memory
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/performance/caching/hybrid
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что происходит с IMemoryCache.GetOrCreate, когда много запросов одновременно не находят один ключ?
+    prompt: |
+      Популярная запись в `IMemoryCache` истекла, и в этот момент сотни запросов одновременно вызывают
+      `cache.GetOrCreate(key, entry => LoadFromDatabase(key))` для одного и того же ключа.
+      Выберите все верные утверждения для `Microsoft.Extensions.Caching.Memory` в .NET 10.
+    hint: Что стоит между проверкой «записи нет» и записью нового значения в кэш, если посмотреть на `GetOrCreate` как на обычный метод расширения?
+    options:
+      a: "Пока запись отсутствует, несколько одновременных запросов могут выполнить фабрику для одного и того же ключа, и каждый из них обратится к базе (cache stampede)"
+      b: "`GetOrCreate` берёт внутреннюю блокировку по ключу, поэтому фабрика для ключа выполняется ровно один раз, а остальные вызовы ждут её результата"
+      c: "Достаточно увеличить `AbsoluteExpirationRelativeToNow` или включить `SlidingExpiration`: тогда одновременного выполнения фабрики не будет"
+      d: "Чтобы фабрика выполнялась для ключа один раз, нужна координация по ключу: например, `SemaphoreSlim` на ключ и повторная проверка кэша после его захвата"
+      e: "Одновременные вызовы для одного ключа могут повредить внутреннее состояние `MemoryCache` или выбросить исключение, поэтому каждый вызов к кэшу нужно оборачивать в `lock`"
+      f: "`GetOrCreateAsync` решает проблему: второй вызов дожидается задачи, которую уже запустил первый"
+    optionExplanations:
+      b: "Нет. `GetOrCreate` - метод расширения: он вызывает `TryGetValue`, при промахе вызывает фабрику и затем записывает результат. Блокировки между проверкой и записью нет. Документация прямо говорит, что `GetOrCreate` и `GetOrCreateAsync` не атомарны: если несколько запросов одновременно не находят один ключ, фабрику выполняет каждый из них."
+      c: "Срок жизни влияет только на то, как часто случаются промахи. В момент самого промаха все одновременные запросы по-прежнему выполнят фабрику, сколько бы ни жила запись."
+      e: "`MemoryCache` потокобезопасен: одновременные чтения и записи не портят его состояние. Проблема не в целостности кэша, а в повторной дорогой работе и нагрузке на источник данных. Общий `lock` вокруг всех вызовов к тому же сериализовал бы обращения по всем ключам."
+      f: "Нет. Документация называет неатомарными оба метода. `GetOrCreateAsync` устроен так же: проверка, вызов фабрики, запись. Задача, запущенная первым вызовом, не попадает в кэш до своего завершения, поэтому второй вызов её не видит и запускает свою."
+    answer: "Верны `a` и `d`: `GetOrCreate` не атомарен, при одновременном промахе фабрика может выполниться много раз, и предотвращает это только координация по ключу, а не настройка срока жизни."
+    explanation: |
+      `GetOrCreate` и `GetOrCreateAsync` - методы расширения из `CacheExtensions`. Они выполняют `TryGetValue`, при промахе
+      вызывают фабрику и потом записывают значение. Если запись популярного ключа истекла, все запросы, пришедшие до окончания
+      первой загрузки, видят пустой кэш и вызывают фабрику сами. Источник данных получает всплеск одинаковых запросов ровно
+      тогда, когда кэш должен был его защищать. Это и есть cache stampede. Сам `MemoryCache` при этом остаётся согласованным:
+      в записи остаётся значение, записанное последним.
+
+      Срок жизни записи здесь не помогает: он меняет частоту промахов, а не поведение в момент промаха. Нужна координация по ключу:
+
+      - `SemaphoreSlim` на ключ (например, в `ConcurrentDictionary<string, SemaphoreSlim>`): захватить, снова проверить кэш,
+        и только при повторном промахе загрузить данные. Словарь семафоров надо ограничивать, иначе он растёт с числом ключей.
+      - Общая задача на ключ: `ConcurrentDictionary.GetOrAdd` с `Lazy<Task<T>>`, чтобы все вызывающие ждали одну загрузку.
+        Если же класть `Lazy` в `IMemoryCache` через `GetOrCreate`, окно гонки лишь сужается, но не исчезает.
+      - Библиотека `HybridCache` (NuGet-пакет `Microsoft.Extensions.Caching.Hybrid`) встроенно защищает от stampede:
+        одновременные запросы одного ключа в процессе ждут одного вызова фабрики. Именно её документация `IMemoryCache`
+        рекомендует, когда фабрика должна выполняться для ключа один раз.
+
+      Защита работает в пределах одного процесса: несколько экземпляров сервиса всё равно загрузят данные каждый по разу.
+    linkTitles:
+      - Кэширование в памяти в ASP.NET Core
+      - Библиотека HybridCache в ASP.NET Core
+  en:
+    title: What happens with IMemoryCache.GetOrCreate when many requests miss the same key at once?
+    prompt: |
+      A popular entry in `IMemoryCache` has expired, and at that moment hundreds of requests call
+      `cache.GetOrCreate(key, entry => LoadFromDatabase(key))` for the same key at the same time.
+      Select all correct statements for `Microsoft.Extensions.Caching.Memory` in .NET 10.
+    hint: If you look at `GetOrCreate` as an ordinary extension method, what stands between the "no entry" check and writing the new value to the cache?
+    options:
+      a: "While the entry is missing, several concurrent requests can run the factory for the same key, and each of them hits the database (a cache stampede)"
+      b: "`GetOrCreate` takes an internal per-key lock, so the factory runs exactly once per key and the other calls wait for its result"
+      c: "It is enough to increase `AbsoluteExpirationRelativeToNow` or enable `SlidingExpiration`: then the factory will not run concurrently"
+      d: "To run the factory once per key you need per-key coordination: for example, a `SemaphoreSlim` per key and a second cache check after acquiring it"
+      e: "Concurrent calls for the same key can corrupt the internal state of `MemoryCache` or throw, so every cache call must be wrapped in a `lock`"
+      f: "`GetOrCreateAsync` solves the problem: the second call awaits the task that the first call has already started"
+    optionExplanations:
+      b: "No. `GetOrCreate` is an extension method: it calls `TryGetValue`, on a miss it calls the factory, and then it writes the result. There is no lock between the check and the write. The documentation states that `GetOrCreate` and `GetOrCreateAsync` aren't atomic: when several requests miss the same key at the same time, each of them runs the factory."
+      c: "The lifetime only changes how often misses happen. At the moment of a miss, all concurrent requests still run the factory, however long the entry lives."
+      e: "`MemoryCache` is thread-safe: concurrent reads and writes do not corrupt its state. The problem is not cache integrity but repeated expensive work and load on the data source. A shared `lock` around all calls would also serialize access to every key."
+      f: "No. The documentation calls both methods non-atomic. `GetOrCreateAsync` works the same way: check, call the factory, write. The task started by the first call does not reach the cache until it completes, so the second call cannot see it and starts its own."
+    answer: "`a` and `d` are correct: `GetOrCreate` is not atomic, on a concurrent miss the factory can run many times, and only per-key coordination prevents it, not an expiration setting."
+    explanation: |
+      `GetOrCreate` and `GetOrCreateAsync` are extension methods from `CacheExtensions`. They run `TryGetValue`, call the
+      factory on a miss and then write the value. When the entry of a popular key expires, every request that arrives before
+      the first load finishes sees an empty cache and calls the factory itself. The data source gets a burst of identical queries
+      exactly when the cache was supposed to protect it. That is a cache stampede. `MemoryCache` itself stays consistent:
+      the entry keeps the value that was written last.
+
+      The entry lifetime does not help: it changes how often misses happen, not what happens at a miss. You need per-key
+      coordination:
+
+      - A `SemaphoreSlim` per key (for example in a `ConcurrentDictionary<string, SemaphoreSlim>`): acquire it, check the cache
+        again, and load the data only on a second miss. The dictionary of semaphores must be bounded, or it grows with the number of keys.
+      - A shared task per key: `ConcurrentDictionary.GetOrAdd` with a `Lazy<Task<T>>`, so all callers await one load.
+        Putting a `Lazy` into `IMemoryCache` through `GetOrCreate` only narrows the race window, it does not close it.
+      - The `HybridCache` library (the `Microsoft.Extensions.Caching.Hybrid` NuGet package) has built-in stampede protection:
+        concurrent requests for the same key in a process wait for a single factory call. It is what the `IMemoryCache`
+        documentation recommends when the factory must run only once per key.
+
+      The protection works within one process: several instances of a service will still load the data once each.
+    linkTitles:
+      - Cache in-memory in ASP.NET Core
+      - HybridCache library in ASP.NET Core
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"

@@ -1,0 +1,152 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNYEYF7SE6QGB009G9
+slug: in-process-locks-after-scale-out
+stack: dotnet
+topic: concurrency
+level: architect
+type: open
+grading: self
+tags: [locks, scale-out, optimistic-concurrency, partitioning, single-writer, channels]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/threading/overview-of-synchronization-primitives
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/extensions/channels
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/ef/core/saving/concurrency
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какие гарантии параллелизма ломаются, когда сервис с внутрипроцессными блокировками масштабируют на несколько экземпляров?
+    prompt: |
+      Сервис сериализует изменения по каждому счёту внутри процесса: `ConcurrentDictionary` с `SemaphoreSlim` на каждый
+      идентификатор счёта, а для части операций - `Channel<T>` на счёт с одним читателем. На одном экземпляре всё работает.
+      Команда собирается запустить сервис на многих экземплярах за балансировщиком нагрузки.
+
+      Какие гарантии при этом ломаются и как перепроектировать сервис, не беря распределённую блокировку на каждый запрос?
+    hint: Где живёт состояние, которое защищает `lock`, и что о нём знает второй экземпляр сервиса?
+    answer: |
+      **Что ломается.** `lock`, `Monitor`, `SemaphoreSlim`, `ReaderWriterLockSlim` и `Channel<T>` координируют потоки
+      одного процесса: их состояние живёт в памяти этого процесса. У второго экземпляра свои блокировки и свои каналы,
+      и о первом он ничего не знает. Именованный `Mutex` работает между процессами, но только в пределах одной машины.
+
+      - **Взаимное исключение по счёту** пропадает: два экземпляра читают один и тот же баланс, оба принимают решение
+        и оба пишут. Итог - потерянное обновление, двойное списание, уход баланса в минус.
+      - **Порядок операций по счёту** пропадает: канал на счёт даёт FIFO только для команд, которые попали в этот
+        экземпляр, а балансировщик раскидывает команды одного счёта по разным экземплярам.
+      - **Инварианты в памяти** перестают быть общими: множества для дедупликации, счётчики, ограничения частоты
+        запросов и кэши у каждого экземпляра свои.
+      - Проблема есть и при одной реплике: во время rolling-развёртывания или перезапуска два процесса какое-то время
+        работают одновременно. Код был корректен лишь благодаря топологии, а не по построению.
+
+      **Как перепроектировать без распределённой блокировки на каждый запрос.**
+
+      1. **Секционированный единственный писатель.** Все команды одного счёта направляются одному владельцу:
+         публикация в брокер с ключом секционирования по идентификатору счёта (ключ партиции в Kafka, где в группе
+         потребителей партицию читает один потребитель, или сессии в Azure Service Bus) либо маршрутизация по
+         согласованному хешированию. Внутри владельца существующий канал на счёт снова корректен: для этого ключа
+         процесс опять единственный. Пропускная способность растёт с числом партиций, а не упирается в блокировки.
+      2. **Оптимистичный контроль параллелизма в общем хранилище.** Каждая запись условная: столбец версии или
+         `rowversion` (`UPDATE ... WHERE Id = @id AND Version = @expected`), ETag в документном хранилище или атомарная
+         команда, которая сама проверяет инвариант (`SET Balance = Balance - @amount WHERE Id = @id AND Balance >= @amount`).
+         Ноль изменённых строк означает конфликт: перечитать и повторить или отклонить. Любой экземпляр может обработать
+         любой запрос.
+      3. **Сочетание обоих подходов.** Владение ключом переезжает при ребалансировке, отказе узла и развёртывании, поэтому
+         недолго два владельца могут обрабатывать один ключ. Маршрутизация даёт пропускную способность и порядок, а условная
+         запись в хранилище (или fencing-токен) даёт корректность. Брокеры доставляют сообщения как минимум один раз,
+         поэтому команды несут ключ идемпотентности, который проверяется уникальным ограничением в базе.
+
+      **Выбор.** При низкой конкуренции за ключ достаточно оптимистичного контроля, это проще всего. Для горячих ключей
+      (один счёт с высокой частотой операций) повторы при конфликтах выбрасывают работу впустую, и лучше единственный
+      писатель на партицию. Распределённая блокировка (Redis, блокировка в базе, аренда blob) остаётся исключением для
+      редких крупных операций. Но и тогда это аренда, которая может истечь посреди операции (пауза сборщика мусора, сетевой
+      разрыв), поэтому запись всё равно должно проверять хранилище.
+
+      Липкие сессии на балансировщике не решают задачу: привязка не гарантирована и теряется при отказе узла и
+      масштабировании.
+
+      **Проверка.** Интеграционный тест, который запускает два экземпляра против одной базы и нагружает один счёт, плюс
+      метрики доли конфликтов и повторов.
+    explanation: |
+      Главная мысль: гарантия корректности должна жить там же, где живёт состояние. Внутрипроцессные примитивы защищают
+      память процесса, а настоящее состояние счёта лежит в базе, общей для всех экземпляров. Пока экземпляр был один, процесс
+      неявно был единственным писателем, и блокировки в памяти этого хватало. После масштабирования это допущение исчезает,
+      и сильный ответ называет его явно, а затем выбирает: вернуть единственного писателя через маршрутизацию по ключу или
+      сделать арбитром само хранилище через условные записи.
+
+      Слабый ответ - заменить `lock` на блокировку в Redis для каждого запроса. Это добавляет к каждому запросу сетевые
+      обращения, делает внешний сервис точкой отказа для всех записей и всё равно не гарантирует взаимное исключение:
+      аренда может истечь, пока владелец ещё пишет. Без проверки в хранилище такой замок даёт лишь ощущение безопасности.
+    linkTitles:
+      - Обзор примитивов синхронизации
+      - Библиотека System.Threading.Channels
+      - Обработка конфликтов параллелизма в EF Core
+  en:
+    title: Which concurrency guarantees break when a service with in-process locks is scaled out to many instances?
+    prompt: |
+      A service serializes updates per account inside the process: a `ConcurrentDictionary` of `SemaphoreSlim` per account
+      id, and for some operations a `Channel<T>` per account with a single reader. On one instance it works.
+      The team plans to run the service on many instances behind a load balancer.
+
+      Which guarantees break, and how would you redesign the service without taking a distributed lock on every request?
+    hint: Where does the state that `lock` protects live, and what does a second instance of the service know about it?
+    answer: |
+      **What breaks.** `lock`, `Monitor`, `SemaphoreSlim`, `ReaderWriterLockSlim` and `Channel<T>` coordinate the threads
+      of one process: their state lives in that process's memory. A second instance has its own locks and its own channels
+      and knows nothing about the first. A named `Mutex` works across processes, but only on one machine.
+
+      - **Mutual exclusion per account** is gone: two instances read the same balance, both decide and both write.
+        The result is a lost update, a double debit, a negative balance.
+      - **Ordering per account** is gone: a channel per account gives FIFO only for the commands that reached this
+        instance, and the load balancer spreads the commands of one account across instances.
+      - **In-memory invariants** are no longer shared: deduplication sets, counters, rate limits and caches are per
+        instance.
+      - The problem exists even with one replica: during a rolling deployment or a restart two processes run at the same
+        time for a while. The code was correct only because of the topology, not by construction.
+
+      **How to redesign without a distributed lock on every request.**
+
+      1. **Partitioned single writer.** Route every command for an account to one owner: publish to a broker keyed by
+         account id (a Kafka partition key, where one consumer in a consumer group reads a partition, or Azure Service Bus
+         sessions), or route by consistent hashing. Inside the owner the existing per-account channel is correct again:
+         for that key the process is once more the only one. Throughput grows with the number of partitions instead of
+         hitting lock contention.
+      2. **Optimistic concurrency in the shared store.** Every write is conditional: a version column or `rowversion`
+         (`UPDATE ... WHERE Id = @id AND Version = @expected`), an ETag in a document store, or an atomic statement that
+         checks the invariant itself (`SET Balance = Balance - @amount WHERE Id = @id AND Balance >= @amount`).
+         Zero affected rows means a conflict: re-read and retry, or reject. Any instance can handle any request.
+      3. **Combine both.** Ownership of a key moves during rebalancing, failover and deployments, so for a short time two
+         owners may process the same key. Routing gives throughput and order; the conditional write in the store (or a
+         fencing token) gives correctness. Brokers deliver at least once, so commands carry an idempotency key enforced
+         by a unique constraint in the database.
+
+      **Choosing.** With low contention per key, optimistic concurrency alone is the simplest. For hot keys (one account
+      with a high rate of operations) retries on conflict waste work, and a single writer per partition is better.
+      A distributed lock (Redis, a database lock, a blob lease) stays an exception for rare, coarse operations. Even then it
+      is a lease that can expire mid-operation (a garbage collector pause, a network partition), so the store must still
+      check the write.
+
+      Sticky sessions on the load balancer do not solve it: affinity is not guaranteed and is lost on failover and
+      scaling.
+
+      **Verification.** An integration test that runs two instances against one database and hammers one account, plus
+      metrics for the conflict and retry rate.
+    explanation: |
+      The key idea: the correctness guarantee has to live where the state lives. In-process primitives protect the memory
+      of a process, but the real state of the account is in the database shared by all instances. While there was one
+      instance, the process was implicitly the single writer, and an in-memory lock was enough. After scale-out that
+      assumption disappears, and a strong answer names it explicitly and then chooses: restore the single writer by routing
+      on the key, or make the store itself the arbiter through conditional writes.
+
+      A weak answer is to replace `lock` with a Redis lock on every request. That adds network round trips to every request,
+      makes an external service a point of failure for all writes, and still does not guarantee mutual exclusion: a lease
+      can expire while its holder is still writing. Without a check in the store such a lock only gives a feeling of safety.
+    linkTitles:
+      - Overview of synchronization primitives
+      - System.Threading.Channels library
+      - Handling concurrency conflicts in EF Core
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

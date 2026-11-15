@@ -1,0 +1,137 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMA96AXRDXSV64C4PF
+slug: return-task-inside-using-disposes-early
+stack: dotnet
+topic: async
+level: middle
+type: find-bug
+grading: auto
+tags: [using, idisposable, task, object-disposed-exception, eliding-async]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    int length = await ReadHeaderAsync();
+    Console.WriteLine(length);
+
+    static Task<int> ReadHeaderAsync()
+    {
+        using var source = new SlowSource();
+        return source.ReadAsync(new byte[16]);
+    }
+
+    sealed class SlowSource : IDisposable
+    {
+        private bool disposed;
+
+        public async Task<int> ReadAsync(byte[] buffer)
+        {
+            await Task.Delay(50); // simulates I/O latency
+            ObjectDisposedException.ThrowIf(disposed, this);
+            "HEAD"u8.CopyTo(buffer);
+            return 4;
+        }
+
+        public void Dispose() => disposed = true;
+    }
+bugLineSets: [[7], [4, 7]]
+fixedSource: |
+  int length = await ReadHeaderAsync();
+  Console.WriteLine(length);
+
+  static async Task<int> ReadHeaderAsync()
+  {
+      using var source = new SlowSource();
+      return await source.ReadAsync(new byte[16]);
+  }
+
+  sealed class SlowSource : IDisposable
+  {
+      private bool disposed;
+
+      public async Task<int> ReadAsync(byte[] buffer)
+      {
+          await Task.Delay(50); // simulates I/O latency
+          ObjectDisposedException.ThrowIf(disposed, this);
+          "HEAD"u8.CopyTo(buffer);
+          return 4;
+      }
+
+      public void Dispose() => disposed = true;
+  }
+fixedExpect: { kind: output, value: "4" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/statements/using
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/asynchronous-programming/async-return-types
+    lang: en
+    kind: docs
+  - url: https://blog.stephencleary.com/2016/12/eliding-async-await.html
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Найдите строку, из-за которой ресурс освобождается раньше, чем закончится чтение
+    prompt: |
+      Метод `ReadHeaderAsync` должен прочитать заголовок из ресурса, и программа должна вывести `4`.
+      Вместо этого она завершается с необработанным исключением `ObjectDisposedException`.
+      Щёлкните по строке с дефектом.
+    hint: В какой момент выполняется `Dispose` для `using var` и успевает ли к этому моменту завершиться операция чтения?
+    answer: |
+      Строка 7: `return source.ReadAsync(...)` возвращает незавершённую задачу без `await`. Метод сразу выходит из области
+      `using`, и `source` освобождается, пока чтение ещё идёт. Засчитывается и выбор строк 4 и 7 вместе: исправление -
+      объявить метод как `async` и написать `return await source.ReadAsync(...)`.
+    explanation: |
+      Объявление `using var` вызывает `Dispose` при выходе из области видимости, то есть когда метод возвращает управление.
+      Метод без `async` возвращает управление сразу после `return`: `ReadAsync` дошёл до первого незавершённого `await`
+      (`Task.Delay`) и вернул задачу, `ReadHeaderAsync` передаёт её наверх и тут же освобождает `source`. Через 50 мс
+      продолжение внутри `ReadAsync` обнаруживает, что объект уже освобождён, задача завершается с ошибкой, и `await`
+      в первой строке выбрасывает `ObjectDisposedException`.
+
+      В версии с `async` и `return await` компилятор строит конечный автомат: метод приостанавливается на `await`,
+      и `Dispose` выполняется только после того, как чтение завершилось. Ресурс живёт ровно столько, сколько операция,
+      поэтому программа выводит `4`.
+
+      Отказ от `async`/`await` с прямым возвратом задачи экономит конечный автомат, но допустим только тогда, когда после
+      вызова метод ничего не делает: нет `using`, `try`/`finally` или `catch`, которым нужно дождаться результата.
+      С настоящими потоками (`FileStream`, `NetworkStream`) та же ошибка проявляется по-разному в зависимости от
+      реализации, поэтому полагаться на понятное исключение нельзя. Поведение проверено на .NET 10.
+    linkTitles:
+      - Оператор using
+      - Типы возвращаемых значений асинхронных методов
+      - "Стивен Клири: Eliding Async and Await"
+  en:
+    title: Find the line that disposes a resource before the read finishes
+    prompt: |
+      The `ReadHeaderAsync` method should read a header from a resource, and the program should print `4`.
+      Instead it ends with an unhandled `ObjectDisposedException`.
+      Click the line that contains the defect.
+    hint: When does `Dispose` run for `using var`, and has the read operation finished by that time?
+    answer: |
+      Line 7: `return source.ReadAsync(...)` returns an incomplete task without `await`. The method leaves the `using`
+      scope at once, and `source` is disposed while the read is still running. Selecting lines 4 and 7 together is also
+      accepted: the fix is to declare the method `async` and write `return await source.ReadAsync(...)`.
+    explanation: |
+      A `using var` declaration calls `Dispose` when the scope ends, that is, when the method returns control.
+      A method without `async` returns control right after `return`: `ReadAsync` has reached its first incomplete `await`
+      (`Task.Delay`) and returned a task, `ReadHeaderAsync` passes it up and immediately disposes `source`. 50 ms later
+      the continuation inside `ReadAsync` finds the object already disposed, the task faults, and the `await` on the
+      first line throws `ObjectDisposedException`.
+
+      In the version with `async` and `return await` the compiler builds a state machine: the method suspends at `await`,
+      and `Dispose` runs only after the read has completed. The resource lives exactly as long as the operation,
+      so the program prints `4`.
+
+      Dropping `async`/`await` and returning the task directly saves a state machine, but it is safe only when the method
+      does nothing after the call: no `using`, `try`/`finally` or `catch` that has to wait for the result. With real
+      streams (`FileStream`, `NetworkStream`) the same bug shows up differently depending on the implementation, so you
+      cannot rely on a clear exception. The behaviour was checked on .NET 10.
+    linkTitles:
+      - The using statement
+      - Async return types
+      - "Stephen Cleary: Eliding Async and Await"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

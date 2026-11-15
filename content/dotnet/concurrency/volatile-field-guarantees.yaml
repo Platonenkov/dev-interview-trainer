@@ -1,0 +1,100 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNJ779HHYNDZVYEX4V
+slug: volatile-field-guarantees
+stack: dotnet
+topic: concurrency
+level: senior
+type: single
+grading: auto
+tags: [volatile, memory-model, race-conditions, acquire-release]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: false
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/volatile
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.volatile
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что на самом деле гарантирует поле с модификатором volatile в C#?
+    prompt: |
+      Поле объявлено как `private volatile int count;` и используется из нескольких потоков.
+      Что гарантирует модификатор `volatile` в C# (.NET 10)?
+    hint: Сколько отдельных обращений к памяти выполняет `count++` и может ли `volatile` заставить другой поток ждать?
+    options:
+      a: "Составные операции над полем, например `count++` или `count += 2`, становятся атомарными"
+      b: "Пока один поток работает с полем, остальные потоки не могут к нему обратиться (взаимное исключение)"
+      c: "Чтение поля имеет семантику захвата (acquire), а запись - семантику освобождения (release): последующие обращения к памяти нельзя перенести раньше чтения, а предыдущие - позже записи"
+      d: "Каждая запись немедленно сбрасывается во все ядра процессора, и все потоки сразу видят самое последнее значение"
+    optionExplanations:
+      a: "`count++` - это чтение, сложение и запись. С `volatile` чтение и запись остаются двумя отдельными операциями, и между ними другой поток может записать своё значение, поэтому инкременты теряются. Нужен `Interlocked.Increment` или `lock`."
+      b: "`volatile` никого не блокирует и не заставляет ждать: несколько потоков могут читать и писать поле одновременно. Взаимное исключение дают `lock`, `Monitor`, `SemaphoreSlim` и другие примитивы синхронизации."
+      d: "Документация прямо говорит обратное: на многопроцессорной системе volatile-чтение не обязано получить последнее значение, записанное другим процессором, а volatile-запись не обязана сразу стать видимой другим процессорам. Нет и единого общего порядка volatile-записей, одинакового для всех потоков."
+    answer: "Чтение `volatile`-поля имеет семантику захвата, а запись - семантику освобождения, что запрещает часть перестановок обращений к памяти."
+    explanation: |
+      Компилятор, JIT и процессор могут переставлять обращения к памяти ради производительности. Для `volatile`-поля
+      часть таких оптимизаций запрещена. Чтение - это volatile-чтение с семантикой захвата: обращения к памяти, которые
+      идут после него, не могут выполниться раньше. Запись - это volatile-запись с семантикой освобождения: обращения,
+      которые идут до неё, не могут выполниться позже. Кроме того, JIT не может закэшировать значение в регистре и
+      вынести чтение из цикла, поэтому `while (!stop)` действительно перечитывает флаг.
+
+      Типичное корректное применение - публикация данных через флаг: поток-писатель заполняет объект, затем пишет
+      `volatile`-флаг, а поток-читатель читает флаг и только потом данные. Порядок гарантирует, что читатель, увидевший
+      флаг, увидит и заполненные данные.
+
+      Чего `volatile` не даёт: атомарности составных операций (`++`, `+=`, проверка и запись), взаимного исключения,
+      мгновенной видимости и полного барьера. Запрет перестановок неполный: volatile-запись и следующее за ней
+      volatile-чтение другого поля всё ещё могут поменяться местами. Для атомарных операций нужен `Interlocked`, для
+      критических секций - `lock`. Класс `Volatile` с методами `Volatile.Read` и `Volatile.Write` даёт ту же семантику
+      для отдельных обращений, не помечая всё поле. Поведение описано для .NET 10 и не менялось между версиями.
+    linkTitles:
+      - Ключевое слово volatile
+      - Класс Volatile
+  en:
+    title: What does a volatile field in C# actually guarantee?
+    prompt: |
+      A field is declared as `private volatile int count;` and is used from several threads.
+      What does the `volatile` modifier guarantee in C# (.NET 10)?
+    hint: How many separate memory accesses does `count++` perform, and can `volatile` make another thread wait?
+    options:
+      a: "Compound operations on the field, such as `count++` or `count += 2`, become atomic"
+      b: "While one thread works with the field, other threads cannot access it (mutual exclusion)"
+      c: "A read of the field has acquire semantics and a write has release semantics: later memory accesses cannot move before the read, and earlier ones cannot move after the write"
+      d: "Every write is immediately flushed to every CPU core, and all threads see the latest value at once"
+    optionExplanations:
+      a: "`count++` is a read, an addition and a write. With `volatile` the read and the write are still two separate operations, and another thread can write its own value in between, so increments are lost. Use `Interlocked.Increment` or `lock`."
+      b: "`volatile` blocks nobody and makes nobody wait: several threads can read and write the field at the same time. Mutual exclusion comes from `lock`, `Monitor`, `SemaphoreSlim` and other synchronization primitives."
+      d: "The documentation says the opposite: on a multiprocessor system a volatile read is not guaranteed to get the latest value written by another processor, and a volatile write is not guaranteed to become visible to other processors immediately. There is also no single total order of volatile writes that all threads agree on."
+    answer: "A read of a `volatile` field has acquire semantics and a write has release semantics, which forbids some reorderings of memory accesses."
+    explanation: |
+      The compiler, the JIT and the processor may reorder memory accesses for performance. For a `volatile` field some
+      of these optimizations are forbidden. A read is a volatile read with acquire semantics: memory accesses that come
+      after it cannot run before it. A write is a volatile write with release semantics: accesses that come before it
+      cannot run after it. The JIT also cannot cache the value in a register and hoist the read out of a loop, so
+      `while (!stop)` really rereads the flag.
+
+      A typical correct use is publishing data through a flag: the writer thread fills an object and then writes the
+      `volatile` flag, and the reader thread reads the flag and only then the data. The ordering guarantees that a reader
+      that sees the flag also sees the filled data.
+
+      What `volatile` does not give: atomicity of compound operations (`++`, `+=`, check-then-write), mutual exclusion,
+      immediate visibility, or a full fence. The ban on reordering is partial: a volatile write followed by a volatile read
+      of another field can still swap places. Atomic operations need `Interlocked`, critical sections need `lock`. The
+      `Volatile` class with `Volatile.Read` and `Volatile.Write` gives the same semantics to individual accesses without
+      marking the whole field. The behaviour is described for .NET 10 and has not changed between versions.
+    linkTitles:
+      - volatile keyword
+      - Volatile class
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

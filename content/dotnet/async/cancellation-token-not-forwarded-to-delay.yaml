@@ -1,0 +1,135 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WM3DSR494GZ0JXS1NG
+slug: cancellation-token-not-forwarded-to-delay
+stack: dotnet
+topic: async
+level: middle
+type: find-bug
+grading: auto
+tags: [cancellation, cancellation-token, task-delay]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    using CancellationTokenSource cts = new();
+    Task work = PollAsync(cts.Token);
+    cts.Cancel();
+
+    try
+    {
+        await work;
+    }
+    catch (OperationCanceledException)
+    {
+        Console.WriteLine("canceled by the caller");
+    }
+
+    Console.WriteLine(work.Status);
+
+    static async Task PollAsync(CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        await Task.Delay(1000);
+        Console.WriteLine("poll finished");
+    }
+bugLineSets: [[19]]
+fixedSource: |
+  using CancellationTokenSource cts = new();
+  Task work = PollAsync(cts.Token);
+  cts.Cancel();
+
+  try
+  {
+      await work;
+  }
+  catch (OperationCanceledException)
+  {
+      Console.WriteLine("canceled by the caller");
+  }
+
+  Console.WriteLine(work.Status);
+
+  static async Task PollAsync(CancellationToken token)
+  {
+      token.ThrowIfCancellationRequested();
+      await Task.Delay(1000, token);
+      Console.WriteLine("poll finished");
+  }
+fixedExpect: { kind: output, value: "canceled by the caller\nCanceled" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/threading/cancellation-in-managed-threads
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.tasks.task.delay
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/fundamentals/code-analysis/quality-rules/ca2016
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строку, из-за которой метод с CancellationToken не отменяется
+    prompt: |
+      Метод `PollAsync` принимает токен отмены и должен остановиться, как только вызывающий код вызовет `Cancel`.
+      Программа должна вывести `canceled by the caller`, а затем `Canceled`. Вместо этого она примерно секунду ждёт,
+      выводит `poll finished` и `RanToCompletion`. Щёлкните по строке с дефектом.
+    hint: Какие вызовы внутри `PollAsync` вообще знают о токене и в какой момент токен проверяется?
+    answer: Строка 19, вызов `Task.Delay(1000)` без токена.
+    explanation: |
+      Отмена в .NET кооперативная: `Cancel` лишь помечает токен и вызывает зарегистрированные на нём обратные вызовы.
+      Токен отменяет только те операции, которым его передали, и код, который сам его проверяет.
+
+      В `PollAsync` токен проверяется один раз, в `ThrowIfCancellationRequested` на строке 18. Метод выполняется
+      синхронно до первого незавершённого `await`, поэтому проверка проходит раньше, чем вызывающий код успевает
+      вызвать `Cancel`, и токен в этот момент ещё не отменён. Дальше метод ждёт `Task.Delay(1000)`, но этот таймер
+      о токене ничего не знает: отмена его не затрагивает, задержка отрабатывает полностью, метод печатает
+      `poll finished` и завершается в состоянии `RanToCompletion`.
+
+      Исправление - передать токен дальше: `await Task.Delay(1000, token)`. Перегрузка с `CancellationToken`
+      регистрирует обратный вызов на токене, и при `Cancel` задача задержки сразу переходит в состояние `Canceled`.
+      `await` выбрасывает `TaskCanceledException` (наследник `OperationCanceledException`), и задача асинхронного
+      метода, завершившегося таким исключением, получает состояние `Canceled`. Вызывающий код перехватывает
+      исключение и выводит `canceled by the caller`, а затем `Canceled`.
+
+      Правило: метод, принимающий `CancellationToken`, передаёт его во все вложенные асинхронные вызовы, которые
+      его принимают. Анализатор CA2016 находит места, где токен можно было передать, но не передали.
+      Поведение проверено на .NET 10.
+    linkTitles:
+      - Отмена в управляемых потоках
+      - Метод Task.Delay
+      - "Правило анализатора CA2016: передавайте параметр CancellationToken в методы"
+  en:
+    title: Find the line that keeps a method with a CancellationToken from being canceled
+    prompt: |
+      The `PollAsync` method takes a cancellation token and must stop as soon as the caller calls `Cancel`.
+      The program should print `canceled by the caller` and then `Canceled`. Instead it waits about a second,
+      prints `poll finished` and `RanToCompletion`. Click the line that contains the defect.
+    hint: Which calls inside `PollAsync` know about the token at all, and when is the token checked?
+    answer: Line 19, the `Task.Delay(1000)` call without the token.
+    explanation: |
+      Cancellation in .NET is cooperative: `Cancel` only marks the token and runs the callbacks registered on it.
+      A token cancels only the operations it is passed to and the code that checks it itself.
+
+      In `PollAsync` the token is checked once, in `ThrowIfCancellationRequested` on line 18. The method runs
+      synchronously until its first incomplete `await`, so the check happens before the caller gets to call
+      `Cancel`, and the token is not canceled yet at that moment. Then the method awaits `Task.Delay(1000)`, but this
+      timer knows nothing about the token: cancellation does not affect it, the delay runs to the end, the method
+      prints `poll finished` and finishes in the `RanToCompletion` state.
+
+      The fix is to forward the token: `await Task.Delay(1000, token)`. The overload with a `CancellationToken`
+      registers a callback on the token, and on `Cancel` the delay task moves to the `Canceled` state at once.
+      `await` throws `TaskCanceledException` (derived from `OperationCanceledException`), and the task of an async
+      method that ends with such an exception gets the `Canceled` state. The caller catches the exception and prints
+      `canceled by the caller`, then `Canceled`.
+
+      The rule: a method that accepts a `CancellationToken` passes it to every nested asynchronous call that accepts
+      one. The CA2016 analyzer finds the places where a token could have been forwarded but was not.
+      The behaviour was checked on .NET 10.
+    linkTitles:
+      - Cancellation in managed threads
+      - Task.Delay method
+      - "Code analysis rule CA2016: forward the CancellationToken parameter to methods"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

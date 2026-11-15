@@ -1,0 +1,114 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WN10VWS5DP7VAX4G7S
+slug: lock-statement-on-system-threading-lock
+stack: dotnet
+topic: concurrency
+level: middle
+type: single
+grading: auto
+tags: [lock, system-threading-lock, monitor, csharp-13]
+code:
+  language: csharp
+  harness: none
+  source: |
+    public sealed class Account
+    {
+        private readonly Lock _gate = new();
+        private int _balance;
+
+        public void Deposit(int amount)
+        {
+            lock (_gate)
+            {
+                _balance += amount;
+            }
+        }
+    }
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/statements/lock
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.lock
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Во что компилятор C# 13 превращает lock для поля типа System.Threading.Lock?
+    prompt: |
+      Проект собирается под .NET 10 (C# 14), поле `_gate` объявлено с типом `System.Threading.Lock`.
+      Какой код компилятор генерирует для оператора `lock (_gate)` в методе `Deposit`?
+    hint: Компилятор выбирает код по статическому типу выражения в `lock`. Зачем типу `Lock` собственный API захвата, если `Monitor` умеет работать с любым ссылочным типом?
+    options:
+      a: "`Monitor.Enter(_gate, ref lockTaken)` перед телом и `Monitor.Exit(_gate)` в блоке `finally`, как для любого ссылочного типа"
+      b: "Вызов `_gate.EnterScope()` и `Dispose()` возвращённой структуры `Lock.Scope` в блоке `finally`, то есть код, эквивалентный `using (_gate.EnterScope()) { ... }`"
+      c: "Ошибку компиляции: `lock` поддерживает только `Monitor`, поэтому для `Lock` нужно вручную вызывать `Enter` и `Exit`"
+      d: "Встроенный цикл с `Interlocked.CompareExchange` по внутреннему состоянию `Lock`, без вызова методов самого `Lock`"
+    optionExplanations:
+      a: "Так компилятор поступает с выражением любого другого ссылочного типа. Начиная с C# 13, если статический тип выражения - `System.Threading.Lock`, используется API самого `Lock`, а `Monitor` не участвует."
+      c: "Начиная с C# 13 и .NET 9 оператор `lock` поддерживает `System.Threading.Lock` напрямую, ошибки компиляции нет и ручные вызовы не нужны."
+      d: "Компилятор не встраивает алгоритм синхронизации в ваш метод: он лишь вызывает публичный метод `EnterScope`. Как ждать освобождения блокировки, решает реализация `Lock` в рантайме."
+    answer: "Вызов `_gate.EnterScope()` и `Dispose()` возвращённой `Lock.Scope` в `finally`, эквивалент `using (_gate.EnterScope()) { ... }`."
+    explanation: |
+      В .NET 9 появился тип `System.Threading.Lock`, а C# 13 научил оператор `lock` работать с ним особым образом.
+      Если статический тип выражения - `Lock`, компилятор генерирует `EnterScope()`, который захватывает блокировку
+      и возвращает структуру `Lock.Scope`, а в `finally` вызывает её `Dispose()`, освобождая блокировку. `Monitor.Enter`
+      и `Monitor.Exit` при этом не вызываются. Поведение то же в .NET 10 и C# 14.
+
+      Решение принимается именно по статическому типу. Если тот же объект привести к `object` (например, передать
+      в метод с параметром `object` и написать там `lock (o)`), компилятор вернётся к `Monitor`, а при таком
+      преобразовании выдаёт предупреждение. Это опасно: захват через `Monitor` и захват через `EnterScope` не исключают
+      друг друга, и два участка кода, которые должны быть взаимоисключающими, могут выполняться одновременно.
+      Поэтому поле `Lock` объявляют с точным типом и не приводят к `object`.
+
+      Смысл выделенного типа в том, что блокировка - отдельный объект со своим API, а не побочное использование
+      заголовка произвольного объекта через `Monitor`. Документация рекомендует его для лучшей производительности.
+    linkTitles:
+      - Оператор lock
+      - Класс System.Threading.Lock
+  en:
+    title: What does the C# 13 compiler generate for lock on a System.Threading.Lock field?
+    prompt: |
+      The project targets .NET 10 (C# 14), and the `_gate` field is declared with the type `System.Threading.Lock`.
+      What code does the compiler generate for the `lock (_gate)` statement in the `Deposit` method?
+    hint: The compiler picks the code by the static type of the expression in `lock`. Why would `Lock` need its own acquisition API when `Monitor` works with any reference type?
+    options:
+      a: "`Monitor.Enter(_gate, ref lockTaken)` before the body and `Monitor.Exit(_gate)` in a `finally` block, as for any reference type"
+      b: "A call to `_gate.EnterScope()` and `Dispose()` of the returned `Lock.Scope` struct in a `finally` block, that is code equivalent to `using (_gate.EnterScope()) { ... }`"
+      c: "A compile error: `lock` supports only `Monitor`, so for `Lock` you must call `Enter` and `Exit` by hand"
+      d: "An inlined loop with `Interlocked.CompareExchange` over the internal state of `Lock`, without calling any `Lock` methods"
+    optionExplanations:
+      a: "That is what the compiler does for an expression of any other reference type. Starting with C# 13, when the static type of the expression is `System.Threading.Lock`, the API of `Lock` itself is used and `Monitor` is not involved."
+      c: "Starting with C# 13 and .NET 9 the `lock` statement supports `System.Threading.Lock` directly, so there is no compile error and no manual calls are needed."
+      d: "The compiler does not inline a synchronization algorithm into your method: it only calls the public `EnterScope` method. How to wait for the lock is up to the `Lock` implementation in the runtime."
+    answer: "A call to `_gate.EnterScope()` and `Dispose()` of the returned `Lock.Scope` in `finally`, equivalent to `using (_gate.EnterScope()) { ... }`."
+    explanation: |
+      .NET 9 added the `System.Threading.Lock` type, and C# 13 taught the `lock` statement to treat it specially.
+      When the static type of the expression is `Lock`, the compiler generates `EnterScope()`, which acquires the lock
+      and returns a `Lock.Scope` struct, and calls its `Dispose()` in `finally`, which releases the lock. `Monitor.Enter`
+      and `Monitor.Exit` are not called. The behaviour is the same in .NET 10 and C# 14.
+
+      The decision is made on the static type. If the same object is converted to `object` (for example, passed to a
+      method with an `object` parameter that does `lock (o)`), the compiler falls back to `Monitor`, and it reports a
+      warning for such a conversion. That is dangerous: acquiring through `Monitor` and acquiring through `EnterScope` do
+      not exclude each other, so two code paths that should be mutually exclusive can run at the same time.
+      That is why a `Lock` field is declared with its exact type and never converted to `object`.
+
+      The point of a dedicated type is that the lock is a separate object with its own API rather than a side use of an
+      arbitrary object's header through `Monitor`. The documentation recommends it for better performance.
+    linkTitles:
+      - The lock statement
+      - System.Threading.Lock class
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"
+  noRunReason: The question is about the code the compiler emits for lock, which is not observable through console output.

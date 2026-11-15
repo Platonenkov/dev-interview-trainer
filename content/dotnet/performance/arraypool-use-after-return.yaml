@@ -1,0 +1,129 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WPCVS1W3HW8675ZJKY
+slug: arraypool-use-after-return
+stack: dotnet
+topic: performance
+level: senior
+type: find-bug
+grading: auto
+tags: [arraypool, pooling, buffers, ownership]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    using System.Buffers;
+
+    int[] squares = Fill(4, i => i * i);
+    int[] cubes = Fill(4, i => i * i * i);
+    Console.WriteLine(string.Join(",", squares.Take(4)));
+    Console.WriteLine(string.Join(",", cubes.Take(4)));
+
+    static int[] Fill(int count, Func<int, int> f)
+    {
+        int[] buffer = ArrayPool<int>.Shared.Rent(count);
+        try
+        {
+            for (int i = 0; i < count; i++)
+            {
+                buffer[i] = f(i + 1);
+            }
+            return buffer;
+        }
+        finally
+        {
+            ArrayPool<int>.Shared.Return(buffer);
+        }
+    }
+bugLineSets: [[21]]
+fixedSource: |
+  using System.Buffers;
+
+  int[] squares = ArrayPool<int>.Shared.Rent(4);
+  int[] cubes = ArrayPool<int>.Shared.Rent(4);
+  try
+  {
+      Fill(squares, 4, i => i * i);
+      Fill(cubes, 4, i => i * i * i);
+      Console.WriteLine(string.Join(",", squares.Take(4)));
+      Console.WriteLine(string.Join(",", cubes.Take(4)));
+  }
+  finally
+  {
+      ArrayPool<int>.Shared.Return(cubes);
+      ArrayPool<int>.Shared.Return(squares);
+  }
+
+  static void Fill(int[] buffer, int count, Func<int, int> f)
+  {
+      for (int i = 0; i < count; i++)
+      {
+          buffer[i] = f(i + 1);
+      }
+  }
+fixedExpect: { kind: output, value: "1,4,9,16\n1,8,27,64" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.buffers.arraypool-1.return
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.buffers.arraypool-1
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строку, из-за которой буфер из ArrayPool перезаписывает данные вызывающего кода
+    prompt: |
+      Вспомогательный метод `Fill` арендует буфер в `ArrayPool<int>.Shared`, заполняет его и отдаёт вызывающему коду.
+      Программа должна вывести `1,4,9,16`, а затем `1,8,27,64`, но в .NET 10 она дважды выводит `1,8,27,64`:
+      квадраты пропали. Щёлкните по строке с дефектом.
+    hint: Кому принадлежит массив после выхода из `Fill` и что пул может сделать с массивом, который ему уже вернули?
+    answer: Строка 21, вызов `ArrayPool<int>.Shared.Return(buffer)` в `finally`, хотя тот же массив возвращается вызывающему коду и используется дальше.
+    explanation: |
+      `return buffer` сначала вычисляет возвращаемое значение, затем выполняется `finally`, и массив уходит обратно в пул.
+      Вызывающий код получает ссылку на массив, который пулу уже не принадлежит ему, а считается свободным. Пул ничего не
+      знает о внешних ссылках: после `Return` он вправе выдать этот массив следующему арендатору.
+
+      В .NET 10 `ArrayPool<int>.Shared` сначала кладёт возвращённый массив в кэш текущего потока, и следующий `Rent` того же
+      размера в том же потоке получает именно его. `Rent(4)` оба раза выдаёт массив длиной 16 из одной корзины, поэтому второй
+      вызов `Fill` получает тот же массив, что и `squares`, и записывает в него кубы. `squares` и `cubes` указывают на один
+      объект, отсюда две одинаковые строки. `Return` по умолчанию массив не очищает, и пул не проверяет, что им ещё пользуются,
+      так что такая ошибка не даёт исключения, а тихо портит данные. Под нагрузкой и с несколькими потоками она проявляется
+      редко и непредсказуемо.
+
+      Правило: у арендованного буфера в каждый момент один владелец, и он вызывает `Return` ровно один раз, после последнего
+      использования. В исправлении буферы арендует и возвращает вызывающий код, а `Fill` только заполняет переданный массив.
+      Другие варианты: явно передать владение вызывающему коду и убрать `Return` из `Fill` или вернуть копию нужной длины
+      (`buffer.AsSpan(0, count).ToArray()`), а пулированный буфер вернуть в пул сразу.
+    linkTitles:
+      - Метод ArrayPool<T>.Return
+      - Класс ArrayPool<T>
+  en:
+    title: Find the line that makes an ArrayPool buffer overwrite the caller's data
+    prompt: |
+      The helper `Fill` rents a buffer from `ArrayPool<int>.Shared`, fills it and hands it to the caller.
+      The program should print `1,4,9,16` and then `1,8,27,64`, but on .NET 10 it prints `1,8,27,64` twice:
+      the squares are gone. Click the line that contains the defect.
+    hint: Who owns the array after `Fill` returns, and what may the pool do with an array that has already been given back to it?
+    answer: Line 21, the `ArrayPool<int>.Shared.Return(buffer)` call in `finally`, although the same array is returned to the caller and used afterwards.
+    explanation: |
+      `return buffer` first evaluates the return value, then `finally` runs and the array goes back to the pool.
+      The caller receives a reference to an array that the pool now considers free. The pool knows nothing about outside
+      references: after `Return` it is entitled to hand that array to the next renter.
+
+      On .NET 10 `ArrayPool<int>.Shared` first stores a returned array in a cache of the current thread, and the next `Rent` of
+      the same size on the same thread gets exactly that array. `Rent(4)` returns an array of length 16 from the same bucket both
+      times, so the second `Fill` call gets the array that `squares` refers to and writes the cubes into it. `squares` and
+      `cubes` point to one object, hence the two identical lines. `Return` does not clear the array by default, and the pool
+      does not check whether anyone still uses it, so this bug throws no exception and silently corrupts data. Under load and
+      with several threads it shows up rarely and unpredictably.
+
+      The rule: a rented buffer has exactly one owner at any moment, and that owner calls `Return` exactly once, after the last
+      use. In the fix the caller rents and returns the buffers, and `Fill` only fills the array it is given.
+      Other options: transfer ownership to the caller explicitly and remove `Return` from `Fill`, or return a copy of the
+      needed length (`buffer.AsSpan(0, count).ToArray()`) and give the pooled buffer back right away.
+    linkTitles:
+      - ArrayPool<T>.Return method
+      - ArrayPool<T> class
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

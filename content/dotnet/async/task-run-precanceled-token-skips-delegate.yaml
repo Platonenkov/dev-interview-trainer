@@ -1,0 +1,125 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMH2Z88NMR794ZDE42
+slug: task-run-precanceled-token-skips-delegate
+stack: dotnet
+topic: async
+level: middle
+type: output
+grading: auto
+tags: [task-run, cancellation, task-status, cancellation-token]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    bool ran = false;
+    using CancellationTokenSource cts = new();
+    cts.Cancel();
+
+    Task task = Task.Run(() => { ran = true; }, cts.Token);
+
+    try
+    {
+        await task;
+    }
+    catch (OperationCanceledException)
+    {
+        // ignored: the status is printed below
+    }
+
+    Console.Write($"{task.Status} {ran}");
+expect:
+  kind: output
+  value: "Canceled False"
+acceptedOutputs: ["Canceled False"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "Canceled False" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "RanToCompletion True" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "Canceled True" }
+  - id: d
+    correct: false
+    expect: { kind: output, value: "Faulted False" }
+  - id: e
+    correct: false
+    expect: { kind: exception, value: System.Threading.Tasks.TaskCanceledException }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/parallel-programming/task-cancellation
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.tasks.task.run
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что выведет Task.Run, если токен отменён ещё до вызова?
+    prompt: |
+      Что выведет эта программа в консоль? Поведение проверяется на .NET 10.
+    hint: Зачем `Task.Run` вообще принимает токен, если делегат его не использует?
+    options:
+      a: "Canceled False"
+      b: "RanToCompletion True"
+      c: "Canceled True"
+      d: "Faulted False"
+      e: Необработанное исключение `TaskCanceledException`
+    optionExplanations:
+      b: "Токен, переданный в `Task.Run`, не игнорируется: он проверяется до запуска делегата. Раз отмена уже запрошена, задача не стартует и не может завершиться успешно."
+      c: "Делегат не запускается вовсе. Задача переходит в `Canceled` ещё до того, как попадает в очередь пула потоков, поэтому `ran` остаётся `false`."
+      d: "Задача не выбрасывала исключение из делегата, её отменили до старта. Отмена через токен даёт состояние `Canceled`, а не `Faulted`."
+      e: "`await` на отменённой задаче действительно выбрасывает `TaskCanceledException`, но этот тип наследует `OperationCanceledException`, поэтому блок `catch` его перехватывает."
+    answer: "Canceled False"
+    explanation: |
+      Токен, переданный в `Task.Run`, служит не только для кооперативной отмены внутри делегата: задача проверяет
+      его перед запуском. Если отмена запрошена до того, как задача начала выполняться, делегат не вызывается вообще,
+      а задача сразу переходит в состояние `TaskStatus.Canceled`. Поэтому `ran` остаётся `false`.
+
+      `await task` на отменённой задаче выбрасывает `TaskCanceledException`, наследника `OperationCanceledException`,
+      и `catch` его перехватывает. Затем программа печатает `Canceled False`.
+
+      Если же токен отменить после того, как делегат начал работу, сам `Task.Run` его уже не остановит: делегат
+      должен сам наблюдать токен, например через `ThrowIfCancellationRequested()`. Задача получит состояние `Canceled`
+      только если делегат выбросит `OperationCanceledException` с тем же токеном, иначе она завершится как
+      `RanToCompletion` или `Faulted`.
+    linkTitles:
+      - Отмена задач
+      - Метод Task.Run
+  en:
+    title: What does Task.Run print when the token is cancelled before the call?
+    prompt: |
+      What does this program print to the console? The behaviour is checked on .NET 10.
+    hint: Why does `Task.Run` take a token at all if the delegate does not use it?
+    options:
+      a: "Canceled False"
+      b: "RanToCompletion True"
+      c: "Canceled True"
+      d: "Faulted False"
+      e: An unhandled `TaskCanceledException`
+    optionExplanations:
+      b: "The token passed to `Task.Run` is not ignored: it is checked before the delegate starts. Since cancellation was already requested, the task never starts and cannot complete successfully."
+      c: "The delegate never runs. The task moves to `Canceled` before it reaches the thread pool queue, so `ran` stays `false`."
+      d: "The delegate threw nothing; the task was cancelled before it started. Cancellation through the token gives the `Canceled` state, not `Faulted`."
+      e: "`await` on a cancelled task does throw `TaskCanceledException`, but that type derives from `OperationCanceledException`, so the `catch` block handles it."
+    answer: "Canceled False"
+    explanation: |
+      The token passed to `Task.Run` is not only for cooperative cancellation inside the delegate: the task checks it
+      before starting. If cancellation is requested before the task begins to run, the delegate is never invoked and
+      the task goes straight to the `TaskStatus.Canceled` state. That is why `ran` stays `false`.
+
+      `await task` on a cancelled task throws `TaskCanceledException`, which derives from `OperationCanceledException`,
+      and the `catch` handles it. The program then prints `Canceled False`.
+
+      If the token is cancelled after the delegate has started, `Task.Run` itself can no longer stop it: the delegate
+      has to observe the token, for example with `ThrowIfCancellationRequested()`. The task ends as `Canceled` only if
+      the delegate throws `OperationCanceledException` carrying the same token; otherwise it ends as `RanToCompletion`
+      or `Faulted`.
+    linkTitles:
+      - Task cancellation
+      - Task.Run method
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

@@ -1,0 +1,108 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WP5JK0WJ5G121VBQNJ
+slug: string-concatenation-in-loop-cost
+stack: dotnet
+topic: performance
+level: middle
+type: single
+grading: auto
+tags: [string, stringbuilder, allocations, immutability]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    string result = "";
+    for (int i = 0; i < 100_000; i++)
+    {
+        result += i.ToString();
+    }
+    Console.WriteLine(result.Length);
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/base-types/stringbuilder
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.text.stringbuilder
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/large-object-heap
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему сборка строки через += в цикле резко замедляется с ростом числа итераций?
+    prompt: |
+      Этот код собирает строку из 100 000 чисел. Если увеличить число итераций в 10 раз, время работы
+      вырастает намного больше, чем в 10 раз. Какова главная причина?
+    hint: Что происходит со старым значением `result`, когда к нему "добавляют" новый фрагмент?
+    options:
+      a: "Компилятор сам превращает `+=` в цикле в `StringBuilder`, а замедление даёт упаковка `int` при вызове `i.ToString()`"
+      b: "Строки неизменяемы: каждый `+=` создаёт новую строку и копирует в неё все накопленные символы, поэтому суммарный объём копирования растёт квадратично"
+      c: "Каждая новая строка попадает в пул интернирования, и `+=` выполняет поиск по всё более крупной хеш-таблице"
+      d: "Каждый вызов `i.ToString()` выделяет новую строку, и именно эти выделения делают цикл медленным"
+    optionExplanations:
+      a: "Компилятор не заменяет `+=` в цикле на `StringBuilder`: он лишь объединяет несколько `+` в одном выражении в один вызов `string.Concat`. Упаковки здесь тоже нет: `ToString()` вызывается у `int` напрямую."
+      c: "Строки, созданные во время выполнения, автоматически не интернируются. Интернируются литералы, а остальные строки - только при явном вызове `string.Intern`."
+      d: "`i.ToString()` действительно выделяет короткую строку, но её стоимость постоянна на итерацию, и суммарно она растёт линейно. Квадратичный рост даёт копирование всё более длинной `result`."
+    answer: "Строки неизменяемы: каждый `+=` создаёт новую строку и копирует в неё все накопленные символы, поэтому суммарная работа растёт квадратично."
+    explanation: |
+      `string` в .NET неизменяем, поэтому `result += x` не дописывает символы в существующую строку. Он выделяет
+      новую строку длиной `result.Length + x.Length`, копирует туда старое содержимое и новый фрагмент, а старая строка
+      становится мусором. На итерации `k` копируется порядка `k` фрагментов, и за `n` итераций суммарно копируется
+      порядка `n * n / 2` фрагментов: в 10 раз больше итераций дают примерно в 100 раз больше копирования и выделений.
+      Когда строка превышает 85 000 байт (около 42 500 символов UTF-16), каждая новая копия к тому же выделяется в куче
+      больших объектов, которая собирается только вместе с поколением 2.
+
+      `StringBuilder` хранит символы во внутреннем изменяемом буфере: `Append` дописывает в него, а при нехватке места
+      ёмкость наращивается без пересоздания строки на каждом шаге. Итоговая строка создаётся один раз в `ToString()`,
+      поэтому суммарная стоимость растёт линейно. Если фрагменты уже лежат в коллекции, подойдут `string.Join` или
+      `string.Concat`. Для нескольких конкатенаций в одном выражении `+` вполне допустим: компилятор сводит их в один
+      вызов `string.Concat`.
+    linkTitles:
+      - Использование класса StringBuilder в .NET
+      - Класс StringBuilder
+      - Куча больших объектов
+  en:
+    title: Why does building a string with += in a loop slow down sharply as iterations grow?
+    prompt: |
+      This code builds a string from 100,000 numbers. If you raise the number of iterations 10 times, the run time
+      grows by far more than 10 times. What is the main reason?
+    hint: What happens to the old value of `result` when a new fragment is "added" to it?
+    options:
+      a: "The compiler turns `+=` in a loop into a `StringBuilder` on its own, and the slowdown comes from boxing the `int` in `i.ToString()`"
+      b: "Strings are immutable: each `+=` creates a new string and copies all accumulated characters into it, so the total copying grows quadratically"
+      c: "Every new string goes into the intern pool, and `+=` performs a lookup in an ever larger hash table"
+      d: "Each `i.ToString()` call allocates a new string, and those allocations are what makes the loop slow"
+    optionExplanations:
+      a: "The compiler does not replace `+=` in a loop with a `StringBuilder`: it only merges several `+` in one expression into a single `string.Concat` call. There is no boxing either: `ToString()` is called on the `int` directly."
+      c: "Strings created at run time are not interned automatically. Literals are interned, and other strings only when you call `string.Intern` explicitly."
+      d: "`i.ToString()` does allocate a short string, but its cost is constant per iteration, so in total it grows linearly. The quadratic growth comes from copying the ever longer `result`."
+    answer: "Strings are immutable: each `+=` creates a new string and copies all accumulated characters into it, so the total work grows quadratically."
+    explanation: |
+      `string` in .NET is immutable, so `result += x` does not append characters to the existing string. It allocates
+      a new string of length `result.Length + x.Length`, copies the old content and the new fragment into it, and the old
+      string becomes garbage. Iteration `k` copies on the order of `k` fragments, and `n` iterations copy on the order of
+      `n * n / 2` fragments in total: 10 times more iterations mean roughly 100 times more copying and allocation.
+      Once the string exceeds 85,000 bytes (about 42,500 UTF-16 characters), every new copy is also allocated on the large
+      object heap, which is collected only together with generation 2.
+
+      `StringBuilder` keeps the characters in an internal mutable buffer: `Append` writes into it, and when space runs out
+      the capacity grows without recreating a string on every step. The final string is created once in `ToString()`, so
+      the total cost grows linearly. If the fragments are already in a collection, `string.Join` or `string.Concat` will do.
+      For a few concatenations in one expression `+` is perfectly fine: the compiler reduces them to a single
+      `string.Concat` call.
+    linkTitles:
+      - Using the StringBuilder class in .NET
+      - StringBuilder class
+      - The large object heap
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

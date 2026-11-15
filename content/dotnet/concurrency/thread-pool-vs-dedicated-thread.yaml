@@ -1,0 +1,119 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNKT1RZ5APEQJK6JD5
+slug: thread-pool-vs-dedicated-thread
+stack: dotnet
+topic: concurrency
+level: junior
+type: open
+grading: self
+tags: [thread-pool, threads, task-run, long-running]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/threading/the-managed-thread-pool
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.tasks.taskcreationoptions
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что такое пул потоков в .NET и когда лучше создать отдельный Thread?
+    prompt: |
+      Что такое управляемый пул потоков? Почему короткие задачи принято ставить в очередь пула
+      (`Task.Run`, `ThreadPool.QueueUserWorkItem`), а не создавать для каждой новый `Thread`?
+      В каких случаях отдельный `Thread` всё же лучше?
+    hint: Что станет с остальной работой в очереди пула, если один из его потоков навсегда занят бесконечным циклом?
+    answer: |
+      **Что это.** Пул потоков - это набор фоновых рабочих потоков, которым управляет среда выполнения; в процессе
+      один пул. Код не создаёт потоки сам, а ставит в очередь рабочие элементы: `Task.Run`, `ThreadPool.QueueUserWorkItem`,
+      обратные вызовы таймеров, продолжения после `await` (когда нет контекста синхронизации). Свободный поток пула берёт
+      элемент, выполняет его и возвращается в пул, где его снова можно использовать. Число потоков пул регулирует сам,
+      стремясь к наибольшей пропускной способности.
+
+      **Зачем ставить короткую работу в пул.**
+      - Создание и уничтожение потока стоит дорого: системный поток, память под стек, запуск и завершение.
+        Для работы длиной в миллисекунды эти накладные расходы сравнимы с самой работой или больше её.
+        Пул переиспользует уже созданные потоки.
+      - Пул ограничивает число одновременно активных потоков: если все они заняты, новые элементы ждут в очереди,
+        и тысяча коротких задач не превращается в тысячу потоков, которые конкурируют за ядра и память.
+      - `Task` поверх пула даёт результат, передачу исключений, продолжения и отмену, чего у голого `Thread` нет.
+
+      **Когда нужен отдельный `Thread`.**
+      - Долгий или блокирующий цикл, который живёт всё время работы приложения: например, чтение из синхронного API
+        устройства или очереди. Такой цикл навсегда занимает поток пула. Когда число потоков дошло до минимума, пул может
+        создать дополнительные потоки, а может и подождать, пока какие-то задачи завершатся, поэтому остальная работа
+        начинает копиться в очереди.
+      - Нужен поток переднего плана, который не даст процессу завершиться (потоки пула фоновые).
+      - Нужен особый приоритет потока или однопоточный апартамент (STA) для COM: потоки пула работают с приоритетом
+        по умолчанию в MTA.
+
+      Для долгой синхронной работы в виде задачи есть `Task.Factory.StartNew` с `TaskCreationOptions.LongRunning`.
+      Это подсказка планировщику, что работа долгая и ей может понадобиться дополнительный поток. Стандартный планировщик
+      обычно выполняет такую задачу в отдельном потоке, а не в потоке пула, но это деталь реализации, а не
+      документированная гарантия. Если же долгое ожидание связано с вводом-выводом, лучше вообще не держать поток
+      и использовать асинхронный API с `await`.
+    explanation: |
+      Пул выгоден, потому что потоки в нём живут долго, а работа в них - коротко: дорогое создание потока
+      оплачивается один раз и распределяется на множество рабочих элементов. Эта модель ломается, когда элемент
+      не заканчивается. Пул ограничивает число активных потоков, и если все они заняты, новые элементы ждут в очереди,
+      пока не освободится поток. Сверх минимума пул сам решает, создать новый поток или подождать, поэтому несколько
+      бесконечных или блокирующих циклов в пуле задерживают остальные задачи, включая продолжения `async`-методов.
+      Так возникает голодание пула потоков.
+
+      Типичные ошибки - две крайности: создавать `new Thread` на каждый запрос или короткую операцию и, наоборот,
+      запускать через `Task.Run` вечный цикл с блокирующими вызовами. Поведение описано для .NET 10.
+    linkTitles:
+      - Управляемый пул потоков
+      - Перечисление TaskCreationOptions
+  en:
+    title: What is the .NET thread pool and when is a dedicated Thread the better choice?
+    prompt: |
+      What is the managed thread pool? Why is short work usually queued to the pool
+      (`Task.Run`, `ThreadPool.QueueUserWorkItem`) instead of creating a new `Thread` for each item?
+      When is a dedicated `Thread` still the better choice?
+    hint: What happens to the rest of the work in the pool queue if one of its threads is busy forever with an endless loop?
+    answer: |
+      **What it is.** The thread pool is a set of background worker threads managed by the runtime; there is one pool
+      per process. Code does not create threads itself; it queues work items: `Task.Run`, `ThreadPool.QueueUserWorkItem`,
+      timer callbacks, continuations after `await` (when there is no synchronization context). A free pool thread takes
+      an item, runs it and returns to the pool, where it can be reused. The pool adjusts the number of threads itself,
+      aiming for the best throughput.
+
+      **Why short work goes to the pool.**
+      - Creating and destroying a thread is expensive: an operating system thread, memory for the stack, startup and teardown.
+        For work that takes milliseconds this overhead is comparable to the work itself or larger.
+        The pool reuses threads that already exist.
+      - The pool limits the number of threads active at the same time: if they are all busy, new items wait in the queue,
+        so a thousand short work items do not turn into a thousand threads competing for cores and memory.
+      - A `Task` on top of the pool gives a result, exception propagation, continuations and cancellation, which a bare `Thread` lacks.
+
+      **When a dedicated `Thread` is needed.**
+      - A long-running or blocking loop that lives for the whole lifetime of the application: for example, reading from a
+        synchronous device or queue API. Such a loop holds a pool thread forever. Once the thread count has reached the
+        minimum, the pool may create additional threads, or it may wait until some tasks complete, so the rest of the work
+        starts piling up in the queue.
+      - You need a foreground thread that keeps the process from exiting (pool threads are background threads).
+      - You need a specific thread priority or a single-threaded apartment (STA) for COM: pool threads run at the default
+        priority in the MTA.
+
+      For long synchronous work expressed as a task there is `Task.Factory.StartNew` with `TaskCreationOptions.LongRunning`.
+      It is a hint to the scheduler that the work is long and may need an additional thread. The default scheduler typically
+      runs such a task on a dedicated thread instead of a pool thread, but that is an implementation detail, not a
+      documented guarantee. If the long wait is about IO, it is better not to hold a thread at all and to use an
+      asynchronous API with `await`.
+    explanation: |
+      The pool pays off because its threads live long while the work in them is short: the expensive thread creation
+      is paid once and spread over many work items. That model breaks when an item never finishes. The pool limits the
+      number of active threads, and if they are all busy, new items wait in the queue until a thread becomes free. Above
+      the minimum the pool decides by itself whether to create a new thread or to wait, so a few endless or blocking loops
+      in the pool delay the other tasks, including continuations of `async` methods. That is how thread pool starvation
+      happens.
+
+      The typical mistakes are two extremes: creating `new Thread` for every request or short operation, or, the other way
+      round, starting an endless loop with blocking calls through `Task.Run`. The behaviour is described for .NET 10.
+    linkTitles:
+      - The managed thread pool
+      - TaskCreationOptions enum
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"

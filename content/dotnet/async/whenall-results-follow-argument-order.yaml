@@ -1,0 +1,113 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMP1Q3X3KJNV14596D
+slug: whenall-results-follow-argument-order
+stack: dotnet
+topic: async
+level: junior
+type: output
+grading: auto
+tags: [task-whenall, taskcompletionsource, tasks]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    TaskCompletionSource<int> first = new();
+    TaskCompletionSource<int> second = new();
+
+    Task<int[]> all = Task.WhenAll(first.Task, second.Task);
+
+    // The second task completes before the first one.
+    second.SetResult(2);
+    first.SetResult(1);
+
+    int[] results = await all;
+    Console.Write(string.Join(",", results));
+expect:
+  kind: output
+  value: "1,2"
+acceptedOutputs: ["1,2"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "1,2" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "2,1" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "System.Int32[]" }
+  - id: d
+    correct: false
+    expect: { kind: compile-error }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.tasks.task.whenall
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.tasks.taskcompletionsource-1
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: В каком порядке Task.WhenAll возвращает результаты задач?
+    prompt: |
+      Две задачи из `TaskCompletionSource<int>` передаются в `Task.WhenAll`, а затем завершаются в обратном порядке:
+      сначала вторая, потом первая. Что выведет эта программа в консоль в .NET 10?
+    hint: "Что задаёт позицию результата в массиве, который возвращает `Task.WhenAll`, - момент завершения задачи или что-то, известное ещё до её завершения?"
+    options:
+      a: "1,2"
+      b: "2,1"
+      c: "System.Int32[]"
+      d: Ошибка компиляции
+    optionExplanations:
+      b: "`Task.WhenAll` не складывает результаты в порядке завершения. Вторая задача завершилась первой, но её результат всё равно попадает во второй элемент массива, потому что она передана вторым аргументом."
+      c: "У `string.Join` есть обобщённая перегрузка `Join<T>(string, IEnumerable<T>)`, и `int[]` подходит под неё лучше, чем под `params`-перегрузку с `object`. Поэтому соединяются элементы массива, а не результат `ToString()` самого массива."
+      d: "Код корректен. Для задач `Task<int>` выбирается обобщённая перегрузка `Task.WhenAll<TResult>`, которая возвращает `Task<int[]>`, а `await` разрешён в инструкциях верхнего уровня."
+    answer: "1,2"
+    explanation: |
+      `Task.WhenAll` возвращает задачу, которая завершается, когда завершены все переданные задачи. Её результат - массив,
+      в котором результаты стоят в том же порядке, в каком задачи были переданы в `WhenAll`. Порядок завершения на это
+      не влияет: элемент с индексом 0 всегда берётся из первой задачи, элемент с индексом 1 - из второй.
+
+      Здесь `second.SetResult(2)` выполняется раньше, чем `first.SetResult(1)`, но `first.Task` передан первым
+      аргументом, поэтому массив равен `[1, 2]`, а `string.Join` выводит `1,2`. Гонки здесь нет: задачи завершаются
+      явными вызовами `SetResult` в одном потоке, поэтому результат всегда один и тот же.
+
+      Это удобно на практике: можно запустить несколько независимых операций одновременно и затем сопоставить результаты
+      с исходными запросами по индексу, не думая о том, какая операция ответила быстрее. Поведение проверено на .NET 10.
+    linkTitles:
+      - Метод Task.WhenAll
+      - Класс TaskCompletionSource<TResult>
+  en:
+    title: In what order does Task.WhenAll return the task results?
+    prompt: |
+      Two tasks from `TaskCompletionSource<int>` are passed to `Task.WhenAll` and then completed in reverse order:
+      the second one first, then the first one. What does this program print to the console on .NET 10?
+    hint: "What decides the position of a result in the array returned by `Task.WhenAll` - the moment the task completes, or something known before it completes?"
+    options:
+      a: "1,2"
+      b: "2,1"
+      c: "System.Int32[]"
+      d: Compile error
+    optionExplanations:
+      b: "`Task.WhenAll` does not collect results in completion order. The second task completed first, but its result still goes into the second element of the array, because it was passed as the second argument."
+      c: "`string.Join` has a generic overload `Join<T>(string, IEnumerable<T>)`, and `int[]` matches it better than the `params` overload with `object`. So the elements of the array are joined, not the result of calling `ToString()` on the array itself."
+      d: "The code is valid. For `Task<int>` tasks the generic `Task.WhenAll<TResult>` overload is chosen, which returns `Task<int[]>`, and `await` is allowed in top-level statements."
+    answer: "1,2"
+    explanation: |
+      `Task.WhenAll` returns a task that completes when all the supplied tasks have completed. Its result is an array that
+      holds the results in the same order in which the tasks were passed to `WhenAll`. Completion order does not matter:
+      the element at index 0 always comes from the first task and the element at index 1 from the second.
+
+      Here `second.SetResult(2)` runs before `first.SetResult(1)`, but `first.Task` is the first argument, so the array
+      is `[1, 2]` and `string.Join` prints `1,2`. There is no race: the tasks are completed by explicit `SetResult` calls
+      on one thread, so the result is always the same.
+
+      This is useful in practice: you can start several independent operations at once and then match the results to the
+      original requests by index, without caring which operation answered faster. The behaviour was checked on .NET 10.
+    linkTitles:
+      - Task.WhenAll method
+      - TaskCompletionSource<TResult> class
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-15
+  dotnetVersion: "10"

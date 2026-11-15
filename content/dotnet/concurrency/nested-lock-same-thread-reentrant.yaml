@@ -1,0 +1,128 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WN44XTTTXXHDJYSS49
+slug: nested-lock-same-thread-reentrant
+stack: dotnet
+topic: concurrency
+level: junior
+type: output
+grading: auto
+tags: [lock, monitor, reentrancy]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    object gate = new();
+    int total = 0;
+
+    void Add(int amount)
+    {
+        lock (gate)
+        {
+            total += amount;
+        }
+    }
+
+    lock (gate)
+    {
+        Add(10);
+        Add(5);
+        Console.Write($"total {total}");
+    }
+expect:
+  kind: output
+  value: "total 15"
+acceptedOutputs: ["total 15"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "total 15" }
+  - id: b
+    correct: false
+    expect: { kind: nondeterministic }
+  - id: c
+    correct: false
+    expect: { kind: exception, value: System.Threading.SynchronizationLockException }
+  - id: d
+    correct: false
+    expect: { kind: exception, value: System.Threading.LockRecursionException }
+  - id: e
+    correct: false
+    expect: { kind: compile-error }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.monitor
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/statements/lock
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что выведет программа, которая дважды берёт lock на один объект в одном потоке?
+    prompt: |
+      Метод `Add` берёт `lock (gate)`, а вызывается из блока, который уже держит `lock (gate)` в том же потоке.
+      Что выведет эта программа на .NET 10?
+    hint: Кто владеет блокировкой `gate` в момент вызова `Add` и кого `Monitor` заставляет ждать?
+    options:
+      a: "total 15"
+      b: Программа зависнет из-за взаимной блокировки
+      c: Исключение `SynchronizationLockException`
+      d: Исключение `LockRecursionException`
+      e: Ошибка компиляции
+    optionExplanations:
+      b: "`Monitor` заставляет ждать только другие потоки. Поток, который уже владеет блокировкой, входит в неё повторно без ожидания, поэтому ждать самого себя ему не приходится."
+      c: "`SynchronizationLockException` выбрасывает `Monitor.Exit`, когда поток освобождает блокировку, которой не владеет. Здесь каждый выход из `lock` парный своему входу, и поток владеет `gate`."
+      d: "`LockRecursionException` выбрасывают примитивы, которые запрещают повторный вход, например `ReaderWriterLockSlim`, созданный конструктором без параметров (политика `LockRecursionPolicy.NoRecursion`). `Monitor` повторный вход разрешает."
+      e: "Вложенные операторы `lock` на один объект синтаксически корректны, а компилятор не отслеживает, какие блокировки уже взяты."
+    answer: "total 15"
+    explanation: |
+      Оператор `lock` на объекте обычного ссылочного типа компилируется в `Monitor.Enter` и `Monitor.Exit` внутри
+      `try`/`finally`. `Monitor` поддерживает повторный вход (reentrancy): он запоминает поток-владелец и число входов.
+      Если тот же поток снова вызывает `Enter` на том же объекте, он не блокируется, а лишь увеличивает счётчик. Каждый
+      `Exit` уменьшает его, и другие потоки получают блокировку, только когда счётчик доходит до нуля.
+
+      Поэтому оба вызова `Add` повторно входят в `gate` без ожидания, и программа выводит `total 15`. Другой поток в это
+      время ждал бы на любом `lock (gate)`, пока внешний блок не завершится.
+
+      Повторный вход удобен, когда защищённый метод вызывает другой защищённый метод того же объекта, но так ведут себя
+      не все примитивы: `SemaphoreSlim` не привязан к потоку, и второй `Wait()` в том же потоке будет ждать бесконечно, а
+      `ReaderWriterLockSlim` по умолчанию выбрасывает `LockRecursionException`. Пример рассчитан на .NET 10.
+    linkTitles:
+      - Класс Monitor
+      - Оператор lock
+  en:
+    title: What does a program print when it takes lock on the same object twice on one thread?
+    prompt: |
+      The `Add` method takes `lock (gate)`, and it is called from a block that already holds `lock (gate)` on the same thread.
+      What does this program print on .NET 10?
+    hint: Who owns the `gate` lock when `Add` is called, and whom does `Monitor` make wait?
+    options:
+      a: "total 15"
+      b: The program hangs because of a deadlock
+      c: "`SynchronizationLockException`"
+      d: "`LockRecursionException`"
+      e: Compile error
+    optionExplanations:
+      b: "`Monitor` makes only other threads wait. A thread that already owns the lock enters it again without waiting, so it never has to wait for itself."
+      c: "`Monitor.Exit` throws `SynchronizationLockException` when a thread releases a lock it does not own. Here every exit from `lock` pairs with its own entry, and the thread owns `gate`."
+      d: "`LockRecursionException` comes from primitives that forbid reentry, such as a `ReaderWriterLockSlim` created with the parameterless constructor (policy `LockRecursionPolicy.NoRecursion`). `Monitor` allows reentry."
+      e: "Nested `lock` statements on the same object are valid syntax, and the compiler does not track which locks are already held."
+    answer: "total 15"
+    explanation: |
+      A `lock` statement on an object of an ordinary reference type compiles to `Monitor.Enter` and `Monitor.Exit` inside
+      `try`/`finally`. `Monitor` is reentrant: it records the owning thread and a count of entries. When the same thread
+      calls `Enter` on the same object again, it does not block but only increments the count. Each `Exit` decrements it,
+      and other threads can take the lock only when the count reaches zero.
+
+      So both `Add` calls re-enter `gate` without waiting, and the program prints `total 15`. Another thread would
+      meanwhile wait at any `lock (gate)` until the outer block finishes.
+
+      Reentry is handy when a protected method calls another protected method of the same object, but not every primitive
+      behaves this way: `SemaphoreSlim` has no thread affinity, so a second `Wait()` on the same thread waits forever, and
+      `ReaderWriterLockSlim` throws `LockRecursionException` by default. The example targets .NET 10.
+    linkTitles:
+      - Monitor class
+      - The lock statement
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

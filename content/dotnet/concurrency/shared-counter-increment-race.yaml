@@ -1,0 +1,124 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNFPXX79EYZSWPSQ5K
+slug: shared-counter-increment-race
+stack: dotnet
+topic: concurrency
+level: junior
+type: find-bug
+grading: auto
+tags: [race-condition, interlocked, threads, atomicity]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    int counter = 0;
+    Thread[] workers = new Thread[4];
+
+    for (int i = 0; i < workers.Length; i++)
+    {
+        workers[i] = new Thread(() =>
+        {
+            for (int j = 0; j < 1_000_000; j++)
+            {
+                counter++;
+            }
+        });
+        workers[i].Start();
+    }
+
+    foreach (Thread worker in workers)
+    {
+        worker.Join();
+    }
+
+    Console.WriteLine(counter);
+bugLineSets: [[10]]
+fixedSource: |
+  int counter = 0;
+  Thread[] workers = new Thread[4];
+
+  for (int i = 0; i < workers.Length; i++)
+  {
+      workers[i] = new Thread(() =>
+      {
+          for (int j = 0; j < 1_000_000; j++)
+          {
+              Interlocked.Increment(ref counter);
+          }
+      });
+      workers[i].Start();
+  }
+
+  foreach (Thread worker in workers)
+  {
+      worker.Join();
+  }
+
+  Console.WriteLine(counter);
+fixedExpect: { kind: output, value: "4000000" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.interlocked.increment
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/threading/managed-threading-best-practices
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строку, из-за которой общий счётчик в четырёх потоках теряет приращения
+    prompt: |
+      Четыре потока по миллиону раз увеличивают общий счётчик, затем программа дожидается их через `Join`
+      и выводит итог. Ожидается `4000000`, но обычно выводится меньшее число, и от запуска к запуску оно разное.
+      Щёлкните по строке с дефектом.
+    hint: Из скольких отдельных шагов на самом деле состоит одна операция `counter++` и что будет, если два потока выполнят их одновременно?
+    answer: |
+      Строка 10, `counter++` над общей переменной без синхронизации. Это неатомарная операция
+      «прочитать - изменить - записать», поэтому одновременные приращения затирают друг друга.
+    explanation: |
+      `counter++` выполняется в три шага: прочитать текущее значение, прибавить единицу, записать результат обратно.
+      Если два потока прочитали одно и то же значение, например `41`, оба запишут `42`, и одно приращение пропадёт.
+      Это классическое состояние гонки: результат зависит от того, как планировщик чередует потоки, поэтому число
+      меньше `4000000` и меняется между запусками. То, что отдельные чтение и запись `int` атомарны, здесь не помогает:
+      атомарен каждый шаг, но не вся последовательность.
+
+      Остальные строки корректны. Лямбда захватывает одну общую переменную `counter`, и это ожидаемо. `Join` дожидается
+      завершения всех потоков, поэтому итоговое чтение в последней строке видит все записи.
+
+      Исправление - сделать приращение атомарным: `Interlocked.Increment(ref counter)` выполняет чтение, сложение
+      и запись как одну неделимую операцию. Подойдёт и `lock` вокруг `counter++`, но для одного счётчика `Interlocked`
+      проще и дешевле. Модификатор `volatile` проблему не решает: он влияет на порядок чтений и записей, но не делает
+      `++` атомарным. Ещё лучше для такой задачи - считать в локальной переменной каждого потока и сложить итоги в конце.
+    linkTitles:
+      - Метод Interlocked.Increment
+      - Рекомендации по работе с управляемыми потоками
+  en:
+    title: Find the line that makes a shared counter lose increments across four threads
+    prompt: |
+      Four threads each increment a shared counter one million times, then the program waits for them with `Join`
+      and prints the total. It should print `4000000`, but it usually prints a smaller number that differs from run to run.
+      Click the line that contains the defect.
+    hint: How many separate steps does a single `counter++` really consist of, and what happens when two threads perform them at the same time?
+    answer: |
+      Line 10, `counter++` on a shared variable without synchronization. It is a non-atomic
+      read-modify-write, so concurrent increments overwrite each other.
+    explanation: |
+      `counter++` runs in three steps: read the current value, add one, write the result back. If two threads read
+      the same value, say `41`, both write `42`, and one increment is lost. This is a classic race condition: the result
+      depends on how the scheduler interleaves the threads, so the number is below `4000000` and changes between runs.
+      The fact that a single read or write of an `int` is atomic does not help here: each step is atomic, but the
+      sequence as a whole is not.
+
+      The other lines are correct. The lambda captures one shared `counter` variable, which is intended. `Join` waits
+      for every thread to finish, so the final read on the last line sees all the writes.
+
+      The fix is to make the increment atomic: `Interlocked.Increment(ref counter)` performs the read, the addition and
+      the write as one indivisible operation. A `lock` around `counter++` also works, but for a single counter
+      `Interlocked` is simpler and cheaper. The `volatile` modifier does not fix it: it affects the ordering of reads and
+      writes, but does not make `++` atomic. Even better for this kind of task is to count in a local variable per thread
+      and add up the totals at the end.
+    linkTitles:
+      - Interlocked.Increment method
+      - Managed threading best practices
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

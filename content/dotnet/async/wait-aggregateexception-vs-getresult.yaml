@@ -1,0 +1,138 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMR8MS9FP730HBJ4ZJ
+slug: wait-aggregateexception-vs-getresult
+stack: dotnet
+topic: async
+level: middle
+type: output
+grading: auto
+tags: [task, exceptions, aggregate-exception, sync-over-async]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    Task task = LoadAsync();
+
+    try
+    {
+        task.Wait();
+    }
+    catch (Exception ex)
+    {
+        Console.Write(ex.GetType().Name + " ");
+    }
+
+    try
+    {
+        task.GetAwaiter().GetResult();
+    }
+    catch (Exception ex)
+    {
+        Console.Write(ex.GetType().Name);
+    }
+
+    static async Task LoadAsync()
+    {
+        await Task.Delay(10);
+        throw new TimeoutException();
+    }
+expect:
+  kind: output
+  value: "AggregateException TimeoutException"
+acceptedOutputs: ["AggregateException TimeoutException"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "AggregateException TimeoutException" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "TimeoutException TimeoutException" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "AggregateException AggregateException" }
+  - id: d
+    correct: false
+    expect: { kind: output, value: "TimeoutException AggregateException" }
+  - id: e
+    correct: false
+    expect: { kind: exception, value: System.TimeoutException }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.tasks.task.wait
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/parallel-programming/exception-handling-task-parallel-library
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какие типы исключений выбрасывают Task.Wait() и GetAwaiter().GetResult() для упавшей задачи?
+    prompt: |
+      Задача завершается с исключением `TimeoutException`. Программа ждёт её сначала через `Wait()`, затем через
+      `GetAwaiter().GetResult()` и каждый раз выводит имя типа перехваченного исключения. Что выведет программа?
+    hint: Задача может хранить сразу несколько исключений. Одинаково ли с ними обращаются `Wait()` и механизм, на котором построен `await`?
+    options:
+      a: "AggregateException TimeoutException"
+      b: "TimeoutException TimeoutException"
+      c: "AggregateException AggregateException"
+      d: "TimeoutException AggregateException"
+      e: Необработанное исключение `TimeoutException`
+    optionExplanations:
+      b: "`Wait()` не выбрасывает исходное исключение: он всегда оборачивает ошибки задачи в `AggregateException`, а `TimeoutException` лежит в его `InnerExceptions`."
+      c: "`GetAwaiter().GetResult()` - это тот же путь, которым пользуется `await`: он не оборачивает ошибку, а выбрасывает исходное исключение задачи."
+      d: Порядок перепутан. Обёртку `AggregateException` даёт именно `Wait()`, а `GetAwaiter().GetResult()` выбрасывает исходный `TimeoutException`.
+      e: Оба вызова находятся в `try` с `catch (Exception ex)`, а этот блок перехватывает и `AggregateException`, и `TimeoutException`. Необработанных исключений не будет.
+    answer: "AggregateException TimeoutException"
+    explanation: |
+      `Task.Wait()` и свойство `Result` появились вместе с TPL, где задача может завершиться сразу с несколькими ошибками
+      (например, у дочерних задач или у `Task.WhenAll`). Поэтому блокирующие методы всегда выбрасывают `AggregateException`,
+      а исходные исключения доступны через `InnerException` и `InnerExceptions`. Первый блок `catch` печатает `AggregateException`.
+
+      `GetAwaiter().GetResult()` - это метод ожидателя `TaskAwaiter`, который вызывает сгенерированный компилятором код
+      для `await`. Он не оборачивает ошибку, а повторно выбрасывает первое исключение задачи с сохранённым стеком вызовов
+      (через `ExceptionDispatchInfo`). Поэтому второй блок `catch` печатает `TimeoutException`. Упавшая задача не «расходует»
+      исключение: каждое ожидание выбрасывает его снова, так что второй вызов тоже завершается ошибкой.
+
+      На практике это значит: если код уже блокируется на задаче (что само по себе нежелательно), то `catch (TimeoutException)`
+      вокруг `Wait()` или `.Result` не сработает, а вокруг `await` или `GetAwaiter().GetResult()` сработает. Поведение
+      проверено на .NET 10.
+    linkTitles:
+      - Метод Task.Wait
+      - Обработка исключений в библиотеке параллельных задач
+  en:
+    title: Which exception types do Task.Wait() and GetAwaiter().GetResult() throw for a faulted task?
+    prompt: |
+      A task faults with `TimeoutException`. The program waits for it first with `Wait()`, then with
+      `GetAwaiter().GetResult()`, and each time prints the type name of the caught exception. What does it print?
+    hint: A task can hold several exceptions at once. Do `Wait()` and the mechanism behind `await` treat them the same way?
+    options:
+      a: "AggregateException TimeoutException"
+      b: "TimeoutException TimeoutException"
+      c: "AggregateException AggregateException"
+      d: "TimeoutException AggregateException"
+      e: Unhandled `TimeoutException`
+    optionExplanations:
+      b: "`Wait()` does not throw the original exception: it always wraps the task's failures in an `AggregateException`, and the `TimeoutException` sits in its `InnerExceptions`."
+      c: "`GetAwaiter().GetResult()` is the same path that `await` uses: it does not wrap the failure but throws the task's original exception."
+      d: The order is reversed. The `AggregateException` wrapper comes from `Wait()`, while `GetAwaiter().GetResult()` throws the original `TimeoutException`.
+      e: Both calls are inside a `try` with `catch (Exception ex)`, which catches both `AggregateException` and `TimeoutException`. Nothing goes unhandled.
+    answer: "AggregateException TimeoutException"
+    explanation: |
+      `Task.Wait()` and the `Result` property come from the TPL, where a task can fault with several errors at once
+      (for example with child tasks or `Task.WhenAll`). That is why the blocking members always throw `AggregateException`,
+      and the original exceptions are available through `InnerException` and `InnerExceptions`. The first `catch` prints `AggregateException`.
+
+      `GetAwaiter().GetResult()` is a method of the `TaskAwaiter` awaiter that compiler-generated code calls for `await`.
+      It does not wrap the failure; it rethrows the task's first exception with its original stack trace preserved
+      (through `ExceptionDispatchInfo`). So the second `catch` prints `TimeoutException`. A faulted task does not "use up"
+      its exception: every wait throws it again, so the second call fails too.
+
+      In practice: if code already blocks on a task (undesirable in itself), a `catch (TimeoutException)` around `Wait()`
+      or `.Result` will not fire, while one around `await` or `GetAwaiter().GetResult()` will. The behaviour was checked
+      on .NET 10.
+    linkTitles:
+      - Task.Wait method
+      - Exception handling in the Task Parallel Library
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"

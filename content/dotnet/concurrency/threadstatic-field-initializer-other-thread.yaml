@@ -1,0 +1,125 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNZR4XN8HTCZK217Z4
+slug: threadstatic-field-initializer-other-thread
+stack: dotnet
+topic: concurrency
+level: senior
+type: output
+grading: auto
+tags: [threadstatic, thread-local-storage, threads, static-constructor]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    Console.Write(Settings.Retries);
+
+    Thread worker = new(() => Console.Write($" {Settings.Retries}"));
+    worker.Start();
+    worker.Join();
+
+    static class Settings
+    {
+        [ThreadStatic]
+        public static int Retries = 5;
+    }
+expect:
+  kind: output
+  value: "5 0"
+acceptedOutputs: ["5 0"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "5 0" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "5 5" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "0 0" }
+  - id: d
+    correct: false
+    expect: { kind: output, value: "0 5" }
+  - id: e
+    correct: false
+    expect: { kind: compile-error }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threadstaticattribute
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.threadlocal-1
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что выведет программа, читающая поле [ThreadStatic] с инициализатором из другого потока?
+    prompt: |
+      Статическое поле `Retries` помечено атрибутом `[ThreadStatic]` и инициализировано значением `5`.
+      Программа читает его в основном потоке, а затем в новом потоке, который она дожидается через `Join`.
+      Что выведет эта программа в консоль в .NET 10?
+    hint: Где компилятор размещает инициализатор статического поля и сколько раз выполняется этот код?
+    options:
+      a: "5 0"
+      b: "5 5"
+      c: "0 0"
+      d: "0 5"
+      e: Ошибка компиляции
+    optionExplanations:
+      b: Инициализатор не выполняется отдельно для каждого потока. Он входит в статический конструктор, который выполняется один раз за время жизни домена приложения, поэтому значение `5` получает только один поток.
+      c: Статический конструктор с инициализатором выполняется в основном потоке, потому что именно он первым обращается к `Settings`. Поэтому копия поля в основном потоке равна `5`.
+      d: Статический конструктор запускает поток, который первым обращается к типу, а это основной поток. Новый поток видит свою копию поля, которую никто не инициализировал.
+      e: "Инициализатор у поля `[ThreadStatic]` разрешён языком. Это логическая ошибка, о которой может предупредить анализатор, но не ошибка компиляции."
+    answer: "5 0"
+    explanation: |
+      Поле с атрибутом `[ThreadStatic]` имеет отдельную копию в каждом потоке. Инициализатор `= 5` при этом не
+      выполняется для каждого потока: компилятор переносит его в статический конструктор типа (`.cctor`), а тот
+      выполняется один раз, в потоке, который первым обратился к типу. Здесь это основной поток, поэтому его копия
+      поля равна `5`.
+
+      Новый поток получает собственную копию поля, и для неё инициализатор уже никто не вызовет: она остаётся со
+      значением по умолчанию `0`. Документация `ThreadStaticAttribute` прямо предупреждает, что такие поля не стоит
+      инициализировать в объявлении, потому что инициализация затронет только один поток.
+
+      Если каждому потоку нужно своё начальное значение, используйте `ThreadLocal<T>` с фабрикой:
+      `new ThreadLocal<int>(() => 5)` вызывает фабрику при первом обращении к `Value` в каждом потоке. Другой вариант -
+      оставить поле без инициализатора и проверять его при чтении. Поведение проверено для .NET 10.
+    linkTitles:
+      - Класс ThreadStaticAttribute
+      - Класс ThreadLocal<T>
+  en:
+    title: What does a program print when it reads a [ThreadStatic] field with an initializer from another thread?
+    prompt: |
+      The static field `Retries` is marked with `[ThreadStatic]` and initialized to `5`.
+      The program reads it on the main thread and then on a new thread that it waits for with `Join`.
+      What does this program print to the console in .NET 10?
+    hint: Where does the compiler put the initializer of a static field, and how many times does that code run?
+    options:
+      a: "5 0"
+      b: "5 5"
+      c: "0 0"
+      d: "0 5"
+      e: Compile error
+    optionExplanations:
+      b: The initializer does not run separately for each thread. It is part of the static constructor, which runs once per application domain, so only one thread gets the value `5`.
+      c: The static constructor with the initializer runs on the main thread, because the main thread is the first to touch `Settings`. So the main thread's copy of the field is `5`.
+      d: The static constructor runs on the thread that first touches the type, which is the main thread. The new thread sees its own copy of the field, which nobody initialized.
+      e: "An initializer on a `[ThreadStatic]` field is allowed by the language. It is a logic error that an analyzer may warn about, not a compile error."
+    answer: "5 0"
+    explanation: |
+      A field marked with `[ThreadStatic]` has a separate copy on every thread. The `= 5` initializer, however, does not
+      run per thread: the compiler moves it into the type's static constructor (`.cctor`), which runs once, on the thread
+      that first touches the type. Here that is the main thread, so its copy of the field is `5`.
+
+      The new thread gets its own copy of the field, and nothing runs the initializer for it: it keeps the default
+      value `0`. The `ThreadStaticAttribute` documentation explicitly warns against initializing such fields in the
+      declaration, because the initialization affects only one thread.
+
+      If every thread needs its own initial value, use `ThreadLocal<T>` with a factory:
+      `new ThreadLocal<int>(() => 5)` calls the factory on the first access to `Value` on each thread. Another option is
+      to leave the field without an initializer and check it on read. The behaviour was checked for .NET 10.
+    linkTitles:
+      - ThreadStaticAttribute class
+      - ThreadLocal<T> class
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

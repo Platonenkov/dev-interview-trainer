@@ -1,0 +1,149 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMFA73X7ZQTBNJGPRK
+slug: request-cancellation-propagation-design
+stack: dotnet
+topic: async
+level: architect
+type: open
+grading: self
+tags: [cancellation, cancellation-token, timeouts, distributed, aspnet-core]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/threading/cancellation-in-managed-threads
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/microsoft.aspnetcore.http.httpcontext.requestaborted
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/grpc/deadlines-cancellation
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/performance/timeouts
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как спроектировать отмену, чтобы при уходе клиента останавливалась вся работа запроса во всех сервисах?
+    prompt: |
+      Входящий запрос в ASP.NET Core (.NET 10) порождает параллельные вызовы в несколько нижестоящих сервисов, запросы
+      к базе данных и вычисления. Клиент закрывает соединение или истекает отведённое на запрос время.
+      Как спроектировать отмену так, чтобы вся начатая этим запросом работа остановилась, и что при этом остановить
+      нельзя или не нужно?
+    hint: Что делает `Cancel` с кодом, который токен так и не получил, и чем сигнал отмены становится на границе процесса?
+    answer: |
+      1. **Один токен на запрос из двух источников.** На входе берётся `HttpContext.RequestAborted` (в контроллерах и
+         minimal API к нему привязывается параметр `CancellationToken`) и связывается с бюджетом времени запроса:
+         `CancellationTokenSource.CreateLinkedTokenSource(requestAborted)` и `CancelAfter(budget)` либо middleware
+         таймаутов запросов (`AddRequestTimeouts`, появилось в .NET 8), которое само отменяет `RequestAborted`.
+         Связанный источник освобождается (`Dispose`) в конце запроса: он держит регистрацию на родительском токене.
+      2. **Передавать токен явно и везде.** Каждый асинхронный метод цепочки принимает `CancellationToken` и передаёт
+         его дальше: `HttpClient.SendAsync`, `ToListAsync` в EF Core, `Task.Delay`, `SemaphoreSlim.WaitAsync`, чтение
+         из `Channel`. CPU-bound циклы периодически вызывают `ThrowIfCancellationRequested`. Все ветви fan-out получают
+         один и тот же токен; если ошибка одной ветви делает остальные бессмысленными, ветви получают дочерний связанный
+         источник, который отменяется при первой ошибке.
+      3. **Перенести отмену через сеть.** Токен по сети не передаётся. Отмена исходящего HTTP-запроса обрывает соединение
+         или поток HTTP/2, и нижестоящий сервис на ASP.NET Core видит собственный `RequestAborted`. Это покрывает только
+         обрыв, а бюджет нужно передавать как дедлайн: gRPC передаёт его сам (заголовок `grpc-timeout`), а
+         `EnableCallContextPropagation` в фабрике gRPC-клиентов переносит дедлайн и отмену текущего вызова в дочерние;
+         для HTTP нужен свой заголовок с оставшимся бюджетом, и каждый узел вычитает из него свой запас. Сообщение, уже
+         отправленное в очередь, отменить нельзя: потребитель проверяет дедлайн в сообщении, или операция должна
+         компенсироваться.
+      4. **Решить, что отменять нельзя.** Побочные эффекты после точки невозврата (зафиксированная транзакция,
+         отправленный платёж) доводятся до конца с `CancellationToken.None` или отдельным коротким таймаутом, а операции
+         делаются идемпотентными, чтобы повтор после обрыва был безопасен. Работа, которая должна пережить запрос, уходит
+         в очередь или фоновый сервис, а не в `Task.Run` с токеном запроса.
+      5. **Правильно обработать результат.** Причину отмены определяют по исходному сигналу, а не по итоговому токену,
+         который отменён в обоих случаях. Со своим связанным источником уход клиента - это отменённый исходный
+         `RequestAborted`, а исчерпание бюджета - связанный источник, отменённый по `CancelAfter`, при неотменённом
+         `RequestAborted`. С middleware таймаутов `RequestAborted` отменяется и по таймауту, поэтому истёкший бюджет
+         распознают по `IHttpRequestTimeoutFeature.RequestTimeoutToken`. `OperationCanceledException` из-за ухода
+         клиента - не ошибка: её не логируют как ошибку, не повторяют и не учитывают в SLO. Исчерпание бюджета - это
+         ответ 504 или доменная ошибка, и его отслеживают как сигнал перегрузки. Политики повторов и hedging наблюдают
+         тот же токен и прекращают попытки после отмены.
+      6. **Проверить.** Интеграционные тесты, которые обрывают запрос и проверяют, что нижестоящие вызовы прекратились;
+         трассировка с отменёнными спанами; проверка прокси и балансировщиков, которые могут не закрывать соединение
+         к бэкенду после ухода клиента, и тогда `RequestAborted` сработает поздно или не сработает совсем.
+    explanation: |
+      Отмена в .NET кооперативная: `Cancel` лишь помечает токен и вызывает зарегистрированные обратные вызовы.
+      Код, который токен не получил или не проверяет, работает до конца, поэтому одна пропущенная передача токена
+      в середине цепочки оставляет висеть весь нижележащий запрос. Отсюда суть дизайна: это контракт, по которому каждый
+      слой принимает и передаёт токен, а каждая граница процесса превращает его в сигнал протокола (обрыв соединения,
+      дедлайн), который на другой стороне снова становится токеном.
+
+      Связывание с бюджетом важно не меньше, чем реакция на обрыв: клиент может ждать дольше, чем имеет смысл работать,
+      и без общего дедлайна нижние сервисы продолжают тратить ресурсы на ответ, который уже никому не нужен. Но после
+      связывания итоговый токен уже не говорит, почему его отменили, поэтому для метрик и кода ответа причину берут
+      из исходных источников.
+
+      Слабые ответы: `Task.WhenAny` с `Task.Delay` (он перестаёт ждать, но ничего не отменяет), только `HttpClient.Timeout`
+      (по умолчанию 100 секунд и только для одного вызова), новый `CancellationTokenSource` без связи с токеном запроса,
+      а также отмена всего подряд без мысли о том, какие побочные эффекты нельзя прерывать посередине.
+    linkTitles:
+      - Отмена в управляемых потоках
+      - Свойство HttpContext.RequestAborted
+      - Дедлайны и отмена в gRPC для .NET
+      - Middleware таймаутов запросов в ASP.NET Core
+  en:
+    title: How do you design cancellation so that all work of an abandoned request stops across services?
+    prompt: |
+      An incoming request in ASP.NET Core (.NET 10) fans out to parallel calls to several downstream services, database
+      queries and computation. The client closes the connection, or the time allotted to the request runs out.
+      How do you design cancellation so that all the work this request started stops, and what must not or need not
+      be stopped?
+    hint: What does `Cancel` do to code that never received the token, and what does a cancellation signal become at a process boundary?
+    answer: |
+      1. **One token per request from two sources.** At the entry point take `HttpContext.RequestAborted` (in controllers
+         and minimal APIs a `CancellationToken` parameter binds to it) and link it with the request's time budget:
+         `CancellationTokenSource.CreateLinkedTokenSource(requestAborted)` plus `CancelAfter(budget)`, or the request
+         timeouts middleware (`AddRequestTimeouts`, added in .NET 8), which cancels `RequestAborted` itself.
+         `Dispose` the linked source at the end of the request: it holds a registration on the parent token.
+      2. **Pass the token explicitly and everywhere.** Every async method in the chain takes a `CancellationToken` and
+         forwards it: `HttpClient.SendAsync`, EF Core `ToListAsync`, `Task.Delay`, `SemaphoreSlim.WaitAsync`, reads from a
+         `Channel`. CPU-bound loops call `ThrowIfCancellationRequested` periodically. All fan-out branches get the same
+         token; if a failure in one branch makes the others pointless, the branches get a child linked source that is
+         cancelled on the first error.
+      3. **Carry cancellation across the network.** A token does not travel over the wire. Cancelling an outgoing HTTP
+         request aborts the connection or the HTTP/2 stream, and a downstream ASP.NET Core service sees its own
+         `RequestAborted`. That covers only the abort; the budget has to travel as a deadline: gRPC sends it natively
+         (the `grpc-timeout` header), and `EnableCallContextPropagation` in the gRPC client factory carries the deadline and
+         cancellation of the current call into child calls; for HTTP you need your own header with the remaining budget,
+         and each hop subtracts its own margin. A message already published to a queue cannot be cancelled: the consumer
+         checks a deadline in the message, or the operation must be compensatable.
+      4. **Decide what must not be cancelled.** Side effects past a point of no return (a committed transaction, a payment
+         sent) are finished with `CancellationToken.None` or a separate short timeout, and operations are made idempotent so
+         that a retry after an abort is safe. Work that must outlive the request goes to a queue or a background service,
+         not to `Task.Run` with the request token.
+      5. **Handle the outcome correctly.** Determine the cause of cancellation from the original signal, not from the
+         resulting token, which is cancelled in both cases. With your own linked source, a client abort is a cancelled
+         original `RequestAborted`, and an exhausted budget is the linked source cancelled by `CancelAfter` while
+         `RequestAborted` is not cancelled. With the request timeouts middleware `RequestAborted` is cancelled on timeout
+         too, so an expired budget is recognised through `IHttpRequestTimeoutFeature.RequestTimeoutToken`. An
+         `OperationCanceledException` caused by a client leaving is not an error: it is not logged as an error, not retried
+         and not counted against the SLO. An exhausted budget is a 504 or a domain error, and it is tracked as an overload
+         signal. Retry and hedging policies observe the same token and stop retrying once it is cancelled.
+      6. **Verify.** Integration tests that abort the request and assert that downstream calls stop; tracing that shows
+         cancelled spans; a check of proxies and load balancers, which may keep the backend connection open after the
+         client leaves, so that `RequestAborted` fires late or not at all.
+    explanation: |
+      Cancellation in .NET is cooperative: `Cancel` only marks the token and runs the registered callbacks.
+      Code that never received the token, or never checks it, runs to completion, so a single missed hand-off in the middle
+      of the chain leaves the whole downstream request running. Hence the essence of the design: it is a contract in which
+      every layer accepts and forwards the token, and every process boundary turns it into a protocol signal (a connection
+      abort, a deadline) that becomes a token again on the other side.
+
+      Linking with a budget matters as much as reacting to the abort: a client may wait longer than the work is worth,
+      and without a shared deadline the lower services keep spending resources on a response nobody needs any more. But
+      once the sources are linked, the resulting token no longer tells why it was cancelled, so metrics and the response
+      code take the cause from the original sources.
+
+      Weak answers: `Task.WhenAny` with `Task.Delay` (it stops waiting but cancels nothing), only `HttpClient.Timeout`
+      (100 seconds by default and only for a single call), a new `CancellationTokenSource` not linked to the request token,
+      and cancelling everything without thinking about which side effects must not be interrupted halfway.
+    linkTitles:
+      - Cancellation in managed threads
+      - HttpContext.RequestAborted property
+      - Reliable gRPC services with deadlines and cancellation
+      - Request timeouts middleware in ASP.NET Core
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"

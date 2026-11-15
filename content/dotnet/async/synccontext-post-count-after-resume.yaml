@@ -1,0 +1,129 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMSJND7VXH1MCGCE6E
+slug: synccontext-post-count-after-resume
+stack: dotnet
+topic: async
+level: senior
+type: output
+grading: auto
+tags: [synchronization-context, task-yield, continuations]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    CountingContext context = new();
+    SynchronizationContext.SetSynchronizationContext(context);
+
+    await Task.Yield();
+    await Task.Yield();
+
+    Console.WriteLine(context.PostCount);
+
+    class CountingContext : SynchronizationContext
+    {
+        public int PostCount;
+
+        public override void Post(SendOrPostCallback d, object state)
+        {
+            PostCount++;
+            base.Post(d, state);
+        }
+    }
+expect:
+  kind: output
+  value: "1"
+acceptedOutputs: ["1"]
+options:
+  - id: a
+    correct: false
+    expect: { kind: output, value: "0" }
+  - id: b
+    correct: true
+    expect: { kind: output, value: "1" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "2" }
+  - id: d
+    correct: false
+    expect: { kind: compile-error }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.synchronizationcontext
+    lang: en
+    kind: docs
+  - url: https://devblogs.microsoft.com/dotnet/configureawait-faq/
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Сколько раз вызовется Post собственного SynchronizationContext после двух await Task.Yield()?
+    prompt: |
+      Программа устанавливает собственный `SynchronizationContext`, который считает вызовы `Post` и передаёт их
+      базовой реализации, а затем дважды выполняет `await Task.Yield()`. Что она выведет в консоль в .NET 10?
+    hint: Где базовая реализация `Post` выполняет переданный делегат и какой контекст увидит второй `await` в этом месте?
+    options:
+      a: "0"
+      b: "1"
+      c: "2"
+      d: Ошибка компиляции
+    optionExplanations:
+      a: "`await Task.Yield()` проверяет `SynchronizationContext.Current`. Перед первым `await` текущим контекстом является `CountingContext`, поэтому продолжение планируется через его `Post`, и счётчик не может остаться нулевым."
+      c: "Так было бы, если бы продолжение снова выполнялось с установленным `CountingContext`, как в UI-потоке WinForms или WPF. Но базовый `Post` ставит делегат в пул потоков и не делает себя текущим контекстом, поэтому второй `await` контекста уже не видит."
+      d: "`Post` у `SynchronizationContext` виртуальный, его можно переопределить и вызвать `base.Post`. Класс после операторов верхнего уровня тоже допустим."
+    answer: "1"
+    explanation: |
+      `await` захватывает контекст, который является текущим в момент ожидания. Перед первым `await Task.Yield()`
+      текущим контекстом основного потока является `CountingContext`, поэтому ожидатель `Task.Yield` планирует продолжение
+      через его `Post`, и `PostCount` становится равен 1.
+
+      Базовая реализация `SynchronizationContext.Post` просто ставит делегат в пул потоков и не устанавливает себя текущим
+      контекстом. Продолжение выполняется в потоке пула, где `SynchronizationContext.Current` равен `null`. Второй
+      `await Task.Yield()` контекста не находит и ставит продолжение прямо в пул потоков, минуя `Post`. Поэтому выводится `1`.
+
+      Отсюда практический вывод: контекст «сохраняется» между `await` только тогда, когда его `Post` выполняет делегат
+      там, где этот контекст снова текущий. Так устроены контексты UI-потоков WinForms и WPF: они установлены в UI-потоке,
+      и продолжение возвращается туда. Собственный контекст, который должен действовать для всего асинхронного метода,
+      обязан в `Post` вызывать `SetSynchronizationContext(this)` перед запуском делегата и восстанавливать прежний контекст
+      после. Кроме того, ожидатели `Task` и `Task.Yield` считают экземпляр ровно базового типа `SynchronizationContext`
+      равнозначным отсутствию контекста, поэтому для подсчёта здесь нужен именно подкласс. Поведение проверяется на .NET 10.
+    linkTitles:
+      - Класс SynchronizationContext
+      - ConfigureAwait FAQ
+  en:
+    title: How many times is Post of a custom SynchronizationContext called after two await Task.Yield()?
+    prompt: |
+      The program installs a custom `SynchronizationContext` that counts `Post` calls and forwards them to the base
+      implementation, and then runs `await Task.Yield()` twice. What does it print to the console on .NET 10?
+    hint: Where does the base implementation of `Post` run the delegate it receives, and which context will the second `await` see there?
+    options:
+      a: "0"
+      b: "1"
+      c: "2"
+      d: Compile error
+    optionExplanations:
+      a: "`await Task.Yield()` checks `SynchronizationContext.Current`. Before the first `await` the current context is `CountingContext`, so the continuation is scheduled through its `Post`, and the counter cannot stay at zero."
+      c: "That would be the result if the continuation ran with `CountingContext` installed again, as on a WinForms or WPF UI thread. But the base `Post` queues the delegate to the thread pool and does not make itself current, so the second `await` no longer sees any context."
+      d: "`Post` on `SynchronizationContext` is virtual, so it can be overridden and can call `base.Post`. A class declared after top-level statements is also valid."
+    answer: "1"
+    explanation: |
+      `await` captures the context that is current at the moment of awaiting. Before the first `await Task.Yield()`
+      the current context of the main thread is `CountingContext`, so the `Task.Yield` awaiter schedules the continuation
+      through its `Post`, and `PostCount` becomes 1.
+
+      The base implementation of `SynchronizationContext.Post` simply queues the delegate to the thread pool and does not
+      install itself as the current context. The continuation runs on a thread pool thread where
+      `SynchronizationContext.Current` is `null`. The second `await Task.Yield()` finds no context and queues its
+      continuation directly to the thread pool, bypassing `Post`. So the program prints `1`.
+
+      The practical lesson: a context "sticks" across `await` only when its `Post` runs the delegate where that context is
+      current again. That is how the WinForms and WPF UI contexts work: they are installed on the UI thread, and the
+      continuation goes back there. A custom context that must stay in effect for a whole async method has to call
+      `SetSynchronizationContext(this)` in `Post` before running the delegate and restore the previous context afterwards.
+      Also, the `Task` and `Task.Yield` awaiters treat an instance of exactly the base `SynchronizationContext` type as no
+      context at all, which is why counting needs a subclass here. The behaviour is checked against .NET 10.
+    linkTitles:
+      - SynchronizationContext class
+      - ConfigureAwait FAQ
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

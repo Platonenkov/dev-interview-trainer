@@ -1,0 +1,115 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WPH8HPHCYHPBDM7817
+slug: pooling-small-objects-pr-decision
+stack: dotnet
+topic: performance
+level: lead
+type: situation
+grading: self
+tags: [object-pool, pooling, gc, code-review, benchmarking]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/performance/objectpool
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/fundamentals
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Коллега в PR переводит мелкие DTO на ObjectPool по всему коду: принимать ли изменение?"
+    prompt: |
+      Коллега открыл большой PR: множество мелких короткоживущих DTO по всему коду теперь берутся из `ObjectPool<T>`
+      и возвращаются в него после использования. В описании приведён микробенчмарк, где цикл `Get`/`Return` выделяет
+      почти ноль байт против заметных аллокаций у варианта с `new`. Как вы решите, принимать ли этот PR и раскатывать
+      ли подход на весь код?
+    hint: Что микробенчмарк с циклом `Get`/`Return` не измеряет и чем пул платит за отсутствие аллокаций, кроме сложности кода?
+    answer: |
+      1. **Выяснить, какую проблему решает PR.** Есть ли измеренный симптом в продакшене: высокая доля времени в GC,
+         частые сборки Gen2, всплески p99, совпадающие со сборками? Если мотивация только «меньше аллокаций», проверять
+         результат не с чем.
+      2. **Критически прочитать микробенчмарк.** Цикл `Get`/`Return` против `new` меряет «горячий» пул и крошечный объект
+         в изоляции. Он не показывает стоимость сброса состояния, конкуренцию за пул при параллельных запросах, влияние
+         на GC всего процесса и на задержку реального запроса. Создание мелкого DTO в Gen0 - это сдвиг указателя, и оно
+         часто не медленнее похода в пул.
+      3. **Измерить сквозной сценарий.** Нагрузочный тест с реалистичным трафиком до и после: пропускная способность,
+         p95/p99, скорость аллокаций, число сборок по поколениям и доля времени в GC (`dotnet-counters`), плюс трассировка
+         аллокаций (`dotnet-trace`), чтобы понять, входят ли эти DTO вообще в число главных источников аллокаций.
+      4. **Взвесить риски.** Объект из пула нужно сбрасывать: забытое поле переносит данные из одного запроса в другой,
+         возможно, данные другого пользователя. Код, который держит ссылку после `Return` или возвращает объект дважды,
+         получает объект с двумя владельцами - редкие, плохо воспроизводимые ошибки, особенно через `await`. Объекты пула
+         живут долго, попадают в Gen2, а их ссылки на свежие объекты удорожают сборки Gen0. Владение объектом должно стать
+         явным в каждом API, через который DTO передаётся.
+      5. **Решить точечно.** Как правило, массовое изменение не принимать. Пул оставить только там, где профилирование
+         показало горячий путь и объект дорого создавать или он большой: `StringBuilder` через
+         `StringBuilderPooledObjectPolicy`, буферы через `ArrayPool<T>`, объекты с дорогой инициализацией. Для мелких DTO
+         при необходимости снижать аллокации иначе (убрать промежуточные коллекции, использовать структуры или `Span<T>`
+         в самом горячем цикле) или оставить как есть.
+      6. **Провести это как командное решение.** Обсуждать в PR данными, а не авторитетом, признать проделанную работу,
+         предложить выделить один горячий путь за флагом с заранее согласованными критериями успеха. Зафиксировать
+         в гайдлайнах команды правило «пул только после замера» и требовать тесты, проверяющие сброс состояния.
+    explanation: |
+      Документация `ObjectPool` прямо предупреждает, что пул не всегда ускоряет код: если инициализация объекта
+      недорогая, взять объект из пула обычно медленнее, чем создать новый, а объекты, которыми владеет пул, не освобождаются,
+      пока жив сам пул. Там же рекомендуется применять пул только после сбора данных о производительности на реалистичных
+      сценариях. Причина в устройстве сборщика мусора: выделение в управляемой куче сводится к сдвигу указателя, а
+      короткоживущий объект умирает в Gen0, и сборка платит в основном за выжившие объекты, а не за умершие. Пул превращает
+      дешёвый мусор в долгоживущие объекты.
+
+      Для уровня lead важна не только техника, но и цена решения для команды. Массовое изменение по всему коду меняет
+      модель владения объектами и создаёт класс ошибок (несброшенное состояние, использование после возврата), которые
+      проявляются редко и могут привести к утечке данных между пользователями. Поэтому решение принимается по сквозным
+      измерениям реальной нагрузки, применяется точечно к измеренным горячим путям и закрепляется правилом команды.
+      Рассуждения даны для .NET 10.
+    linkTitles:
+      - Повторное использование объектов с помощью ObjectPool в ASP.NET Core
+      - Основы сборки мусора
+  en:
+    title: "A teammate's PR pools small DTOs with ObjectPool across the codebase: do you accept it?"
+    prompt: |
+      A teammate opened a large PR: many small, short-lived DTOs across the codebase are now taken from an
+      `ObjectPool<T>` and returned to it after use. The description cites a microbenchmark where a `Get`/`Return` loop
+      allocates almost zero bytes against noticeable allocations in the `new` version. How do you decide whether to
+      accept this PR and roll the approach out to the whole codebase?
+    hint: What does a `Get`/`Return` microbenchmark not measure, and what does the pool pay for having no allocations, besides code complexity?
+    answer: |
+      1. **Find out which problem the PR solves.** Is there a measured symptom in production: a high share of time in GC,
+         frequent Gen2 collections, p99 spikes that line up with collections? If the motivation is only "fewer allocations",
+         there is nothing to verify the result against.
+      2. **Read the microbenchmark critically.** A `Get`/`Return` loop against `new` measures a hot pool and a tiny object
+         in isolation. It does not show the cost of resetting state, contention on the pool under concurrent requests, the
+         effect on GC for the whole process, or the latency of a real request. Creating a small DTO in Gen0 is a pointer
+         bump and is often no slower than going to the pool.
+      3. **Measure end to end.** A load test with realistic traffic before and after: throughput, p95/p99, allocation rate,
+         collection counts per generation and share of time in GC (`dotnet-counters`), plus an allocation trace
+         (`dotnet-trace`) to see whether these DTOs are even among the top allocation sources.
+      4. **Weigh the risks.** A pooled object must be reset: a forgotten field carries data from one request into another,
+         possibly another user's data. Code that keeps a reference after `Return` or returns an object twice ends up with
+         an object that has two owners - rare, hard-to-reproduce bugs, especially across `await`. Pooled objects live long,
+         get promoted to Gen2, and their references to fresh objects make Gen0 collections more expensive. Ownership of the
+         object has to become explicit in every API that passes a DTO along.
+      5. **Decide selectively.** As a rule, do not merge the blanket change. Keep pooling only where profiling shows a hot
+         path and the object is expensive to create or large: `StringBuilder` through `StringBuilderPooledObjectPolicy`,
+         buffers through `ArrayPool<T>`, objects with costly initialization. For small DTOs, if needed, cut allocations
+         another way (drop intermediate collections, use structs or `Span<T>` in the hottest loop) or leave them as they are.
+      6. **Handle it as a team decision.** Argue in the PR with data, not authority, acknowledge the work done, and suggest
+         carving out one hot path behind a flag with success criteria agreed in advance. Record a team guideline "pool only
+         after measuring" and require tests that check state reset.
+    explanation: |
+      The `ObjectPool` documentation warns directly that pooling does not always improve performance: unless an object's
+      initialization is expensive, getting it from the pool is usually slower than creating a new one, and objects owned
+      by the pool are not freed while the pool itself is alive. The same page recommends pooling only after collecting
+      performance data on realistic scenarios. The reason lies in how the garbage collector works: allocation on the managed
+      heap amounts to bumping a pointer, a short-lived object dies in Gen0, and a collection pays mostly for survivors, not
+      for dead objects. A pool turns cheap garbage into long-lived objects.
+
+      At the lead level what matters is not only the technique but the cost of the decision for the team. A blanket change
+      across the codebase changes the ownership model and introduces a class of bugs (state not reset, use after return)
+      that show up rarely and can leak data between users. So the decision rests on end-to-end measurements of the real
+      workload, is applied selectively to measured hot paths, and is backed by a team rule. The reasoning is given for .NET 10.
+    linkTitles:
+      - Object reuse with ObjectPool in ASP.NET Core
+      - Fundamentals of garbage collection
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

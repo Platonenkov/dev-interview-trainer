@@ -1,0 +1,112 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMGCQZ64PXYWQRG1NQ
+slug: cancel-only-signals-cooperative-token
+stack: dotnet
+topic: async
+level: junior
+type: single
+grading: auto
+tags: [cancellation, cancellation-token, cooperative-cancellation]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    using CancellationTokenSource cts = new();
+    int processed = 0;
+
+    async Task ProcessAsync(CancellationToken token)
+    {
+        for (int i = 0; i < 100; i++)
+        {
+            await Task.Delay(10);
+            processed++;
+        }
+    }
+
+    Task work = ProcessAsync(cts.Token);
+    cts.Cancel();
+    await work;
+    Console.WriteLine($"{work.Status} {processed}");
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/threading/cancellation-in-managed-threads
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/parallel-programming/task-cancellation
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что делает CancellationTokenSource.Cancel с задачей, которая не проверяет токен?
+    prompt: |
+      Метод `ProcessAsync` получает токен отмены, но в цикле его нигде не использует. Сразу после запуска
+      вызывающий код вызывает `cts.Cancel()`. Что произойдёт в .NET 10?
+    hint: Что именно меняется в токене после вызова `Cancel` и какой код должен это изменение заметить?
+    options:
+      a: Задача остановится сразу, перейдёт в состояние `Canceled`, а `await work` выбросит `TaskCanceledException`
+      b: Цикл выполнит все 100 итераций, задача завершится успешно, и программа выведет `RanToCompletion 100`
+      c: Цикл прервётся на ближайшем `await Task.Delay(10)`, и задача завершится в состоянии `Canceled` с `processed` меньше 100
+      d: "`Cancel` прервёт поток, выполняющий цикл, через `ThreadAbortException`"
+    optionExplanations:
+      a: "`Cancel` не умеет останавливать чужой код. Он только выставляет флаг в токене и вызывает зарегистрированные обработчики. Задача станет `Canceled`, только если код сам заметит отмену и выбросит `OperationCanceledException`, а этот цикл токен не читает."
+      c: "`Task.Delay(10)` вызывается без токена, поэтому ничего не знает об отмене и просто ждёт 10 мс. Остановка на `await` была бы, только если бы токен передали: `Task.Delay(10, token)`."
+      d: "Отмена в .NET не прерывает потоки принудительно. К тому же `Thread.Abort` в .NET Core и .NET 5+ не поддерживается и выбрасывает `PlatformNotSupportedException`. Кроме того, между итерациями этот метод вообще не занимает поток."
+    answer: Цикл выполнит все 100 итераций, задача завершится успешно, и программа выведет `RanToCompletion 100`.
+    explanation: |
+      Отмена в .NET кооперативная. `CancellationTokenSource.Cancel()` только переводит токен в отменённое состояние
+      (`IsCancellationRequested` становится `true`) и вызывает обработчики, зарегистрированные через `token.Register`.
+      Остановить работу должен сам код, который получил токен: проверить `IsCancellationRequested`, вызвать
+      `token.ThrowIfCancellationRequested()` или передать токен дальше в методы, которые его поддерживают.
+
+      Здесь токен принят параметром, но не используется ни в цикле, ни в `Task.Delay`, поэтому вызов `Cancel` на работу
+      никак не влияет: цикл доходит до конца, а задача завершается в состоянии `RanToCompletion`.
+
+      Исправление - наблюдать токен: `await Task.Delay(10, token);` или `token.ThrowIfCancellationRequested();` в начале
+      итерации. Тогда возникнет `OperationCanceledException`, задача `async`-метода перейдёт в состояние `Canceled`,
+      а `await work` выбросит это исключение вызывающему коду. Поведение описано для .NET 10.
+    linkTitles:
+      - Отмена в управляемых потоках
+      - Отмена задач
+  en:
+    title: What does CancellationTokenSource.Cancel do to a task that never checks the token?
+    prompt: |
+      The `ProcessAsync` method receives a cancellation token but never uses it in its loop. Right after starting it,
+      the caller calls `cts.Cancel()`. What happens in .NET 10?
+    hint: What exactly changes in the token after `Cancel` is called, and which code has to notice that change?
+    options:
+      a: The task stops at once, moves to the `Canceled` state, and `await work` throws `TaskCanceledException`
+      b: The loop runs all 100 iterations, the task completes successfully, and the program prints `RanToCompletion 100`
+      c: The loop is interrupted at the next `await Task.Delay(10)`, and the task ends in the `Canceled` state with `processed` below 100
+      d: "`Cancel` aborts the thread running the loop with `ThreadAbortException`"
+    optionExplanations:
+      a: "`Cancel` cannot stop someone else's code. It only sets a flag in the token and runs the registered callbacks. The task becomes `Canceled` only if the code itself notices the cancellation and throws `OperationCanceledException`, and this loop never reads the token."
+      c: "`Task.Delay(10)` is called without the token, so it knows nothing about the cancellation and simply waits 10 ms. It would stop at the `await` only if the token were passed: `Task.Delay(10, token)`."
+      d: "Cancellation in .NET never aborts threads forcibly. Besides, `Thread.Abort` is not supported on .NET Core and .NET 5+ and throws `PlatformNotSupportedException`. Also, between iterations this method does not occupy a thread at all."
+    answer: The loop runs all 100 iterations, the task completes successfully, and the program prints `RanToCompletion 100`.
+    explanation: |
+      Cancellation in .NET is cooperative. `CancellationTokenSource.Cancel()` only moves the token to the cancelled state
+      (`IsCancellationRequested` becomes `true`) and runs the callbacks registered with `token.Register`.
+      Stopping the work is the job of the code that received the token: check `IsCancellationRequested`, call
+      `token.ThrowIfCancellationRequested()`, or pass the token on to methods that support it.
+
+      Here the token is accepted as a parameter but used neither in the loop nor in `Task.Delay`, so calling `Cancel`
+      has no effect on the work: the loop runs to the end and the task ends in the `RanToCompletion` state.
+
+      The fix is to observe the token: `await Task.Delay(10, token);` or `token.ThrowIfCancellationRequested();` at the
+      start of each iteration. Then an `OperationCanceledException` is raised, the task of the `async` method moves to the
+      `Canceled` state, and `await work` rethrows that exception to the caller. The behaviour is described for .NET 10.
+    linkTitles:
+      - Cancellation in managed threads
+      - Task cancellation
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

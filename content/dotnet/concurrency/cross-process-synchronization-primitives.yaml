@@ -1,0 +1,115 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNP81PCWQBM7DT5ZQC
+slug: cross-process-synchronization-primitives
+stack: dotnet
+topic: concurrency
+level: middle
+type: multi
+grading: auto
+tags: [locks, mutex, semaphore, eventwaithandle, interprocess]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+  - id: e
+    correct: true
+  - id: f
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/threading/overview-of-synchronization-primitives
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/threading/semaphore-and-semaphoreslim
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.mutex
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какие примитивы синхронизации в .NET 10 работают между процессами?
+    prompt: |
+      Два отдельных процесса на Windows должны по очереди работать с общим ресурсом, например с одним файлом.
+      Выберите все примитивы, которыми в .NET 10 можно синхронизировать эти процессы.
+    hint: Где хранится состояние каждого примитива - в объекте в управляемой куче одного процесса или в ядре операционной системы?
+    options:
+      a: "Именованный `Mutex`"
+      b: "`SemaphoreSlim`"
+      c: "Именованный `Semaphore`"
+      d: "Оператор `lock`"
+      e: "Именованный `EventWaitHandle`"
+      f: "`ReaderWriterLockSlim`"
+    optionExplanations:
+      b: "`SemaphoreSlim` - облегчённый семафор, рассчитанный на работу внутри одного процесса. Он не поддерживает имена, а его состояние живёт в управляемом объекте, который другой процесс не видит. Для межпроцессного семафора нужен именованный `Semaphore`."
+      d: "`lock` использует `Monitor` (или, начиная с .NET 9, `System.Threading.Lock`) и блокирует конкретный управляемый объект в куче процесса. У другого процесса своя куча и свои объекты, поэтому его `lock` никак не связан с вашим."
+      f: "`ReaderWriterLockSlim` согласует только потоки одного процесса: именованного варианта у него нет, состояние хранится в управляемом объекте."
+    answer: "Верны `a`, `c` и `e`: именованные `Mutex`, `Semaphore` и `EventWaitHandle` оборачивают объекты ядра ОС и видны другим процессам, а `lock`, `SemaphoreSlim` и `ReaderWriterLockSlim` работают только внутри одного процесса."
+    explanation: |
+      `Mutex`, `Semaphore` и `EventWaitHandle` наследуют `WaitHandle` и оборачивают объекты ядра операционной системы.
+      Если при создании передать имя, Windows делает объект видимым другим процессам: второй процесс, который создаёт
+      или открывает объект с тем же именем (конструктором с именем или через `OpenExisting`), работает с тем же объектом ядра.
+      Поэтому такие примитивы подходят, например, чтобы не дать запустить вторую копию приложения или чтобы согласовать
+      доступ двух процессов к общему файлу.
+
+      `lock` (`Monitor`, а начиная с .NET 9 и `System.Threading.Lock`), `SemaphoreSlim` и `ReaderWriterLockSlim` хранят
+      состояние в управляемых объектах в куче одного процесса. Имени у них нет, а у другого процесса своя куча и свои объекты,
+      поэтому согласовать они могут только потоки внутри одного процесса. Зато они дешевле: при отсутствии конкуренции
+      обходятся без перехода в режим ядра.
+
+      Что ещё стоит знать. У `Mutex` есть привязка к потоку: освободить его должен тот же поток, который его захватил,
+      поэтому держать его через `await` нельзя. Если процесс завершится, не освободив мьютекс, следующий ожидающий получит
+      `AbandonedMutexException`. Имя с префиксом `Global\` видно во всех сеансах служб терминалов, без префикса - только
+      в текущем сеансе. Вопрос задан для Windows и .NET 10: на Linux и macOS именованный `Mutex` поддерживается,
+      а именованные `Semaphore` и `EventWaitHandle` выбрасывают `PlatformNotSupportedException`.
+    linkTitles:
+      - Обзор примитивов синхронизации
+      - Semaphore и SemaphoreSlim
+      - Класс Mutex
+  en:
+    title: Which synchronization primitives work across processes in .NET 10?
+    prompt: |
+      Two separate processes on Windows must take turns working with a shared resource, for example one file.
+      Select all primitives that can synchronize these processes in .NET 10.
+    hint: Where does each primitive keep its state - in an object on the managed heap of one process, or in the operating system kernel?
+    options:
+      a: "A named `Mutex`"
+      b: "`SemaphoreSlim`"
+      c: "A named `Semaphore`"
+      d: "The `lock` statement"
+      e: "A named `EventWaitHandle`"
+      f: "`ReaderWriterLockSlim`"
+    optionExplanations:
+      b: "`SemaphoreSlim` is a lightweight semaphore meant for use inside one process. It does not support names, and its state lives in a managed object that another process cannot see. A cross-process semaphore needs a named `Semaphore`."
+      d: "`lock` uses `Monitor` (or, starting with .NET 9, `System.Threading.Lock`) and locks a specific managed object on the process heap. Another process has its own heap and its own objects, so its `lock` has nothing to do with yours."
+      f: "`ReaderWriterLockSlim` coordinates only threads of one process: it has no named variant, and its state is kept in a managed object."
+    answer: "`a`, `c` and `e` are correct: a named `Mutex`, `Semaphore` and `EventWaitHandle` wrap operating system kernel objects that other processes can see, while `lock`, `SemaphoreSlim` and `ReaderWriterLockSlim` work only inside one process."
+    explanation: |
+      `Mutex`, `Semaphore` and `EventWaitHandle` derive from `WaitHandle` and wrap operating system kernel objects.
+      When you pass a name on creation, Windows makes the object visible to other processes: a second process that creates
+      or opens an object with the same name (with a named constructor or with `OpenExisting`) works with the same kernel object.
+      That is why these primitives fit cases such as preventing a second instance of an application or coordinating
+      access of two processes to a shared file.
+
+      `lock` (`Monitor`, and starting with .NET 9 also `System.Threading.Lock`), `SemaphoreSlim` and `ReaderWriterLockSlim`
+      keep their state in managed objects on the heap of one process. They have no name, and another process has its own heap
+      and its own objects, so they can only coordinate threads inside one process. In return they are cheaper: without
+      contention they avoid a transition into kernel mode.
+
+      A few more details. A `Mutex` has thread affinity: the thread that acquired it must release it, so it cannot be held
+      across an `await`. If a process exits without releasing the mutex, the next waiter gets `AbandonedMutexException`.
+      A name with the `Global\` prefix is visible in all terminal services sessions, a name without a prefix only in the
+      current session. The question is about Windows and .NET 10: on Linux and macOS a named `Mutex` is supported, while
+      a named `Semaphore` and `EventWaitHandle` throw `PlatformNotSupportedException`.
+    linkTitles:
+      - Overview of synchronization primitives
+      - Semaphore and SemaphoreSlim
+      - Mutex class
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

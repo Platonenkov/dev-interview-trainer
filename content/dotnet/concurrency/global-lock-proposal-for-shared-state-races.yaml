@@ -1,0 +1,156 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WN13NPMW653JNGYXVA
+slug: global-lock-proposal-for-shared-state-races
+stack: dotnet
+topic: concurrency
+level: lead
+type: situation
+grading: self
+tags: [race-conditions, immutability, interlocked, locks, caching, code-review]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/threading/managed-threading-best-practices
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.interlocked.exchange
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.collections.frozen.frozendictionary-2
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.dictionary-2
+    lang: en
+    kind: docs
+  - url: https://github.com/dotnet/runtime/blob/main/docs/design/specs/Memory-model.md
+    lang: en
+    kind: spec
+locales:
+  ru:
+    title: "Кэш цен под нагрузкой иногда отдаёт испорченные данные: соглашаться ли на один глобальный lock перед релизом?"
+    prompt: |
+      Сервис цен на .NET 10 хранит данные в кэше в памяти: singleton со словарём `Dictionary<string, PriceInfo>`.
+      Раз в несколько минут фоновая задача обновляет словарь, пока запросы его читают: добавляет новые позиции, удаляет
+      снятые с продажи и меняет поля существующих объектов `PriceInfo` (это изменяемый класс) на месте. Под нагрузкой
+      изредка в ответ попадает цена с чужой валютой, запросы иногда не находят ключ, который точно есть в кэше, а в логах
+      встречаются единичные `InvalidOperationException`, выброшенные изнутри кода `Dictionary`. До релиза два дня.
+      Разработчик предлагает обернуть каждое обращение к кэшу в один глобальный `lock (Sync)` и выпускаться.
+
+      Что вы решаете как лид и как команда предотвратит повторение таких ошибок?
+    hint: Какое именно состояние одновременно разделяется между потоками и меняется, и что один общий `lock` сделает с самым горячим путём чтения?
+    answer: |
+      1. **Оценить риск и принять решение по релизу.** Неверные цены - бизнес-инцидент, а не косметика. Не стоит
+         выпускать наспех непроверенный патч «заблокировать всё». Либо релиз переносится, либо выходит узкое исправление
+         подтверждённой причины (шаг 3), проверенное нагрузочным тестом. Грубая блокировка допустима только как
+         временная мера, если нагрузочный тест показал приемлемую пропускную способность и под ней нет ввода-вывода
+         и других блокировок. Риск и план нужно явно проговорить с владельцем продукта.
+      2. **Найти разделяемое изменяемое состояние.** Составить список:
+         - `Dictionary` меняет фоновая задача (добавление и удаление), пока его читают запросы. `Dictionary<TKey,TValue>`
+           допускает параллельных читателей, только пока коллекцию никто не меняет. Одновременная запись может испортить
+           его внутреннюю структуру: записи теряются, поиск не находит существующий ключ, а в .NET 10 словарь иногда
+           замечает повреждение и выбрасывает `InvalidOperationException` о неподдерживаемых параллельных операциях
+           (в .NET Framework такое повреждение могло закончиться бесконечным циклом со 100% загрузкой ядра). Поведение
+           не определено, и рассчитывать на исключение как на защиту нельзя;
+         - объекты `PriceInfo` меняются по полю: читатель видит новую цену со старой валютой. `lock` внутри кэша здесь
+           не спасает: ссылки на `PriceInfo` уходят вызывающему коду и читаются уже вне блокировки;
+         - последовательности «проверить, потом действовать» (`ContainsKey`, затем индексатор) и ленивая инициализация.
+      3. **Исправить проектом, а не блокировкой.** Сделать значения неизменяемыми (`record` со свойствами `init`).
+         Фоновая задача строит новый снимок целиком в стороне (`ToFrozenDictionary()`, доступный начиная с .NET 8,
+         в том числе в .NET 10, или новый `Dictionary`, который после публикации не меняется) и публикует его заменой
+         одной ссылки: `Interlocked.Exchange(ref _snapshot, next)` или `Volatile.Write`. Читатель один раз берёт
+         `var snapshot = Volatile.Read(ref _snapshot);` и работает с ним весь запрос: он видит одну согласованную версию
+         без всякой блокировки. Если между полными обновлениями нужны точечные изменения, использовать
+         `ConcurrentDictionary<string, PriceInfo>` и заменять значение целиком, а не менять его поля. Обновлять снимок
+         должен один писатель; если их несколько, нужен `Interlocked.CompareExchange`.
+      4. **Объяснить команде, почему не глобальный lock.** Он сериализует горячий путь чтения: все запросы встают в
+         очередь к одной блокировке, и пропускная способность падает, а задержка растёт именно под нагрузкой.
+         Заблокированные потоки занимают пул потоков. Одна блокировка, которую берут из многих мест, ведёт к deadlock,
+         как только кто-то вызовет под ней ввод-вывод, другую блокировку или обратный вызов. Любой путь, где её забыли,
+         возвращает состояние гонки, а изменяемые объекты, ушедшие наружу, она не защищает вовсе.
+      5. **Доказать и закрепить.** Стресс-тест: много параллельных читателей и частые обновления в течение нескольких
+         минут с проверкой инварианта (цена и валюта из одной версии снимка, все ожидаемые ключи находятся), в CI или
+         ночной сборке. Правило для code review: у singleton или статического поля с изменяемым состоянием должен быть
+         явный способ синхронизации - неизменяемый снимок с атомарной заменой, конкурентная коллекция или
+         задокументированная блокировка. Разбор инцидента без поиска виноватых и короткая сессия для команды по этому шаблону.
+    explanation: |
+      Задача лида здесь - отличить подавление симптома от устранения причины и управлять риском релиза. Состояние гонки
+      возникает из разделяемого изменяемого состояния, и убрать его можно тремя способами: не разделять, не изменять или
+      синхронизировать. Глобальный `lock` - самый грубый вариант третьего способа: он прячет гонку ценой
+      пропускной способности, нового риска deadlock и при этом не покрывает объекты, которые утекли за его пределы.
+
+      Для кэша, который в основном читают, лучше подходит второй способ. Неизменяемый снимок плюс атомарная замена
+      ссылки даёт чтение без блокировок и согласованность в пределах одного снимка. Присваивание ссылки в C# атомарно,
+      а `Interlocked.Exchange` возвращает старое значение, и, как описывает модель памяти .NET, операции `Interlocked`
+      действуют как полный барьер памяти. Цена решения - память на два снимка во время обновления и устаревание данных
+      на интервал обновления, которое кэш и так допускает. Без стресс-теста и правила ревью та же ошибка вернётся
+      в следующем singleton.
+    linkTitles:
+      - "Рекомендации по управляемой многопоточности"
+      - "Метод Interlocked.Exchange"
+      - "Класс FrozenDictionary<TKey,TValue>"
+      - "Класс Dictionary<TKey,TValue> (раздел о потокобезопасности)"
+      - "Модель памяти .NET (dotnet/runtime)"
+  en:
+    title: "A pricing cache returns corrupted data under load: should you accept one global lock before the release?"
+    prompt: |
+      A pricing service on .NET 10 keeps its data in an in-memory cache: a singleton with a `Dictionary<string, PriceInfo>`.
+      Every few minutes a background job refreshes the dictionary while requests read it: it adds new items, removes
+      discontinued ones and changes the fields of existing `PriceInfo` objects (a mutable class) in place. Under load a
+      response rarely contains a price paired with the wrong currency, requests sometimes fail to find a key that is
+      definitely in the cache, and the logs show occasional `InvalidOperationException` thrown from inside `Dictionary` code.
+      The release is in two days. A developer proposes wrapping every cache access in one global `lock (Sync)` and shipping.
+
+      What do you decide as the lead, and how does the team prevent this kind of bug from coming back?
+    hint: Which state exactly is shared between threads and changed at the same time, and what does a single shared `lock` do to the hottest read path?
+    answer: |
+      1. **Assess the risk and decide on the release.** Wrong prices are a business incident, not a cosmetic one. Do not
+         ship an untested "lock everything" patch in a hurry. Either the release moves, or it ships with a narrow fix of
+         the confirmed cause (step 3) checked by a load test. A coarse lock is acceptable only as a temporary measure,
+         if a load test shows acceptable throughput and no IO or other locks run under it. State the risk and the plan
+         explicitly to the product owner.
+      2. **Find the shared mutable state.** Make an inventory:
+         - the `Dictionary` is modified by the background job (adds and removes) while requests read it.
+           `Dictionary<TKey,TValue>` supports concurrent readers only while nobody modifies it. A concurrent write can
+           corrupt its internal structure: entries get lost, a lookup misses an existing key, and in .NET 10 the dictionary
+           sometimes detects the corruption and throws `InvalidOperationException` about unsupported concurrent operations
+           (on .NET Framework the same corruption could end in an endless loop at 100% CPU). The behaviour is undefined,
+           so the exception cannot be relied on as a safeguard;
+         - `PriceInfo` objects are changed field by field, so a reader sees the new price with the old currency. A `lock`
+           inside the cache does not help here: references to `PriceInfo` escape to callers and are read outside the lock;
+         - check-then-act sequences (`ContainsKey`, then the indexer) and lazy initialization.
+      3. **Fix it by design, not by locking.** Make the values immutable (a `record` with `init` properties). The
+         background job builds a whole new snapshot on the side (`ToFrozenDictionary()`, available since .NET 8,
+         including .NET 10, or a new `Dictionary` that is never modified after publishing) and publishes it by swapping
+         one reference: `Interlocked.Exchange(ref _snapshot, next)` or `Volatile.Write`. A reader takes
+         `var snapshot = Volatile.Read(ref _snapshot);` once and uses it for the whole request: it sees one consistent
+         version without any lock. If per-key changes are needed between full refreshes, use
+         `ConcurrentDictionary<string, PriceInfo>` and replace whole values instead of mutating their fields. There
+         should be a single writer of the snapshot; with several, use `Interlocked.CompareExchange`.
+      4. **Explain to the team why not a global lock.** It serializes the hot read path: every request queues for one
+         lock, so throughput falls and latency grows exactly under load. Blocked threads hold thread pool threads. One lock
+         taken from many places leads to deadlock as soon as someone calls IO, another lock or a callback under it. Any
+         path that forgets it brings the race condition back, and it does not protect mutable objects that escaped at all.
+      5. **Prove it and make it stick.** A stress test: many parallel readers and frequent refreshes for several minutes,
+         checking invariants (price and currency come from the same snapshot version, every expected key is found), in CI
+         or a nightly build. A code review rule: a singleton or static field with mutable state must have an explicit
+         synchronization approach - an immutable snapshot with an atomic swap, a concurrent collection, or a documented
+         lock. A blameless post-incident review and a short team session on the pattern.
+    explanation: |
+      The lead's job here is to tell suppressing a symptom from removing the cause, and to manage the release risk. A
+      race condition comes from shared mutable state, and there are three ways to remove it: do not share, do not mutate,
+      or synchronize. A global `lock` is the crudest form of the third: it hides the race at the cost of throughput and a
+      new deadlock risk, and it still does not cover objects that leaked outside it.
+
+      For a read-mostly cache the second way fits better. An immutable snapshot plus an atomic reference swap gives
+      lock-free reads and consistency within one snapshot. Reference assignment in C# is atomic, `Interlocked.Exchange`
+      returns the old value, and, as the .NET memory model describes, `Interlocked` operations act as full memory
+      barriers. The price is memory for two snapshots during a refresh and staleness up to the refresh interval, which a
+      cache already accepts. Without a stress test and a review rule, the same bug comes back in the next singleton.
+    linkTitles:
+      - "Managed threading best practices"
+      - "Interlocked.Exchange method"
+      - "FrozenDictionary<TKey,TValue> class"
+      - "Dictionary<TKey,TValue> class (thread safety section)"
+      - ".NET memory model (dotnet/runtime)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"

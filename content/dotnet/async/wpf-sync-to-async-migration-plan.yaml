@@ -1,0 +1,139 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMF8VEH4X7SJQBJ5BV
+slug: wpf-sync-to-async-migration-plan
+stack: dotnet
+topic: async
+level: lead
+type: situation
+grading: self
+tags: [wpf, sync-over-async, deadlock, migration, analyzers]
+links:
+  - url: https://learn.microsoft.com/en-us/archive/msdn-magazine/2015/july/async-programming-brownfield-async-development
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/archive/msdn-magazine/2013/march/async-await-best-practices-in-asynchronous-programming
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: "WPF-приложение зависает: как перевести 40 вызовов .Result на async, не останавливая релизы?"
+    prompt: |
+      Команда переводит слой доступа к данным WPF-приложения на .NET 10 на асинхронные методы. UI уже вызывает
+      новые методы примерно из 40 мест через `.Result`, и пользователи жалуются, что окно периодически "замерзает"
+      навсегда. Остановить релизы на время переделки бизнес не разрешает. Вы техлид: как вы спланируете миграцию
+      и что будете делать в каком порядке?
+    hint: "В каком месте цепочки вызовов от обработчика события до базы асинхронность может безопасно закончиться, и что происходит, когда синхронный и асинхронный код соединяют блокирующим ожиданием?"
+    answer: |
+      1. **Сначала ограничить риск.** Найти все блокирующие ожидания (`.Result`, `.Wait()`, `GetAwaiter().GetResult()`),
+         сопоставить каждое с действием пользователя и с жалобами на зависания и расставить приоритеты: первыми идут
+         самые частые сценарии и подтверждённые зависания. Подключить анализатор (например, `VSTHRD002` из пакета
+         `Microsoft.VisualStudio.Threading.Analyzers`), подавив существующие нарушения, чтобы новые блокирующие вызовы
+         не появлялись, пока убираются старые.
+      2. **На время перехода держать в слое данных два честных API.** Рядом с каждым новым методом `XxxAsync`
+         оставить синхронный метод с действительно синхронной реализацией (синхронные вызовы драйвера), а не обёртку,
+         которая блокируется на асинхронной версии. В асинхронных методах слоя данных ставить `ConfigureAwait(false)`
+         на каждый `await`: контекст UI им не нужен. Места, которые ещё не переведены, вызывают синхронный метод вместо
+         `.Result`: UI по-прежнему ждёт на время вызова, но взаимной блокировки больше нет.
+      3. **Переводить вертикальными срезами, async до самого верха.** Срез - один пользовательский сценарий: вся цепочка
+         от обработчика события или команды до слоя данных становится асинхронной. `async void` допустим только
+         в обработчике события верхнего уровня (с `try`/`catch` и логированием), для MVVM - асинхронная команда.
+         Каждый срез небольшой, проходит code review и тесты и уходит в обычный релиз, при риске - за флагом функциональности.
+      4. **Учесть, что async меняет в UI.** Повторный вход: пока операция идёт, кнопка или команда недоступна, чтобы второй
+         клик не запустил её дважды. Отмена при закрытии окна, индикатор загрузки, показ ошибок пользователю.
+         Конструкторы, геттеры свойств и конвертеры не могут использовать `await`: загрузку переносят в `Loaded` или
+         в явный асинхронный метод инициализации с привязанным состоянием "идёт загрузка".
+      5. **Закрепить правило и довести до конца.** По мере перевода поднимать уровень анализатора до ошибки
+         в переведённых проектах; на code review отклонять новые sync-over-async и обёртки вида `Task.Run(...).Result`.
+         Число оставшихся блокирующих вызовов вести как видимую метрику. Синхронные методы слоя данных удалять,
+         когда у них не осталось вызывающих.
+
+      Чего не делать: переписывать всё одним большим изменением и "лечить" зависания обёрткой
+      `Task.Run(() => ...).GetAwaiter().GetResult()`. Она убирает взаимную блокировку, только если код внутри `Task.Run`
+      не нуждается в UI-потоке: если он вызывает `Dispatcher` или обращается к объектам, привязанным к UI, он либо снова
+      зависнет, либо упадёт с `InvalidOperationException`. И даже в удачном случае UI-поток стоит на время вызова,
+      поэтому такая обёртка допустима разве что как аварийная заплатка с задачей на удаление.
+    explanation: |
+      Причина зависаний - sync-over-async в UI-потоке. `await` внутри слоя данных захватывает
+      `DispatcherSynchronizationContext` и планирует продолжение в UI-поток, а UI-поток заблокирован в `.Result` и ждёт
+      эту же задачу. Каждая сторона ждёт другую. Поэтому "мост" между синхронным и асинхронным кодом через блокировку
+      в UI-приложении не работает: либо взаимная блокировка, либо, в лучшем случае, замороженный интерфейс.
+
+      `ConfigureAwait(false)` в слое данных полезен, но не решает задачу: UI-поток всё равно блокируется на время запроса,
+      а один пропущенный `ConfigureAwait(false)`, в том числе в чужой библиотеке, возвращает взаимную блокировку.
+      Надёжно только async до самого верха, до обработчика события, где `await` освобождает UI-поток.
+
+      Почему постепенно: каждое из 40 мест тянет за собой цепочку методов, и перевод всего сразу - большое рискованное
+      изменение, которое трудно проверить и откатить. Вертикальные срезы с синхронными версиями методов рядом позволяют
+      выпускать релизы на любом шаге, а анализатор и code review не дают долгу снова расти. Синхронные версии можно
+      не дублировать вручную: общий код пишется один раз с параметром-флагом `sync`, и синхронная ветка вызывает только
+      синхронные API (приём "флаг-аргумента" из статьи Стивена Клири о переводе существующего кода на async).
+
+      Сильный ответ лида показывает не только технику, но и процесс: приоритизацию по реальным жалобам, критерий
+      готовности среза, измеримый прогресс и правило, которое проверяется автоматически, а не держится на памяти команды.
+    linkTitles:
+      - "Стивен Клири: асинхронная разработка в существующем коде (Brownfield Async Development)"
+      - Рекомендации по асинхронному программированию (async/await)
+  en:
+    title: "A WPF app freezes: how do you move 40 .Result calls to async without stopping releases?"
+    prompt: |
+      A team is converting the data layer of a WPF application on .NET 10 to asynchronous methods. The UI already calls
+      the new methods from about 40 places through `.Result`, and users report that the window sometimes "freezes"
+      forever. The business will not allow releases to stop during the rework. You are the tech lead: how do you plan
+      the migration, and what do you do in what order?
+    hint: "At which point of the call chain from the event handler down to the database can asynchrony safely end, and what happens when synchronous and asynchronous code are joined by a blocking wait?"
+    answer: |
+      1. **Contain the risk first.** Find every blocking wait (`.Result`, `.Wait()`, `GetAwaiter().GetResult()`),
+         map each one to a user action and to the freeze reports, and set priorities: the most frequent scenarios and the
+         confirmed hangs go first. Turn on an analyzer (for example `VSTHRD002` from the
+         `Microsoft.VisualStudio.Threading.Analyzers` package) with the existing violations suppressed, so that no new
+         blocking calls appear while the old ones are being removed.
+      2. **Keep two honest APIs in the data layer during the transition.** Next to every new `XxxAsync` method keep the
+         synchronous method with a truly synchronous implementation (synchronous driver calls), not a wrapper that blocks
+         on the async version. In the data layer's async methods use `ConfigureAwait(false)` on every `await`: they do not
+         need the UI context. Call sites that are not migrated yet call the synchronous method instead of `.Result`: the UI
+         still waits for the duration of the call, but the deadlock is gone.
+      3. **Migrate in vertical slices, async all the way up.** A slice is one user scenario: the whole chain from the event
+         handler or command down to the data layer becomes asynchronous. `async void` is acceptable only in the top-level
+         event handler (with `try`/`catch` and logging); in MVVM use an async command. Each slice is small, goes through
+         code review and tests, and ships in the regular release, behind a feature flag if it is risky.
+      4. **Handle what async changes in the UI.** Reentrancy: while the operation runs, the button or command is disabled,
+         so a second click does not start it twice. Cancellation when a window closes, a busy indicator, errors shown to the
+         user. Constructors, property getters and converters cannot use `await`: move loading to `Loaded` or to an explicit
+         async initialization method with a bound "loading" state.
+      5. **Enforce the rule and finish the job.** As slices are done, raise the analyzer to error in the migrated projects;
+         code review rejects new sync-over-async and wrappers like `Task.Run(...).Result`. Track the number of remaining
+         blocking calls as a visible metric. Delete the synchronous data-layer methods once they have no callers.
+
+      What not to do: rewrite everything in one big change, or "fix" the freezes with a
+      `Task.Run(() => ...).GetAwaiter().GetResult()` wrapper. It removes the deadlock only when the code inside `Task.Run`
+      does not need the UI thread: if it calls the `Dispatcher` or touches UI-bound objects, it either hangs again or fails
+      with `InvalidOperationException`. Even in the good case the UI thread still stands still for the duration of the call,
+      so at most it is an emergency patch with a ticket to remove it.
+    explanation: |
+      The freezes come from sync-over-async on the UI thread. An `await` inside the data layer captures the
+      `DispatcherSynchronizationContext` and schedules its continuation onto the UI thread, while the UI thread is blocked
+      in `.Result` waiting for that same task. Each side waits for the other. That is why a "bridge" between synchronous
+      and asynchronous code built on blocking does not work in a UI application: you get either a deadlock or, at best,
+      a frozen interface.
+
+      `ConfigureAwait(false)` in the data layer is useful but does not solve the problem: the UI thread is still blocked for
+      the duration of the request, and a single missing `ConfigureAwait(false)`, including one in a third-party library,
+      brings the deadlock back. The only reliable fix is async all the way up to the event handler, where `await` releases
+      the UI thread.
+
+      Why incrementally: each of the 40 call sites drags a chain of methods with it, and converting everything at once is a
+      large risky change that is hard to verify and roll back. Vertical slices with synchronous method versions alongside
+      keep every step releasable, and the analyzer plus code review stop the debt from growing again. The synchronous
+      versions do not have to be duplicated by hand: shared code can be written once with a `sync` flag parameter, where
+      the synchronous branch calls only synchronous APIs (the "flag argument" technique from Stephen Cleary's article on
+      brownfield async development).
+
+      A strong lead answer shows the process, not only the technique: priorities driven by real reports, a definition of
+      done for a slice, measurable progress, and a rule that is checked automatically instead of relying on the team's memory.
+    linkTitles:
+      - "Stephen Cleary: Brownfield Async Development"
+      - Async/await best practices in asynchronous programming
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"

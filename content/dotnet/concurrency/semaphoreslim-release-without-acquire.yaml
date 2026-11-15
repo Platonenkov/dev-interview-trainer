@@ -1,0 +1,137 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WN487PB0AHRM7FFR1Q
+slug: semaphoreslim-release-without-acquire
+stack: dotnet
+topic: concurrency
+level: senior
+type: find-bug
+grading: auto
+tags: [semaphoreslim, locks, semaphore-full-exception, try-finally]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    SemaphoreSlim gate = new(1, 1);
+    int saved = 0;
+
+    void Save(bool nested)
+    {
+        bool acquired = gate.Wait(0);
+        try
+        {
+            if (!acquired)
+            {
+                Console.WriteLine("busy, skipped");
+                return;
+            }
+            if (nested)
+            {
+                Save(false);
+            }
+            saved++;
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    Save(true);
+    Console.WriteLine(saved);
+bugLineSets: [[22]]
+fixedSource: |
+  SemaphoreSlim gate = new(1, 1);
+  int saved = 0;
+
+  void Save(bool nested)
+  {
+      if (!gate.Wait(0))
+      {
+          Console.WriteLine("busy, skipped");
+          return;
+      }
+      try
+      {
+          if (nested)
+          {
+              Save(false);
+          }
+          saved++;
+      }
+      finally
+      {
+          gate.Release();
+      }
+  }
+
+  Save(true);
+  Console.WriteLine(saved);
+fixedExpect: { kind: output, value: "busy, skipped\n1" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.semaphoreslim.release
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.semaphoreslim
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строку, из-за которой SemaphoreSlim выбрасывает SemaphoreFullException
+    prompt: |
+      Метод `Save` не должен выполняться параллельно сам с собой: если семафор занят, вызов пропускается.
+      Программа должна вывести `busy, skipped`, а затем `1`, но после строки `busy, skipped` она завершается
+      с необработанным исключением `SemaphoreFullException`. Щёлкните по строке с дефектом.
+    hint: В каких случаях выполняется `finally` и всегда ли к этому моменту семафор был захвачен?
+    answer: Строка 22, безусловный вызов `gate.Release()` в `finally`, который выполняется и тогда, когда `Wait(0)` вернул `false`.
+    explanation: |
+      `SemaphoreSlim` хранит счётчик свободных слотов и не запоминает, какой вызов их занял. Внешний вызов `Save(true)`
+      занимает единственный слот (`CurrentCount` становится 0), поэтому вложенный `Save(false)` в том же потоке получает
+      от `Wait(0)` значение `false`: повторно войти тому же потоку семафор не даёт, это видно по строке `busy, skipped` в выводе.
+      Вложенный вызов выходит через `return`, но `finally` всё равно вызывает `Release`, хотя этот вызов ничего не захватывал.
+      `Release` просто увеличивает `CurrentCount` на единицу: счётчик возвращается к 1, пока внешний вызов ещё находится
+      в критической секции. Взаимное исключение уже нарушено: другой поток в этот момент мог бы войти в `Save`.
+      Затем внешний вызов тоже освобождает семафор, но счётчик уже равен максимуму `maxCount = 1`, и `Release`
+      выбрасывает `SemaphoreFullException`.
+
+      Исключение здесь - удачный исход: ошибку поймал только низкий максимум. Если бы максимум был больше, например
+      `new SemaphoreSlim(1, 10)`, лишний `Release` без всякого исключения поднял бы счётчик до 2, и дальше семафор
+      молча пускал бы двух владельцев одновременно.
+
+      Правило: `Release` вызывается ровно столько раз, сколько ожидание завершилось успешно. Проверку `Wait(0)`
+      (или `WaitAsync` с таймаутом) нужно делать до `try`, а в `try`/`finally` заходить только после успешного захвата.
+      Другой вариант - `if (acquired) gate.Release();` в `finally`. Поведение проверено на .NET 10.
+    linkTitles:
+      - Метод SemaphoreSlim.Release
+      - Класс SemaphoreSlim
+  en:
+    title: Find the line that makes SemaphoreSlim throw SemaphoreFullException
+    prompt: |
+      The `Save` method must not run concurrently with itself: if the semaphore is taken, the call is skipped.
+      The program should print `busy, skipped` and then `1`, but after the `busy, skipped` line it ends with
+      an unhandled `SemaphoreFullException`. Click the line that contains the defect.
+    hint: When does `finally` run, and has the semaphore always been acquired by then?
+    answer: Line 22, the unconditional `gate.Release()` call in `finally`, which also runs when `Wait(0)` returned `false`.
+    explanation: |
+      `SemaphoreSlim` keeps a count of free slots and does not remember which call took them. The outer `Save(true)` call
+      takes the only slot (`CurrentCount` becomes 0), so the nested `Save(false)` on the same thread gets `false` from
+      `Wait(0)`: the semaphore does not let the same thread in again, as the `busy, skipped` line in the output shows.
+      The nested call leaves through `return`, but `finally` still calls `Release`, although this call acquired nothing.
+      `Release` simply increments `CurrentCount` by one: the count goes back to 1 while the outer call is still inside
+      the critical section. Mutual exclusion is already broken: another thread could enter `Save` at that moment.
+      Then the outer call releases as well, but the count is already at the maximum `maxCount = 1`, so `Release`
+      throws `SemaphoreFullException`.
+
+      The exception is the lucky outcome here: only the low maximum caught the bug. With a larger maximum, for example
+      `new SemaphoreSlim(1, 10)`, the extra `Release` would raise the count to 2 without any exception, and from then on
+      the semaphore would silently admit two holders at once.
+
+      The rule: call `Release` exactly as many times as a wait succeeded. Check `Wait(0)` (or `WaitAsync` with a timeout)
+      before `try`, and enter `try`/`finally` only after a successful acquire. An alternative is
+      `if (acquired) gate.Release();` in `finally`. The behaviour was checked on .NET 10.
+    linkTitles:
+      - SemaphoreSlim.Release method
+      - SemaphoreSlim class
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"

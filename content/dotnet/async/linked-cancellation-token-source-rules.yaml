@@ -1,0 +1,124 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WM3YTS5HCNAMCK4ZTT
+slug: linked-cancellation-token-source-rules
+stack: dotnet
+topic: async
+level: senior
+type: multi
+grading: auto
+tags: [cancellation, cancellation-token-source, linked-token, tryreset]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+  - id: e
+    correct: true
+  - id: f
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.cancellationtokensource.createlinkedtokensource
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/threading/cancellation-in-managed-threads
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.cancellationtokensource.tryreset
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.cancellationtokensource.cancelafter
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какие утверждения о CancellationTokenSource, связанных источниках и TryReset верны в .NET 10?
+    prompt: |
+      Выберите все верные утверждения о `CancellationTokenSource` в .NET 10.
+    hint: Подумайте, на что подписан связанный источник, что должно происходить с подписками, когда источник больше не нужен, и обратимо ли состояние «отменён».
+    options:
+      a: "Связанный источник из `CreateLinkedTokenSource` регистрирует обратный вызов на каждом токене-родителе, и снимает эти регистрации только его `Dispose`; без `Dispose` долгоживущий родитель продолжает ссылаться на связанный источник"
+      b: "Вызов `Cancel` у связанного источника отменяет и все токены-родители, из которых он создан"
+      c: "Повторный вызов `CancelAfter` до того, как источник отменён, заменяет прежнюю задержку новой: отсчёт начинается заново"
+      d: "`TryReset` возвращает уже отменённый источник в неотменённое состояние, чтобы использовать его для следующей операции"
+      e: "`TryReset` (появился в .NET 6) возвращает `true`, только если отмена у источника ещё не запрашивалась; вызывать его должен единственный владелец источника, когда операция завершена и никто больше не будет его отменять или рассчитывать на регистрации на его токене"
+      f: "`Dispose` отменяет токен источника, поэтому код, который ждёт этот токен, завершится с `OperationCanceledException`"
+    optionExplanations:
+      b: "Отмена идёт только от родителей к связанному источнику. Связанный источник подписан на родителей, а родители о нём ничего не знают, поэтому `Cancel` у связанного источника отменяет только его собственный токен."
+      d: "Отменённый токен не может снова стать неотменённым: кто-то уже мог увидеть `IsCancellationRequested == true` или выполнить зарегистрированные обратные вызовы. Для отменённого источника `TryReset` просто возвращает `false`, и для следующей операции нужен новый источник."
+      f: "`Dispose` освобождает ресурсы источника (таймер `CancelAfter`, регистрации на родителях у связанного источника), но отмену не запрашивает. Ожидающий код никакого сигнала не получит. Если нужно и отменить, и освободить, вызывают `Cancel`, а затем `Dispose`."
+    answer: "Верны `a`, `c` и `e`: связанный источник обязательно освобождают, повторный `CancelAfter` перезапускает отсчёт, а `TryReset` срабатывает только для источника, который ещё не отменён, и вызывает его только единственный владелец."
+    explanation: |
+      `CreateLinkedTokenSource` создаёт источник, который отменяется, когда отменяется любой из родителей. Документация
+      об отмене в управляемых потоках прямо требует вызвать `Dispose` у связанного источника, когда работа с ним закончена.
+      Причина видна в реализации: чтобы узнать об отмене родителя, связанный источник регистрирует обратный вызов на каждом
+      родительском токене, и эта регистрация ссылается на связанный источник. Снимает её `Dispose`. Пока он не вызван,
+      связанный источник не будет собран, если родитель жив. Типичный шаблон -
+      `using var linked = CancellationTokenSource.CreateLinkedTokenSource(requestToken, shutdownToken);` и затем
+      `linked.CancelAfter(timeout)`. Если забыть `Dispose`, каждый запрос оставит регистрацию на токене остановки
+      приложения, который живёт всё время работы процесса, и память будет расти с числом запросов. В обратную сторону
+      связь не работает: отмена связанного источника родителей не затрагивает.
+
+      `CancelAfter` запускает отсчёт, а повторный вызов, пока источник не отменён, сбрасывает задержку на новую.
+
+      `TryReset` (с .NET 6) нужен, чтобы переиспользовать источник для следующей, не связанной операции вместо создания
+      нового. Он возвращает `true` только если отмена ещё не запрашивалась, потому что состояние «отменён» необратимо:
+      потребители токена уже могли на него отреагировать. Документация рассчитывает на единственного владельца, который
+      знает, что операция завершена, никто больше не попытается отменить источник, а оставшиеся регистрации ошибочны:
+      после сброса они не получат уведомлений о следующей отмене. Код, у которого остался токен, при опросе увидит
+      текущее состояние того же экземпляра. Вызывать `TryReset` одновременно с `Cancel` небезопасно. Если `TryReset`
+      вернул `false`, источник освобождают и создают новый.
+    linkTitles:
+      - Метод CancellationTokenSource.CreateLinkedTokenSource
+      - Отмена в управляемых потоках
+      - Метод CancellationTokenSource.TryReset
+      - Метод CancellationTokenSource.CancelAfter
+  en:
+    title: Which statements about CancellationTokenSource, linked sources and TryReset are true in .NET 10?
+    prompt: |
+      Select all correct statements about `CancellationTokenSource` in .NET 10.
+    hint: Think about what the linked source is subscribed to, what has to happen to the subscriptions when a source is no longer needed, and whether the cancelled state is reversible.
+    options:
+      a: "A linked source from `CreateLinkedTokenSource` registers a callback on every parent token, and only its `Dispose` removes those registrations; without `Dispose` a long-lived parent keeps referencing the linked source"
+      b: "Calling `Cancel` on a linked source also cancels all parent tokens it was created from"
+      c: "Calling `CancelAfter` again before the source is cancelled replaces the earlier delay with the new one: the countdown starts over"
+      d: "`TryReset` returns an already cancelled source to the uncancelled state so it can be used for the next operation"
+      e: "`TryReset` (added in .NET 6) returns `true` only if cancellation has not been requested on the source; only the sole owner should call it, once the operation has finished and nobody else will cancel the source or rely on registrations on its token"
+      f: "`Dispose` cancels the source's token, so code that waits on that token ends with `OperationCanceledException`"
+    optionExplanations:
+      b: "Cancellation flows only from the parents to the linked source. The linked source is subscribed to the parents, and the parents know nothing about it, so `Cancel` on the linked source cancels only its own token."
+      d: "A cancelled token can never become uncancelled again: someone may already have seen `IsCancellationRequested == true` or run the registered callbacks. For a cancelled source `TryReset` simply returns `false`, and the next operation needs a new source."
+      f: "`Dispose` releases the source's resources (the `CancelAfter` timer, the registrations on the parents of a linked source), but it does not request cancellation. Waiting code gets no signal at all. If you need to both cancel and release, call `Cancel` and then `Dispose`."
+    answer: "`a`, `c` and `e` are correct: a linked source must be disposed, a repeated `CancelAfter` restarts the countdown, and `TryReset` succeeds only for a source that has not been cancelled and is called only by its sole owner."
+    explanation: |
+      `CreateLinkedTokenSource` creates a source that is cancelled when any of its parents is cancelled. The article on
+      cancellation in managed threads states plainly that you must call `Dispose` on the linked token source when you are
+      done with it. The implementation shows why: to learn about a parent's cancellation, the linked source registers a
+      callback on each parent token, and that registration references the linked source. `Dispose` removes it. Until it
+      is called, the linked source cannot be collected while the parent is alive. The typical pattern is
+      `using var linked = CancellationTokenSource.CreateLinkedTokenSource(requestToken, shutdownToken);` followed by
+      `linked.CancelAfter(timeout)`. If you forget `Dispose`, every request leaves a registration on the application
+      shutdown token, which lives as long as the process, and memory grows with the number of requests. The link does not
+      work the other way: cancelling the linked source does not affect the parents.
+
+      `CancelAfter` starts a countdown, and calling it again before the source is cancelled resets the delay to the new one.
+
+      `TryReset` (since .NET 6) lets you reuse a source for a subsequent, unrelated operation instead of creating a new one.
+      It returns `true` only if cancellation has not been requested, because the cancelled state is irreversible: consumers
+      of the token may already have reacted to it. The documentation expects the sole owner to call it when the operation
+      has completed, nobody else will attempt to cancel the source, and any remaining registrations are erroneous: after a
+      reset they are not notified of a later cancellation. Code that still holds the token sees the current state of the
+      same instance when it polls. Calling `TryReset` concurrently with `Cancel` is not thread-safe. If `TryReset` returns
+      `false`, dispose the source and create a new one.
+    linkTitles:
+      - CancellationTokenSource.CreateLinkedTokenSource method
+      - Cancellation in managed threads
+      - CancellationTokenSource.TryReset method
+      - CancellationTokenSource.CancelAfter method
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"

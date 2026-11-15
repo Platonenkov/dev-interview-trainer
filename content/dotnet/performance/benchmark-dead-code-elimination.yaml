@@ -1,0 +1,167 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WP20K8CJVJ2S490BXX
+slug: benchmark-dead-code-elimination
+stack: dotnet
+topic: performance
+level: senior
+type: open
+grading: self
+tags: [benchmarkdotnet, benchmarking, jit, dead-code-elimination, constant-folding]
+code:
+  language: csharp
+  harness: none
+  source: |
+    using BenchmarkDotNet.Attributes;
+
+    public class GeometryBenchmarks
+    {
+        [Benchmark]
+        public void Distance()
+        {
+            double dx = 3.0;
+            double dy = 4.0;
+            Math.Sqrt(dx * dx + dy * dy); // result is discarded
+        }
+    }
+links:
+  - url: https://benchmarkdotnet.org/articles/guides/good-practices.html
+    lang: en
+    kind: docs
+  - url: https://benchmarkdotnet.org/articles/features/parameterization.html
+    lang: en
+    kind: docs
+  - url: https://benchmarkdotnet.org/articles/configs/diagnosers.html
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему бенчмарк BenchmarkDotNet показывает время меньше наносекунды и как его исправить?
+    prompt: |
+      Бенчмарк выше, собранный в Release и запущенный через BenchmarkDotNet на .NET 10, показывает для `Distance`
+      среднее время меньше 1 нс. Что на самом деле измеряется, почему так получилось и как переписать бенчмарк,
+      чтобы он измерял вычисление?
+    hint: Что остаётся от тела метода после оптимизации JIT-компилятором и что на самом деле замеряет цикл бенчмарка?
+    answer: |
+      **Что происходит.** Измеряется фактически пустой метод. На .NET 10 JIT-компилятор видит две вещи:
+
+      - результат `Math.Sqrt` никуда не уходит, а у вычисления нет побочных эффектов, поэтому это мёртвый код, и JIT
+        его удаляет;
+      - `dx` и `dy` - локальные переменные, инициализированные константами, поэтому всё выражение можно свернуть
+        в константу ещё при компиляции (constant folding), даже если результат использовать.
+
+      Время меньше наносекунды - это меньше нескольких тактов процессора, реальное вычисление с умножениями и
+      квадратным корнем столько не занимает. BenchmarkDotNet вычитает накладные расходы своего цикла вызова,
+      поэтому пустое тело даёт результат около нуля, и в отчёте обычно появляется предупреждение, что длительность
+      метода неотличима от длительности пустого метода.
+
+      **Как исправить.**
+
+      1. **Вернуть результат из метода.** BenchmarkDotNet сам потребляет возвращаемое значение так, что JIT не может
+         доказать его ненужность: `public double Distance() => ...`.
+      2. **Сделать входные данные неизвестными JIT.** Перенести их в обычные поля экземпляра (не `const` и не
+         `static readonly`), которые задаются в методе `[GlobalSetup]`, или передавать через `[Params]`/`[Arguments]`.
+         Поля `static readonly` на оптимизированном уровне многоуровневой компиляции JIT может считать константами.
+      3. **Если значений несколько** (например, в цикле или в цепочке LINQ), объединить их в одно возвращаемое
+         значение или передать в `Consumer` из `BenchmarkDotNet.Engines`.
+      4. **Проверить, что работа действительно выполняется.** Время должно стать правдоподобным и меняться при
+         изменении входных данных, а `[DisassemblyDiagnoser]` покажет сгенерированный машинный код.
+
+      ```csharp
+      private double dx;
+      private double dy;
+
+      [GlobalSetup]
+      public void Setup()
+      {
+          dx = 3.0;
+          dy = 4.0;
+      }
+
+      [Benchmark]
+      public double Distance() => Math.Sqrt(dx * dx + dy * dy);
+      ```
+    explanation: |
+      Микробенчмарк измеряет не исходный код, а машинный код, который из него сделал оптимизирующий JIT. В Release
+      JIT удаляет вычисления без побочных эффектов, результат которых не используется, и сворачивает выражения
+      с известными при компиляции операндами. В рабочем коде это полезные оптимизации, но в бенчмарке они
+      выбрасывают ровно ту работу, которую хотели измерить. Рекомендации BenchmarkDotNet прямо приводят пример:
+      `Math.Exp(1)` без использования результата JIT может удалить, а `return Math.Exp(1)` - нет.
+
+      Поэтому правило простое: результат вычисления должен «уходить» из метода (возврат или `Consumer`), а входные
+      данные не должны быть известны JIT заранее. Возвращать результат надо из самого метода `[Benchmark]`, а не
+      сохранять в локальную переменную. Подозрительно маленькое время, особенно меньше наносекунды или одинаковое
+      для разных входных данных, - сигнал проверить бенчмарк, а не повод радоваться. Поведение оптимизаций описано
+      для .NET 10; в другой версии JIT может удалять больше или меньше кода, поэтому бенчмарк должен быть защищён
+      явно, а не полагаться на то, что JIT «не догадается».
+    linkTitles:
+      - "BenchmarkDotNet: рекомендации по написанию бенчмарков"
+      - "BenchmarkDotNet: параметризация бенчмарков"
+      - "BenchmarkDotNet: диагностики"
+  en:
+    title: Why does a BenchmarkDotNet benchmark report less than a nanosecond and how do you fix it?
+    prompt: |
+      The benchmark above, built in Release and run with BenchmarkDotNet on .NET 10, reports a mean time below 1 ns
+      for `Distance`. What is actually being measured, why did it happen, and how do you rewrite the benchmark so
+      that it measures the computation?
+    hint: What is left of the method body after the JIT compiler has optimized it, and what does the benchmark loop actually time?
+    answer: |
+      **What is happening.** In effect an empty method is being measured. On .NET 10 the JIT compiler sees two things:
+
+      - the result of `Math.Sqrt` goes nowhere and the computation has no side effects, so it is dead code and the
+        JIT removes it;
+      - `dx` and `dy` are locals initialized with constants, so the whole expression can be folded into a constant
+        at compile time (constant folding), even if the result were used.
+
+      Less than a nanosecond is less than a few CPU cycles; a real computation with multiplications and a square
+      root does not take that little. BenchmarkDotNet subtracts the overhead of its own invocation loop, so an empty
+      body gives a result close to zero, and the report usually adds a warning that the method duration is
+      indistinguishable from the empty method duration.
+
+      **How to fix it.**
+
+      1. **Return the result from the method.** BenchmarkDotNet consumes the return value in a way the JIT cannot
+         prove to be unused: `public double Distance() => ...`.
+      2. **Make the inputs unknown to the JIT.** Move them into ordinary instance fields (not `const` and not
+         `static readonly`) set in a `[GlobalSetup]` method, or pass them through `[Params]`/`[Arguments]`. At the
+         optimized tier of tiered compilation the JIT may treat `static readonly` fields as constants.
+      3. **If there are several values** (for example in a loop or a LINQ chain), combine them into one return value
+         or pass them to a `Consumer` from `BenchmarkDotNet.Engines`.
+      4. **Check that the work really runs.** The time should become plausible and change with the inputs, and
+         `[DisassemblyDiagnoser]` shows the generated machine code.
+
+      ```csharp
+      private double dx;
+      private double dy;
+
+      [GlobalSetup]
+      public void Setup()
+      {
+          dx = 3.0;
+          dy = 4.0;
+      }
+
+      [Benchmark]
+      public double Distance() => Math.Sqrt(dx * dx + dy * dy);
+      ```
+    explanation: |
+      A microbenchmark does not measure the source code; it measures the machine code that the optimizing JIT made
+      from it. In Release the JIT removes side-effect-free computations whose results are unused and folds
+      expressions whose operands are known at compile time. In production code these are useful optimizations, but
+      in a benchmark they throw away exactly the work you wanted to measure. The BenchmarkDotNet good practices give
+      this very example: the JIT may eliminate `Math.Exp(1)` when the result is unused, but not `return Math.Exp(1)`.
+
+      That is why the rule is simple: the result must "escape" the method (a return value or a `Consumer`), and the
+      inputs must not be known to the JIT in advance. The result has to be returned from the `[Benchmark]` method
+      itself, not stored in a local variable. A suspiciously small time, especially below a nanosecond or identical
+      for different inputs, is a signal to check the benchmark, not a reason to celebrate. The optimization
+      behaviour is described for .NET 10; another JIT version may remove more or less code, so the benchmark should
+      be protected explicitly instead of relying on the JIT "not noticing".
+    linkTitles:
+      - "BenchmarkDotNet: good practices"
+      - "BenchmarkDotNet: parameterization"
+      - "BenchmarkDotNet: diagnosers"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"
+  noRunReason: Needs the BenchmarkDotNet NuGet package, which the sandbox does not provide.

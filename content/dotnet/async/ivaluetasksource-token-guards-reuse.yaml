@@ -1,0 +1,101 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMJJPGZ5GGD6RBBNVF
+slug: ivaluetasksource-token-guards-reuse
+stack: dotnet
+topic: async
+level: senior
+type: single
+grading: auto
+tags: [valuetask, ivaluetasksource, pooling, object-reuse]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.tasks.sources.ivaluetasksource-1
+    lang: en
+    kind: docs
+  - url: https://devblogs.microsoft.com/dotnet/understanding-the-whys-whats-and-whens-of-valuetask/
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.tasks.sources.manualresetvaluetasksourcecore-1
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Зачем ValueTask, построенному на IValueTaskSource, короткий токен?
+    prompt: |
+      `ValueTask<T>` может опираться на `IValueTaskSource<T>`. Тогда структура хранит ссылку на источник и токен типа `short`,
+      который передаётся в каждый вызов `GetStatus`, `OnCompleted` и `GetResult`. Зачем нужен этот токен в .NET 10?
+    hint: Что происходит с объектом-источником после того, как потребитель получил результат одной операции?
+    options:
+      a: Объект-источник сбрасывается и повторно используется для следующей операции, а токен указывает, к какой операции относится конкретный `ValueTask<T>`, поэтому обращение через устаревший `ValueTask<T>` можно обнаружить, а не молча вернуть результат чужой операции
+      b: Токен позволяет потребителю отменить незавершённую операцию, как компактный аналог `CancellationToken`
+      c: Токен сообщает источнику, в каком `SynchronizationContext` или `TaskScheduler` выполнить продолжение
+      d: Токен считает ожидания, поэтому один и тот же `ValueTask<T>` можно безопасно ожидать несколько раз
+    optionExplanations:
+      b: "Отмены в `IValueTaskSource<T>` нет: у интерфейса только `GetStatus`, `OnCompleted` и `GetResult`. Операция, которая поддерживает отмену, получает `CancellationToken` при запуске."
+      c: "Контекст продолжения задаётся аргументом `ValueTaskSourceOnCompletedFlags` метода `OnCompleted` (`UseSchedulingContext`, `FlowExecutionContext`), а не токеном."
+      d: "Токен не делает повторное ожидание законным. `ValueTask<T>` по-прежнему потребляется один раз: после первого `GetResult` источник может быть сброшен и отдан другой операции, и второй `await` - ошибка, которую токен в лучшем случае лишь обнаружит."
+    answer: Источник сбрасывается и переиспользуется, а токен связывает `ValueTask<T>` с конкретной операцией, чтобы обращение через устаревший `ValueTask<T>` обнаруживалось, а не читало результат чужой операции.
+    explanation: |
+      Смысл `IValueTaskSource<T>` - избежать выделения памяти и на асинхронном пути: вместо нового `Task<T>` на каждую
+      операцию один и тот же объект-источник (из пула или закэшированный) обслуживает операцию за операцией. Но
+      `ValueTask<T>` - структура, её копии могут остаться у потребителя и после того, как источник уже сброшен и отдан
+      следующей операции. Одной ссылки на объект недостаточно, чтобы понять, к какой операции относится копия.
+
+      Поэтому при создании `ValueTask<T>` источник выдаёт текущий токен (номер версии), а структура передаёт его обратно
+      в каждый вызов. Источник сравнивает его со своей текущей версией. Например, `ManualResetValueTaskSourceCore<TResult>`
+      увеличивает `Version` в `Reset()` и выбрасывает `InvalidOperationException`, если токен не совпадает. Так повторный
+      `await` или `.Result` у устаревшего `ValueTask<T>` превращается в заметную ошибку, а не в тихое чтение результата
+      другой операции.
+
+      Важно, что это механизм обнаружения ошибок, а не разрешение на повторное использование: проверка зависит от реализации
+      источника, а 16-битный токен со временем повторяется. Правило однократного потребления `ValueTask<T>` остаётся в силе.
+    linkTitles:
+      - Интерфейс IValueTaskSource<TResult>
+      - "Стивен Туб: Understanding the Whys, Whats, and Whens of ValueTask"
+      - Структура ManualResetValueTaskSourceCore<TResult>
+  en:
+    title: Why does a ValueTask backed by an IValueTaskSource carry a short token?
+    prompt: |
+      A `ValueTask<T>` can be backed by an `IValueTaskSource<T>`. Then the struct stores a reference to the source and a `short`
+      token that is passed to every call of `GetStatus`, `OnCompleted` and `GetResult`. Why is this token needed in .NET 10?
+    hint: What happens to the source object after the consumer has received the result of one operation?
+    options:
+      a: The source object is reset and reused for the next operation, and the token identifies which operation a particular `ValueTask<T>` belongs to, so a call through a stale `ValueTask<T>` can be detected instead of silently returning another operation's result
+      b: The token lets the consumer cancel the pending operation, like a compact `CancellationToken`
+      c: The token tells the source which `SynchronizationContext` or `TaskScheduler` to run the continuation on
+      d: The token counts awaits, so the same `ValueTask<T>` can be safely awaited several times
+    optionExplanations:
+      b: "Cancellation is not part of `IValueTaskSource<T>`: the interface has only `GetStatus`, `OnCompleted` and `GetResult`. An operation that supports cancellation receives a `CancellationToken` when it is started."
+      c: "The continuation's context is described by the `ValueTaskSourceOnCompletedFlags` argument of `OnCompleted` (`UseSchedulingContext`, `FlowExecutionContext`), not by the token."
+      d: "The token does not make repeated awaits legal. A `ValueTask<T>` is still consumed once: after the first `GetResult` the source can be reset and handed to another operation, and a second `await` is an error that the token at best only detects."
+    answer: The source is reset and reused, and the token ties a `ValueTask<T>` to one specific operation, so a call through a stale `ValueTask<T>` is detected instead of reading another operation's result.
+    explanation: |
+      The point of `IValueTaskSource<T>` is to avoid allocations on the asynchronous path too: instead of a new `Task<T>` per
+      operation, the same source object (pooled or cached) serves one operation after another. But `ValueTask<T>` is a struct,
+      and copies of it can stay with a consumer after the source has already been reset and handed to the next operation.
+      A reference to the object alone cannot tell which operation a copy belongs to.
+
+      So when a `ValueTask<T>` is created, the source hands out its current token (a version number), and the struct passes it
+      back on every call. The source compares it with its current version. For example, `ManualResetValueTaskSourceCore<TResult>`
+      increments `Version` in `Reset()` and throws `InvalidOperationException` when the token does not match. That turns a
+      repeated `await` or `.Result` on a stale `ValueTask<T>` into a visible error instead of a silent read of another
+      operation's result.
+
+      Note that this is a misuse detector, not permission to reuse: the check depends on the source implementation, and a
+      16-bit token eventually repeats. The rule that a `ValueTask<T>` is consumed only once still holds.
+    linkTitles:
+      - IValueTaskSource<TResult> interface
+      - "Stephen Toub: Understanding the Whys, Whats, and Whens of ValueTask"
+      - ManualResetValueTaskSourceCore<TResult> struct
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

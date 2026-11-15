@@ -1,0 +1,112 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMXQCCHWDNE4R4F4ZC
+slug: startnew-async-lambda-not-unwrapped
+stack: dotnet
+topic: async
+level: middle
+type: output
+grading: auto
+tags: [task-factory, startnew, unwrap, task-run, taskcompletionsource]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    TaskCompletionSource gate = new();
+
+    Task<Task> outer = Task.Factory.StartNew(async () =>
+    {
+        await gate.Task;
+        Console.Write("done ");
+    });
+
+    Task inner = await outer;
+    Console.Write($"{outer.IsCompleted} {inner.IsCompleted}");
+expect:
+  kind: output
+  value: "True False"
+acceptedOutputs: ["True False"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "True False" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "done True True" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "False False" }
+  - id: d
+    correct: false
+    expect: { kind: compile-error }
+links:
+  - url: https://devblogs.microsoft.com/dotnet/task-run-vs-task-factory-startnew/
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.tasks.taskextensions.unwrap
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что выведет await результата Task.Factory.StartNew с async-лямбдой?
+    prompt: |
+      Что выведет эта программа в консоль? `gate` нигде не завершается.
+    hint: Какой тип результата у `StartNew`, если переданная лямбда сама возвращает `Task`, и в какой момент такая лямбда возвращает управление?
+    options:
+      a: "True False"
+      b: "done True True"
+      c: "False False"
+      d: Ошибка компиляции
+    optionExplanations:
+      b: "`await outer` ждёт только внешнюю задачу. Она завершается, как только лямбда дошла до незавершённого `await gate.Task` и вернула внутреннюю задачу. `gate` так и не завершается, поэтому `done` не печатается, а внутренняя задача остаётся незавершённой."
+      c: "После `await outer` внешняя задача по определению завершена, поэтому `outer.IsCompleted` равно `True`."
+      d: "Код корректен. Для `async`-лямбды без возвращаемого значения выбирается перегрузка `StartNew<TResult>(Func<TResult>)` с `TResult = Task`, поэтому результат имеет тип `Task<Task>` и присваивание компилируется."
+    answer: "True False"
+    explanation: |
+      `async`-лямбда здесь - это `Func<Task>`, и `Task.Factory.StartNew` возвращает `Task<Task>`. `StartNew` ничего
+      не знает про асинхронность делегата: внешняя задача представляет только вызов лямбды. Лямбда выполняется в пуле
+      потоков, доходит до `await gate.Task`, видит незавершённую задачу и возвращает вызывающему коду незавершённую
+      внутреннюю задачу. На этом делегат закончен, и внешняя задача завершается с этой внутренней задачей в качестве результата.
+
+      Поэтому `await outer` возвращает `inner` почти сразу: `outer.IsCompleted` равно `True`, а `inner.IsCompleted` - `False`,
+      и строка `done` не выводится, потому что `gate` не завершается. Программа завершается, не дожидаясь `inner`.
+
+      `Task.Run` с `async`-лямбдой разворачивает результат: он возвращает `Task`, который представляет всю асинхронную
+      работу лямбды. С `StartNew` то же поведение дают `Unwrap()` или двойной `await` (`await await ...`). Здесь любой из
+      этих вариантов ждал бы `gate` бесконечно. Поведение описано для .NET 10.
+    linkTitles:
+      - "Стивен Туб: Task.Run vs Task.Factory.StartNew"
+      - Метод TaskExtensions.Unwrap
+  en:
+    title: What does awaiting the result of Task.Factory.StartNew with an async lambda print?
+    prompt: |
+      What does this program print to the console? `gate` is never completed.
+    hint: What is the result type of `StartNew` when the lambda itself returns a `Task`, and at what point does such a lambda return control?
+    options:
+      a: "True False"
+      b: "done True True"
+      c: "False False"
+      d: Compile error
+    optionExplanations:
+      b: "`await outer` waits only for the outer task. It completes as soon as the lambda reaches the incomplete `await gate.Task` and returns its inner task. `gate` never completes, so `done` is not printed and the inner task stays incomplete."
+      c: "After `await outer` the outer task is completed by definition, so `outer.IsCompleted` is `True`."
+      d: "The code is valid. For an `async` lambda without a return value the `StartNew<TResult>(Func<TResult>)` overload is chosen with `TResult = Task`, so the result has type `Task<Task>` and the assignment compiles."
+    answer: "True False"
+    explanation: |
+      The `async` lambda here is a `Func<Task>`, and `Task.Factory.StartNew` returns a `Task<Task>`. `StartNew` knows nothing
+      about the delegate being asynchronous: the outer task represents only the invocation of the lambda. The lambda runs on
+      the thread pool, reaches `await gate.Task`, sees an incomplete task and returns an incomplete inner task to its caller.
+      At that point the delegate is finished, and the outer task completes with the inner task as its result.
+
+      So `await outer` hands back `inner` almost at once: `outer.IsCompleted` is `True`, `inner.IsCompleted` is `False`,
+      and `done` is never printed because `gate` never completes. The program exits without waiting for `inner`.
+
+      `Task.Run` with an `async` lambda unwraps the result: it returns a `Task` that represents all the asynchronous work of
+      the lambda. With `StartNew` you get the same behaviour from `Unwrap()` or a double `await` (`await await ...`). Here any
+      of those would wait for `gate` forever. The behaviour is described for .NET 10.
+    linkTitles:
+      - "Stephen Toub: Task.Run vs Task.Factory.StartNew"
+      - TaskExtensions.Unwrap method
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

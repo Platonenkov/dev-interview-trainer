@@ -1,0 +1,127 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WN9B9QCYS1B30GW0YH
+slug: bounded-channel-drop-oldest-output
+stack: dotnet
+topic: concurrency
+level: middle
+type: output
+grading: auto
+tags: [channels, bounded-channel, producer-consumer]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    using System.Threading.Channels;
+
+    Channel<int> channel = Channel.CreateBounded<int>(
+        new BoundedChannelOptions(2) { FullMode = BoundedChannelFullMode.DropOldest });
+
+    bool accepted = true;
+    foreach (int item in new[] { 1, 2, 3 })
+    {
+        accepted &= channel.Writer.TryWrite(item);
+    }
+
+    List<int> received = new();
+    while (channel.Reader.TryRead(out int value))
+    {
+        received.Add(value);
+    }
+
+    Console.Write($"{accepted}: {string.Join(" ", received)}");
+expect:
+  kind: output
+  value: "True: 2 3"
+acceptedOutputs: ["True: 2 3"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "True: 2 3" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "False: 1 2" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "True: 1 2" }
+  - id: d
+    correct: false
+    expect: { kind: output, value: "True: 1 3" }
+  - id: e
+    correct: false
+    expect: { kind: output, value: "True: 1 2 3" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.channels.boundedchannelfullmode
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/extensions/channels
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что выведет ограниченный канал ёмкостью 2 в режиме DropOldest после трёх записей?
+    prompt: |
+      Канал создан с ёмкостью 2 и режимом `BoundedChannelFullMode.DropOldest`. В него трижды пишут через `TryWrite`,
+      затем вычитывают всё через `TryRead`. Что выведет эта программа в .NET 10?
+    hint: Как режим `FullMode` влияет на две вещи - что вернёт `TryWrite` для полного канала и какой элемент останется в буфере?
+    options:
+      a: "True: 2 3"
+      b: "False: 1 2"
+      c: "True: 1 2"
+      d: "True: 1 3"
+      e: "True: 1 2 3"
+    optionExplanations:
+      b: Так вёл бы себя режим `Wait`, который используется по умолчанию. В нём `TryWrite` для полного канала не ждёт, а сразу возвращает `false`, и элемент `3` не попадает в канал. Здесь задан `DropOldest`, и запись проходит.
+      c: Так вёл бы себя режим `DropWrite`. Запись считается успешной, но выбрасывается сам записываемый элемент `3`. В режиме `DropOldest` выбрасывается не новый элемент, а самый старый в буфере.
+      d: Так вёл бы себя режим `DropNewest`. Он удаляет самый новый элемент, уже лежащий в буфере (здесь `2`), и записывает `3`. `DropOldest` удаляет элемент с другого конца очереди.
+      e: Ёмкость 2 означает, что в буфере одновременно лежит не больше двух элементов. Все три элемента вернул бы только неограниченный канал или ограниченный с ёмкостью не меньше 3.
+    answer: "True: 2 3"
+    explanation: |
+      Ограниченный канал хранит не больше `capacity` элементов, а `FullMode` определяет, что происходит при записи
+      в полный канал. Первые две записи помещают `1` и `2` в буфер. Третья запись застаёт канал полным: в режиме
+      `DropOldest` канал удаляет самый старый элемент (`1`), кладёт `3` в конец и сообщает об успехе. Поэтому все три
+      вызова `TryWrite` вернули `true`, а читатель получает `2` и `3` в порядке записи.
+
+      Сравните с остальными режимами: `Wait` (по умолчанию) отклоняет `TryWrite`, а `WriteAsync` ждёт освобождения места,
+      не блокируя поток; `DropWrite` молча выбрасывает записываемый элемент; `DropNewest` удаляет самый новый элемент
+      в буфере. Все режимы с `Drop` теряют данные, при этом `TryWrite` возвращает `true`. Поэтому они подходят там,
+      где важны только свежие значения (телеметрия, последнее состояние), а не там, где нужен каждый элемент.
+      Чтобы узнать о потерянных элементах, у `Channel.CreateBounded` есть перегрузка с делегатом `itemDropped`.
+    linkTitles:
+      - Перечисление BoundedChannelFullMode
+      - Библиотека System.Threading.Channels
+  en:
+    title: What does a bounded channel of capacity 2 in DropOldest mode print after three writes?
+    prompt: |
+      The channel is created with capacity 2 and `BoundedChannelFullMode.DropOldest`. The code writes to it three times
+      with `TryWrite`, then drains it with `TryRead`. What does this program print on .NET 10?
+    hint: How does `FullMode` affect two things - what `TryWrite` returns for a full channel and which item stays in the buffer?
+    options:
+      a: "True: 2 3"
+      b: "False: 1 2"
+      c: "True: 1 2"
+      d: "True: 1 3"
+      e: "True: 1 2 3"
+    optionExplanations:
+      b: That is how the default `Wait` mode behaves. In it `TryWrite` on a full channel does not wait but returns `false` at once, and `3` never enters the channel. Here the mode is `DropOldest`, so the write succeeds.
+      c: That is how `DropWrite` behaves. The write is reported as successful, but the item being written, `3`, is discarded. `DropOldest` discards the oldest buffered item, not the new one.
+      d: That is how `DropNewest` behaves. It removes the newest item already in the buffer (here `2`) and writes `3`. `DropOldest` removes the item at the other end of the queue.
+      e: Capacity 2 means the buffer holds at most two items at a time. Only an unbounded channel, or a bounded one with capacity 3 or more, would return all three items.
+    answer: "True: 2 3"
+    explanation: |
+      A bounded channel holds at most `capacity` items, and `FullMode` decides what happens on a write to a full channel.
+      The first two writes put `1` and `2` into the buffer. The third write finds the channel full: in `DropOldest`
+      mode the channel removes the oldest item (`1`), appends `3` and reports success. So all three `TryWrite` calls
+      returned `true`, and the reader gets `2` and `3` in write order.
+
+      Compare the other modes: `Wait` (the default) rejects `TryWrite`, while `WriteAsync` waits for free space without
+      blocking a thread; `DropWrite` silently discards the item being written; `DropNewest` removes the newest buffered item.
+      Every `Drop` mode loses data while `TryWrite` still returns `true`. That makes them fit cases where only fresh
+      values matter (telemetry, latest state), not cases where every item must be processed. To learn about dropped
+      items, `Channel.CreateBounded` has an overload that takes an `itemDropped` delegate.
+    linkTitles:
+      - BoundedChannelFullMode enum
+      - System.Threading.Channels library
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

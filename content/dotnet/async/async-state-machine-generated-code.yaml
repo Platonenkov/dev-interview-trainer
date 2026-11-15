@@ -1,0 +1,147 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WM1379VHNY35GBBDDS
+slug: async-state-machine-generated-code
+stack: dotnet
+topic: async
+level: senior
+type: open
+grading: self
+tags: [state-machine, async-method-builder, allocations, compiler]
+links:
+  - url: https://devblogs.microsoft.com/dotnet/how-async-await-really-works/
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.runtime.compilerservices.iasyncstatemachine
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.runtime.compilerservices.poolingasyncvaluetaskmethodbuilder-1
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что генерирует компилятор C# для async-метода и когда этот код выделяет память в куче?
+    prompt: |
+      Во что компилятор C# превращает метод `async Task<int> LoadAsync(...)`? Опишите сгенерированные типы, поля
+      и метод `MoveNext`, а затем объясните, в каких случаях вызов такого метода выделяет память в куче, а в каких нет.
+    hint: Что должно пережить возврат метода к вызывающему коду посреди выполнения, и где это можно сохранить?
+    answer: |
+      **Что генерируется.**
+
+      - **Метод-заглушка** с той же сигнатурой, но без `async` в IL. Он создаёт экземпляр конечного автомата, копирует
+        в него параметры и `this`, инициализирует построитель (`AsyncTaskMethodBuilder<int>.Create()`) и состояние `-1`,
+        вызывает `builder.Start(ref stateMachine)` и возвращает `builder.Task`. `Start` синхронно вызывает `MoveNext`
+        в текущем потоке, поэтому метод выполняется синхронно до первого незавершённого `await`.
+      - **Тип конечного автомата** (вложенный тип с именем вида `<LoadAsync>d__0`), реализующий `IAsyncStateMachine`.
+        В сборке Release это `struct`, в Debug - `class`. Поля: состояние (`<>1__state`), построитель (`<>t__builder`),
+        параметры, "поднятые" локальные переменные, которые живут через `await`, и поля для объектов ожидания (awaiter).
+      - **`MoveNext`** содержит тело метода, разрезанное по точкам `await`. В начале по значению состояния выполняется
+        переход к нужной точке. Для каждого `await`: `GetAwaiter()`, проверка `IsCompleted`. Если операция уже завершена, код
+        идёт дальше синхронно и вызывает `GetResult()`. Иначе автомат сохраняет номер состояния и awaiter в полях,
+        вызывает `builder.AwaitUnsafeOnCompleted(ref awaiter, ref this)` и выходит из `MoveNext`. При возобновлении
+        `MoveNext` вызывается снова, переходит к метке после этого `await`, восстанавливает awaiter и вызывает `GetResult()`.
+        Тело обёрнуто в `try`/`catch`: исключение уходит в `builder.SetException`, нормальное завершение - в
+        `builder.SetResult`, состояние становится `-2`.
+
+      **Когда выделяется память.**
+
+      - **Метод завершился синхронно** (все ожидаемые операции уже были завершены): структура автомата живёт в стеке
+        и не упаковывается. `async Task` возвращает закэшированную завершённую задачу. `async Task<T>` выделяет `Task<T>`
+        для результата, кроме кэшируемых значений (например, `true`/`false`, `null`, небольшие `int`). `async ValueTask<T>`
+        не выделяет ничего.
+      - **Первый `await`, который действительно приостанавливает метод**: продолжение должно пережить кадр стека, поэтому
+        построитель упаковывает автомат в кучу. В современном .NET (в том числе в .NET 10) это один объект-обёртка
+        `AsyncStateMachineBox<TStateMachine>`, который одновременно является возвращаемой `Task<TResult>` и хранит
+        структуру автомата как поле. Последующие приостановки используют тот же объект, новых выделений на каждый `await`
+        нет. С этого момента поднятые локальные переменные живут в куче.
+      - **Debug-сборка**: автомат - класс, поэтому объект создаётся при каждом вызове, даже при синхронном завершении.
+      - **Не из автомата**: замыкания и лямбды внутри метода, массивы `params`, а также сами ожидаемые операции выделяют
+        память отдельно.
+
+      Сократить выделения можно быстрым синхронным путём (кэшированный результат и `ValueTask<T>`) и, для горячих путей
+      с частыми приостановками, явным пулингом через `[AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]`
+      на методе (.NET 6 и C# 10 и новее), но только по результатам замеров.
+    explanation: |
+      Ключевая идея в том, что `async` - это преобразование кода компилятором, а не возможность среды выполнения.
+      Локальные переменные обычного метода живут в кадре стека, который исчезает при возврате. Async-метод может
+      вернуть управление посреди работы, поэтому всё, что нужно после `await`, компилятор переносит в поля автомата,
+      а позицию выполнения кодирует числом в поле состояния.
+
+      Автомат сделан структурой, чтобы синхронный путь ничего не стоил: если ни один `await` не приостановил метод,
+      структура так и остаётся в стеке. Упаковка нужна только тогда, когда продолжение будет вызвано позже, из другого
+      места. В .NET Framework на этом шаге выделялось несколько объектов (упакованный автомат, задача, делегат продолжения),
+      а в современном .NET, включая .NET 10, объект-обёртка сам является задачей, и цена приостановки обычно сводится
+      к одному выделению на вызов метода.
+
+      Типичные ошибки кандидата: считать, что каждый `await` создаёт новую задачу или делегат; что async-метод сразу
+      уходит в другой поток; что автомат всегда класс. Отсюда же следствие для `Span<T>` и других `ref struct`:
+      их нельзя держать через `await`, потому что поле автомата может оказаться в куче.
+    linkTitles:
+      - "Стивен Туб: How Async/Await Really Works in C#"
+      - Интерфейс IAsyncStateMachine
+      - Структура PoolingAsyncValueTaskMethodBuilder<TResult>
+  en:
+    title: What does the C# compiler generate for an async method and when does that code allocate on the heap?
+    prompt: |
+      What does the C# compiler turn an `async Task<int> LoadAsync(...)` method into? Describe the generated types,
+      fields and the `MoveNext` method, then explain when a call to such a method allocates on the heap and when it does not.
+    hint: What has to survive when the method returns to its caller in the middle of its work, and where can it be stored?
+    answer: |
+      **What is generated.**
+
+      - **A stub method** with the same signature but without `async` in IL. It creates the state machine instance, copies
+        the parameters and `this` into it, initializes the builder (`AsyncTaskMethodBuilder<int>.Create()`) and the state `-1`,
+        calls `builder.Start(ref stateMachine)` and returns `builder.Task`. `Start` calls `MoveNext` synchronously on the
+        current thread, which is why the method runs synchronously until the first incomplete `await`.
+      - **A state machine type** (a nested type named like `<LoadAsync>d__0`) that implements `IAsyncStateMachine`.
+        In a Release build it is a `struct`, in Debug a `class`. Fields: the state (`<>1__state`), the builder (`<>t__builder`),
+        the parameters, the "hoisted" locals that live across an `await`, and fields for the awaiters.
+      - **`MoveNext`** holds the method body, cut at every `await`. At the start it branches on the state value to the right
+        point. For every `await`: `GetAwaiter()`, then a check of `IsCompleted`. If the operation has already completed, the
+        code continues synchronously and calls `GetResult()`. Otherwise the machine stores the state number and the awaiter
+        in fields, calls `builder.AwaitUnsafeOnCompleted(ref awaiter, ref this)` and returns from `MoveNext`. On resumption
+        `MoveNext` is called again, jumps to the label after that `await`, restores the awaiter and calls `GetResult()`.
+        The body is wrapped in `try`/`catch`: an exception goes to `builder.SetException`, normal completion to
+        `builder.SetResult`, and the state becomes `-2`.
+
+      **When it allocates.**
+
+      - **The method completes synchronously** (every awaited operation had already completed): the state machine struct
+        stays on the stack and is never boxed. `async Task` returns a cached completed task. `async Task<T>` allocates a
+        `Task<T>` for the result, except for cached values (for example `true`/`false`, `null`, small `int` values).
+        `async ValueTask<T>` allocates nothing.
+      - **The first `await` that really suspends**: the continuation must outlive the stack frame, so the builder boxes the
+        state machine onto the heap. In modern .NET (including .NET 10) this is a single `AsyncStateMachineBox<TStateMachine>`
+        object that is at the same time the returned `Task<TResult>` and holds the state machine struct as a field.
+        Later suspensions reuse the same object; there is no new allocation per `await`. From that point the hoisted locals
+        live on the heap.
+      - **Debug build**: the state machine is a class, so an object is created on every call, even when the method
+        completes synchronously.
+      - **Not from the state machine**: closures and lambdas inside the method, `params` arrays and the awaited operations
+        themselves allocate separately.
+
+      You can reduce allocations with a synchronous fast path (a cached result and `ValueTask<T>`) and, for hot paths that
+      suspend often, with opt-in pooling through `[AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]`
+      on the method (.NET 6 and C# 10 or later), but only when measurements justify it.
+    explanation: |
+      The key idea is that `async` is a compiler transformation, not a runtime feature. The locals of an ordinary method
+      live in a stack frame that disappears on return. An async method can return in the middle of its work, so the
+      compiler moves everything needed after an `await` into fields of the state machine and encodes the execution
+      position as a number in the state field.
+
+      The state machine is a struct so that the synchronous path costs nothing: if no `await` suspended the method, the
+      struct simply stays on the stack. Boxing is needed only when the continuation will be invoked later, from somewhere
+      else. In .NET Framework this step allocated several objects (the boxed state machine, the task, the continuation
+      delegate); in modern .NET, including .NET 10, the box is itself the task, so the cost of suspending usually comes
+      down to one allocation per method call.
+
+      Typical mistakes: believing that every `await` creates a new task or delegate, that an async method moves to another
+      thread right away, or that the state machine is always a class. The same design explains why `Span<T>` and other
+      `ref struct` values cannot be kept across an `await`: a field of the state machine may end up on the heap.
+    linkTitles:
+      - "Stephen Toub: How Async/Await Really Works in C#"
+      - IAsyncStateMachine interface
+      - PoolingAsyncValueTaskMethodBuilder<TResult> struct
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"

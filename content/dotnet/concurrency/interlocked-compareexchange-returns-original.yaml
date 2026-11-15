@@ -1,0 +1,112 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNA19C0REGX3YQE879
+slug: interlocked-compareexchange-returns-original
+stack: dotnet
+topic: concurrency
+level: middle
+type: output
+grading: auto
+tags: [interlocked, compare-exchange, atomic-operations, lock-free]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    int x = 5;
+    int r = Interlocked.CompareExchange(ref x, 10, 3);
+    Console.Write($"{r} {x}");
+expect:
+  kind: output
+  value: "5 5"
+acceptedOutputs: ["5 5"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "5 5" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "5 10" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "10 10" }
+  - id: d
+    correct: false
+    expect: { kind: output, value: "3 5" }
+  - id: e
+    correct: false
+    expect: { kind: compile-error }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.interlocked.compareexchange
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.interlocked
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что вернёт Interlocked.CompareExchange, если текущее значение не совпало с ожидаемым?
+    prompt: |
+      Что выведет эта программа в консоль?
+    hint: Какой из трёх аргументов `CompareExchange` сравнивается с текущим значением `x`, а какой записывается?
+    options:
+      a: "5 5"
+      b: "5 10"
+      c: "10 10"
+      d: "3 5"
+      e: Ошибка компиляции
+    optionExplanations:
+      b: "`CompareExchange` записывает `value` (10) только если текущее значение равно `comparand` (3). Здесь `x` равен 5, условие не выполнено, и `x` не меняется."
+      c: "Метод возвращает исходное значение `location1`, а не новое. К тому же запись здесь вообще не происходит, потому что 5 не равно 3."
+      d: "Метод возвращает не `comparand`, а значение, которое лежало в `location1` до операции, то есть 5."
+      e: "Код корректен: в `ref` можно передать локальную переменную, `Interlocked` не требует, чтобы это было поле. Пространство имён `System.Threading` подключено неявными using."
+    answer: "5 5"
+    explanation: |
+      Сигнатура метода - `CompareExchange(ref int location1, int value, int comparand)`. Он атомарно сравнивает
+      `location1` с `comparand` и, только если они равны, записывает в `location1` значение `value`. Возвращает он
+      всегда исходное значение `location1`, которое было до операции, независимо от того, произошла запись или нет.
+
+      Здесь `x` равен 5, а `comparand` равен 3: сравнение не проходит, `x` остаётся 5, и метод возвращает 5.
+
+      Именно возвращаемое значение говорит, удалась ли операция: если оно равно `comparand`, запись произошла.
+      На этом строится цикл compare-and-swap без блокировок: прочитать текущее значение, вычислить новое и вызвать
+      `CompareExchange` с прочитанным значением в роли `comparand`; если вернулось другое значение, значит, другой поток
+      успел изменить переменную, и попытку нужно повторить. Частая ошибка - перепутать порядок аргументов `value`
+      и `comparand`: новое значение идёт вторым, ожидаемое - третьим. Пример рассчитан на .NET 10.
+    linkTitles:
+      - Метод Interlocked.CompareExchange
+      - Класс Interlocked
+  en:
+    title: What does Interlocked.CompareExchange return when the current value does not match the comparand?
+    prompt: |
+      What does this program print to the console?
+    hint: Which of the three arguments of `CompareExchange` is compared with the current value of `x`, and which one is written?
+    options:
+      a: "5 5"
+      b: "5 10"
+      c: "10 10"
+      d: "3 5"
+      e: Compile error
+    optionExplanations:
+      b: "`CompareExchange` writes `value` (10) only when the current value equals `comparand` (3). Here `x` is 5, the condition fails, and `x` is left unchanged."
+      c: "The method returns the original value of `location1`, not the new one. Besides, no write happens here at all, because 5 is not equal to 3."
+      d: "The method does not return `comparand`; it returns the value that was in `location1` before the operation, which is 5."
+      e: "The code is valid: a local variable can be passed by `ref`, and `Interlocked` does not require a field. The `System.Threading` namespace comes from implicit usings."
+    answer: "5 5"
+    explanation: |
+      The method signature is `CompareExchange(ref int location1, int value, int comparand)`. It atomically compares
+      `location1` with `comparand` and, only if they are equal, stores `value` in `location1`. It always returns the
+      original value of `location1`, the one before the operation, whether or not the write happened.
+
+      Here `x` is 5 and `comparand` is 3: the comparison fails, `x` stays 5, and the method returns 5.
+
+      The return value is how you learn whether the operation succeeded: if it equals `comparand`, the write happened.
+      A lock-free compare-and-swap loop is built on this: read the current value, compute the new one, and call
+      `CompareExchange` with the value you read as `comparand`; if a different value comes back, another thread changed
+      the variable in the meantime and you retry. A common mistake is swapping `value` and `comparand`: the new value is
+      the second argument, the expected one is the third. The example targets .NET 10.
+    linkTitles:
+      - Interlocked.CompareExchange method
+      - Interlocked class
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

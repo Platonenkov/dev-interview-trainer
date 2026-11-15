@@ -1,0 +1,125 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMTN6QGP5BYZVVB3HS
+slug: async-exception-stored-in-returned-task
+stack: dotnet
+topic: async
+level: junior
+type: output
+grading: auto
+tags: [async-await, exceptions, task]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    Task task = FailAsync(true);
+    Console.Write("A");
+    try
+    {
+        await task;
+    }
+    catch (InvalidOperationException)
+    {
+        Console.Write("B");
+    }
+
+    static async Task FailAsync(bool fail)
+    {
+        if (fail)
+        {
+            throw new InvalidOperationException("boom");
+        }
+        await Task.Delay(10);
+    }
+expect:
+  kind: output
+  value: "AB"
+acceptedOutputs: ["AB"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "AB" }
+  - id: b
+    correct: false
+    expect: { kind: exception, value: System.InvalidOperationException }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "A" }
+  - id: d
+    correct: false
+    expect: { kind: exception, value: System.AggregateException }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/parallel-programming/exception-handling-task-parallel-library
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/await
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Что выведет программа, если async-метод выбрасывает исключение до первого await?"
+    prompt: |
+      Метод `FailAsync` выбрасывает исключение ещё до того, как дошёл до `await`. Вызов метода стоит вне блока
+      `try`, а `await task` - внутри. Что выведет эта программа в консоль в .NET 10?
+    hint: "Куда попадает исключение, выброшенное в теле метода `async Task`, - к вызывающему коду или в возвращаемую задачу?"
+    options:
+      a: "AB"
+      b: "Необработанное исключение `InvalidOperationException`, ничего не выведено"
+      c: "A"
+      d: "Необработанное исключение `AggregateException`"
+    optionExplanations:
+      b: "Метод `async Task` не выбрасывает исключение в точке вызова. Компилятор перехватывает его и сохраняет в возвращаемую задачу, поэтому вызов `FailAsync(true)` завершается нормально и `A` печатается."
+      c: "Исключение не теряется. Оно хранится в задаче и выбрасывается заново при `await task`, где его ловит блок `catch`, который печатает `B`."
+      d: "`await` не оборачивает ошибку в `AggregateException`, а выбрасывает исходное исключение задачи. Поэтому `catch (InvalidOperationException)` его перехватывает. В `AggregateException` ошибку оборачивают блокирующие `Wait()` и `Result`."
+    answer: "AB"
+    explanation: |
+      Тело метода с модификатором `async` компилятор превращает в конечный автомат, и любое исключение внутри него,
+      даже выброшенное до первого `await`, перехватывается и сохраняется в возвращаемый `Task`: задача переходит в
+      состояние `Faulted`. Вызывающий код получает эту задачу без исключения, поэтому сначала печатается `A`.
+
+      Исключение проявляется только тогда, когда задачу ожидают. `await task` выбрасывает исходное
+      `InvalidOperationException` (без обёртки в `AggregateException`), блок `catch` его ловит и печатает `B`.
+      Итог - `AB`.
+
+      Практическое следствие: проверки аргументов в `async`-методе не срабатывают в момент вызова. Если ошибка
+      должна появиться сразу, проверку выносят в обычный (не `async`) метод-обёртку, который затем вызывает
+      асинхронную реализацию. У `async void` поведение другое: возвращать ошибку некуда, и исключение уходит в
+      контекст синхронизации или в пул потоков. Поведение описано для .NET 10.
+    linkTitles:
+      - "Обработка исключений в библиотеке параллельных задач (TPL)"
+      - "Оператор await"
+  en:
+    title: "What does a program print when an async method throws before its first await?"
+    prompt: |
+      The `FailAsync` method throws an exception before it reaches any `await`. The method call is outside the
+      `try` block, and `await task` is inside it. What does this program print to the console on .NET 10?
+    hint: "Where does an exception thrown in the body of an `async Task` method go - to the caller, or into the returned task?"
+    options:
+      a: "AB"
+      b: "An unhandled `InvalidOperationException`, nothing is printed"
+      c: "A"
+      d: "An unhandled `AggregateException`"
+    optionExplanations:
+      b: "An `async Task` method does not throw at the call site. The compiler catches the exception and stores it in the returned task, so the call `FailAsync(true)` returns normally and `A` is printed."
+      c: "The exception is not lost. It is stored in the task and thrown again at `await task`, where the `catch` block catches it and prints `B`."
+      d: "`await` does not wrap the failure in an `AggregateException`; it throws the task's original exception. That is why `catch (InvalidOperationException)` catches it. The blocking `Wait()` and `Result` are the ones that wrap it in `AggregateException`."
+    answer: "AB"
+    explanation: |
+      The compiler turns the body of an `async` method into a state machine, and any exception inside it, even one
+      thrown before the first `await`, is caught and stored in the returned `Task`: the task moves to the `Faulted`
+      state. The caller receives that task without any exception, so `A` is printed first.
+
+      The exception surfaces only when the task is awaited. `await task` throws the original
+      `InvalidOperationException` (not wrapped in an `AggregateException`), the `catch` block catches it and prints `B`.
+      The result is `AB`.
+
+      A practical consequence: argument checks inside an `async` method do not fire at the moment of the call. If the
+      error must appear immediately, the check goes into a plain (non-`async`) wrapper method that then calls the
+      asynchronous implementation. `async void` behaves differently: there is no task to store the error in, so the
+      exception goes to the synchronization context or the thread pool. The behaviour is described for .NET 10.
+    linkTitles:
+      - "Exception handling (Task Parallel Library)"
+      - "await operator"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"

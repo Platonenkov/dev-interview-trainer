@@ -1,0 +1,137 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMJR3PJ5NW0KGHSK83
+slug: whenall-await-rethrows-first-exception
+stack: dotnet
+topic: async
+level: middle
+type: output
+grading: auto
+tags: [task-whenall, exceptions, aggregate-exception, await]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    Task all = Task.WhenAll(
+        FailAsync("first"),
+        FailAsync("second"));
+
+    try
+    {
+        await all;
+    }
+    catch (Exception ex)
+    {
+        Console.Write($"{ex.GetType().Name} {all.Exception.InnerExceptions.Count}");
+    }
+
+    static async Task FailAsync(string message)
+    {
+        await Task.Delay(10);
+        throw new InvalidOperationException(message);
+    }
+expect:
+  kind: output
+  value: "InvalidOperationException 2"
+acceptedOutputs: ["InvalidOperationException 2"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "InvalidOperationException 2" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "AggregateException 2" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "AggregateException 1" }
+  - id: d
+    correct: false
+    expect: { kind: output, value: "InvalidOperationException 1" }
+  - id: e
+    correct: false
+    expect: { kind: exception, value: System.AggregateException }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.tasks.task.whenall
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/statements/exception-handling-statements
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/asynchronous-programming-patterns/consuming-the-task-based-asynchronous-pattern
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что выведет await Task.WhenAll, если обе задачи завершились с ошибкой?
+    prompt: |
+      Обе задачи, переданные в `Task.WhenAll`, завершаются с исключением `InvalidOperationException` (с разными
+      сообщениями). Что выведет эта программа в консоль?
+    hint: Сколько исключений может выбросить один `await` и куда деваются остальные ошибки задачи?
+    options:
+      a: "InvalidOperationException 2"
+      b: "AggregateException 2"
+      c: "AggregateException 1"
+      d: "InvalidOperationException 1"
+      e: Необработанное исключение `AggregateException`
+    optionExplanations:
+      b: "`AggregateException` выбрасывают блокирующие `Wait()` и `Result`. `await` разворачивает ошибку и выбрасывает одно из исходных исключений, а не обёртку."
+      c: "`await` не выбрасывает обёртку `AggregateException`, а выбрасывает исходное исключение. К тому же ошибок две, и свойство `Exception` задачи `all` хранит обе, поэтому число равно 2, а не 1."
+      d: "`await` выбрасывает только одно исключение, но сама задача `all` вторую ошибку не теряет: её свойство `Exception` хранит исключения обеих задач."
+      e: "`catch (Exception ex)` перехватывает выброшенное `await` исключение, поэтому программа не падает. К тому же `await` выбрасывает исходное `InvalidOperationException`, а не `AggregateException`."
+    answer: "InvalidOperationException 2"
+    explanation: |
+      Задача, которую вернул `Task.WhenAll`, завершается с ошибкой, когда завершились все входные задачи и хотя бы
+      одна из них упала. Её свойство `Exception` - это `AggregateException`, в `InnerExceptions` которого лежат
+      исключения всех упавших задач, здесь их два. Поэтому второе число - `2`.
+
+      Но `await` не выбрасывает `AggregateException`: он выбрасывает заново одно исключение из этого набора,
+      сохраняя исходный стек вызовов. В `catch` попадает одна ошибка, хотя их две. Какая именно из них окажется
+      выброшенной, документация не обещает, и полагаться на это нельзя. В этой программе обе задачи падают с
+      `InvalidOperationException`, поэтому имя типа одно и то же при любом выборе, и выводится
+      `InvalidOperationException 2`.
+
+      Практический вывод: если нужны все ошибки, сохраните задачу `WhenAll` в переменную и после перехвата прочитайте
+      `all.Exception.InnerExceptions` или проверьте `IsFaulted` у каждой исходной задачи. Поведение описано для .NET 10.
+    linkTitles:
+      - Метод Task.WhenAll
+      - Операторы обработки исключений (раздел об исключениях в асинхронных методах)
+      - Использование асинхронного шаблона, основанного на задачах (TAP)
+  en:
+    title: What does await Task.WhenAll print when both tasks fail?
+    prompt: |
+      Both tasks passed to `Task.WhenAll` fail with `InvalidOperationException` (with different messages).
+      What does this program print to the console?
+    hint: How many exceptions can a single `await` throw, and where do the other errors of the task go?
+    options:
+      a: "InvalidOperationException 2"
+      b: "AggregateException 2"
+      c: "AggregateException 1"
+      d: "InvalidOperationException 1"
+      e: An unhandled `AggregateException`
+    optionExplanations:
+      b: "`AggregateException` is what the blocking `Wait()` and `Result` throw. `await` unwraps the failure and throws one of the original exceptions, not the wrapper."
+      c: "`await` does not throw the `AggregateException` wrapper; it throws an original exception. Besides, there are two errors and the `Exception` property of the `all` task holds both, so the count is 2, not 1."
+      d: "`await` throws only one exception, but the `all` task does not lose the other error: its `Exception` property holds the exceptions of both tasks."
+      e: "`catch (Exception ex)` catches the exception thrown by `await`, so the program does not crash. Besides, `await` throws the original `InvalidOperationException`, not `AggregateException`."
+    answer: "InvalidOperationException 2"
+    explanation: |
+      The task returned by `Task.WhenAll` faults once all input tasks have finished and at least one of them failed.
+      Its `Exception` property is an `AggregateException` whose `InnerExceptions` hold the exceptions of every failed
+      task, two of them here. That is why the number printed is `2`.
+
+      But `await` does not throw the `AggregateException`: it rethrows one exception from that set, preserving the
+      original stack trace. The `catch` block receives a single error even though there are two. Which one gets
+      rethrown is not promised by the documentation, and you should not rely on it. In this program both tasks fail
+      with `InvalidOperationException`, so the type name is the same whichever one is chosen, and the output is
+      `InvalidOperationException 2`.
+
+      The practical takeaway: if you need every error, keep the `WhenAll` task in a variable and read
+      `all.Exception.InnerExceptions` after catching, or check `IsFaulted` on each source task. The behaviour is
+      described for .NET 10.
+    linkTitles:
+      - Task.WhenAll method
+      - Exception-handling statements (exceptions in async methods)
+      - Consuming the Task-based Asynchronous Pattern (TAP)
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"

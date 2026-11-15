@@ -1,0 +1,112 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WPH1NBJVGGJ7SS2CH9
+slug: memorycache-sizelimit-requires-entry-size
+stack: dotnet
+topic: performance
+level: middle
+type: single
+grading: auto
+tags: [caching, memory-cache, size-limit]
+code:
+  language: csharp
+  harness: none
+  source: |
+    using Microsoft.Extensions.Caching.Memory;
+
+    var cache = new MemoryCache(new MemoryCacheOptions
+    {
+        SizeLimit = 1024
+    });
+
+    cache.Set("user:42", "Alice", new MemoryCacheEntryOptions
+    {
+        AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5)
+    });
+
+    Console.WriteLine(cache.Get<string>("user:42"));
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/performance/caching/memory
+    lang: en
+    kind: docs
+  - url: https://github.com/dotnet/runtime/blob/main/src/libraries/Microsoft.Extensions.Caching.Memory/src/MemoryCache.cs
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что произойдёт, если в MemoryCache задан SizeLimit, а у записи не указан Size?
+    prompt: |
+      Кэш создан с ограничением `SizeLimit = 1024`, а запись добавляется без указания `Size`.
+      Что произойдёт при выполнении этого кода в .NET 10?
+    hint: Может ли `MemoryCache` сам узнать, сколько «весит» строка или произвольный объект?
+    options:
+      a: "`Set` выбросит `InvalidOperationException`: при заданном `SizeLimit` каждая запись обязана указать `Size`"
+      b: Запись сохранится с размером 0, не будет учитываться в лимите, и программа выведет `Alice`
+      c: Кэш сам вычислит размер строки в байтах, сохранит запись, и программа выведет `Alice`
+      d: Запись молча не попадёт в кэш, `Get` вернёт `null`, и программа выведет пустую строку
+    optionExplanations:
+      b: Размера по умолчанию нет. Запись без `Size` при включённом `SizeLimit` считается ошибкой использования, и кэш отказывается её принимать, а не подставляет ноль.
+      c: У `MemoryCache` нет механизма измерять объекты, поэтому у лимита нет единиц измерения. Размер записи всегда задаёт приложение.
+      d: Молчаливый отказ бывает в другом случае - когда у записи указан `Size`, но сумма размеров превысила бы `SizeLimit`. Запись совсем без размера приводит к исключению.
+    answer: "`Set` выбросит `InvalidOperationException`: при заданном `SizeLimit` каждая запись обязана указать `Size`."
+    explanation: |
+      `MemoryCache` не умеет измерять объекты, поэтому `SizeLimit` - это число в условных единицах, которые выбирает
+      приложение: например, 1 на запись (тогда лимит - это число записей) или приблизительный размер в байтах.
+      Раз кэш не может посчитать размер сам, при включённом лимите каждая запись должна его объявить через
+      `Size` или `SetSize`. Если размер не указан, при фиксации записи (здесь внутри `Set`) метод `MemoryCache.SetEntry`
+      проверяет это условие и выбрасывает `InvalidOperationException`.
+
+      Исправление: `new MemoryCacheEntryOptions { Size = 1, AbsoluteExpirationRelativeToNow = ... }` или
+      `.SetSize(1)`. Если же запись с размером не помещается в лимит, она просто не сохраняется, без исключения.
+
+      Практическое следствие: не задавайте `SizeLimit` для общего `IMemoryCache` из `AddMemoryCache`, если в него
+      пишет код, который не знает про лимит (сторонние библиотеки, компоненты фреймворка). Для кэша с лимитом
+      лучше создать отдельный экземпляр `MemoryCache`. Поведение описано для .NET 10.
+    linkTitles:
+      - Кэширование в памяти в ASP.NET Core
+      - Исходный код MemoryCache в репозитории dotnet/runtime
+  en:
+    title: What happens when MemoryCache has a SizeLimit and an entry does not set Size?
+    prompt: |
+      The cache is created with `SizeLimit = 1024`, and an entry is added without setting `Size`.
+      What happens when this code runs on .NET 10?
+    hint: Can `MemoryCache` find out by itself how much a string or an arbitrary object "weighs"?
+    options:
+      a: "`Set` throws `InvalidOperationException`: with `SizeLimit` set, every entry must specify `Size`"
+      b: The entry is stored with size 0, does not count toward the limit, and the program prints `Alice`
+      c: The cache computes the size of the string in bytes itself, stores the entry, and the program prints `Alice`
+      d: The entry is silently not cached, `Get` returns `null`, and the program prints an empty line
+    optionExplanations:
+      b: There is no default size. An entry without `Size` while `SizeLimit` is on is treated as a usage error, and the cache rejects it instead of assuming zero.
+      c: "`MemoryCache` has no mechanism to measure objects, which is why the limit has no unit. The application always supplies the entry size."
+      d: A silent rejection happens in a different case - when the entry has a `Size` but the total would exceed `SizeLimit`. An entry with no size at all causes an exception.
+    answer: "`Set` throws `InvalidOperationException`: with `SizeLimit` set, every entry must specify `Size`."
+    explanation: |
+      `MemoryCache` cannot measure objects, so `SizeLimit` is a number in arbitrary units chosen by the application:
+      for example 1 per entry (then the limit is an entry count) or an approximate size in bytes.
+      Because the cache cannot compute a size itself, every entry must declare one through `Size` or `SetSize`
+      once the limit is on. If the size is missing, the `MemoryCache.SetEntry` method checks this condition when the
+      entry is committed (here, inside `Set`) and throws `InvalidOperationException`.
+
+      The fix is `new MemoryCacheEntryOptions { Size = 1, AbsoluteExpirationRelativeToNow = ... }` or
+      `.SetSize(1)`. If an entry with a size does not fit into the limit, it is simply not stored, with no exception.
+
+      Practical consequence: do not set `SizeLimit` on the shared `IMemoryCache` from `AddMemoryCache` if code that
+      does not know about the limit writes to it (third-party libraries, framework components). For a size-limited
+      cache, create a separate `MemoryCache` instance. The behaviour is described for .NET 10.
+    linkTitles:
+      - Cache in-memory in ASP.NET Core
+      - MemoryCache source code in the dotnet/runtime repository
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"
+  noRunReason: MemoryCache lives in Microsoft.Extensions.Caching.Memory, which is not part of the base shared framework available in the sandbox.

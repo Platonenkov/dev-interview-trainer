@@ -1,0 +1,134 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WM9WJA7KZJW1EKES4H
+slug: library-async-wrappers-policy
+stack: dotnet
+topic: async
+level: lead
+type: open
+grading: self
+tags: [library-design, api-design, sync-over-async, async-over-sync]
+links:
+  - url: https://devblogs.microsoft.com/dotnet/should-i-expose-asynchronous-wrappers-for-synchronous-methods/
+    lang: en
+    kind: article
+  - url: https://devblogs.microsoft.com/dotnet/should-i-expose-synchronous-wrappers-for-asynchronous-methods/
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/archive/msdn-magazine/2013/march/async-await-best-practices-in-asynchronous-programming
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Нужны ли общей библиотеке синхронная и асинхронная версии каждого метода?
+    prompt: |
+      Ваша команда сопровождает общую внутреннюю библиотеку на .NET 10. Её используют сервисы на ASP.NET Core, клиент на WPF
+      и консольные утилиты. Коллеги просят добавить к каждому публичному методу и синхронную, и асинхронную версию,
+      «чтобы каждый выбрал, что ему удобно». Какую политику вы установите, как будете её соблюдать и почему?
+    hint: Что обещает вызывающему коду суффикс `Async` и что библиотека на самом деле знает о потоках и окружении, из которых её вызовут?
+    answer: |
+      **Политика: API библиотеки отражает природу работы, а не пожелания вызывающих.**
+
+      1. **Асинхронный метод - только там, где работа действительно асинхронная.** Это ввод-вывод, у которого есть
+         асинхронный API нижнего уровня: сеть, файлы, база данных. Внутри такого метода асинхронность сквозная:
+         `await` на каждом шаге, `ConfigureAwait(false)`, параметр `CancellationToken`, возврат `Task` или `Task<T>`
+         (`ValueTask<T>` - только после замера).
+      2. **Никакого async over sync.** Если работа вычислительная или по природе синхронная, библиотека даёт только
+         синхронный метод. Обёртка вида `Task.Run(() => Compute(x))` с именем `ComputeAsync` запрещена. WPF-клиент,
+         которому нужен отзывчивый интерфейс, сам пишет `await Task.Run(() => lib.Compute(x))`, а сервис вызывает
+         метод напрямую.
+      3. **Никакого sync over async.** Синхронные обёртки через `.Result`, `.Wait()` или `GetAwaiter().GetResult()`
+         запрещены. Синхронная версия допустима, только если она синхронна на всю глубину и использует синхронные API
+         нижнего уровня (например, `HttpClient.Send`, который появился в .NET 5 и есть в .NET 10), имеет свои тесты и на неё
+         есть реальный спрос. Иначе вызывающий код переводится на `async`.
+      4. **Соблюдение правила.** Политика записывается в руководство библиотеки или ADR, новые публичные методы проходят
+         ревью API, в CI работают анализаторы: на блокирующие ожидания (например, VSTHRD002 из
+         Microsoft.VisualStudio.Threading.Analyzers) и CA2007 для `ConfigureAwait` в коде библиотеки. Уже
+         существующие обёртки помечаются `[Obsolete]` с указанием замены и удаляются в следующей мажорной версии.
+      5. **Ответ на просьбу коллег.** Выяснить реальную потребность за просьбой «дайте обе версии»: отзывчивость UI
+         решается `Task.Run` на стороне вызова, синхронный интерфейс в старом коде - постепенным переводом цепочки
+         вызовов на `async`, а не блокирующей обёрткой в библиотеке.
+    explanation: |
+      Главный аргумент: решение «заблокировать поток» или «перенести работу в другой поток» зависит от окружения,
+      а окружение знает только вызывающий код. Библиотека, которая принимает это решение за него, ошибается хотя бы
+      для части потребителей.
+
+      **Почему async over sync вредна.** Обёртка через `Task.Run` не освобождает поток: она просто занимает поток пула
+      вместо вызывающего и добавляет накладные расходы на планирование. На сервере, где запрос и так выполняется в потоке пула,
+      это чистый проигрыш для масштабируемости. Хуже того, суффикс `Async` вводит в заблуждение: потребитель думает,
+      что метод не держит поток во время ожидания, и строит на этом расчёты нагрузки. Масштабируемость даёт только настоящий
+      асинхронный ввод-вывод, а обёртка его не создаёт. Исключение, которое описывает Стивен Туб, - базовые классы вроде
+      `Stream`, где асинхронный метод по умолчанию реализован поверх синхронного, чтобы наследники могли переопределить его
+      настоящей асинхронной реализацией. Это точка расширения, а не обёртка для удобства.
+
+      **Почему sync over async вредна.** Этот случай Туб разбирает во второй статье. Блокирующее ожидание задачи в окружении
+      с `SynchronizationContext` (UI-поток WPF и других настольных фреймворков, классический ASP.NET) может привести
+      к взаимной блокировке, а в ASP.NET Core оно занимает поток пула и под нагрузкой ведёт к голоданию пула потоков.
+      Библиотека не знает, в каком окружении её вызовут, поэтому безопасной такая обёртка быть не может.
+
+      Наконец, удвоенный API - это удвоенные тесты, документация и поддержка. Для руководителя важно не только
+      сформулировать правило, но и закрепить его ревью, анализаторами и понятным путём миграции для существующих обёрток.
+      Типичная ошибка - считать, что «асинхронная версия» - это синхронная, завёрнутая в `Task.Run`. Названные API
+      и анализаторы описаны для .NET 10.
+    linkTitles:
+      - "Стивен Туб: Should I expose asynchronous wrappers for synchronous methods?"
+      - "Стивен Туб: Should I expose synchronous wrappers for asynchronous methods?"
+      - "Async/await: рекомендации по асинхронному программированию"
+  en:
+    title: Should a shared library offer both sync and async versions of every method?
+    prompt: |
+      Your team maintains a shared internal library on .NET 10. It is used by ASP.NET Core services, a WPF client and console
+      tools. Colleagues ask you to add both a synchronous and an asynchronous version of every public method,
+      "so everyone can pick what suits them". What policy do you set, how do you enforce it, and why?
+    hint: What does an `Async` suffix promise a caller, and what does a library actually know about the threads and environment it will be called from?
+    answer: |
+      **Policy: the library API reflects the nature of the work, not the wishes of the callers.**
+
+      1. **An async method only where the work is truly asynchronous.** That is I/O with an asynchronous API underneath:
+         network, files, a database. Inside such a method asynchrony goes all the way: `await` at every step,
+         `ConfigureAwait(false)`, a `CancellationToken` parameter, a `Task` or `Task<T>` return type
+         (`ValueTask<T>` only after measuring).
+      2. **No async over sync.** If the work is CPU-bound or synchronous by nature, the library exposes only a
+         synchronous method. A wrapper such as `Task.Run(() => Compute(x))` named `ComputeAsync` is not allowed. The WPF
+         client that needs a responsive UI writes `await Task.Run(() => lib.Compute(x))` itself, and a service calls the
+         method directly.
+      3. **No sync over async.** Synchronous wrappers built on `.Result`, `.Wait()` or `GetAwaiter().GetResult()` are
+         not allowed. A synchronous version is acceptable only if it is synchronous all the way down and uses synchronous
+         APIs of the lower layer (for example `HttpClient.Send`, added in .NET 5 and available in .NET 10), has its own
+         tests, and there is real demand for it. Otherwise the calling code moves to `async`.
+      4. **Enforcement.** The policy is written into the library guidelines or an ADR, new public methods go through API
+         review, and CI runs analyzers: one for blocking waits (for example VSTHRD002 from
+         Microsoft.VisualStudio.Threading.Analyzers) and CA2007 for `ConfigureAwait` in library code. Existing
+         wrappers are marked `[Obsolete]` with the replacement named and removed in the next major version.
+      5. **Answering the colleagues' request.** Find the real need behind "give us both versions": UI responsiveness is
+         solved with `Task.Run` at the call site, a synchronous interface in old code by gradually moving the call chain
+         to `async`, not by a blocking wrapper in the library.
+    explanation: |
+      The main argument: the decision to block a thread or to move work to another thread depends on the environment,
+      and only the calling code knows the environment. A library that makes this decision on the caller's behalf is wrong
+      for at least some of its consumers.
+
+      **Why async over sync is harmful.** A `Task.Run` wrapper does not free a thread: it simply occupies a thread pool
+      thread instead of the caller's and adds scheduling overhead. On a server, where the request already runs on a pool
+      thread, this is a pure loss for scalability. Worse, the `Async` suffix misleads: the consumer believes the method does
+      not hold a thread while waiting and builds capacity estimates on that. Scalability comes only from truly asynchronous
+      I/O, and a wrapper does not create it. The exception Stephen Toub describes is base classes such as `Stream`, where
+      the default asynchronous method is implemented over the synchronous one so that derived types can override it with a
+      truly asynchronous implementation. That is an extensibility point, not a convenience wrapper.
+
+      **Why sync over async is harmful.** Toub covers this case in the second post. Blocking on a task in an environment
+      with a `SynchronizationContext` (the UI thread of WPF and other desktop frameworks, classic ASP.NET) can cause a
+      deadlock, and in ASP.NET Core it holds a thread pool thread and under load leads to thread pool starvation.
+      The library does not know which environment calls it, so such a wrapper cannot be safe.
+
+      Finally, a doubled API means doubled tests, documentation and maintenance. For a lead it matters not only to state
+      the rule but to make it stick with review, analyzers and a clear migration path for existing wrappers.
+      A typical mistake is to think that "the async version" is the sync one wrapped in `Task.Run`. The APIs and
+      analyzers named here are described for .NET 10.
+    linkTitles:
+      - "Stephen Toub: Should I expose asynchronous wrappers for synchronous methods?"
+      - "Stephen Toub: Should I expose synchronous wrappers for asynchronous methods?"
+      - "Async/await: best practices in asynchronous programming"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"

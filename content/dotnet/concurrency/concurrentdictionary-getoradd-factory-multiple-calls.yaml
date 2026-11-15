@@ -1,0 +1,96 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNHW657J4177A1AWZP
+slug: concurrentdictionary-getoradd-factory-multiple-calls
+stack: dotnet
+topic: concurrency
+level: middle
+type: single
+grading: auto
+tags: [concurrentdictionary, concurrent-collections, getoradd, lazy]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.collections.concurrent.concurrentdictionary-2.getoradd
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/collections/thread-safe/how-to-add-and-remove-items
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Сколько раз вызывается valueFactory в ConcurrentDictionary.GetOrAdd при одновременных вызовах?
+    prompt: |
+      Несколько потоков в .NET 10 одновременно вызывают `cache.GetOrAdd(key, k => CreateValue(k))` у общего
+      `ConcurrentDictionary<string, Report>` с одним и тем же ключом, которого в словаре ещё нет. Других операций
+      со словарём в это время нет, ключ никто не удаляет.
+
+      Что гарантирует `ConcurrentDictionary`?
+    hint: Выполняется ли ваш делегат под внутренней блокировкой словаря? Что могут сделать два потока, которые одновременно не нашли ключ?
+    options:
+      a: "`CreateValue` вызывается ровно один раз: остальные потоки ждут его завершения и получают тот же результат"
+      b: "`CreateValue` может быть вызван несколько раз, но в словарь попадает только одно значение, и все вызовы `GetOrAdd` возвращают именно его"
+      c: "Каждый поток получает результат своего вызова `CreateValue`, а в словаре остаётся значение, записанное последним"
+      d: "Второй одновременный вызов выбрасывает `ArgumentException`, потому что элемент с таким ключом уже добавлен"
+    optionExplanations:
+      a: "Такой гарантии нет. Делегат вызывается вне блокировок словаря, поэтому несколько потоков, не нашедших ключ, могут одновременно выполнить свою фабрику. Поведение «ровно один раз» нужно обеспечивать самому, например через `Lazy<T>`."
+      c: "Значение не перезаписывается. Добавление выполняется под блокировкой, и поток, который проиграл гонку, видит уже добавленное значение: его собственный результат отбрасывается, а возвращается сохранённый."
+      d: "`GetOrAdd` не выбрасывает исключение при существующем ключе: в этом и смысл метода. `ArgumentException` при дубликате ключа выбрасывает `Dictionary<TKey, TValue>.Add`."
+    answer: "`CreateValue` может быть вызван несколько раз, но в словарь попадает только одно значение, и все вызовы `GetOrAdd` возвращают именно его."
+    explanation: |
+      `ConcurrentDictionary` использует мелкозернистые блокировки для записи, но пользовательский делегат `valueFactory`
+      вызывается вне этих блокировок: выполнять неизвестный код под блокировкой опасно (долгая работа, взаимная блокировка).
+      Поэтому `GetOrAdd` с фабрикой не атомарен целиком. Несколько потоков могут одновременно не найти ключ и каждый
+      вызвать фабрику. Затем под блокировкой добавляется только первое значение, а остальные потоки обнаруживают, что
+      ключ уже есть, и возвращают сохранённое значение, отбросив своё.
+
+      Если у фабрики есть побочные эффекты или она дорогая (запрос в базу, создание соединения, объект `IDisposable`,
+      который потом никто не освободит), храните в словаре `Lazy<T>`:
+      `cache.GetOrAdd(key, k => new Lazy<Report>(() => CreateValue(k))).Value`. Лишние объекты `Lazy<T>` создать
+      дёшево, а `Value` вычисляется только у того, что попал в словарь, и по умолчанию потокобезопасно, ровно один раз.
+    linkTitles:
+      - Метод ConcurrentDictionary<TKey,TValue>.GetOrAdd
+      - Добавление и удаление элементов в ConcurrentDictionary
+  en:
+    title: How many times is valueFactory called by ConcurrentDictionary.GetOrAdd under concurrent calls?
+    prompt: |
+      Several threads in .NET 10 call `cache.GetOrAdd(key, k => CreateValue(k))` at the same time on a shared
+      `ConcurrentDictionary<string, Report>` with the same key, which is not in the dictionary yet. No other operations
+      run on the dictionary meanwhile, and nobody removes the key.
+
+      What does `ConcurrentDictionary` guarantee?
+    hint: Does your delegate run under the dictionary's internal lock? What can two threads do if both fail to find the key at the same time?
+    options:
+      a: "`CreateValue` is called exactly once: the other threads wait for it to finish and receive the same result"
+      b: "`CreateValue` may be called several times, but only one value is stored in the dictionary, and every `GetOrAdd` call returns that value"
+      c: "Each thread gets the result of its own `CreateValue` call, and the dictionary keeps the value written last"
+      d: "The second concurrent call throws `ArgumentException` because an item with that key has already been added"
+    optionExplanations:
+      a: "There is no such guarantee. The delegate runs outside the dictionary's locks, so several threads that did not find the key can run their factories at the same time. Exactly-once behaviour is your job, for example with `Lazy<T>`."
+      c: "The value is not overwritten. The add happens under a lock, and a thread that lost the race sees the value already added: its own result is discarded and the stored value is returned."
+      d: "`GetOrAdd` does not throw when the key exists: that is the whole point of the method. `ArgumentException` on a duplicate key comes from `Dictionary<TKey, TValue>.Add`."
+    answer: "`CreateValue` may be called several times, but only one value is stored in the dictionary, and every `GetOrAdd` call returns that value."
+    explanation: |
+      `ConcurrentDictionary` uses fine-grained locks for writes, but the user-supplied `valueFactory` delegate is called
+      outside those locks: running unknown code under a lock is dangerous (long work, deadlocks). So `GetOrAdd` with a
+      factory is not atomic as a whole. Several threads can miss the key at the same time and each call the factory.
+      Then, under the lock, only the first value is added, and the other threads find the key already present and
+      return the stored value, discarding their own.
+
+      If the factory has side effects or is expensive (a database query, opening a connection, an `IDisposable` object
+      that nobody will dispose later), store `Lazy<T>` in the dictionary:
+      `cache.GetOrAdd(key, k => new Lazy<Report>(() => CreateValue(k))).Value`. Extra `Lazy<T>` objects are cheap to
+      create, and `Value` is computed only for the one that made it into the dictionary, thread-safely and exactly once by default.
+    linkTitles:
+      - ConcurrentDictionary<TKey,TValue>.GetOrAdd method
+      - How to add and remove items from a ConcurrentDictionary
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

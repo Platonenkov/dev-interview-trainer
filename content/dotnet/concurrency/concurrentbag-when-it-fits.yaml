@@ -1,0 +1,128 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WN2YM7WVMQ0SW0CYF0
+slug: concurrentbag-when-it-fits
+stack: dotnet
+topic: concurrency
+level: senior
+type: open
+grading: self
+tags: [concurrentbag, concurrent-collections, work-stealing, producer-consumer, channels]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.collections.concurrent.concurrentbag-1
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/collections/thread-safe/when-to-use-a-thread-safe-collection
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/extensions/channels
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Когда ConcurrentBag<T> подходит, а когда лучше ConcurrentQueue<T> или Channel<T>?
+    prompt: |
+      Как устроен `ConcurrentBag<T>` в .NET 10 и что из этого следует для выбора коллекции? В каких сценариях
+      он действительно лучший выбор, а в каких стоит взять `ConcurrentQueue<T>` или `Channel<T>`?
+    hint: Где хранится элемент, который добавил поток, и откуда возьмёт элемент поток, который сам ничего не добавлял?
+    answer: |
+      **Как устроен.** У каждого потока, который добавляет элементы, есть своя локальная очередь внутри мешка
+      (по принципу work stealing).
+
+      - `Add` кладёт элемент в очередь текущего потока, почти без конкуренции с другими потоками.
+      - `TryTake` сначала берёт элемент из своей очереди: последний добавленный этим потоком.
+      - Если своя очередь пуста, поток перебирает очереди других потоков и «крадёт» элемент. Это медленный путь:
+        нужна синхронизация с чужой очередью и её владельцем.
+      - `Count`, `ToArray` и перечисление делают согласованный снимок и для этого на время блокируют очереди
+        всех потоков. В горячем цикле это дорого.
+
+      **Когда подходит.** Когда одни и те же потоки и добавляют, и забирают элементы, а порядок не важен:
+
+      - пул переиспользуемых объектов, где рабочий поток возвращает объект и сам же его снова берёт;
+      - обработчики, которые порождают подзадачи и сами их выполняют, а простаивающие потоки подбирают чужую работу;
+      - сбор результатов из `Parallel.ForEach`, если порядок не нужен и результат читается после цикла: добавления
+        идут в локальные очереди без конкуренции. Здесь стоит сравнить и с локальными аккумуляторами
+        (`localInit`/`localFinally`).
+
+      **Когда не подходит.** Классический конвейер «производители - потребители», где это разные потоки:
+
+      - у потребителя своя очередь всегда пуста, поэтому каждый `TryTake` идёт по медленному пути с кражей;
+      - порядок FIFO не гарантирован, задачи могут обрабатываться не в порядке поступления;
+      - ждать появления элемента нельзя: `TryTake` просто возвращает `false`, и потребитель вынужден опрашивать коллекцию.
+
+      Здесь лучше:
+
+      - `ConcurrentQueue<T>`: FIFO, рассчитана на то, что производители и потребители - разные потоки;
+      - `Channel<T>`: асинхронное ожидание (`ReadAsync`, `ReadAllAsync`), ограниченная ёмкость с обратным давлением
+        на производителей и сигнал завершения (`Writer.Complete()`);
+      - `BlockingCollection<T>`, если нужно синхронное блокирующее ожидание.
+    explanation: |
+      Документация прямо говорит, что `ConcurrentBag<T>` оптимизирован для сценариев, где один и тот же поток
+      и производит, и потребляет данные. В чистом сценарии «производитель - потребитель» он, скорее всего, будет
+      медленнее других потокобезопасных коллекций, а в смешанном сценарии обычно быстрее и лучше масштабируется.
+      Причина в устройстве: быстрый путь существует только для своей локальной очереди потока, всё остальное -
+      кража из чужих очередей.
+
+      Типичная ошибка - выбрать мешок потому, что «порядок не важен», для очереди заданий между разными потоками.
+      Неупорядоченность - не причина брать `ConcurrentBag<T>`. Решает схема доступа: кто добавляет и кто забирает.
+      Если это разные потоки, нужен FIFO или асинхронное ожидание, то подходят `ConcurrentQueue<T>` или `Channel<T>`.
+      Сильный ответ объясняет выбор через устройство коллекции, а не перечисляет классы. Описание относится
+      к реализации в .NET 10.
+    linkTitles:
+      - Класс ConcurrentBag<T>
+      - Когда использовать потокобезопасную коллекцию
+      - Каналы в .NET (System.Threading.Channels)
+  en:
+    title: When does ConcurrentBag<T> fit, and when are ConcurrentQueue<T> or Channel<T> better?
+    prompt: |
+      How is `ConcurrentBag<T>` implemented in .NET 10, and what does that mean for choosing a collection? In which
+      scenarios is it really the best choice, and in which should you use `ConcurrentQueue<T>` or `Channel<T>`?
+    hint: Where is an item stored after a thread adds it, and where does a thread that added nothing itself take an item from?
+    answer: |
+      **How it works.** Every thread that adds items gets its own local queue inside the bag (a work-stealing design).
+
+      - `Add` puts the item into the current thread's queue, with almost no contention with other threads.
+      - `TryTake` first takes an item from the thread's own queue: the one this thread added last.
+      - If its own queue is empty, the thread walks the queues of other threads and "steals" an item. This is the slow
+        path: it has to synchronize with the other queue and its owner.
+      - `Count`, `ToArray` and enumeration build a consistent snapshot, and for that they briefly lock the queues of
+        all threads. In a hot loop this is expensive.
+
+      **When it fits.** When the same threads both add and take items, and order does not matter:
+
+      - a pool of reusable objects where a worker thread returns an object and later takes one again itself;
+      - workers that spawn subtasks and run them themselves, while idle threads pick up other workers' work;
+      - collecting results from `Parallel.ForEach` when order is not needed and the result is read after the loop: the
+        adds go to local queues without contention. Here it is also worth comparing with local accumulators
+        (`localInit`/`localFinally`).
+
+      **When it does not fit.** A classic producer-consumer pipeline where producers and consumers are different threads:
+
+      - the consumer's own queue is always empty, so every `TryTake` takes the slow stealing path;
+      - FIFO order is not guaranteed, so jobs may be processed out of arrival order;
+      - you cannot wait for an item: `TryTake` just returns `false`, and the consumer has to poll.
+
+      Better choices here:
+
+      - `ConcurrentQueue<T>`: FIFO, designed for producers and consumers on different threads;
+      - `Channel<T>`: asynchronous waiting (`ReadAsync`, `ReadAllAsync`), bounded capacity with backpressure on
+        producers, and a completion signal (`Writer.Complete()`);
+      - `BlockingCollection<T>` when you need synchronous blocking waits.
+    explanation: |
+      The documentation says plainly that `ConcurrentBag<T>` is optimized for scenarios where the same thread both
+      produces and consumes data. In a pure producer-consumer scenario it will probably be slower than the other
+      thread-safe collections, while in a mixed scenario it is usually faster and scales better. The reason is the
+      design: the fast path exists only for the thread's own local queue, and everything else is stealing from other queues.
+
+      A typical mistake is to pick the bag "because order does not matter" for a job queue between different threads.
+      Being unordered is not a reason to use `ConcurrentBag<T>`. The access pattern decides: who adds and who takes.
+      If those are different threads, or you need FIFO or asynchronous waiting, use `ConcurrentQueue<T>` or `Channel<T>`.
+      A strong answer explains the choice through how the collection is built rather than listing classes. The
+      description refers to the .NET 10 implementation.
+    linkTitles:
+      - ConcurrentBag<T> class
+      - When to use a thread-safe collection
+      - Channels in .NET (System.Threading.Channels)
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

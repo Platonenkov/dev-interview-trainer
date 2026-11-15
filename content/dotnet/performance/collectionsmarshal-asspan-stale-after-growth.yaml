@@ -1,0 +1,115 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WP9Y41JYBZZQCHXN8S
+slug: collectionsmarshal-asspan-stale-after-growth
+stack: dotnet
+topic: performance
+level: senior
+type: output
+grading: auto
+tags: [collectionsmarshal, span, list, allocations]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    using System.Runtime.InteropServices;
+
+    List<int> list = new(2) { 1, 2 };
+    Span<int> span = CollectionsMarshal.AsSpan(list);
+    list.Add(3);
+    span[0] = 99;
+    Console.Write($"{list[0]} {span[0]}");
+expect:
+  kind: output
+  value: "1 99"
+acceptedOutputs: ["1 99"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "1 99" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "99 99" }
+  - id: c
+    correct: false
+    expect: { kind: exception, value: System.InvalidOperationException }
+  - id: d
+    correct: false
+    expect: { kind: compile-error }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.runtime.interopservices.collectionsmarshal.asspan
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.list-1.capacity
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что выведет запись через CollectionsMarshal.AsSpan после роста List<T>?
+    prompt: |
+      Список создан с ёмкостью 2 и содержит два элемента. Код получает `Span<int>` через `CollectionsMarshal.AsSpan`,
+      добавляет третий элемент, а затем пишет `99` в `span[0]`. Что выведет программа на .NET 10?
+    hint: На какой массив указывает `span`, если при `Add` списку пришлось увеличить ёмкость?
+    options:
+      a: "1 99"
+      b: "99 99"
+      c: Исключение `InvalidOperationException`
+      d: Ошибка компиляции
+    optionExplanations:
+      b: "Так было бы, если бы `span` по-прежнему смотрел во внутренний массив списка. Но `Add` при заполненной ёмкости создал новый массив и скопировал туда элементы, а `span` остался на старом массиве."
+      c: "`Span<int>` - это просто окно на массив, он не знает о версии списка и ничего не проверяет. Изменение коллекции во время работы отслеживает только перечислитель `List<T>`, здесь он не используется."
+      d: "Код корректен: `CollectionsMarshal` находится в `System.Runtime.InteropServices`, а локальная переменная `Span<int>` допустима в операторах верхнего уровня, потому что в них нет `await`."
+    answer: "`1 99`: запись ушла в старый массив, который список уже не использует."
+    explanation: |
+      `CollectionsMarshal.AsSpan` возвращает `Span<T>` прямо поверх внутреннего массива `List<T>` длиной `Count`, без
+      копирования. Это и есть его смысл: доступ к элементам без проверок и выделений памяти. Но span привязан к конкретному
+      массиву, а не к списку.
+
+      Список заполнен до ёмкости (2 из 2), поэтому `Add(3)` выделяет новый, больший массив, копирует в него `1` и `2`
+      и добавляет `3`. Старый массив списку больше не нужен, но `span` всё ещё ссылается на него. Запись `span[0] = 99`
+      меняет старый массив: `span[0]` читает `99`, а `list[0]` читает новый массив и возвращает `1`. Изменение молча
+      теряется, исключения нет.
+
+      Документация прямо требует не добавлять и не удалять элементы, пока span используется. Правило: после любого
+      изменения размера списка заново получать span, а если размер известен заранее - задать ёмкость до вызова
+      `AsSpan` (например, через конструктор или `EnsureCapacity`). Поведение проверено для .NET 10; `CollectionsMarshal.AsSpan`
+      доступен начиная с .NET 5.
+    linkTitles:
+      - Метод CollectionsMarshal.AsSpan
+      - Свойство List<T>.Capacity
+  en:
+    title: What does a write through CollectionsMarshal.AsSpan print after a List<T> grows?
+    prompt: |
+      The list is created with capacity 2 and holds two items. The code gets a `Span<int>` with `CollectionsMarshal.AsSpan`,
+      adds a third item and then writes `99` to `span[0]`. What does the program print on .NET 10?
+    hint: Which array does `span` point to if the list had to increase its capacity during `Add`?
+    options:
+      a: "1 99"
+      b: "99 99"
+      c: "`InvalidOperationException`"
+      d: Compile error
+    optionExplanations:
+      b: "That would happen if `span` still looked at the list's backing array. But `Add` at full capacity created a new array and copied the items into it, while `span` stayed on the old array."
+      c: "A `Span<int>` is just a window over an array; it knows nothing about the list's version and checks nothing. Only the `List<T>` enumerator detects modification of the collection, and no enumerator is used here."
+      d: "The code is valid: `CollectionsMarshal` lives in `System.Runtime.InteropServices`, and a `Span<int>` local is allowed in top-level statements because they contain no `await`."
+    answer: "`1 99`: the write went to the old array, which the list no longer uses."
+    explanation: |
+      `CollectionsMarshal.AsSpan` returns a `Span<T>` directly over the internal array of the `List<T>`, of length `Count`,
+      without copying. That is the whole point: element access without checks or allocations. But the span is tied to a
+      specific array, not to the list.
+
+      The list is full (2 of 2), so `Add(3)` allocates a new, larger array, copies `1` and `2` into it and appends `3`.
+      The list no longer needs the old array, but `span` still refers to it. The write `span[0] = 99` changes the old
+      array: `span[0]` reads `99`, while `list[0]` reads the new array and returns `1`. The change is silently lost, and
+      no exception is thrown.
+
+      The documentation explicitly says not to add or remove items while the span is in use. The rule: get the span again
+      after any change to the list's size, and if the size is known up front, set the capacity before calling `AsSpan`
+      (for example through the constructor or `EnsureCapacity`). The behaviour was checked for .NET 10;
+      `CollectionsMarshal.AsSpan` is available since .NET 5.
+    linkTitles:
+      - CollectionsMarshal.AsSpan method
+      - List<T>.Capacity property
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

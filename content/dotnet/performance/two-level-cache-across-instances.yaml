@@ -1,0 +1,163 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WPAPVYWQYK44EA8FQ2
+slug: two-level-cache-across-instances
+stack: dotnet
+topic: performance
+level: architect
+type: open
+grading: self
+tags: [caching, hybridcache, distributed-cache, cache-invalidation, consistency, scaling]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/performance/caching/hybrid
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/performance/caching/distributed
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как спроектировать кэш для сервиса на многих экземплярах, если локальные кэши расходятся?
+    prompt: |
+      Сервис на .NET 10 масштабирован до 12 экземпляров за балансировщиком, и каждый экземпляр кэширует данные
+      в `IMemoryCache`. Пользователи жалуются: после изменения цены одна вкладка показывает новую цену, а другая
+      старую, в зависимости от того, какой экземпляр ответил.
+
+      Как вы спроектируете кэширование для нескольких экземпляров и на какие компромиссы пойдёте?
+    hint: Какую задачу решает кэш в памяти процесса, какую - общий кэш, и сколько времени устаревшее значение может прожить в каждом из них?
+    answer: |
+      1. **Назвать причину.** У каждого экземпляра свой кэш, заполненный в своё время. Запись в лучшем случае
+         очищает кэш только того экземпляра, который её обработал, остальные отдают старое значение до истечения
+         срока жизни записи. По сути это 12 несинхронизированных реплик. Sticky sessions лишь маскируют проблему:
+         при деплое, перебалансировке или падении экземпляра пользователь снова попадает на чужой кэш.
+      2. **Разделить данные по допустимой устарелости.** Справочники терпят минуты, цены и каталог - секунды
+         или требуют инвалидации, а остатки, балансы и всё, на чём принимается решение о деньгах, на критичном
+         пути читают из источника. Для каждого класса явно записать окно устарелости.
+      3. **Два уровня кэша.**
+         - L1 - кэш в памяти процесса: доступ без сети, но своя копия на каждом экземпляре.
+         - L2 - общий распределённый кэш (например, Redis через `IDistributedCache`): одна копия на все экземпляры,
+           но каждый доступ - это сетевой вызов и сериализация.
+         - Чтение идёт L1, затем L2, затем источник, а результат заполняет оба уровня. Новый или перезапущенный
+           экземпляр прогревается из L2, а не из базы.
+      4. **Реализация в .NET.** `HybridCache` из пакета `Microsoft.Extensions.Caching.Hybrid` (линейка пакетов
+         .NET 9), регистрация через `AddHybridCache()`. Он может использовать зарегистрированный `IDistributedCache`
+         как вторичный кэш (L2) и добавляет поверх него первичный кэш в памяти процесса (L1) и защиту от stampede:
+         параллельные промахи по одному ключу внутри экземпляра ждут одного вызова фабрики в `GetOrCreateAsync`.
+         В `HybridCacheEntryOptions` срок жизни задаётся отдельно для L2 (`Expiration`) и для L1
+         (`LocalCacheExpiration`). Инвалидация - через `RemoveAsync` (удаляет запись из первичного и вторичного
+         кэша) и теги (`RemoveByTagAsync`: логическая инвалидация, старые значения хранятся до истечения, но
+         считаются промахом). Про сериализацию: L1 у `HybridCache` отдаёт один и тот же экземпляр без
+         десериализации только для типов, помеченных как неизменяемые (`sealed` и `[ImmutableObject(true)]`),
+         иначе каждое чтение десериализует новую копию, поэтому для горячих ключей лучше кэшировать неизменяемые типы.
+      5. **Ограничить устарелость L1.** Короткий `LocalCacheExpiration` (секунды) - это верхняя граница
+         расхождения между экземплярами. Нельзя рассчитывать, что удаление на одном экземпляре очистит L1 остальных:
+         документация `HybridCache` описывает удаление из первичного и вторичного кэша, но не описывает оповещение
+         кэшей в памяти других экземпляров. Поэтому запись в L1 другого экземпляра может прожить до своего
+         `LocalCacheExpiration`. Если окно нужно сократить, при записи экземпляр обновляет L2 и свой L1 и публикует
+         сообщение об инвалидации (Redis pub/sub, шина сообщений), по которому остальные удаляют ключ из своего L1;
+         этот механизм добавляют сами или берут библиотеку с такой функцией. Сообщения могут теряться или
+         запаздывать, поэтому короткий срок жизни записей в L1 остаётся страховкой.
+      6. **Спроектировать отказы.** Таймауты на L2. Если Redis недоступен, сервис идёт в источник, но с ограничением
+         параллелизма, чтобы не уронить базу. Против одновременного истечения на всех экземплярах помогает
+         разброс (jitter) срока жизни, для самых дорогих ключей - фоновое обновление до истечения.
+      7. **Измерять.** Доля попаданий по каждому уровню, задержка L2, нагрузка на источник, возраст отдаваемых
+         данных. Память L1 ограничить: данные дублируются в каждом экземпляре.
+
+      **Компромиссы.**
+
+      | Вариант | Плюсы | Минусы |
+      |---|---|---|
+      | Только L1 | Самый быстрый, нет внешней зависимости | Экземпляры расходятся, N копий в памяти, N промахов на каждый ключ |
+      | Только L2 | Одна копия, расхождение только с источником | Сеть и сериализация на каждый запрос, Redis становится критичной зависимостью |
+      | L1 + L2 | Задержка L1 для горячих ключей, нагрузку на базу снимает L2 | Окно устарелости равно сроку жизни в L1 или задержке доставки инвалидации, сложнее эксплуатация |
+
+      Строгой согласованности кэш не даёт: где она нужна, данные читаются из источника.
+    explanation: |
+      Главная мысль: кэш - это реплика данных, и решение о кэшировании - это решение о согласованности, а не только
+      о скорости. N кэшей в памяти процесса - это N реплик без протокола синхронизации, поэтому расхождение
+      неизбежно. Двухуровневая схема разводит две задачи: L1 убирает сетевую задержку на горячих ключах, L2 даёт
+      общую копию и снимает нагрузку с источника. Цена - окно, в котором L1 разных экземпляров могут расходиться,
+      и его размер должен быть осознанным числом для каждого класса данных.
+
+      Слабые ответы обычно останавливаются на одном рычаге: «перейти на Redis» (забыта задержка на каждый запрос
+      и новая точка отказа), «включить sticky sessions» (не переживает деплой и перебалансировку) или «выключить
+      кэш» (вся нагрузка уходит в базу). Сильный ответ называет окно устарелости, механизм его ограничения
+      (срок жизни записей в L1 плюс сообщения об инвалидации), поведение при отказе L2 и метрики, которыми решение
+      проверяется. Ответ дан для .NET 10 и пакета `Microsoft.Extensions.Caching.Hybrid`.
+    linkTitles:
+      - Библиотека HybridCache в ASP.NET Core
+      - Распределённое кэширование в ASP.NET Core
+  en:
+    title: How do you design caching for a service on many instances when local caches diverge?
+    prompt: |
+      A .NET 10 service is scaled to 12 instances behind a load balancer, and each instance caches data in
+      `IMemoryCache`. Users complain: after a price change one browser tab shows the new price and another the old
+      one, depending on which instance answered.
+
+      How do you design caching across instances, and which trade-offs do you accept?
+    hint: Which job does an in-process cache do, which job does a shared cache do, and how long can a stale value live in each of them?
+    answer: |
+      1. **Name the cause.** Each instance has its own cache, filled at its own time. A write at best clears the cache
+         of the instance that handled it, while the others serve the old value until the entry expires. In effect
+         these are 12 unsynchronized replicas. Sticky sessions only hide the problem: after a deployment, a rebalance
+         or an instance failure the user lands on another instance's cache again.
+      2. **Classify data by tolerated staleness.** Reference data tolerates minutes, prices and the catalog tolerate
+         seconds or need invalidation, and stock levels, balances and anything a money decision depends on are read
+         from the source on the critical path. Write down the staleness window for each class explicitly.
+      3. **Two cache levels.**
+         - L1 is the in-process cache: no network, but every instance keeps its own copy.
+         - L2 is a shared distributed cache (for example Redis through `IDistributedCache`): one copy for all
+           instances, but every access is a network call plus serialization.
+         - Reads go L1, then L2, then the source, and the result fills both levels. A new or restarted instance warms
+           up from L2 instead of the database.
+      4. **Implementation in .NET.** `HybridCache` from the `Microsoft.Extensions.Caching.Hybrid` package (the .NET 9
+         package line), registered with `AddHybridCache()`. It can use a registered `IDistributedCache` as its secondary
+         (L2) cache and adds an in-process primary (L1) cache and stampede protection on top of it: concurrent misses on
+         one key within an instance wait for a single factory call in `GetOrCreateAsync`. `HybridCacheEntryOptions`
+         sets the lifetime separately for L2 (`Expiration`) and L1 (`LocalCacheExpiration`). Invalidation goes through
+         `RemoveAsync` (removes the entry from the primary and secondary caches) and tags (`RemoveByTagAsync`: a logical
+         invalidation, old values stay stored until they expire but are treated as misses). On serialization: the
+         `HybridCache` L1 hands out the same instance without deserialization only for types marked as immutable (`sealed`
+         with `[ImmutableObject(true)]`); otherwise every read deserializes a fresh copy, so prefer immutable cached types
+         for hot keys.
+      5. **Bound L1 staleness.** A short `LocalCacheExpiration` (seconds) is the upper bound of divergence between
+         instances. Do not assume that a removal on one instance clears the L1 of the others: the `HybridCache`
+         documentation describes removal from the primary and secondary caches, but no notification of other instances'
+         in-memory caches. So an L1 entry on another instance can live until its `LocalCacheExpiration`. If the window
+         must be shorter, on a write the instance updates L2 and its own L1 and publishes an invalidation message (Redis
+         pub/sub, a message bus) on which the other instances drop the key from their L1; you add that mechanism
+         yourself or pick a library that has it. Messages can be lost or delayed, so the short L1 lifetime stays as a
+         safety net.
+      6. **Design for failure.** Timeouts on L2. When Redis is down the service goes to the source, but with limited
+         concurrency so it does not take the database down. Jitter on lifetimes prevents simultaneous expiry on all
+         instances, and the most expensive keys can be refreshed in the background before they expire.
+      7. **Measure.** Hit ratio per level, L2 latency, load on the source, age of the data served. Cap L1 memory:
+         the data is duplicated in every instance.
+
+      **Trade-offs.**
+
+      | Option | Pros | Cons |
+      |---|---|---|
+      | L1 only | Fastest, no external dependency | Instances diverge, N copies in memory, N misses per key |
+      | L2 only | One copy, divergence only from the source | Network and serialization on every request, Redis becomes a critical dependency |
+      | L1 + L2 | L1 latency for hot keys, L2 offloads the database | Staleness window equals the L1 lifetime or the invalidation delivery delay, more to operate |
+
+      A cache does not give strong consistency: where it is required, the data is read from the source.
+    explanation: |
+      The main point: a cache is a replica of the data, and a caching decision is a consistency decision, not only a
+      speed decision. N in-process caches are N replicas with no synchronization protocol, so divergence is
+      inevitable. The two-level design separates two jobs: L1 removes network latency for hot keys, L2 provides a
+      shared copy and offloads the source. The price is a window in which the L1 caches of different instances can
+      disagree, and its size must be a deliberate number for each class of data.
+
+      Weak answers usually stop at a single lever: "move to Redis" (forgets the per-request latency and the new point
+      of failure), "turn on sticky sessions" (does not survive deployments and rebalancing) or "turn the cache off"
+      (the whole load moves to the database). A strong answer names the staleness window, the mechanism that bounds it
+      (the L1 entry lifetime plus invalidation messages), the behaviour when L2 fails, and the metrics that verify the
+      decision. The answer applies to .NET 10 and the `Microsoft.Extensions.Caching.Hybrid` package.
+    linkTitles:
+      - HybridCache library in ASP.NET Core
+      - Distributed caching in ASP.NET Core
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"

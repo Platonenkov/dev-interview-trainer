@@ -1,0 +1,113 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMKQVKJQJ6YV4MHAYR
+slug: async-method-runs-synchronously-until-first-await
+stack: dotnet
+topic: async
+level: junior
+type: output
+grading: auto
+tags: [async-await, task, synchronous-completion]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    Task task = PrintAsync();
+    Console.Write("4");
+    await task;
+    Console.Write("3");
+
+    async Task PrintAsync()
+    {
+        Console.Write("1");
+        await Task.CompletedTask;
+        Console.Write("2");
+    }
+expect:
+  kind: output
+  value: "1243"
+acceptedOutputs: ["1243"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "1243" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "1423" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "4123" }
+  - id: d
+    correct: false
+    expect: { kind: compile-error }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/await
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/asynchronous-programming/task-asynchronous-programming-model
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что выведет async-метод, который ожидает уже завершённую задачу?
+    prompt: |
+      Что выведет эта программа в консоль? Цифры в вызовах `Console.Write` - просто метки, а не порядок выполнения.
+    hint: Всегда ли `await` возвращает управление вызывающему коду?
+    options:
+      a: "1243"
+      b: "1423"
+      c: "4123"
+      d: Ошибка компиляции
+    optionExplanations:
+      b: "Так было бы, если бы любой `await` возвращал управление вызывающему коду. Но `Task.CompletedTask` уже завершена, поэтому `await` не приостанавливает метод, и `2` печатается до возврата из `PrintAsync`."
+      c: "Вызов async-метода не откладывает его запуск: тело выполняется сразу, синхронно, в потоке вызывающего кода. Поэтому `1` печатается раньше, чем `4`."
+      d: "Код корректен: в программе с инструкциями верхнего уровня можно использовать `await`, а локальная функция может быть объявлена после инструкций."
+    answer: "1243"
+    explanation: |
+      Вызов `PrintAsync()` начинает выполнять тело метода сразу и в том же потоке: печатается `1`. Затем `await`
+      проверяет, завершена ли ожидаемая задача. `Task.CompletedTask` уже завершена, поэтому метод не приостанавливается,
+      а просто продолжает работу: печатается `2`, и метод возвращает уже завершённую задачу.
+
+      Только после этого управление возвращается вызывающему коду: печатается `4`. `await task` тоже видит завершённую
+      задачу и продолжает синхронно, печатается `3`. Итог - `1243`.
+
+      Правило: async-метод выполняется синхронно до первого `await` на незавершённой задаче. Только такой `await`
+      приостанавливает метод и возвращает управление вызывающему коду; если ожидаемая операция уже завершена,
+      `await` сразу возвращает её результат без приостановки. Сам по себе `async` не создаёт нового потока и не
+      откладывает выполнение. Поведение проверено на .NET 10.
+    linkTitles:
+      - Оператор await
+      - Модель асинхронного программирования на основе задач (TAP) с async и await
+  en:
+    title: What does an async method print when it awaits an already completed task?
+    prompt: |
+      What does this program print to the console? The digits in the `Console.Write` calls are labels, not the order of execution.
+    hint: Does `await` always hand control back to the caller?
+    options:
+      a: "1243"
+      b: "1423"
+      c: "4123"
+      d: Compile error
+    optionExplanations:
+      b: "That would happen if every `await` returned control to the caller. But `Task.CompletedTask` has already completed, so `await` does not suspend the method, and `2` is printed before `PrintAsync` returns."
+      c: "Calling an async method does not defer it: the body starts at once, synchronously, on the caller's thread. That is why `1` is printed before `4`."
+      d: "The code is valid: top-level statements may use `await`, and a local function may be declared after the statements."
+    answer: "1243"
+    explanation: |
+      Calling `PrintAsync()` starts running the method body immediately on the same thread: `1` is printed. Then `await`
+      checks whether the awaited task has completed. `Task.CompletedTask` already has, so the method does not suspend and
+      simply continues: `2` is printed, and the method returns a task that is already completed.
+
+      Only then does control return to the caller: `4` is printed. `await task` also sees a completed task and continues
+      synchronously, so `3` is printed. The result is `1243`.
+
+      The rule: an async method runs synchronously until its first `await` on an incomplete task. Only such an `await`
+      suspends the method and returns control to the caller; when the awaited operation has already completed, `await`
+      returns its result immediately without suspension. `async` by itself neither creates a new thread nor defers
+      execution. The behaviour was checked on .NET 10.
+    linkTitles:
+      - await operator
+      - The Task Asynchronous Programming (TAP) model with async and await
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"

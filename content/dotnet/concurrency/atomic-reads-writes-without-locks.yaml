@@ -1,0 +1,104 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WN35ER2TT3WH9HBNGV
+slug: atomic-reads-writes-without-locks
+stack: dotnet
+topic: concurrency
+level: senior
+type: multi
+grading: auto
+tags: [atomicity, race-conditions, interlocked, memory-model]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: true
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+  - id: f
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/language-specification/variables
+    lang: en
+    kind: spec
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.interlocked
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какие чтения и записи спецификация C# гарантирует атомарными без синхронизации?
+    prompt: |
+      Несколько потоков обращаются к общим полям без `lock`, `Interlocked` и `volatile`.
+      Выберите все операции, атомарность которых гарантирует спецификация языка C#.
+    hint: Подумайте, какие значения гарантированно помещаются в одно обращение к памяти даже в 32-битном процессе, и из скольких шагов состоит `x++`.
+    options:
+      a: Запись в поле типа `int`
+      b: Присваивание ссылки полю ссылочного типа
+      c: Запись в поле типа `bool`
+      d: Запись в поле типа `long`
+      e: Запись в поле типа `decimal`
+      f: "`x++` над полем типа `int`"
+    optionExplanations:
+      d: "Спецификация прямо говорит, что чтение и запись `long`, `ulong` и `double` не обязаны быть атомарными. В 32-битном процессе 64-битное значение может записываться двумя половинами, и другой поток прочитает «разорванное» значение. То, что в 64-битном процессе выровненная запись `long` на практике атомарна, - свойство платформы, а не гарантия языка. Для таких полей используют `Interlocked.Read` и `Interlocked.Exchange`."
+      e: "`decimal` занимает 128 бит, и спецификация не гарантирует атомарность его чтения и записи ни на какой платформе. Поток может увидеть смесь старого и нового значения. Нужна блокировка или неизменяемый объект, ссылку на который заменяют целиком."
+      f: "`x++` - это операция чтение-изменение-запись: прочитать, прибавить единицу, записать. Даже если каждое чтение и каждая запись `int` атомарны, между ними может вклиниться другой поток, и одно из увеличений потеряется. Спецификация отдельно оговаривает, что атомарность чтения-изменения-записи не гарантируется; нужен `Interlocked.Increment` или `lock`."
+    answer: "Верны `a`, `b` и `c`: запись `int`, присваивание ссылки и запись `bool` атомарны по спецификации. Запись `long` и `decimal` атомарной быть не обязана, а `x++` атомарным не бывает."
+    explanation: |
+      Раздел спецификации C# об атомарности ссылок на переменные перечисляет типы, чтение и запись которых обязаны быть
+      атомарными: `bool`, `char`, `byte`, `sbyte`, `short`, `ushort`, `uint`, `int`, `float` и ссылочные типы, а также
+      перечисления с базовым типом из этого списка. Для остальных типов, включая `long`, `ulong`, `double`, `decimal` и
+      пользовательские структуры, атомарность не гарантируется. Атомарность операций чтение-изменение-запись, таких как
+      инкремент и декремент, не гарантируется вовсе, кроме библиотечных методов, созданных для этого (`Interlocked`).
+
+      Атомарность означает лишь одно: другой поток не увидит частично записанное значение. Она не гарантирует, что запись
+      станет видна другому потоку вовремя, и не задаёт порядок операций. Поэтому даже для `int` и ссылок флаг или
+      опубликованный объект обычно читают и пишут через `Volatile.Read`/`Volatile.Write`, поле `volatile` или `lock`.
+
+      Типичная ошибка - считать запись `long` атомарной, потому что тесты проходят на 64-битной машине. Это поведение
+      платформы: код, опирающийся на него, ломается в 32-битном процессе. Если нужна гарантия для 64-битного значения,
+      используйте `Interlocked`.
+    linkTitles:
+      - "Спецификация C#: переменные (атомарность ссылок на переменные)"
+      - Класс Interlocked
+  en:
+    title: Which reads and writes does the C# specification guarantee to be atomic without synchronization?
+    prompt: |
+      Several threads access shared fields without `lock`, `Interlocked` or `volatile`.
+      Select all operations whose atomicity is guaranteed by the C# language specification.
+    hint: Think about which values are guaranteed to fit into a single memory access even in a 32-bit process, and how many steps `x++` consists of.
+    options:
+      a: Writing a field of type `int`
+      b: Assigning a reference to a field of a reference type
+      c: Writing a field of type `bool`
+      d: Writing a field of type `long`
+      e: Writing a field of type `decimal`
+      f: "`x++` on a field of type `int`"
+    optionExplanations:
+      d: "The specification states explicitly that reads and writes of `long`, `ulong` and `double` need not be atomic. In a 32-bit process a 64-bit value may be written in two halves, and another thread can read a torn value. That an aligned `long` write is atomic in practice in a 64-bit process is a property of the platform, not a language guarantee. For such fields use `Interlocked.Read` and `Interlocked.Exchange`."
+      e: "`decimal` takes 128 bits, and the specification does not guarantee atomic reads and writes for it on any platform. A thread can see a mix of the old and the new value. You need a lock, or an immutable object whose reference is replaced as a whole."
+      f: "`x++` is a read-modify-write operation: read, add one, write. Even if each read and each write of an `int` is atomic, another thread can step in between them, and one of the increments is lost. The specification says separately that read-modify-write is not guaranteed to be atomic; you need `Interlocked.Increment` or `lock`."
+    answer: "`a`, `b` and `c` are correct: writing an `int`, assigning a reference and writing a `bool` are atomic by the specification. Writing a `long` or a `decimal` need not be atomic, and `x++` is never atomic."
+    explanation: |
+      The section of the C# specification on atomicity of variable references lists the types whose reads and writes must be
+      atomic: `bool`, `char`, `byte`, `sbyte`, `short`, `ushort`, `uint`, `int`, `float` and reference types, plus enums whose
+      underlying type is in that list. For other types, including `long`, `ulong`, `double`, `decimal` and user-defined
+      structs, atomicity is not guaranteed. Atomicity of read-modify-write operations such as increment and decrement is not
+      guaranteed at all, except for library methods designed for it (`Interlocked`).
+
+      Atomicity means one thing only: another thread never sees a partially written value. It does not guarantee that the
+      write becomes visible to another thread in time, and it does not define the order of operations. That is why even for
+      `int` and references a flag or a published object is usually read and written through `Volatile.Read`/`Volatile.Write`,
+      a `volatile` field or a `lock`.
+
+      A typical mistake is to treat a `long` write as atomic because the tests pass on a 64-bit machine. That is platform
+      behaviour: code that relies on it breaks in a 32-bit process. If you need the guarantee for a 64-bit value, use
+      `Interlocked`.
+    linkTitles:
+      - "C# specification: variables (atomicity of variable references)"
+      - Interlocked class
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

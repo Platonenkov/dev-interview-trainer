@@ -1,0 +1,100 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNB86SZTPW6MTPM3EX
+slug: foreground-thread-keeps-process-alive
+stack: dotnet
+topic: concurrency
+level: junior
+type: single
+grading: auto
+tags: [threads, foreground-thread, background-thread, thread-pool]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/threading/foreground-and-background-threads
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.thread.isbackground
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какой поток не даст процессу .NET завершиться после выхода из Main?
+    prompt: |
+      Консольное приложение на .NET 10 запускает работу `Work`, которая выполняется ещё несколько секунд, и сразу
+      после этого метод `Main` возвращает управление. Ничего не ожидается через `Join`, `Wait` или `await`.
+      В каком из вариантов процесс продолжит работать, пока `Work` не закончится?
+    hint: Процесс при завершении ждёт все потоки или только потоки определённого вида? И из какого источника берёт поток `Task.Run`?
+    options:
+      a: "Поток `new Thread(Work)`, запущенный через `Start()` без изменения настроек"
+      b: "Поток `new Thread(Work) { IsBackground = true }`, запущенный через `Start()`"
+      c: "Элемент работы, поставленный в очередь через `ThreadPool.QueueUserWorkItem`"
+      d: "Задача, запущенная через `Task.Run(Work)`"
+    optionExplanations:
+      b: "`IsBackground = true` делает поток фоновым. Фоновые потоки не удерживают процесс: когда завершается последний поток переднего плана, среда выполнения останавливает фоновые потоки, и `Work` не доработает."
+      c: "Все потоки пула потоков фоновые (`IsBackground` у них равно `true`), поэтому работа в пуле не удерживает процесс и будет прервана при его завершении."
+      d: "`Task.Run` по умолчанию выполняет делегат в пуле потоков, а потоки пула фоновые. Если задачу не ожидать, процесс завершится, не дожидаясь её."
+    answer: "Поток `new Thread(Work)` с настройками по умолчанию: он создаётся как поток переднего плана."
+    explanation: |
+      Процесс .NET продолжает работать, пока жив хотя бы один поток переднего плана (foreground). Когда завершается
+      последний из них, среда выполнения останавливает все оставшиеся фоновые (background) потоки и завершает процесс.
+      Поэтому возврат из `Main` ещё не означает конец процесса: он ждёт остальные потоки переднего плана.
+
+      Вид потока задаёт свойство `Thread.IsBackground`:
+
+      - поток, созданный конструктором `Thread`, по умолчанию является потоком переднего плана;
+      - потоки пула потоков фоновые, а значит, фоновой будет и работа из `ThreadPool.QueueUserWorkItem` и `Task.Run`;
+      - свойство `IsBackground` можно изменить, как в варианте `b`.
+
+      Практический вывод: если работа должна завершиться до выхода из программы, её нужно явно дождаться
+      (`Join` для потока, `await` или `Wait` для задачи), а не полагаться на вид потока. Обратная ошибка тоже
+      встречается: забытый поток переднего плана с бесконечным циклом не даёт приложению закрыться. Поведение
+      одинаково во всех версиях .NET, включая .NET 10.
+    linkTitles:
+      - Потоки переднего плана и фоновые потоки
+      - Свойство Thread.IsBackground
+  en:
+    title: Which thread keeps a .NET process alive after Main returns?
+    prompt: |
+      A .NET 10 console application starts some work `Work` that runs for several more seconds, and right after that
+      `Main` returns. Nothing is waited for with `Join`, `Wait` or `await`.
+      In which variant does the process keep running until `Work` finishes?
+    hint: When a process shuts down, does it wait for all threads or only for threads of a certain kind? And where does `Task.Run` get its thread from?
+    options:
+      a: "A thread `new Thread(Work)` started with `Start()` without changing its settings"
+      b: "A thread `new Thread(Work) { IsBackground = true }` started with `Start()`"
+      c: "A work item queued with `ThreadPool.QueueUserWorkItem`"
+      d: "A task started with `Task.Run(Work)`"
+    optionExplanations:
+      b: "`IsBackground = true` makes the thread a background thread. Background threads do not keep the process alive: when the last foreground thread ends, the runtime stops the background threads and `Work` does not finish."
+      c: "All thread pool threads are background threads (their `IsBackground` is `true`), so work on the pool does not keep the process alive and is cut off when the process ends."
+      d: "`Task.Run` runs the delegate on the thread pool by default, and pool threads are background threads. If the task is not awaited, the process ends without waiting for it."
+    answer: "The thread `new Thread(Work)` with default settings: it is created as a foreground thread."
+    explanation: |
+      A .NET process keeps running while at least one foreground thread is alive. When the last one ends, the runtime
+      stops all remaining background threads and ends the process. So returning from `Main` does not by itself end the
+      process: it waits for the other foreground threads.
+
+      The kind of thread is set by the `Thread.IsBackground` property:
+
+      - a thread created with the `Thread` constructor is a foreground thread by default;
+      - thread pool threads are background threads, so work from `ThreadPool.QueueUserWorkItem` and `Task.Run` is background work too;
+      - `IsBackground` can be changed, as in option `b`.
+
+      The practical lesson: if work must finish before the program exits, wait for it explicitly (`Join` for a thread,
+      `await` or `Wait` for a task) instead of relying on the kind of thread. The opposite mistake also happens: a forgotten
+      foreground thread with an endless loop prevents the application from closing. The behaviour is the same in all
+      .NET versions, including .NET 10.
+    linkTitles:
+      - Foreground and background threads
+      - Thread.IsBackground property
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

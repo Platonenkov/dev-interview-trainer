@@ -1,0 +1,116 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WP6K0A6E81TWHFYNPF
+slug: arraypool-return-keeps-stale-data
+stack: dotnet
+topic: performance
+level: middle
+type: output
+grading: auto
+tags: [arraypool, pooling, allocations]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    using System.Buffers;
+
+    int[] first = ArrayPool<int>.Shared.Rent(10);
+    first[0] = 42;
+    ArrayPool<int>.Shared.Return(first);
+
+    int[] second = ArrayPool<int>.Shared.Rent(10);
+    Console.Write($"{second[0]} {ReferenceEquals(first, second)}");
+expect:
+  kind: output
+  value: "42 True"
+acceptedOutputs: ["42 True"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "42 True" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "0 True" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "0 False" }
+  - id: d
+    correct: false
+    expect: { kind: exception, value: System.ArgumentException }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.buffers.arraypool-1.return
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.buffers.arraypool-1.rent
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что окажется в массиве, повторно арендованном из ArrayPool после Return?
+    prompt: |
+      Что выведет эта программа в консоль на .NET 10?
+    hint: Обязан ли пул что-то делать с содержимым массива, когда его возвращают, и какой массив он отдаст следующему `Rent` того же размера в том же потоке?
+    options:
+      a: "42 True"
+      b: "0 True"
+      c: "0 False"
+      d: "Исключение `ArgumentException` в `Return`"
+    optionExplanations:
+      b: "`Return` без аргумента `clearArray` (по умолчанию `false`) не очищает массив. Содержимое остаётся таким, каким его оставил предыдущий владелец, поэтому `second[0]` равно `42`, а не `0`."
+      c: "Пул не создаёт новый массив, если у него есть подходящий возвращённый. В .NET 10 общий пул хранит последний возвращённый массив каждого размера в слоте текущего потока, и следующий `Rent` в этом же потоке получает именно его."
+      d: "`Rent(10)` вернул массив длиной 16 - размер корзины пула, поэтому `Return` принимает его без ошибок. `ArgumentException` возникает, только если вернуть массив, длина которого не соответствует ни одной корзине, то есть массив, который пул не выдавал."
+    answer: "42 True"
+    explanation: |
+      `ArrayPool<int>.Shared.Rent(10)` возвращает массив длиной не меньше запрошенной (здесь 16). После `Return(first)`
+      со значением `clearArray` по умолчанию (`false`) пул сохраняет массив как есть: документация прямо говорит, что без
+      очистки содержимое остаётся неизменным. В .NET 10 общий пул кладёт возвращённый массив в слот текущего потока для его
+      корзины размера, и следующий `Rent(10)` в том же потоке получает тот же самый объект. Поэтому `ReferenceEquals`
+      даёт `True`, а в `second[0]` лежит `42` от предыдущего владельца.
+
+      То, что вернётся именно этот массив, - деталь реализации, а не контракт. Контракт другой: массив из `Rent` может быть
+      не заполнен нулями. Отсюда правила работы с пулом:
+
+      - никогда не считать арендованный буфер обнулённым и читать только ту часть, которую сами записали (длину нужно
+        хранить отдельно, `array.Length` для этого не подходит);
+      - если в буфере были чувствительные данные (пароли, токены, персональные данные), вызывать
+        `Return(array, clearArray: true)`, чтобы их не увидел следующий арендатор;
+      - не очищать без нужды: очистка большого буфера стоит времени, и именно поэтому по умолчанию она выключена.
+    linkTitles:
+      - Метод ArrayPool<T>.Return
+      - Метод ArrayPool<T>.Rent
+  en:
+    title: What is in an array rented again from ArrayPool after Return?
+    prompt: |
+      What does this program print to the console on .NET 10?
+    hint: Does the pool have to do anything with the contents of an array when it is returned, and which array does it hand to the next `Rent` of the same size on the same thread?
+    options:
+      a: "42 True"
+      b: "0 True"
+      c: "0 False"
+      d: "`ArgumentException` in `Return`"
+    optionExplanations:
+      b: "`Return` without the `clearArray` argument (default `false`) does not clear the array. The contents stay as the previous owner left them, so `second[0]` is `42`, not `0`."
+      c: "The pool does not create a new array when it has a suitable returned one. In .NET 10 the shared pool keeps the last returned array of each size in a slot of the current thread, and the next `Rent` on the same thread gets exactly that array."
+      d: "`Rent(10)` returned an array of length 16, the pool's bucket size, so `Return` accepts it without error. `ArgumentException` is thrown only when you return an array whose length matches no bucket, that is, an array the pool never handed out."
+    answer: "42 True"
+    explanation: |
+      `ArrayPool<int>.Shared.Rent(10)` returns an array of at least the requested length (16 here). After `Return(first)`
+      with the default `clearArray` value (`false`) the pool keeps the array as it is: the documentation states that without
+      clearing the contents are left unchanged. In .NET 10 the shared pool puts the returned array into the current thread's
+      slot for its size bucket, and the next `Rent(10)` on the same thread gets the very same object. That is why
+      `ReferenceEquals` gives `True` and `second[0]` holds `42` from the previous owner.
+
+      Getting exactly this array back is an implementation detail, not a contract. The contract is different: an array from
+      `Rent` may not be zero-initialized. Hence the rules for working with the pool:
+
+      - never assume a rented buffer is zeroed, and read only the part you wrote yourself (track that length separately,
+        `array.Length` is not it);
+      - if the buffer held sensitive data (passwords, tokens, personal data), call `Return(array, clearArray: true)` so the
+        next renter cannot see it;
+      - do not clear without a reason: clearing a large buffer costs time, which is exactly why it is off by default.
+    linkTitles:
+      - ArrayPool<T>.Return method
+      - ArrayPool<T>.Rent method
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

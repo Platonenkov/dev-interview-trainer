@@ -1,0 +1,129 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNJ378MSJ55AS6G9RK
+slug: monitor-enter-boxed-int
+stack: dotnet
+topic: concurrency
+level: middle
+type: find-bug
+grading: auto
+tags: [monitor, locks, boxing, synchronization-lock-exception]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    Counter counter = new();
+    counter.Add(5);
+    Console.WriteLine(counter.Total);
+
+    class Counter
+    {
+        private int count;
+
+        public int Total => count;
+
+        public void Add(int amount)
+        {
+            Monitor.Enter(count);
+            try
+            {
+                count += amount;
+            }
+            finally
+            {
+                Monitor.Exit(count);
+            }
+        }
+    }
+bugLineSets: [[13, 20], [13], [20]]
+fixedSource: |
+  Counter counter = new();
+  counter.Add(5);
+  Console.WriteLine(counter.Total);
+
+  class Counter
+  {
+      private readonly object gate = new();
+      private int count;
+
+      public int Total
+      {
+          get
+          {
+              lock (gate)
+              {
+                  return count;
+              }
+          }
+      }
+
+      public void Add(int amount)
+      {
+          lock (gate)
+          {
+              count += amount;
+          }
+      }
+  }
+fixedExpect: { kind: output, value: "5" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.monitor.exit
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.monitor
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите дефект, из-за которого Monitor.Exit выбрасывает SynchronizationLockException
+    prompt: |
+      Метод `Add` должен защищать поле `count` от одновременного изменения из разных потоков.
+      Программа должна вывести `5`, но завершается с необработанным исключением `SynchronizationLockException`.
+      Щёлкните по строке или строкам с дефектом.
+    hint: Что происходит со значением `int`, когда его передают в параметр типа `object`?
+    answer: Строки 13 и 20, вызовы `Monitor.Enter(count)` и `Monitor.Exit(count)`, где объектом блокировки служит поле типа `int`.
+    explanation: |
+      `Monitor.Enter` и `Monitor.Exit` принимают `object`, поэтому при каждом вызове `int` упаковывается в новый объект
+      в куче. `Monitor.Enter(count)` захватывает блокировку на первом упакованном объекте, а `Monitor.Exit(count)` получает
+      уже другой, только что созданный объект. Текущий поток не владеет его блокировкой, и `Exit` выбрасывает
+      `SynchronizationLockException`.
+
+      Даже если бы `Exit` не падал, защиты бы не было: каждый поток блокировал бы свой собственный упакованный объект,
+      и взаимного исключения не возникло бы. Monitor работает только со ссылочными типами, потому что блокировка
+      привязана к конкретному объекту.
+
+      Оператор `lock (count)` здесь не скомпилировался бы (ошибка CS0185: тип не является ссылочным), но у
+      `Monitor.Enter(object)` такой проверки нет, и упаковка происходит молча. Исправление: завести отдельное закрытое
+      поле `private readonly object gate = new();` и блокировать его через `lock (gate)`, в том числе при чтении поля.
+      Начиная с .NET 9 вместо `object` можно использовать `System.Threading.Lock`. Поведение проверено на .NET 10.
+    linkTitles:
+      - Метод Monitor.Exit
+      - Класс Monitor
+  en:
+    title: Find the defect that makes Monitor.Exit throw SynchronizationLockException
+    prompt: |
+      The `Add` method should protect the `count` field from concurrent changes by several threads.
+      The program should print `5`, but it ends with an unhandled `SynchronizationLockException`.
+      Click the line or lines that contain the defect.
+    hint: What happens to an `int` value when it is passed to a parameter of type `object`?
+    answer: Lines 13 and 20, the calls `Monitor.Enter(count)` and `Monitor.Exit(count)`, which use an `int` field as the lock object.
+    explanation: |
+      `Monitor.Enter` and `Monitor.Exit` take an `object`, so every call boxes the `int` into a new heap object.
+      `Monitor.Enter(count)` acquires the lock on the first boxed object, while `Monitor.Exit(count)` receives a different,
+      freshly created object. The current thread does not own the lock on it, so `Exit` throws
+      `SynchronizationLockException`.
+
+      Even if `Exit` did not fail, there would be no protection: each thread would lock its own boxed object, so there
+      would be no mutual exclusion. Monitor works only with reference types, because the lock belongs to a specific
+      object instance.
+
+      The statement `lock (count)` would not compile here (error CS0185: the type is not a reference type), but
+      `Monitor.Enter(object)` has no such check, and the boxing happens silently. The fix is a dedicated private field
+      `private readonly object gate = new();` locked with `lock (gate)`, including when the field is read.
+      Since .NET 9 `System.Threading.Lock` can be used instead of `object`. The behaviour was checked on .NET 10.
+    linkTitles:
+      - Monitor.Exit method
+      - Monitor class
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

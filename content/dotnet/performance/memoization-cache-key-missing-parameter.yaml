@@ -1,0 +1,128 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WPRNBVVWAZREQNWQ6K
+slug: memoization-cache-key-missing-parameter
+stack: dotnet
+topic: performance
+level: middle
+type: find-bug
+grading: auto
+tags: [memoization, caching, dictionary, cache-key]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    Dictionary<string, decimal> cache = new();
+
+    decimal LoadPrice(int productId, string currency)
+    {
+        // Stand-in for a slow call to a pricing service.
+        return currency == "EUR" ? 92m : 100m;
+    }
+
+    decimal GetPrice(int productId, string currency)
+    {
+        string key = productId.ToString();
+        if (cache.TryGetValue(key, out decimal cached))
+        {
+            return cached;
+        }
+        decimal price = LoadPrice(productId, currency);
+        cache[key] = price;
+        return price;
+    }
+
+    decimal usd = GetPrice(42, "USD");
+    decimal eur = GetPrice(42, "EUR");
+    Console.WriteLine($"USD {usd}, EUR {eur}");
+bugLineSets: [[11]]
+fixedSource: |
+  Dictionary<string, decimal> cache = new();
+
+  decimal LoadPrice(int productId, string currency)
+  {
+      // Stand-in for a slow call to a pricing service.
+      return currency == "EUR" ? 92m : 100m;
+  }
+
+  decimal GetPrice(int productId, string currency)
+  {
+      string key = $"{productId}:{currency}";
+      if (cache.TryGetValue(key, out decimal cached))
+      {
+          return cached;
+      }
+      decimal price = LoadPrice(productId, currency);
+      cache[key] = price;
+      return price;
+  }
+
+  decimal usd = GetPrice(42, "USD");
+  decimal eur = GetPrice(42, "EUR");
+  Console.WriteLine($"USD {usd}, EUR {eur}");
+fixedExpect: { kind: output, value: "USD 100, EUR 92" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.dictionary-2.trygetvalue
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.valuetuple-2
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строку, из-за которой мемоизированный поиск цены возвращает цену не в той валюте
+    prompt: |
+      Метод `GetPrice` кэширует результат медленного `LoadPrice` в словаре, чтобы не ходить в сервис цен повторно.
+      Программа должна вывести `USD 100, EUR 92`, но выводит `USD 100, EUR 100`: второй вызов с валютой `EUR`
+      возвращает цену в долларах. Щёлкните по строке с дефектом.
+    hint: Сравните, какие входные данные влияют на результат `LoadPrice`, и по каким из них кэш различает записи.
+    answer: "Строка 11: ключ кэша `productId.ToString()` строится только из `productId` и не учитывает `currency`."
+    explanation: |
+      Первый вызов `GetPrice(42, "USD")` не находит ключ `"42"`, загружает цену `100` и кладёт её в словарь под этим ключом.
+      Второй вызов `GetPrice(42, "EUR")` строит тот же ключ `"42"`, `TryGetValue` возвращает `true`, и метод отдаёт
+      закэшированную долларовую цену, так и не вызвав `LoadPrice` для евро. Сам словарь работает правильно: он возвращает
+      значение по заданному ключу, но ключ описывает вычисление не полностью.
+
+      Правило мемоизации: ключ должен включать все входные данные, от которых зависит результат. Если два вызова
+      с разными аргументами получают одинаковый ключ, кэш смешивает их результаты, и ошибка проявляется только
+      на определённой последовательности вызовов, поэтому её легко пропустить в тестах.
+
+      Исправление - добавить валюту в ключ: `$"{productId}:{currency}"`. Надёжнее составной ключ без склейки строк,
+      например `Dictionary<(int ProductId, string Currency), decimal>`: структура `ValueTuple<T1,T2>` переопределяет
+      `Equals` и `GetHashCode` и сравнивает компоненты по очереди, поэтому два ключа равны, только если совпадают и товар,
+      и валюта. Склейка строк, напротив, требует разделителя, который не может встретиться в самих значениях.
+      Помните и о скрытых входах (текущая дата, культура, пользователь): если они влияют на результат, им тоже место в ключе.
+      Поведение не зависит от версии; пример проверяется на .NET 10.
+    linkTitles:
+      - Метод Dictionary<TKey,TValue>.TryGetValue
+      - Структура ValueTuple<T1,T2>
+  en:
+    title: Find the line that makes a memoized price lookup return a price in the wrong currency
+    prompt: |
+      The `GetPrice` method caches the result of the slow `LoadPrice` in a dictionary so that it does not call the pricing
+      service again. The program should print `USD 100, EUR 92`, but it prints `USD 100, EUR 100`: the second call with
+      the `EUR` currency returns the dollar price. Click the line that contains the defect.
+    hint: Compare which inputs affect the result of `LoadPrice` with which of them the cache uses to tell entries apart.
+    answer: "Line 11: the cache key `productId.ToString()` is built from `productId` only and ignores `currency`."
+    explanation: |
+      The first call `GetPrice(42, "USD")` does not find the key `"42"`, loads the price `100` and stores it under that key.
+      The second call `GetPrice(42, "EUR")` builds the same key `"42"`, `TryGetValue` returns `true`, and the method returns
+      the cached dollar price without ever calling `LoadPrice` for euros. The dictionary itself works correctly: it returns
+      the value for the key it was given, but the key does not fully describe the computation.
+
+      The memoization rule: the key must include every input that affects the result. If two calls with different
+      arguments produce the same key, the cache mixes up their results, and the bug shows up only for a particular
+      sequence of calls, which makes it easy to miss in tests.
+
+      The fix is to add the currency to the key: `$"{productId}:{currency}"`. A composite key without string concatenation
+      is more robust, for example `Dictionary<(int ProductId, string Currency), decimal>`: the `ValueTuple<T1,T2>` struct
+      overrides `Equals` and `GetHashCode` and compares its components one by one, so two keys are equal only when both
+      the product and the currency match. Concatenation, by contrast, needs a separator that can never appear in the values.
+      Also watch for hidden inputs (the current date, the culture, the user): if they affect the result, they belong in the key too.
+      The behaviour does not depend on the version; the example is checked on .NET 10.
+    linkTitles:
+      - Dictionary<TKey,TValue>.TryGetValue method
+      - ValueTuple<T1,T2> struct
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"

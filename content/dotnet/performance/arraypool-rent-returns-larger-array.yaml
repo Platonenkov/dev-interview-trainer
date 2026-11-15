@@ -1,0 +1,103 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WPP8WC3AQXW8XG6V5C
+slug: arraypool-rent-returns-larger-array
+stack: dotnet
+topic: performance
+level: junior
+type: output
+grading: auto
+tags: [arraypool, pooling, buffers, allocations]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    using System.Buffers;
+
+    int[] buffer = ArrayPool<int>.Shared.Rent(10);
+    Console.WriteLine(buffer.Length);
+    ArrayPool<int>.Shared.Return(buffer);
+expect:
+  kind: output
+  value: "16"
+acceptedOutputs: ["16"]
+options:
+  - id: a
+    correct: false
+    expect: { kind: output, value: "10" }
+  - id: b
+    correct: true
+    expect: { kind: output, value: "16" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "32" }
+  - id: d
+    correct: false
+    expect: { kind: output, value: "0" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.buffers.arraypool-1.rent
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.buffers.arraypool-1
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какую длину имеет массив, полученный из ArrayPool<int>.Shared.Rent(10)?
+    prompt: |
+      Что выведет эта программа в консоль в .NET 10?
+    hint: "Что именно документация обещает о длине массива, который возвращает `Rent`, - ровно запрошенную или какую-то другую?"
+    options:
+      a: "10"
+      b: "16"
+      c: "32"
+      d: "0"
+    optionExplanations:
+      a: "`Rent` гарантирует только длину не меньше запрошенной. Общий пул хранит массивы корзинами фиксированных размеров и округляет запрос вверх до размера корзины, поэтому массив ровно из 10 элементов не получится."
+      c: "Пул выбирает наименьшую корзину, в которую помещается запрос. Корзина на 16 элементов уже вмещает 10, поэтому брать массив вдвое больше незачем."
+      d: "Пустой массив `Rent` возвращает только при запросе нулевой длины. Здесь запрошено 10 элементов, и массив будет не короче."
+    answer: "16"
+    explanation: |
+      Контракт `ArrayPool<T>.Rent(minimumLength)` обещает массив длиной **не меньше** `minimumLength`, но не ровно такой.
+      `ArrayPool<T>.Shared` в .NET 10 хранит массивы в корзинах, размеры которых - степени двойки начиная с 16
+      (16, 32, 64 и так далее). Запрос округляется вверх до ближайшей подходящей корзины, поэтому `Rent(10)` возвращает
+      массив из 16 элементов, и программа выводит `16`.
+
+      Точные размеры корзин - деталь реализации, и полагаться на число 16 в коде нельзя. Практический вывод другой:
+      код должен сам хранить запрошенную длину и работать только с этой частью массива, например через
+      `buffer.AsSpan(0, 10)`. Если пройти циклом по `buffer.Length` или передать весь массив дальше, обработаются
+      лишние элементы, которые к задаче не относятся.
+    linkTitles:
+      - Метод ArrayPool<T>.Rent
+      - Класс ArrayPool<T>
+  en:
+    title: What length does an array from ArrayPool<int>.Shared.Rent(10) have?
+    prompt: |
+      What does this program print to the console on .NET 10?
+    hint: "What exactly does the documentation promise about the length of the array that `Rent` returns - exactly the requested one or something else?"
+    options:
+      a: "10"
+      b: "16"
+      c: "32"
+      d: "0"
+    optionExplanations:
+      a: "`Rent` only guarantees a length of at least the requested one. The shared pool keeps arrays in buckets of fixed sizes and rounds the request up to a bucket size, so an array of exactly 10 elements is not what you get."
+      c: "The pool picks the smallest bucket that fits the request. The 16-element bucket already holds 10, so there is no reason to hand out an array twice that size."
+      d: "`Rent` returns an empty array only when a length of zero is requested. Here 10 elements are requested, and the array is at least that long."
+    answer: "16"
+    explanation: |
+      The contract of `ArrayPool<T>.Rent(minimumLength)` promises an array whose length is **at least** `minimumLength`,
+      not exactly that. In .NET 10 `ArrayPool<T>.Shared` keeps arrays in buckets whose sizes are powers of two starting
+      at 16 (16, 32, 64 and so on). The request is rounded up to the nearest bucket that fits, so `Rent(10)` returns an
+      array of 16 elements and the program prints `16`.
+
+      The exact bucket sizes are an implementation detail, and code must not depend on the number 16. The practical
+      lesson is different: code has to track the requested length itself and work only with that part of the array,
+      for example through `buffer.AsSpan(0, 10)`. Looping up to `buffer.Length` or passing the whole array on processes
+      extra elements that have nothing to do with the task.
+    linkTitles:
+      - ArrayPool<T>.Rent method
+      - ArrayPool<T> class
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"

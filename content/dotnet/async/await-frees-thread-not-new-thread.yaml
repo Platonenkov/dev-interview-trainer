@@ -1,0 +1,120 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMRM04CTMTB4XPJWTQ
+slug: await-frees-thread-not-new-thread
+stack: dotnet
+topic: async
+level: junior
+type: single
+grading: auto
+tags: [await, task, threads, io]
+code:
+  language: csharp
+  harness: none
+  source: |
+    async Task<int> GetPageLengthAsync(HttpClient client, string url)
+    {
+        Console.WriteLine("Before await");
+        string body = await client.GetStringAsync(url);
+        Console.WriteLine("After await");
+        return body.Length;
+    }
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: false
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/await
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/asynchronous-programming/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/asynchronous-programming/task-asynchronous-programming-model
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/async-in-depth
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что происходит с вызывающим потоком, когда async-метод доходит до await незавершённой задачи?
+    prompt: |
+      Код в потоке T вызывает `GetPageLengthAsync`. Метод печатает `Before await` и доходит до `await`,
+      а ответ на HTTP-запрос ещё не пришёл. Что в этот момент происходит с потоком T?
+    hint: Что компилятор делает с кодом после `await`, если ожидаемая задача ещё не завершена?
+    options:
+      a: "Поток T блокируется до прихода ответа, а затем продолжает выполнять метод"
+      b: "`await` создаёт новый поток, который ждёт ответа, и код после `await` выполняется в этом новом потоке"
+      c: "Метод приостанавливается и возвращает вызывающему коду незавершённый `Task<int>`; поток T свободен для другой работы, а код после `await` выполнится позже как продолжение, когда придёт ответ"
+      d: "Поток T в цикле проверяет `IsCompleted` у задачи, пока запрос не завершится, и только потом возвращает управление вызывающему коду"
+    optionExplanations:
+      a: "Так работает блокирующее ожидание (`.Result`, `.Wait()`), а не `await`. Оператор `await` не блокирует поток, который выполняет async-метод: управление возвращается вызывающему коду."
+      b: "Ключевые слова `async` и `await` не создают дополнительных потоков: async-метод не выполняется в собственном потоке. Пока идёт сетевой запрос, ни один поток не выделен под ожидание ответа. Продолжение после `await` позже выполнится в потоке, который выберет контекст: в UI-приложении это UI-поток, в консольном приложении и ASP.NET Core обычно поток пула."
+      d: "Активного ожидания нет. Метод регистрирует продолжение у задачи и сразу возвращает управление; продолжение будет вызвано, когда задача завершится. Цикл проверки впустую тратил бы процессор и держал поток."
+    answer: "Метод приостанавливается и возвращает вызывающему коду незавершённый `Task<int>`; поток T освобождается, а код после `await` выполнится позже как продолжение."
+    explanation: |
+      Оператор `await` приостанавливает выполнение async-метода, пока не завершится ожидаемая операция, и при этом
+      не блокирует поток: управление возвращается вызывающему коду. Компилятор превращает async-метод в конечный
+      автомат. На `await` он проверяет, завершена ли задача. Если нет, он запоминает, где остановился метод, регистрирует
+      продолжение у задачи и возвращает вызывающему коду незавершённый `Task<int>`. Поток T при этом не ждёт: он
+      возвращается к своей работе, например обрабатывает другие события UI или другие запросы.
+
+      `await` не создаёт нового потока, а для операций ввода-вывода ни один поток не выделяется под ожидание результата:
+      запрос выполняют операционная система и драйвер устройства. Когда ответ приходит, задача завершается, и
+      запускается продолжение. Где оно выполнится, зависит от захваченного контекста: в UI-приложении - в UI-потоке,
+      без контекста синхронизации - обычно в потоке пула. Поэтому `After await` может напечатать уже другой поток.
+
+      Если бы задача к моменту `await` уже была завершена, метод не приостанавливался бы и продолжил выполнение
+      синхронно в том же потоке. Именно то, что потоки не заняты ожиданием ввода-вывода, позволяет асинхронному коду
+      обслуживать много операций небольшим числом потоков.
+    linkTitles:
+      - Оператор await
+      - Асинхронное программирование
+      - Модель асинхронного программирования на основе задач (TAP)
+      - Подробно об асинхронности
+  en:
+    title: What happens to the calling thread when an async method reaches await on an incomplete task?
+    prompt: |
+      Code on thread T calls `GetPageLengthAsync`. The method prints `Before await` and reaches `await`
+      while the HTTP response has not arrived yet. What happens to thread T at this point?
+    hint: What does the compiler do with the code after `await` when the awaited task has not completed yet?
+    options:
+      a: "Thread T is blocked until the response arrives, then it continues running the method"
+      b: "`await` creates a new thread that waits for the response, and the code after `await` runs on that new thread"
+      c: "The method suspends and returns an incomplete `Task<int>` to the caller; thread T is free for other work, and the code after `await` runs later as a continuation when the response arrives"
+      d: "Thread T checks `IsCompleted` on the task in a loop until the request finishes, and only then returns control to the caller"
+    optionExplanations:
+      a: "That is how blocking waits (`.Result`, `.Wait()`) behave, not `await`. The `await` operator does not block the thread that runs the async method: control returns to the caller."
+      b: "The `async` and `await` keywords do not create additional threads: an async method does not run on its own thread. While the network request is in progress, no thread is dedicated to waiting for the response. The continuation after `await` later runs on a thread chosen by the context: the UI thread in a UI application, usually a thread pool thread in a console application or ASP.NET Core."
+      d: "There is no busy waiting. The method registers a continuation on the task and returns control at once; the continuation is invoked when the task completes. A polling loop would waste CPU and hold the thread."
+    answer: "The method suspends and returns an incomplete `Task<int>` to the caller; thread T is released, and the code after `await` runs later as a continuation."
+    explanation: |
+      The `await` operator suspends the async method until the awaited operation completes, and it does not block the
+      thread: control returns to the caller. The compiler turns an async method into a state machine. At `await` it checks
+      whether the task has completed. If it has not, it records where the method stopped, registers a continuation on the
+      task and returns an incomplete `Task<int>` to the caller. Thread T does not wait: it goes back to its own work, for
+      example handling other UI events or other requests.
+
+      `await` does not create a new thread, and for I/O operations no thread is dedicated to waiting for the result: the
+      request is carried out by the operating system and the device driver. When the response arrives, the task completes
+      and the continuation runs. Where it runs depends on the captured context: on the UI thread in a UI application,
+      usually on a thread pool thread when there is no synchronization context. That is why `After await` may be printed by
+      a different thread.
+
+      If the task had already completed by the time of `await`, the method would not suspend and would continue
+      synchronously on the same thread. The fact that no threads are tied up waiting for I/O is exactly what lets
+      asynchronous code serve many operations with a small number of threads.
+    linkTitles:
+      - await operator
+      - Asynchronous programming
+      - Task asynchronous programming model (TAP)
+      - Async in depth
+meta:
+  authors: [platonenkov]
+  verified: 1970-01-01
+  noRunReason: Needs network access for the HTTP request, which the sandbox does not provide.

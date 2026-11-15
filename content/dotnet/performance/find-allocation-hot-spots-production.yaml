@@ -1,0 +1,148 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WPHCS4RR7EAM1V2N5Q
+slug: find-allocation-hot-spots-production
+stack: dotnet
+topic: performance
+level: senior
+type: open
+grading: self
+tags: [profiling, allocations, dotnet-trace, gc, diagnostics]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-trace
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/visualstudio/profiling/dotnet-alloc-tool
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-counters
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-gcdump
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как найти в продакшене типы и стеки вызовов, которые выделяют больше всего памяти?
+    prompt: |
+      `dotnet-counters` на продакшен-сервисе (.NET 10) показывает высокую скорость выделения памяти и частые сборки Gen0.
+      Как вы выясните, какие типы и какие стеки вызовов выделяют больше всего? Какими инструментами и в каком порядке
+      вы воспользуетесь и чего от каждого из них ждать?
+    hint: Счётчик отвечает на вопрос «сколько». Какие данные отвечают на вопросы «кто» и «откуда» и останутся ли короткоживущие объекты в снимке кучи?
+    answer: |
+      Счётчик говорит только «сколько», но не «кто». Чтобы отнести выделения к типам и стекам вызовов, нужны события
+      выделения памяти, которые несут тип объекта и стек.
+
+      1. **Убедиться, что это проблема.** Запустить `dotnet-counters monitor -p <PID> --counters System.Runtime`.
+         В .NET 9 и новее `System.Runtime` публикуется как метрики на основе `Meter`: смотреть на
+         `dotnet.gc.heap.total_allocated` (накопительный счётчик выделенных байтов, скорость выделения - это скорость
+         его роста), `dotnet.gc.collections` по поколениям и `dotnet.gc.pause.time`, а также на задержки запросов.
+         Частые сборки Gen0 при малом времени пауз стоят дёшево; плохо, когда растут время пауз и хвостовые задержки
+         или объекты доживают до Gen1 и Gen2. В .NET 8 и ранее те же данные дают счётчики EventCounter `alloc-rate`,
+         `gen-0-gc-count` и `time-in-gc`.
+      2. **Снять короткую трассировку с событиями выделения.** Например,
+         `dotnet-trace collect -p <PID> --profile gc-verbose --duration 00:00:00:30` (имя профиля стоит сверить
+         с выводом `dotnet-trace list-profiles`, формат длительности - `dd:hh:mm:ss`). Профиль `gc-verbose` отслеживает
+         сборки мусора и делает выборку выделений: среда выполнения пишет событие `GCAllocationTick` примерно на каждые
+         100 КБ выделенной памяти (это деталь реализации) с типом объекта, на котором был пересечён порог, и стеком
+         вызовов. Накладные расходы выше, чем у профиля по умолчанию, поэтому окно держат коротким и начинают с одного
+         инстанса. В контейнерах трассировку снимают через диагностический порт или `dotnet-monitor`.
+      3. **Разобрать трассировку по типам и стекам.** Открыть `.nettrace` в PerfView, в представлении
+         «GC Heap Alloc Ignore Free (Coarse Sampling) Stacks», сгруппировать по типу выделенного объекта, затем раскрыть
+         вызывающие методы. Типичные находки: `string` из конкатенации и форматирования, `byte[]` под буферы, упаковка,
+         замыкания и делегаты, перечислители LINQ, рост `List<T>` и `StringBuilder` без заданной ёмкости. Поскольку это
+         выборка, оценивать нужно доли, а не точные количества.
+      4. **Уточнить вне продакшена.** На тестовом стенде с той же нагрузкой инструмент .NET Object Allocation
+         в профилировщике Visual Studio показывает выделения по типам (представление Allocation) и по путям вызовов
+         (представление Call Tree с кнопкой Expand Hot Path). Он рассчитан на разработку и тестирование, а не на боевой
+         сервер. Исправление горячей точки проверять на BenchmarkDotNet с `[MemoryDiagnoser]` (столбец `Allocated`).
+      5. **Подтвердить результат** после выката теми же метриками: скорость выделения, сборки по поколениям, время
+         пауз, задержки.
+
+      Чего не делать: искать причину в `dotnet-gcdump` или дампе памяти. Снимок кучи показывает объекты, которые живы
+      в момент снимка, а мусор, который создаёт нагрузку на Gen0, к этому времени уже собран.
+    explanation: |
+      Счётчики - это агрегаты: общий объём выделений и число сборок не содержат ни типов, ни стеков. Отнести выделения
+      к коду можно только по событиям, которые несут тип и стек. Записывать каждое выделение в продакшене слишком дорого,
+      поэтому среда выполнения делает выборку: событие `GCAllocationTick` примерно на каждые 100 КБ выделенной памяти.
+      Чем больше код выделяет, тем чаще он пересекает порог и попадает в выборку, поэтому на окне в десятки секунд доли
+      по типам и стекам получаются надёжной оценкой, а точные количества - нет.
+
+      Различие, которое отделяет сильный ответ от слабого, - большой поток короткоживущих выделений против удержания
+      объектов в памяти. Частые сборки Gen0 вызваны большим потоком короткоживущих объектов, и их видно только в событиях
+      выделения. Снимок кучи (`dotnet-gcdump`, дамп памяти) отвечает на другой вопрос - что удерживается в памяти, и годится
+      для поиска утечек и роста Gen2; к тому же `dotnet-gcdump` перед снятием снимка запускает полную сборку мусора, а это
+      лишняя пауза боевого процесса. Второй признак зрелого ответа - сначала проверить, вредят ли выделения на самом деле
+      (время пауз, задержки), только потом оптимизировать, а после исправления подтвердить эффект теми же метриками.
+
+      В .NET 9 и новее `System.Runtime` публикуется как метрики на основе `Meter` (`dotnet.gc.*`); на более ранних версиях
+      среды выполнения используются имена EventCounter `alloc-rate` и `time-in-gc`. Ответ дан для .NET 10.
+    linkTitles:
+      - Инструмент dotnet-trace
+      - Инструмент .NET Object Allocation в Visual Studio
+      - Инструмент dotnet-counters
+      - Инструмент dotnet-gcdump
+  en:
+    title: How do you find which types and call stacks allocate the most in a production .NET service?
+    prompt: |
+      On a production service (.NET 10), `dotnet-counters` shows a high allocation rate and frequent Gen0 collections.
+      How do you find out which types and which call stacks allocate the most? Which tools do you use, in what order,
+      and what do you expect from each of them?
+    hint: The counter answers "how much". What kind of data answers "who" and "from where", and would short-lived objects still be in a heap snapshot?
+    answer: |
+      The counter only says "how much", not "who". To attribute allocations to types and call stacks you need allocation
+      events that carry the object type and the stack.
+
+      1. **Confirm it is a problem.** Run `dotnet-counters monitor -p <PID> --counters System.Runtime`.
+         On .NET 9 and later `System.Runtime` is published as `Meter`-based metrics: watch
+         `dotnet.gc.heap.total_allocated` (a cumulative count of allocated bytes; the allocation rate is how fast it
+         grows), `dotnet.gc.collections` per generation and `dotnet.gc.pause.time`, together with request latency.
+         Frequent Gen0 collections with little pause time are cheap; it hurts when pause time and tail latency grow,
+         or objects survive into Gen1 and Gen2. On .NET 8 and earlier the same data comes from the EventCounter names
+         `alloc-rate`, `gen-0-gc-count` and `time-in-gc`.
+      2. **Record a short trace with allocation events.** For example
+         `dotnet-trace collect -p <PID> --profile gc-verbose --duration 00:00:00:30` (check the profile name in the
+         output of `dotnet-trace list-profiles`; the duration format is `dd:hh:mm:ss`). The `gc-verbose` profile tracks
+         garbage collections and samples object allocations: the runtime writes a `GCAllocationTick` event roughly every
+         100 KB allocated (an implementation detail) with the type of the object that crossed the threshold and the call
+         stack. The overhead is higher than with the default profile, so keep the window short and start on one
+         instance. In containers, collect the trace through the diagnostic port or `dotnet-monitor`.
+      3. **Analyze the trace by type and stack.** Open the `.nettrace` in PerfView, in the
+         "GC Heap Alloc Ignore Free (Coarse Sampling) Stacks" view, group by the allocated type, then expand the callers.
+         Typical findings: `string` from concatenation and formatting, `byte[]` buffers, boxing, closures and delegates,
+         LINQ enumerators, `List<T>` and `StringBuilder` growth without a preset capacity. Because it is a sample, read
+         relative shares, not exact counts.
+      4. **Dig deeper outside production.** On a test environment with the same load, the .NET Object Allocation tool
+         in the Visual Studio profiler shows allocations by type (the Allocation view) and by call path (the Call Tree
+         view with the Expand Hot Path button). It is meant for development and testing, not for a production server.
+         Check the fix of a hot spot with BenchmarkDotNet and `[MemoryDiagnoser]` (the `Allocated` column).
+      5. **Confirm the result** after deployment with the same metrics: allocation rate, collections per generation,
+         pause time, latency.
+
+      What not to do: look for the cause in `dotnet-gcdump` or a memory dump. A heap snapshot shows the objects that are
+      alive at the moment of the snapshot, while the garbage that drives the Gen0 load has already been collected.
+    explanation: |
+      Counters are aggregates: the allocated-bytes total and the collection counts carry neither types nor stacks.
+      Allocations can be attributed to code only through events that carry a type and a stack. Recording every allocation
+      is too expensive for production, so the runtime samples: a `GCAllocationTick` event roughly every 100 KB allocated.
+      The more a piece of code allocates, the more often it crosses the threshold and lands in the sample, so over a window
+      of tens of seconds the shares by type and stack are a reliable estimate, while exact counts are not.
+
+      The distinction that separates a strong answer from a weak one is a high flow of short-lived allocations versus
+      objects retained in memory. Frequent Gen0 collections are caused by a high flow of short-lived objects, and those
+      are visible only in allocation events. A heap snapshot (`dotnet-gcdump`, a memory dump) answers a different question,
+      what is retained in memory, and is the tool for leaks and Gen2 growth; besides, `dotnet-gcdump` forces a full garbage
+      collection before it captures the heap, which is an extra pause on a production process. The second sign of a mature
+      answer is checking first whether the allocations actually hurt (pause time, latency), optimizing only then, and
+      confirming the effect with the same metrics after the fix.
+
+      On .NET 9 and later `System.Runtime` is exposed as `Meter`-based metrics (`dotnet.gc.*`); on earlier runtimes use
+      the EventCounter names `alloc-rate` and `time-in-gc`. The answer is given for .NET 10.
+    linkTitles:
+      - dotnet-trace tool
+      - .NET Object Allocation tool in Visual Studio
+      - dotnet-counters tool
+      - dotnet-gcdump tool
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"

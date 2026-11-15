@@ -1,0 +1,99 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNHBQD8KM1DBY9ZSS5
+slug: bounded-channel-backpressure
+stack: dotnet
+topic: concurrency
+level: middle
+type: open
+grading: self
+tags: [channels, backpressure, producer-consumer]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/core/extensions/channels
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.channels.boundedchannelfullmode
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Чем ограниченный Channel<T> в режиме Wait отличается от неограниченного, если производители быстрее потребителей?
+    prompt: |
+      В .NET 10 конвейер построен на `Channel<T>`: несколько производителей пишут элементы, несколько потребителей их
+      обрабатывают, и производители в среднем работают быстрее потребителей. Чем будет отличаться поведение системы,
+      если канал создан через `Channel.CreateUnbounded<T>()` и если через `Channel.CreateBounded<T>` с
+      `FullMode = BoundedChannelFullMode.Wait`? Почему эта разница важна?
+    hint: Куда деваются элементы, которые производители записывают быстрее, чем потребители успевают их читать, и кто должен ждать?
+    answer: |
+      - **Неограниченный канал** (`Channel.CreateUnbounded<T>()`). Пока канал не завершён, `TryWrite` всегда возвращает `true`,
+        а `WriteAsync` завершается сразу. Производителей ничто не притормаживает, поэтому очередь растёт без предела: растёт
+        потребление памяти и нагрузка на сборщик мусора, каждый элемент дольше ждёт в очереди (задержка обработки растёт),
+        и в итоге процесс может упасть с `OutOfMemoryException`. Проблема не решается, а лишь откладывается.
+      - **Ограниченный канал в режиме `Wait`** (этот режим используется по умолчанию в `Channel.CreateBounded<T>(capacity)`).
+        Когда в буфере уже `Capacity` элементов, `WriteAsync` возвращает незавершённый `ValueTask`, и метод производителя
+        приостанавливается на `await`, не занимая поток. Он продолжится, когда потребитель прочитает элемент и освободит место.
+        `TryWrite` при полном буфере возвращает `false`. Это и есть обратное давление (backpressure): производители автоматически
+        работают со скоростью потребителей, а память ограничена примерно величиной `Capacity` на размер элемента.
+      - **Почему это важно.** Система остаётся устойчивой при перегрузке: давление передаётся вверх по цепочке (брокеру сообщений,
+        источнику данных, клиенту), а не копится молча в памяти процесса.
+      - **Практические детали.** Передавайте `CancellationToken` в `WriteAsync`, чтобы ожидающий производитель мог сдаться по
+        таймауту или при остановке приложения. Если потребители упали, а канал не завершён, производители будут ждать бесконечно,
+        поэтому ошибку потребителя нужно передать через `Writer.TryComplete(exception)`. Не блокируйтесь на
+        `WriteAsync(...).AsTask().Wait()`: так асинхронное ожидание превращается в заблокированный поток пула. Ёмкость подбирайте
+        замером. Если потеря данных допустима (телеметрия, «нужно только последнее значение»), режимы `DropOldest`, `DropNewest`
+        и `DropWrite` избавляют производителей от ожидания ценой отброшенных элементов.
+    explanation: |
+      Если элементы поступают быстрее, чем обрабатываются, любая неограниченная очередь растёт, пока дисбаланс сохраняется.
+      Вопрос только в том, где окажется излишек: в памяти процесса или в ожидании у источника. Неограниченный канал выбирает
+      первое и не даёт никакого сигнала о перегрузке, пока не закончится память. Ограниченный канал в режиме `Wait` выбирает
+      второе: перегрузка превращается в ожидание производителя, и скорость всей цепочки определяет самое медленное звено.
+
+      Типичная ошибка - считать, что ограниченный канал «блокирует потоки». `WriteAsync` ждёт асинхронно: поток возвращается
+      в пул потоков, пока места нет. Другая ошибка - выбирать неограниченный канал, потому что он «быстрее»: он быстрее только
+      до тех пор, пока производители не обгоняют потребителей. Неограниченный канал уместен, когда скорость поступления
+      ограничена естественным образом и заведомо ниже скорости обработки.
+    linkTitles:
+      - "Библиотека System.Threading.Channels"
+      - "Перечисление BoundedChannelFullMode"
+  en:
+    title: How does a bounded Channel<T> in Wait mode differ from an unbounded one when producers are faster than consumers?
+    prompt: |
+      In .NET 10 a pipeline is built on `Channel<T>`: several producers write items, several consumers process them,
+      and on average the producers are faster than the consumers. How does the system behave differently if the channel
+      is created with `Channel.CreateUnbounded<T>()` versus `Channel.CreateBounded<T>` with
+      `FullMode = BoundedChannelFullMode.Wait`? Why does that difference matter?
+    hint: Where do the items go that producers write faster than consumers can read them, and who should be the one waiting?
+    answer: |
+      - **Unbounded channel** (`Channel.CreateUnbounded<T>()`). While the channel is not completed, `TryWrite` always returns `true`
+        and `WriteAsync` completes immediately. Nothing slows the producers down, so the queue grows without limit: memory use
+        and garbage collector load grow, every item waits longer in the queue (processing latency grows), and eventually the
+        process can fail with `OutOfMemoryException`. The problem is not solved, only postponed.
+      - **Bounded channel in `Wait` mode** (the default mode of `Channel.CreateBounded<T>(capacity)`). When the buffer already
+        holds `Capacity` items, `WriteAsync` returns an incomplete `ValueTask`, and the producer method is suspended at `await`
+        without holding a thread. It resumes when a consumer reads an item and frees space. `TryWrite` returns `false` while the
+        buffer is full. This is backpressure: producers automatically run at the consumers' pace, and memory is bounded by roughly
+        `Capacity` times the item size.
+      - **Why it matters.** The system stays stable under overload: pressure propagates upstream (to a message broker, a data
+        source, a client) instead of silently piling up in the process memory.
+      - **Practical details.** Pass a `CancellationToken` to `WriteAsync` so that a waiting producer can give up on a timeout
+        or at application shutdown. If the consumers die and the channel is not completed, producers wait forever, so a consumer
+        failure has to be reported through `Writer.TryComplete(exception)`. Do not block on `WriteAsync(...).AsTask().Wait()`:
+        that turns an asynchronous wait into a blocked thread pool thread. Choose the capacity by measuring. When losing data is
+        acceptable (telemetry, "only the latest value matters"), the `DropOldest`, `DropNewest` and `DropWrite` modes spare
+        producers from waiting at the cost of discarded items.
+    explanation: |
+      When items arrive faster than they are processed, any unbounded queue grows for as long as the imbalance lasts.
+      The only question is where the surplus ends up: in the process memory or as waiting at the source. An unbounded
+      channel chooses the first and gives no overload signal until memory runs out. A bounded channel in `Wait` mode chooses
+      the second: overload turns into producer waiting, and the slowest stage sets the pace of the whole pipeline.
+
+      A typical mistake is to think that a bounded channel "blocks threads". `WriteAsync` waits asynchronously: the thread
+      goes back to the thread pool while there is no space. Another mistake is to pick an unbounded channel because it is
+      "faster": it is faster only until producers outrun consumers. An unbounded channel fits when the arrival rate is
+      naturally limited and known to stay below the processing rate.
+    linkTitles:
+      - "System.Threading.Channels library"
+      - "BoundedChannelFullMode enum"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

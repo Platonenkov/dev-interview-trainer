@@ -1,0 +1,126 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMDT35D51CHPHZBTN5
+slug: tcs-setresult-runs-continuation-inline
+stack: dotnet
+topic: async
+level: senior
+type: output
+grading: auto
+tags: [taskcompletionsource, continuations, run-continuations-asynchronously]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    TaskCompletionSource tcs = new();
+
+    async Task WaitForSignalAsync()
+    {
+        await tcs.Task;
+        Console.Write("C");
+    }
+
+    Task waiter = WaitForSignalAsync();
+    tcs.SetResult();
+    Console.Write("B");
+    await waiter;
+expect:
+  kind: output
+  value: "CB"
+acceptedOutputs: ["CB"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "CB" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "BC" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "B" }
+  - id: d
+    correct: false
+    expect: { kind: compile-error }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.tasks.taskcreationoptions
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.tasks.taskcompletionsource
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что выведет программа, если после await на задаче TaskCompletionSource вызвать SetResult?
+    prompt: |
+      Что выведет эта программа в консоль? Программа запускается как консольное приложение .NET 10,
+      контекста синхронизации нет.
+    hint: Что делает `SetResult` с продолжениями, которые уже подписаны на задачу, если `TaskCompletionSource` создан без флагов?
+    options:
+      a: "CB"
+      b: "BC"
+      c: "B"
+      d: Ошибка компиляции
+    optionExplanations:
+      b: "Так могло бы быть, если бы продолжение выполнялось асинхронно, например при создании `TaskCompletionSource` с `TaskCreationOptions.RunContinuationsAsynchronously`, и даже тогда порядок зависел бы от планирования. Без этого флага `SetResult` выполняет продолжение сам, до возврата управления."
+      c: "`await waiter` дожидается завершения `WaitForSignalAsync`, поэтому `C` выводится в любом случае: программа не может закончиться раньше."
+      d: "Код корректен. Необобщённый `TaskCompletionSource` с методом `SetResult()` без аргументов существует начиная с .NET 5, а асинхронные локальные функции допустимы в инструкциях верхнего уровня."
+    answer: "CB"
+    explanation: |
+      `WaitForSignalAsync` выполняется синхронно до `await tcs.Task`. Задача ещё не завершена, поэтому метод
+      регистрирует своё продолжение на ней и возвращает незавершённую задачу `waiter`.
+
+      Затем основной поток вызывает `tcs.SetResult()`. Задача переходит в состояние `RanToCompletion` и запускает
+      зарегистрированные продолжения. Контекста синхронизации нет, планировщик стандартный, а флаг
+      `RunContinuationsAsynchronously` не задан, поэтому продолжение выполняется синхронно прямо внутри `SetResult`,
+      в том же потоке: выводится `C`, и метод завершается. Только после этого `SetResult` возвращает управление,
+      и программа выводит `B`. Итог: `CB`. Поведение проверяется на .NET 10.
+
+      На практике это источник тонких ошибок: код после `await` у потребителя выполняется в потоке того, кто завершает
+      задачу, иногда внутри его `lock` или посреди его логики, что приводит к взаимным блокировкам, повторному входу
+      и неожиданно долгим вызовам `SetResult`. Поэтому `TaskCompletionSource`, который используется как сигнал между
+      компонентами, обычно создают как `new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)`:
+      тогда продолжения ставятся в очередь пула потоков. Частая ошибка - передать в конструктор
+      `TaskContinuationOptions.RunContinuationsAsynchronously`: такое значение попадает в перегрузку с параметром
+      `object state` и не включает асинхронные продолжения.
+    linkTitles:
+      - Перечисление TaskCreationOptions
+      - Класс TaskCompletionSource
+  en:
+    title: What does the program print when SetResult is called after an await on a TaskCompletionSource task?
+    prompt: |
+      What does this program print to the console? It runs as a .NET 10 console application with no
+      synchronization context.
+    hint: What does `SetResult` do with continuations already registered on the task when the `TaskCompletionSource` was created without any flags?
+    options:
+      a: "CB"
+      b: "BC"
+      c: "B"
+      d: Compile error
+    optionExplanations:
+      b: "That could happen if the continuation ran asynchronously, for example when the `TaskCompletionSource` is created with `TaskCreationOptions.RunContinuationsAsynchronously`, and even then the order would depend on scheduling. Without that flag `SetResult` runs the continuation itself before it returns."
+      c: "`await waiter` waits for `WaitForSignalAsync` to finish, so `C` is always printed: the program cannot end earlier."
+      d: "The code is valid. The non-generic `TaskCompletionSource` with a parameterless `SetResult()` exists since .NET 5, and async local functions are allowed in top-level statements."
+    answer: "CB"
+    explanation: |
+      `WaitForSignalAsync` runs synchronously up to `await tcs.Task`. The task is not complete yet, so the method
+      registers its continuation on it and returns the incomplete task `waiter`.
+
+      Then the main thread calls `tcs.SetResult()`. The task moves to `RanToCompletion` and runs its registered
+      continuations. There is no synchronization context, the scheduler is the default one, and the
+      `RunContinuationsAsynchronously` flag is not set, so the continuation runs synchronously inside `SetResult`,
+      on the same thread: `C` is printed and the method completes. Only then does `SetResult` return, and the
+      program prints `B`. The result is `CB`. The behaviour is checked on .NET 10.
+
+      In practice this is a source of subtle bugs: the consumer's code after `await` runs on the thread of whoever
+      completes the task, sometimes inside that caller's `lock` or in the middle of its logic, which leads to deadlocks,
+      reentrancy and unexpectedly long `SetResult` calls. That is why a `TaskCompletionSource` used as a signal between
+      components is usually created as `new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)`:
+      its continuations are then queued to the thread pool. A common mistake is to pass
+      `TaskContinuationOptions.RunContinuationsAsynchronously` to the constructor: that value binds to the overload
+      with an `object state` parameter and does not enable asynchronous continuations.
+    linkTitles:
+      - TaskCreationOptions enum
+      - TaskCompletionSource class
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

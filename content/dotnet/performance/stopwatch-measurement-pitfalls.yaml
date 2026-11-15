@@ -1,0 +1,118 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WPSEWVVVZ94VWTHTVD
+slug: stopwatch-measurement-pitfalls
+stack: dotnet
+topic: performance
+level: middle
+type: multi
+grading: auto
+tags: [benchmarking, stopwatch, jit, tiered-compilation]
+code:
+  language: csharp
+  harness: none
+  source: |
+    // Run once from the IDE to check whether the new BuildReport is faster
+    Stopwatch sw = Stopwatch.StartNew();
+    string report = BuildReport(orders);
+    sw.Stop();
+    Console.WriteLine($"BuildReport: {sw.Elapsed.TotalMilliseconds} ms");
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: true
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+links:
+  - url: https://benchmarkdotnet.org/articles/guides/good-practices.html
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.diagnostics.stopwatch
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/runtime-config/compilation
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему замер одного вызова метода через Stopwatch ненадёжен?
+    prompt: |
+      Разработчик хочет проверить, ускорила ли его оптимизация метод `BuildReport`. Он запускает приложение
+      из IDE и один раз замеряет вызов, как в коде выше (`.NET 10`). Выберите все факторы, из-за которых
+      полученному числу нельзя доверять.
+    hint: Подумайте, чем замеряемый запуск отличается от тысячного вызова того же метода в продакшене.
+    options:
+      a: "Код собран в конфигурации Debug или запущен под отладчиком, поэтому JIT не применяет оптимизации и время не отражает скорость в продакшене"
+      b: "Замеряется первый вызов: в него входят JIT-компиляция, загрузка типов и статические конструкторы, а при многоуровневой компиляции метод сначала выполняется неоптимизированным кодом уровня 0"
+      c: "Одно измерение не отделяет стоимость метода от шума: паузы сборщика мусора, переключения контекста, изменения частоты процессора"
+      d: "Вместо `Stopwatch` нужно брать разницу двух значений `DateTime.Now`, потому что `Stopwatch` менее точен"
+      e: "`Stopwatch` считает только процессорное время текущего потока, поэтому время ожидания ввода-вывода и блокировок в результат не попадает"
+    optionExplanations:
+      d: "Наоборот. `Stopwatch` построен на монотонном счётчике высокого разрешения операционной системы (`Stopwatch.IsHighResolution`, `Stopwatch.Frequency`). `DateTime.Now` - это время по часам с переводом в локальный пояс: оно может скачком меняться при корректировке системных часов и не предназначено для замера интервалов. Выбор `Stopwatch` здесь не ошибка."
+      e: "`Stopwatch` измеряет прошедшее реальное время (wall-clock) между `Start` и `Stop`. Ожидание ввода-вывода, блокировок и вытеснение потока в результат входят, и это одна из причин шума, а не способ его избежать."
+    answer: "Верны `a`, `b` и `c`: неоптимизированная сборка или отладчик, стоимость первого вызова (JIT и многоуровневая компиляция) и единственное измерение, которое не отличает сигнал от шума. Сам `Stopwatch` выбран правильно."
+    explanation: |
+      Проблема не в таймере, а в том, что именно он замеряет.
+
+      - **Debug и отладчик.** В конфигурации Debug компилятор помечает сборку как неоптимизированную, и JIT генерирует
+        код без оптимизаций. Подключённый отладчик тоже может подавлять оптимизации JIT. Такой замер говорит о скорости
+        отладочной сборки, а не о том, что будет в Release.
+      - **Первый вызов.** До выполнения метод нужно скомпилировать JIT, загрузить используемые типы и выполнить их статические
+        конструкторы. В .NET 10 многоуровневая компиляция (tiered compilation) включена по умолчанию: часто вызываемый метод
+        сначала компилируется быстро и без оптимизаций, а оптимизированный код получает позже. Первый вызов почти всегда
+        медленнее установившегося режима.
+      - **Одна итерация.** Паузы сборщика мусора, планировщик ОС, другие процессы, частота процессора и состояние кэшей
+        дают разброс, сравнимый с эффектом оптимизации. По одному числу нельзя понять, что это: разница или шум.
+
+      Правильный путь - BenchmarkDotNet: сборка Release без отладчика, отдельный процесс, прогрев, много итераций и
+      статистика (среднее, медиана, стандартное отклонение). Если писать замер вручную, нужно как минимум сделать Release,
+      прогреть метод и повторить измерение много раз.
+    linkTitles:
+      - "BenchmarkDotNet: рекомендации по написанию бенчмарков"
+      - Класс Stopwatch
+      - Параметры конфигурации среды выполнения для компиляции
+  en:
+    title: Why is timing a single method call with Stopwatch unreliable?
+    prompt: |
+      A developer wants to check whether an optimization made the `BuildReport` method faster. They run the application
+      from the IDE and time one call once, as in the code above (`.NET 10`). Select all factors that make the resulting
+      number untrustworthy.
+    hint: Think about how the measured run differs from the thousandth call of the same method in production.
+    options:
+      a: "The code is built in the Debug configuration or runs under a debugger, so the JIT does not optimize it and the time does not reflect production speed"
+      b: "The first call is measured: it includes JIT compilation, type loading and static constructors, and with tiered compilation the method first runs unoptimized tier-0 code"
+      c: "One measurement cannot separate the method's cost from noise: garbage collector pauses, context switches, CPU frequency changes"
+      d: "`Stopwatch` should be replaced with the difference of two `DateTime.Now` values, because `Stopwatch` is less precise"
+      e: "`Stopwatch` counts only the CPU time of the current thread, so time spent waiting on IO and locks is not included"
+    optionExplanations:
+      d: "The opposite. `Stopwatch` is built on the operating system's high-resolution monotonic counter (`Stopwatch.IsHighResolution`, `Stopwatch.Frequency`). `DateTime.Now` is clock time converted to the local time zone: it can jump when the system clock is adjusted and is not meant for measuring intervals. Choosing `Stopwatch` is not the flaw here."
+      e: "`Stopwatch` measures elapsed real (wall-clock) time between `Start` and `Stop`. Waiting on IO, on locks and being preempted are all included, which is one source of noise rather than a way around it."
+    answer: "`a`, `b` and `c` are correct: an unoptimized build or a debugger, the cost of the first call (JIT and tiered compilation), and a single measurement that cannot tell signal from noise. `Stopwatch` itself is the right choice."
+    explanation: |
+      The problem is not the timer but what it is timing.
+
+      - **Debug and the debugger.** In the Debug configuration the compiler marks the assembly as unoptimized, and the JIT
+        produces code without optimizations. An attached debugger can also suppress JIT optimizations. Such a measurement
+        tells you the speed of a debug build, not what Release will do.
+      - **The first call.** Before it runs, the method has to be JIT-compiled, the types it uses loaded and their static
+        constructors executed. In .NET 10 tiered compilation is on by default: a frequently called method is first compiled
+        quickly without optimizations and gets optimized code later. The first call is almost always slower than the steady state.
+      - **One iteration.** Garbage collector pauses, the OS scheduler, other processes, CPU frequency and cache state cause
+        variation comparable to the effect of the optimization. A single number cannot tell you whether you see a difference or noise.
+
+      The right tool is BenchmarkDotNet: a Release build without a debugger, a separate process, warmup, many iterations and
+      statistics (mean, median, standard deviation). If you time by hand, at least use Release, warm the method up and repeat
+      the measurement many times.
+    linkTitles:
+      - "BenchmarkDotNet: good practices"
+      - Stopwatch class
+      - Runtime configuration options for compilation
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"
+  noRunReason: Illustrative fragment; BuildReport and orders are not defined, and timing output is not deterministic.

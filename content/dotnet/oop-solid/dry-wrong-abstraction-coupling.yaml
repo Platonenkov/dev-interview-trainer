@@ -1,0 +1,118 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNNG37MEA7PADT2WT3
+slug: dry-wrong-abstraction-coupling
+stack: dotnet
+topic: oop-solid
+level: senior
+type: open
+grading: self
+tags: [dry, wrong-abstraction, coupling, refactoring]
+links:
+  - url: https://sandimetz.com/blog/2016/1/20/the-wrong-abstraction
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/dotnet/architecture/modern-web-apps-azure/architectural-principles
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему общий хелпер для счетов и зарплаты оброс флагами и что с ним делать?
+    prompt: |
+      Модули выставления счетов и расчёта зарплаты принадлежат двум разным командам. Когда-то в них заметили
+      почти одинаковый код подсчёта сумм и форматирования строк и вынесли его в общий метод
+      `AmountCalculator.Calculate`. С тех пор у метода появились параметры `isPayroll`, `applyVat` и
+      `roundPerLine`. Каждое новое требование одной команды добавляет ещё один флаг и ветку, а релизы одной
+      команды время от времени ломают расчёты другой.
+
+      Что пошло не так с точки зрения принципа DRY и как бы вы это исправили?
+    hint: Если в счетах поменяют правило округления, обязана ли из-за этого поменяться зарплатная ведомость?
+    answer: |
+      - **Диагноз.** DRY говорит о дублировании знания, а не текста: каждое правило предметной области должно
+        иметь одно авторитетное представление. Код счетов и зарплаты совпадал случайно. Он выражает разные
+        правила (налоги и НДС в счетах, удержания в зарплате), у которых разные причины изменения и разные
+        владельцы. Объединив их, получили неверную абстракцию: общий метод нарушает принцип единственной
+        ответственности и связывает две команды.
+      - **Симптомы.** Булевы флаги и ветки по вызывающему, параметры, нужные только одному клиенту, страх
+        трогать метод, регрессии у соседней команды, согласование релизов ради одного изменения.
+      - **Исправление.**
+        1. Закрепить текущее поведение характеризационными тестами отдельно для счетов и для зарплаты.
+        2. Встроить (inline) хелпер обратно в каждый вызывающий модуль, сознательно вернув дублирование.
+        3. В каждой копии убрать ветки и параметры, которые этому вызывающему не нужны: флаги становятся
+           константами, мёртвый код удаляется.
+        4. Сравнить упрощённые копии и заново вынести только то, что действительно является одним знанием с
+           одной причиной изменения (например, тип `Money` и арифметику валют), с явным владельцем и
+           контрактом. Остальное остаётся похожим, но независимым.
+      - **Профилактика.** Перед выносом общего кода спрашивать: «если это правило изменится для одного
+        вызывающего, обязано ли оно измениться для другого?». Терпеть дублирование, пока не станет видна
+        настоящая общая абстракция. Общий код между командами - это ещё и организационная связь, поэтому
+        планка для него выше.
+    explanation: |
+      Сходство текста - слабый сигнал. Два фрагмента могут совпадать сегодня и разойтись завтра, потому что
+      подчиняются разным правилам. Когда такие фрагменты объединяют, общий метод начинает зависеть от причин
+      изменения обоих модулей, и каждое новое требование добавляет параметр и условие. Формально метод один,
+      но внутри него две программы, переплетённые флагами, и понять, какие ветки нужны конкретному
+      вызывающему, всё труднее.
+
+      Сэнди Метц описывает этот цикл так: абстракция уже существует, поэтому следующий разработчик чувствует
+      себя обязанным её сохранить и добавляет ещё один параметр, а не пересматривает решение. Её вывод -
+      дублирование обходится гораздо дешевле неверной абстракции, а самый быстрый путь вперёд начинается с шага
+      назад: встроить код обратно в вызывающих и упростить каждую копию.
+
+      Между двумя командами цена неверной абстракции выше: изменение общего метода требует согласования версий
+      и релизов. Две независимые копии и явное решение «это разные правила» часто лучше, а действительно общая
+      часть, например работа с деньгами и валютами, выносится отдельно и получает понятного владельца.
+    linkTitles:
+      - "Sandi Metz: The Wrong Abstraction"
+      - "Архитектурные принципы"
+  en:
+    title: Why did a helper shared by invoicing and payroll fill up with flags, and what do you do about it?
+    prompt: |
+      The invoicing and payroll modules belong to two different teams. At some point someone noticed nearly
+      identical code for computing amounts and formatting lines in both and extracted it into a shared method
+      `AmountCalculator.Calculate`. Since then the method has gained the parameters `isPayroll`, `applyVat` and
+      `roundPerLine`. Every new requirement from one team adds another flag and branch, and releases of one
+      team now and then break the other team's calculations.
+
+      What went wrong from the point of view of the DRY principle, and how would you fix it?
+    hint: If the rounding rule for invoices changes, does the payroll statement have to change because of it?
+    answer: |
+      - **Diagnosis.** DRY is about duplicated knowledge, not duplicated text: every domain rule should have one
+        authoritative representation. The invoicing and payroll code matched by coincidence. It expresses
+        different rules (taxes and VAT on invoices, deductions on payroll) with different reasons to change and
+        different owners. Merging them produced a wrong abstraction: the shared method violates the single
+        responsibility principle and couples two teams.
+      - **Symptoms.** Boolean flags and branches per caller, parameters only one client needs, fear of touching
+        the method, regressions in the other team, coordinated releases for a single change.
+      - **Fix.**
+        1. Pin the current behaviour with characterization tests, separately for invoicing and for payroll.
+        2. Inline the helper back into each caller, deliberately reintroducing the duplication.
+        3. In each copy remove the branches and parameters that this caller does not need: flags become
+           constants, dead code is deleted.
+        4. Compare the simplified copies and re-extract only what is truly one piece of knowledge with one
+           reason to change (for example a `Money` type and currency arithmetic), with an explicit owner and
+           contract. The rest stays similar but independent.
+      - **Prevention.** Before extracting shared code, ask: "if this rule changes for one caller, must it change
+        for the other?". Tolerate duplication until the real shared abstraction becomes visible. Code shared
+        between teams is also an organisational dependency, so the bar for it is higher.
+    explanation: |
+      Textual similarity is a weak signal. Two fragments can match today and diverge tomorrow because they obey
+      different rules. When such fragments are merged, the shared method starts to depend on the reasons to
+      change of both modules, and every new requirement adds a parameter and a condition. Formally there is one
+      method, but inside it there are two programs tangled by flags, and it gets harder and harder to see which
+      branches a given caller needs.
+
+      Sandi Metz describes the cycle like this: the abstraction already exists, so the next developer feels
+      obliged to keep it and adds one more parameter instead of revisiting the decision. Her conclusion is that
+      duplication is far cheaper than the wrong abstraction, and the fastest way forward starts with a step
+      back: inline the code into the callers and simplify each copy.
+
+      Between two teams the cost of a wrong abstraction is higher: changing the shared method needs coordinated
+      versions and releases. Two independent copies and an explicit decision that "these are different rules"
+      are often better, while the genuinely shared part, such as money and currency handling, is extracted on
+      its own and gets a clear owner.
+    linkTitles:
+      - "Sandi Metz: The Wrong Abstraction"
+      - "Architectural principles"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

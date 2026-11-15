@@ -1,0 +1,130 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNCR472ZY4SN4H8M4Y
+slug: when-composition-beats-inheritance
+stack: dotnet
+topic: oop-solid
+level: middle
+type: open
+grading: self
+tags: [inheritance, composition, design]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/object-oriented/inheritance
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/design-guidelines/virtual-members
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/design-guidelines/designing-for-extensibility
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/design-guidelines/guidelines-for-collections
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Когда для повторного использования кода выбирать композицию, а когда наследование?
+    prompt: |
+      Вам нужно повторно использовать поведение, которое уже есть в другом классе. Когда вы предпочтёте
+      композицию наследованию, и в каких случаях наследование всё же остаётся правильным инструментом?
+    hint: Подумайте, что производный класс получает от базового помимо нужного метода, и что произойдёт, когда базовый класс изменится.
+    answer: |
+      **Для повторного использования поведения композиция обычно лучший первый выбор:**
+      - класс хранит ссылку на объект с нужным поведением и вызывает только его публичный контракт, поэтому
+        детали реализации скрыты, а изменение внутренностей этого объекта не ломает владельца;
+      - зависимость можно подменить во время выполнения или через DI (другая стратегия, декоратор, фейк в тесте),
+        тогда как поведение, заданное переопределением виртуального метода, фиксируется при компиляции;
+      - можно сочетать несколько поведений, а у класса C# только один прямой базовый класс;
+      - наружу не утекают лишние члены: класс, унаследованный от `List<T>`, отдаёт всем `Add`, `Clear` и
+        `Insert`, а эти методы не виртуальные, так что перехватить их и защитить свои инварианты нельзя.
+        Обёртка открывает только нужные операции.
+
+      **Наследование уместно, когда:**
+      - есть настоящее отношение «является»: производный класс можно подставить везде, где ожидается базовый,
+        без нарушения его контракта (LSP);
+      - базовый класс спроектирован для расширения и документирует свои `virtual`, `abstract` и `protected` члены.
+        Примеры - `Collection<T>` с переопределяемыми `InsertItem`, `SetItem`, `RemoveItem` и `ClearItems`
+        или абстрактный `Stream`;
+      - нужен полиморфизм через базовый тип, а иерархия стабильна.
+
+      **Эвристика:** если вы наследуете только ради того, чтобы вызвать пару методов базового класса, это повод
+      для композиции. И наоборот, проектируя свой класс, не делайте члены `virtual` без причины: каждая точка
+      расширения - это контракт, который придётся проектировать, тестировать и поддерживать.
+    explanation: |
+      Наследование - самая сильная связь между классами. Производный класс зависит не только от публичного
+      контракта базового, но и от его внутреннего поведения: какие виртуальные методы вызывают друг друга,
+      в каком порядке и с каким состоянием. Если автор базового класса меняет эти детали, производный класс
+      ломается, хотя сам не менялся (проблема хрупкого базового класса). Рекомендации по проектированию .NET
+      прямо называют виртуальные члены дорогими в проектировании, тестировании и сопровождении: переопределение
+      может выполнить произвольный код, а менять такие члены без нарушения совместимости труднее. Там же
+      отмечено, что поведение виртуального члена можно изменить только при компиляции, а поведение колбэка -
+      во время выполнения. Кроме того, наследник получает весь публичный интерфейс базового класса, даже
+      ненужный.
+
+      Композиция связывает объекты только через контракт, поэтому реализацию можно заменить, обернуть или
+      протестировать отдельно. Цена - немного кода делегирования.
+
+      Наследование при этом не плохо само по себе: оно хорошо работает там, где базовый класс намеренно
+      открыт для расширения, как `Collection<T>`, и подтип действительно сохраняет его контракт. `List<T>`,
+      наоборот, рассчитан на использование внутри реализации, а не на расширение: рекомендации по коллекциям
+      советуют не выставлять его в публичных API. Ответ, который сводится к «наследование всегда плохо», так же
+      слаб, как и «наследуем ради переиспользования кода».
+    linkTitles:
+      - "Наследование в C#"
+      - "Рекомендации по виртуальным членам"
+      - "Проектирование с учётом расширяемости"
+      - "Рекомендации по коллекциям"
+  en:
+    title: When should you reuse code through composition, and when through inheritance?
+    prompt: |
+      You need to reuse behaviour that already exists in another class. When would you choose composition
+      over inheritance, and in which cases is inheritance still the right tool?
+    hint: Think about what a derived class gets from its base besides the method it needs, and what happens when the base class changes.
+    answer: |
+      **For reusing behaviour, composition is usually the better first choice:**
+      - the class holds a reference to an object with the needed behaviour and calls only its public contract,
+        so implementation details stay hidden and changes inside that object do not break the owner;
+      - the dependency can be swapped at runtime or through DI (another strategy, a decorator, a fake in a test),
+        while behaviour supplied by overriding a virtual method is fixed at compile time;
+      - several behaviours can be combined, while a C# class has only one direct base class;
+      - no extra members leak out: a class derived from `List<T>` exposes `Add`, `Clear` and `Insert` to
+        everyone, and these methods are not virtual, so it cannot intercept them to protect its invariants.
+        A wrapper exposes only the needed operations.
+
+      **Inheritance fits when:**
+      - there is a true is-a relationship: the derived class can be used anywhere the base is expected
+        without breaking its contract (LSP);
+      - the base class is designed for extension and documents its `virtual`, `abstract` and `protected`
+        members. Examples are `Collection<T>` with the overridable `InsertItem`, `SetItem`, `RemoveItem` and
+        `ClearItems`, or the abstract `Stream`;
+      - you need polymorphism through the base type and the hierarchy is stable.
+
+      **Heuristic:** if you inherit only to call a couple of base class methods, that is a sign to use
+      composition. Conversely, when you design your own class, do not make members `virtual` without a reason:
+      every extension point is a contract you will have to design, test and maintain.
+    explanation: |
+      Inheritance is the strongest coupling between classes. A derived class depends not only on the public
+      contract of the base but also on its internal behaviour: which virtual methods call each other, in what
+      order and with what state. If the author of the base class changes those details, the derived class
+      breaks even though it did not change (the fragile base class problem). The .NET design guidelines call
+      virtual members costly to design, test and maintain: an override can run arbitrary code, and such members
+      are less forgiving of changes without breaking compatibility. The same guidelines note that the behaviour
+      of a virtual member can be changed only at compile time, while the behaviour of a callback can be changed
+      at run time. The derived class also gets the whole public interface of the base, even the parts it does
+      not need.
+
+      Composition couples objects only through a contract, so the implementation can be replaced, wrapped or
+      tested separately. The cost is a little delegation code.
+
+      Inheritance is not bad in itself: it works well where the base class is deliberately open for extension,
+      like `Collection<T>`, and the subtype truly keeps its contract. `List<T>`, by contrast, is meant for use
+      inside an implementation, not for extension: the collection guidelines advise against exposing it in
+      public APIs. An answer that boils down to "inheritance is always bad" is as weak as "we inherit to reuse
+      code".
+    linkTitles:
+      - "Inheritance in C#"
+      - "Virtual member design guidelines"
+      - "Designing for extensibility"
+      - "Guidelines for collections"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

@@ -1,0 +1,106 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WQYZRPC3QJ87G1XX15
+slug: value-types-not-always-on-stack
+stack: dotnet
+topic: types-memory
+level: junior
+type: open
+grading: self
+tags: [stack, heap, value-types, reference-types, memory-layout]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/value-types
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/fundamentals
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/types/boxing-and-unboxing
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Правда ли, что типы значений всегда хранятся в стеке, а ссылочные типы в куче?
+    prompt: |
+      Часто говорят: «типы значений живут в стеке, а ссылочные типы - в куче». Верно ли это?
+      Где на самом деле хранится поле `Count` типа `int` у экземпляра класса `class Counter { public int Count; }`,
+      и в каких ещё случаях это правило не работает?
+    hint: |
+      Спросите себя не «какого типа это значение», а «частью чего является эта переменная и сколько она должна жить».
+    answer: |
+      - Правило - упрощение. Место хранения значения определяется тем, где живёт переменная (её видом и временем
+        жизни), а не тем, является ли её тип типом значения или ссылочным.
+      - Поле `Count` хранится в управляемой куче, прямо внутри объекта `Counter`: `new Counter()` выделяет в куче
+        один объект, и 4 байта под `Count` - часть этого объекта. Поле освобождается вместе с объектом.
+      - Другие случаи, когда значение типа значения лежит в куче:
+        - элементы массива, например `int[]`: массив - объект в куче, и значения хранятся прямо в нём;
+        - локальные переменные, захваченные лямбдой или анонимным методом: компилятор переносит их в класс замыкания;
+        - локальные переменные `async`-методов и итераторов, которые нужны после `await` или `yield return`: они
+          становятся полями конечного автомата, который создаёт компилятор, и этот автомат живёт в куче. У итератора
+          это объект класса в куче с самого начала, а у `async`-метода в Release-сборке это структура, которая
+          упаковывается в кучу, когда метод действительно приостанавливается;
+        - упакованные значения (`object o = 42;`).
+      - В стеке (или в регистре процессора) значение типа значения оказывается, когда это обычная локальная переменная
+        или параметр метода, который ничем не захвачен. И наоборот, переменная ссылочного типа (сама ссылка) тоже может
+        быть локальной переменной в стеке, хотя объект, на который она указывает, находится в куче.
+    explanation: |
+      Переменная типа значения содержит сами данные, а не ссылку на них. Поэтому значение хранится там же, где
+      хранится переменная. Локальная переменная метода нужна только на время вызова, и среда выполнения может
+      разместить её в кадре стека. Поле нужно столько же, сколько живёт объект, поэтому оно хранится внутри объекта,
+      а объект класса размещается в управляемой куче, которой управляет сборщик мусора.
+
+      Язык не гарантирует, где именно будет лежать значение: стек и куча - деталь реализации среды выполнения.
+      Настоящее различие между типами значений и ссылочными типами - в семантике: при присваивании, передаче в
+      метод и возврате из него копируются либо сами данные, либо ссылка на объект.
+
+      Практическое следствие: объявить тип как `struct` ещё не значит избавиться от выделений в куче. `List<Point>`
+      хранит точки во внутреннем массиве в куче, `Point` в поле класса лежит внутри объекта этого класса, а
+      приведение `Point` к `object` или к интерфейсу создаёт в куче новый упакованный объект.
+    linkTitles:
+      - "Типы значений"
+      - "Основы сборки мусора"
+      - "Упаковка и распаковка"
+  en:
+    title: Do value types always live on the stack and reference types on the heap?
+    prompt: |
+      A popular rule says "value types live on the stack, reference types live on the heap". Is it true?
+      Where is the `int` field `Count` of an instance of `class Counter { public int Count; }` actually stored,
+      and in which other cases does the rule not hold?
+    hint: |
+      Ask not "what type is this value" but "what is this variable a part of, and how long must it live".
+    answer: |
+      - The rule is a simplification. Where a value is stored depends on where the variable lives (its kind and
+        lifetime), not on whether its type is a value type or a reference type.
+      - The field `Count` is stored on the managed heap, inline inside the `Counter` object: `new Counter()` allocates
+        one heap object, and the 4 bytes of `Count` are part of it. The field is freed together with the object.
+      - Other cases where a value-type value lives on the heap:
+        - elements of an array such as `int[]`: the array is a heap object and holds the values inline;
+        - local variables captured by a lambda or an anonymous method: the compiler moves them into a closure class;
+        - locals of `async` methods and iterators that are needed after `await` or `yield return`: they become
+          fields of the compiler-generated state machine, which lives on the heap. An iterator's state machine is a
+          heap object from the start, while an `async` method's state machine in a Release build is a struct that is
+          boxed onto the heap when the method actually suspends;
+        - boxed values (`object o = 42;`).
+      - A value-type value ends up on the stack (or in a CPU register) when it is an ordinary local variable or
+        parameter of a method that nothing captures. Conversely, a variable of a reference type (the reference itself)
+        can also be a local on the stack, even though the object it points to is on the heap.
+    explanation: |
+      A variable of a value type contains the data itself, not a reference to it. So the value is stored wherever
+      the variable is stored. A local variable of a method is needed only for the duration of the call, so the
+      runtime can place it in the stack frame. A field is needed for as long as its object lives, so it is stored
+      inside the object, and a class object is placed on the managed heap, which the garbage collector manages.
+
+      The language does not guarantee where a value is stored: stack and heap are an implementation detail of the
+      runtime. The real difference between value types and reference types is semantics: assignment, passing to a
+      method and returning from it copy either the data itself or a reference to an object.
+
+      The practical consequence: declaring a type as a `struct` does not by itself remove heap allocations.
+      A `List<Point>` keeps its points in an internal array on the heap, a `Point` in a field of a class lives
+      inside the object of that class, and converting a `Point` to `object` or to an interface creates a new boxed
+      object on the heap.
+    linkTitles:
+      - "Value types"
+      - "Fundamentals of garbage collection"
+      - "Boxing and unboxing"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

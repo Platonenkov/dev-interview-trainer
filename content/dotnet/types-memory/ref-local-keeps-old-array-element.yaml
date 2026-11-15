@@ -1,0 +1,116 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WQ6C785D62EA48T9DB
+slug: ref-local-keeps-old-array-element
+stack: dotnet
+topic: types-memory
+level: middle
+type: output
+grading: auto
+tags: [ref-locals, arrays, managed-pointers]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    int[] a = { 1, 2, 3 };
+    int[] old = a;
+    ref int first = ref a[0];
+
+    a = new int[] { 10, 20, 30 };
+    first = 99;
+
+    Console.Write($"{a[0]} {old[0]}");
+expect:
+  kind: output
+  value: "10 99"
+acceptedOutputs: ["10 99"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "10 99" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "99 1" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "10 1" }
+  - id: d
+    correct: false
+    expect: { kind: compile-error }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/ref
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/statements/declarations
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что выведет код, если после взятия ref на элемент массива переменной присвоили новый массив?
+    prompt: |
+      Что выведет эта программа в консоль? Ссылочная локальная переменная `first` получена до того, как
+      переменной `a` присвоили новый массив, а запись через `first` выполняется уже после этого.
+    hint: Когда вычисляется `ref a[0]` и что именно запоминает `first`?
+    options:
+      a: "10 99"
+      b: "99 1"
+      c: "10 1"
+      d: Ошибка компиляции
+    optionExplanations:
+      b: Так было бы, если бы `first` ссылалась на выражение `a[0]` и пересчитывала его при каждом обращении. Но `ref a[0]` вычисляется один раз в момент объявления и запоминает ячейку старого массива, а не переменную `a`.
+      c: Так было бы, если бы `first` была обычной переменной `int` с копией значения. Ссылочная локальная переменная - это псевдоним ячейки, поэтому запись `first = 99` меняет элемент старого массива, и `old[0]` становится 99.
+      d: "Код корректен. Ссылочную локальную переменную можно инициализировать ссылкой на элемент массива (`ref int first = ref a[0];`), и такое объявление допустимо в операторах верхнего уровня."
+    answer: "10 99"
+    explanation: |
+      Выражение `ref a[0]` вычисляется один раз, в момент объявления `first`: берётся объект массива, на который
+      в этот момент ссылается `a`, и его элемент 0. Ссылочная переменная `first` становится псевдонимом этого
+      элемента, то есть ячейки внутри конкретного объекта массива. С самой переменной `a` она никак не связана.
+
+      Присваивание `a = new int[] { 10, 20, 30 }` меняет только переменную `a`: теперь она указывает на новый
+      массив. `first` по-прежнему ссылается на ячейку первого массива, поэтому `first = 99` записывает 99 в
+      элемент 0 старого массива. Переменная `old` ссылается на тот же старый массив, поэтому `old[0]` равно 99,
+      а `a[0]` нового массива осталось равным 10.
+
+      Чтобы `first` указывала на элемент нового массива, её нужно перенацелить оператором присваивания ссылки:
+      `first = ref a[0];`. Если нужен псевдоним самой переменной, а не элемента, пишут `ref int[] arr = ref a;`.
+      Компилятор гарантирует, что ссылочная переменная не переживёт свой референт, поэтому такой код безопасен.
+      Поведение проверено на .NET 10.
+    linkTitles:
+      - Ключевое слово ref
+      - Объявления переменных, ссылочные переменные
+  en:
+    title: What does the code print when a variable gets a new array after a ref to its element was taken?
+    prompt: |
+      What does this program print to the console? The ref local `first` is taken before the variable `a` is
+      assigned a new array, and the write through `first` happens after that.
+    hint: When is `ref a[0]` evaluated, and what exactly does `first` remember?
+    options:
+      a: "10 99"
+      b: "99 1"
+      c: "10 1"
+      d: Compile error
+    optionExplanations:
+      b: That would be true if `first` referred to the expression `a[0]` and re-evaluated it on every access. But `ref a[0]` is evaluated once, at the declaration, and remembers the slot in the old array, not the variable `a`.
+      c: That would be true if `first` were an ordinary `int` variable holding a copy of the value. A ref local is an alias of the slot, so `first = 99` changes the element of the old array, and `old[0]` becomes 99.
+      d: "The code is valid. A ref local can be initialized with a reference to an array element (`ref int first = ref a[0];`), and such a declaration is allowed in top-level statements."
+    answer: "10 99"
+    explanation: |
+      The expression `ref a[0]` is evaluated once, when `first` is declared: it takes the array object that `a`
+      refers to at that moment and its element 0. The reference variable `first` becomes an alias of that
+      element, a slot inside a specific array object. It has no connection to the variable `a` itself.
+
+      The assignment `a = new int[] { 10, 20, 30 }` changes only the variable `a`: it now refers to the new array.
+      `first` still refers to the slot in the first array, so `first = 99` writes 99 into element 0 of the old
+      array. The variable `old` refers to that same old array, so `old[0]` is 99, while `a[0]` of the new array
+      stays 10.
+
+      To make `first` point to an element of the new array, re-target it with the ref assignment operator:
+      `first = ref a[0];`. If you need an alias of the variable itself rather than of an element, write
+      `ref int[] arr = ref a;`. The compiler ensures that a reference variable does not outlive its referent, so
+      this code is safe. The behaviour is verified on .NET 10.
+    linkTitles:
+      - The ref keyword
+      - Declaration statements, reference variables
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"

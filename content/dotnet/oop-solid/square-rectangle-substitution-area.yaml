@@ -1,0 +1,152 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNKEEKJP199AGDDED6
+slug: square-rectangle-substitution-area
+stack: dotnet
+topic: oop-solid
+level: middle
+type: output
+grading: auto
+tags: [solid, liskov-substitution, inheritance, virtual-members]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    Rectangle shape = new Square();
+    PrintArea(shape);
+
+    static void PrintArea(Rectangle r)
+    {
+        r.Width = 5;
+        r.Height = 4;
+        Console.Write(r.Area);
+    }
+
+    class Rectangle
+    {
+        public virtual int Width { get; set; }
+        public virtual int Height { get; set; }
+        public int Area => Width * Height;
+    }
+
+    class Square : Rectangle
+    {
+        // Keeps both sides equal whichever side is set.
+        public override int Width
+        {
+            get => base.Width;
+            set { base.Width = value; base.Height = value; }
+        }
+
+        public override int Height
+        {
+            get => base.Height;
+            set { base.Width = value; base.Height = value; }
+        }
+    }
+expect:
+  kind: output
+  value: "16"
+acceptedOutputs: ["16"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "16" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "20" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "25" }
+  - id: d
+    correct: false
+    expect: { kind: compile-error }
+links:
+  - url: https://www.cs.cmu.edu/~wing/publications/LiskovWing94.pdf
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/virtual
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/override
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какую площадь выведет метод, если переменная Rectangle хранит Square?
+    prompt: |
+      Метод `PrintArea` написан в расчёте на контракт `Rectangle`: ширина и высота задаются независимо
+      друг от друга. В него передают объект `Square`, сеттеры которого держат стороны равными.
+      Что выведет программа?
+    hint: Проследите, что делает с обеими сторонами каждое из двух присваиваний в `PrintArea`.
+    options:
+      a: "16"
+      b: "20"
+      c: "25"
+      d: Ошибка компиляции
+    optionExplanations:
+      b: "20 вышло бы у настоящего `Rectangle`. Но объект - это `Square`, и его сеттер `Height` записывает 4 в обе стороны."
+      c: "25 получилось бы, если бы выигрывал первый сеттер. Присваивание `Height = 4` выполняется вторым и переписывает обе стороны, так что выигрывает последнее."
+      d: "Код корректен: `Width` и `Height` объявлены `virtual`, `Square` переопределяет их через `override`, а `base.Width` и `base.Height` обращаются к реализации базового класса."
+    answer: "16"
+    explanation: |
+      Вызовы идут через переменную типа `Rectangle`, но свойства виртуальные, а `Square` переопределяет их через
+      `override`. Поэтому во время выполнения работают сеттеры `Square`, то есть реализация самого производного
+      типа объекта. `r.Width = 5` делает обе стороны равными 5, затем `r.Height = 4` делает обе стороны равными 4.
+      `Area` возвращает `4 * 4`, то есть `16`.
+
+      Вызывающий код опирался на контракт базового класса: изменение высоты не трогает ширину, поэтому после
+      присваиваний он ждёт `20`. Лисков и Уинг формулируют требование к подтипу так: свойство, которое можно
+      доказать для объектов базового типа, должно выполняться и для объектов подтипа. Для изменяемого `Rectangle`
+      таким свойством является «присваивание `Height` не меняет `Width`», и `Square` его нарушает. Значит, `Square`
+      нельзя подставить вместо `Rectangle` без изменения поведения программы: это нарушение принципа подстановки
+      Лисков (LSP). Квадрат является прямоугольником в геометрии, но не как изменяемый объект с независимыми
+      сторонами.
+
+      Типичные исправления: не наследовать `Square` от `Rectangle`, а сделать общую абстракцию только с тем, что
+      верно для обеих фигур (например, `Area`), или сделать фигуры неизменяемыми, чтобы сеттеров с таким
+      контрактом просто не было.
+    linkTitles:
+      - "Барбара Лисков, Жаннетт Уинг: A Behavioral Notion of Subtyping"
+      - "Ключевое слово virtual"
+      - "Ключевое слово override"
+  en:
+    title: What area does a method print when a Rectangle variable holds a Square?
+    prompt: |
+      The `PrintArea` method is written against the `Rectangle` contract: width and height are set
+      independently. It receives a `Square` object whose setters keep both sides equal.
+      What does the program print?
+    hint: Trace what each of the two assignments in `PrintArea` does to both sides.
+    options:
+      a: "16"
+      b: "20"
+      c: "25"
+      d: Compile error
+    optionExplanations:
+      b: "20 is what a real `Rectangle` would give. But the object is a `Square`, and its `Height` setter writes 4 to both sides."
+      c: "25 would mean the first setter wins. The `Height = 4` assignment runs second and overwrites both sides, so the last one wins."
+      d: "The code is valid: `Width` and `Height` are `virtual`, `Square` overrides them with `override`, and `base.Width` and `base.Height` call the base class implementation."
+    answer: "16"
+    explanation: |
+      The calls go through a `Rectangle` variable, but the properties are virtual and `Square` overrides them with
+      `override`. So at run time the `Square` setters run, the implementation of the most derived type of the
+      object. `r.Width = 5` sets both sides to 5, then `r.Height = 4` sets both sides to 4.
+      `Area` returns `4 * 4`, which is `16`.
+
+      The calling code relied on the base class contract: changing the height leaves the width alone, so after
+      the assignments it expects `20`. Liskov and Wing state the subtype requirement like this: a property that
+      can be proved for objects of the base type must also hold for objects of the subtype. For a mutable
+      `Rectangle` one such property is "assigning `Height` does not change `Width`", and `Square` breaks it. So
+      `Square` cannot replace `Rectangle` without changing the program's behaviour: that is a violation of the
+      Liskov substitution principle (LSP). A square is a rectangle in geometry, but not as a mutable object with
+      independent sides.
+
+      Typical fixes: do not derive `Square` from `Rectangle`; instead introduce a common abstraction with only
+      what holds for both shapes (for example `Area`), or make the shapes immutable so that setters with this
+      contract do not exist at all.
+    linkTitles:
+      - "Barbara Liskov, Jeannette Wing: A Behavioral Notion of Subtyping"
+      - "virtual keyword"
+      - "override keyword"
+meta:
+  authors: [platonenkov]
+  verified: 1970-01-01

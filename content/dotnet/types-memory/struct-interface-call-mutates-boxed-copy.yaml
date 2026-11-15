@@ -1,0 +1,132 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WRCQNAQY2YB6ZF6ZNS
+slug: struct-interface-call-mutates-boxed-copy
+stack: dotnet
+topic: types-memory
+level: senior
+type: output
+grading: auto
+tags: [boxing, struct, interfaces, mutable-struct, generics]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    Counter c = new Counter();
+    ICounter boxed = c;
+    boxed.Inc();
+    boxed.Inc();
+    c.Inc();
+    Console.Write($"{boxed.Count} {c.Count}");
+
+    interface ICounter
+    {
+        int Count { get; }
+        void Inc();
+    }
+
+    struct Counter : ICounter
+    {
+        public int Count { get; private set; }
+        public void Inc() => Count++;
+    }
+expect:
+  kind: output
+  value: "2 1"
+acceptedOutputs: ["2 1"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "2 1" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "3 3" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "0 1" }
+  - id: d
+    correct: false
+    expect: { kind: compile-error }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/types/boxing-and-unboxing
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/struct
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.reflection.emit.opcodes.constrained
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что выведет код, если изменяемую структуру вызывать и через интерфейс, и напрямую?
+    prompt: |
+      Структура `Counter` реализует интерфейс `ICounter`. Программа присваивает её переменной типа `ICounter`,
+      дважды вызывает `Inc` через интерфейс и один раз напрямую у структуры. Что она выведет в консоль?
+    hint: Что происходит со значением структуры в момент, когда его присваивают переменной интерфейсного типа?
+    options:
+      a: "2 1"
+      b: "3 3"
+      c: "0 1"
+      d: Ошибка компиляции
+    optionExplanations:
+      b: Так было бы, если бы `boxed` и `c` ссылались на один объект, как у класса. Но `Counter` - структура, и присваивание интерфейсу создаёт отдельную упакованную копию.
+      c: Упаковка происходит один раз, в строке `ICounter boxed = c;`. Вызовы через `boxed` не упаковывают значение заново, а работают с уже существующим объектом в куче, поэтому изменения в нём накапливаются.
+      d: Код корректен. Структура может реализовывать интерфейс, преобразование структуры в интерфейс неявное (это упаковка), а изменять собственное поле в методе не-readonly структуры разрешено.
+    answer: "2 1"
+    explanation: |
+      Преобразование типа значения в `object` или в реализуемый им интерфейс - это упаковка: в куче создаётся
+      новый объект, и в него копируется текущее значение структуры. После строки `ICounter boxed = c;` существуют
+      два независимых счётчика: локальная переменная `c` и упакованная копия, на которую ссылается `boxed`.
+
+      Оба вызова `boxed.Inc()` выполняются над упакованной копией, и её `Count` становится `2`. Вызов `c.Inc()`
+      меняет только локальную переменную, её `Count` становится `1`. Отсюда `2 1`.
+
+      Это одна из причин, почему изменяемые структуры считаются опасными: результат зависит от того, через
+      что вызван метод. Обобщённый метод с ограничением на интерфейс, который принимает `ref T`, может вызвать
+      `Inc` у переменной вызывающего кода без упаковки, например
+      `static void Bump<T>(ref T x) where T : ICounter => x.Inc();`. Вызов члена интерфейса у `T` компилируется
+      в IL с префиксом `constrained.`: если `T` - тип значения, который сам реализует метод, указатель на
+      переменную передаётся в метод напрямую, без упаковки. Поведение программы проверено на .NET 10.
+    linkTitles:
+      - Упаковка и распаковка
+      - Типы структур
+      - Поле OpCodes.Constrained (префикс IL constrained.)
+  en:
+    title: What does the code print when a mutable struct is called both through an interface and directly?
+    prompt: |
+      The struct `Counter` implements the interface `ICounter`. The program assigns it to a variable of type
+      `ICounter`, calls `Inc` twice through the interface and once directly on the struct. What does it print to the console?
+    hint: What happens to a struct value at the moment it is assigned to a variable of an interface type?
+    options:
+      a: "2 1"
+      b: "3 3"
+      c: "0 1"
+      d: Compile error
+    optionExplanations:
+      b: That would be true if `boxed` and `c` referred to one object, as with a class. But `Counter` is a struct, and assigning it to an interface creates a separate boxed copy.
+      c: Boxing happens once, in the line `ICounter boxed = c;`. Calls through `boxed` do not box the value again; they work on the existing heap object, so the changes accumulate in it.
+      d: The code is valid. A struct may implement an interface, the conversion from a struct to an interface is implicit (it is boxing), and a method of a non-readonly struct may change its own field.
+    answer: "2 1"
+    explanation: |
+      Converting a value type to `object` or to an interface it implements is boxing: a new object is created
+      on the heap and the current value of the struct is copied into it. After the line `ICounter boxed = c;`
+      there are two independent counters: the local variable `c` and the boxed copy that `boxed` refers to.
+
+      Both `boxed.Inc()` calls run on the boxed copy, so its `Count` becomes `2`. The `c.Inc()` call changes only
+      the local variable, so its `Count` becomes `1`. Hence `2 1`.
+
+      This is one reason mutable structs are considered dangerous: the result depends on what the method is
+      called through. A generic method constrained to the interface and taking `ref T` can call `Inc` on the
+      caller's variable without boxing, for example
+      `static void Bump<T>(ref T x) where T : ICounter => x.Inc();`. The call to an interface member on `T` is
+      compiled to IL with the `constrained.` prefix: if `T` is a value type that implements the method itself,
+      the pointer to the variable is passed to the method directly, without boxing. The behaviour of the program
+      is verified on .NET 10.
+    linkTitles:
+      - Boxing and unboxing
+      - Structure types
+      - OpCodes.Constrained field (the constrained. IL prefix)
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"

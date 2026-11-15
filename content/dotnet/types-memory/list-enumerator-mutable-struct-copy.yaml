@@ -1,0 +1,127 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WREX0VH3XTBF3Q8CGK
+slug: list-enumerator-mutable-struct-copy
+stack: dotnet
+topic: types-memory
+level: senior
+type: find-bug
+grading: auto
+tags: [struct, mutable-struct, enumerator, ref-parameters, copying]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    List<string> rows = new() { "id,name", "1,Ann", "2,Bob" };
+    List<string>.Enumerator rowEnumerator = rows.GetEnumerator();
+    SkipHeader(rowEnumerator);
+    while (rowEnumerator.MoveNext())
+    {
+        Console.Write($"[{rowEnumerator.Current}]");
+    }
+
+    static void SkipHeader(List<string>.Enumerator enumerator)
+    {
+        enumerator.MoveNext();
+    }
+bugLineSets: [[9], [3], [3, 9]]
+fixedSource: |
+  List<string> rows = new() { "id,name", "1,Ann", "2,Bob" };
+  List<string>.Enumerator rowEnumerator = rows.GetEnumerator();
+  SkipHeader(ref rowEnumerator);
+  while (rowEnumerator.MoveNext())
+  {
+      Console.Write($"[{rowEnumerator.Current}]");
+  }
+
+  static void SkipHeader(ref List<string>.Enumerator enumerator)
+  {
+      enumerator.MoveNext();
+  }
+fixedExpect: { kind: output, value: "[1,Ann][2,Bob]" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.list-1.enumerator
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/method-parameters
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему вспомогательный метод не пропускает заголовок, хотя вызывает MoveNext у перечислителя List<T>?
+    prompt: |
+      Метод `SkipHeader` должен пропустить строку заголовка, чтобы цикл вывел только данные: `[1,Ann][2,Bob]`.
+      Исключения нет, но программа выводит `[id,name][1,Ann][2,Bob]`: заголовок по-прежнему попадает в вывод.
+      Щёлкните по строке с дефектом.
+    hint: Что происходит с позицией перечислителя, когда он попадает в метод через параметр без модификаторов?
+    answer: |
+      Строка 9 - корень дефекта: параметр `enumerator` объявлен как `List<string>.Enumerator` без `ref`.
+      `List<T>.Enumerator` - изменяемая структура, поэтому метод получает копию перечислителя, и `MoveNext`
+      сдвигает только копию. Строка 3 - парный вызов `SkipHeader(rowEnumerator)`, который передаёт перечислитель
+      по значению; её выбор (отдельно или вместе со строкой 9) тоже принимается, потому что исправление через `ref`
+      меняет обе строки. Исправление - принимать параметр по `ref` и передавать `ref rowEnumerator` в строке 3
+      или работать через `IEnumerator<string>`.
+    explanation: |
+      `List<T>.GetEnumerator()` возвращает `List<T>.Enumerator`, а это `struct`. Так сделано ради производительности:
+      `foreach` по `List<T>` использует структуру-перечислитель без выделения памяти в куче. Но `MoveNext` сдвигает
+      позицию, которую перечислитель хранит в собственных полях, то есть это изменяемая структура.
+
+      При передаче структуры по значению вызываемый метод получает полную копию всех её полей. `SkipHeader` вызывает
+      `MoveNext` у своей копии: сдвигается позиция копии, а переменная `rowEnumerator` в вызывающем коде остаётся в
+      исходном состоянии - перед первым элементом. Копия после возврата из метода просто пропадает, поэтому цикл
+      начинает перебор с заголовка. Компилятор не предупреждает: код корректен, ошибка только в семантике копирования.
+
+      Варианты исправления:
+
+      - объявить параметр как `ref List<string>.Enumerator` (строка 9) и вызывать `SkipHeader(ref rowEnumerator)`
+        (строка 3) - метод работает с той же переменной, копии нет;
+      - сохранить перечислитель в переменную типа `IEnumerator<string>` и принимать в методе `IEnumerator<string>`:
+        структура упаковывается один раз, дальше передаётся ссылка на один и тот же объект, и `MoveNext` в методе
+        сдвигает общее состояние (ценой одной аллокации).
+
+      Общий урок: изменяемые структуры опасны везде, где неявно появляются копии - передача по значению, присваивание,
+      возврат из свойства, `readonly`-поля. Перечислители BCL - редкое оправданное исключение, и обращаться с ними
+      нужно осторожно.
+    linkTitles:
+      - "Структура List<T>.Enumerator"
+      - "Параметры методов и модификатор ref"
+  en:
+    title: Why does a helper not skip the header even though it calls MoveNext on a List<T> enumerator?
+    prompt: |
+      The `SkipHeader` method should skip the header row so that the loop prints only the data: `[1,Ann][2,Bob]`.
+      There is no exception, but the program prints `[id,name][1,Ann][2,Bob]`: the header still ends up in the output.
+      Click the line that contains the defect.
+    hint: What happens to the enumerator's position when it is passed into a method through a plain parameter?
+    answer: |
+      Line 9 is the root cause: the parameter `enumerator` is declared as `List<string>.Enumerator` without `ref`.
+      `List<T>.Enumerator` is a mutable struct, so the method receives a copy of the enumerator and `MoveNext`
+      advances only the copy. Line 3 is the matching call `SkipHeader(rowEnumerator)`, which passes the enumerator
+      by value; selecting it (alone or together with line 9) is also accepted, because the `ref` fix changes both
+      lines. The fix is to take the parameter by `ref` and pass `ref rowEnumerator` on line 3, or to work through
+      `IEnumerator<string>`.
+    explanation: |
+      `List<T>.GetEnumerator()` returns `List<T>.Enumerator`, which is a `struct`. This is done for performance:
+      `foreach` over a `List<T>` uses the struct enumerator without a heap allocation. But `MoveNext` advances a
+      position that the enumerator keeps in its own fields, so it is a mutable struct.
+
+      When a struct is passed by value, the called method receives a full copy of all its fields. `SkipHeader` calls
+      `MoveNext` on its copy: the copy's position moves, while the `rowEnumerator` variable in the caller stays in its
+      initial state - before the first element. The copy is discarded when the method returns, so the loop starts with
+      the header. The compiler gives no warning: the code is valid, the defect is purely in the copying semantics.
+
+      Ways to fix it:
+
+      - declare the parameter as `ref List<string>.Enumerator` (line 9) and call `SkipHeader(ref rowEnumerator)`
+        (line 3) - the method works on the same variable, with no copy;
+      - store the enumerator in a variable of type `IEnumerator<string>` and make the method take
+        `IEnumerator<string>`: the struct is boxed once, after that a reference to the same object is passed around,
+        and `MoveNext` in the method advances the shared state (at the cost of one allocation).
+
+      The general lesson: mutable structs are dangerous wherever copies appear implicitly - passing by value, assignment,
+      returning from a property, `readonly` fields. BCL enumerators are a rare justified exception, and they must be
+      handled with care.
+    linkTitles:
+      - "List<T>.Enumerator struct"
+      - "Method parameters and the ref modifier"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

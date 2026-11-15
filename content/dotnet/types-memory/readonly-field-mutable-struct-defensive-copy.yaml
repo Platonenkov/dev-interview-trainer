@@ -1,0 +1,135 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WQRBFGTW0VM7Y3H6QV
+slug: readonly-field-mutable-struct-defensive-copy
+stack: dotnet
+topic: types-memory
+level: middle
+type: find-bug
+grading: auto
+tags: [struct, readonly, defensive-copy, mutable-struct]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    Tracker tracker = new Tracker();
+    tracker.Track();
+    tracker.Track();
+    tracker.Track();
+    Console.WriteLine(tracker.Total);
+
+    struct Counter
+    {
+        public int Value;
+        public void Increment() => Value++;
+    }
+
+    class Tracker
+    {
+        private readonly Counter _counter = new Counter();
+
+        public void Track() => _counter.Increment();
+
+        public int Total => _counter.Value;
+    }
+bugLineSets: [[15], [17]]
+fixedSource: |
+  Tracker tracker = new Tracker();
+  tracker.Track();
+  tracker.Track();
+  tracker.Track();
+  Console.WriteLine(tracker.Total);
+
+  struct Counter
+  {
+      public int Value;
+      public void Increment() => Value++;
+  }
+
+  class Tracker
+  {
+      private Counter _counter = new Counter();
+
+      public void Track() => _counter.Increment();
+
+      public int Total => _counter.Value;
+  }
+fixedExpect: { kind: output, value: "3" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/language-specification/expressions
+    lang: en
+    kind: spec
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/readonly
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/struct
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему вызов Increment у структуры в поле readonly не меняет счётчик?
+    prompt: |
+      Класс `Tracker` трижды вызывает `Track`, и программа должна вывести `3`. Вместо этого она выводит `0`,
+      без исключений и ошибок компиляции. Щёлкните по строке с дефектом.
+    hint: "`Counter` - структура. Меняет ли вызов `_counter.Increment()` то самое значение, которое потом читает `Total`, или что-то другое?"
+    answer: |
+      Строка 15: изменяемая структура `Counter` хранится в поле `readonly`. Ответ, указывающий на строку 17
+      (вызов `_counter.Increment()` через это поле), тоже принимается: дефект проявляется именно там.
+    explanation: |
+      Поле `readonly` можно изменить только в инициализаторе или в конструкторе. По спецификации C# обращение к
+      такому полю вне конструктора даёт значение, а не переменную. Для вызова метода у значения типа структуры
+      спецификация (правило вызова функции-члена) задаёт отдельный случай: если структура не объявлена как
+      `readonly struct`, а выражение - это поле `readonly`, создаётся временная локальная переменная, в неё
+      копируется значение поля, и метод вызывается уже у этой временной копии. Так компилятор сохраняет гарантию
+      `readonly`: обычный (не `readonly`) метод `Increment` мог бы изменить поля структуры.
+
+      В итоге каждый вызов `Track` увеличивает `Value` у копии, которая сразу выбрасывается, а само поле
+      `_counter` остаётся со значением `0`. Компилятор при этом не выдаёт ни ошибки, ни предупреждения.
+      Тот же механизм документация описывает для `readonly`-членов структуры: при вызове не-`readonly` члена
+      создаётся копия экземпляра, и исходный экземпляр не меняется.
+
+      Исправления:
+
+      - убрать `readonly` у поля, если структура действительно должна меняться (так сделано в исправленном коде);
+      - или сделать `Counter` классом;
+      - или, что обычно лучше, проектировать структуры неизменяемыми (`readonly struct`) и возвращать новое
+        значение вместо изменения полей: тогда метод вроде `Increment`, меняющий поле, не скомпилируется вообще.
+    linkTitles:
+      - "Спецификация C#: выражения (доступ к членам и вызов функций-членов)"
+      - "Ключевое слово readonly"
+      - "Типы структур"
+  en:
+    title: Why does calling Increment on a struct in a readonly field not change the counter?
+    prompt: |
+      The `Tracker` class calls `Track` three times, and the program should print `3`. Instead it prints `0`,
+      with no exception and no compile error. Click the line that contains the defect.
+    hint: "`Counter` is a struct. Does the call `_counter.Increment()` change the very value that `Total` reads later, or something else?"
+    answer: |
+      Line 15: the mutable struct `Counter` is stored in a `readonly` field. An answer that points at line 17
+      (the call `_counter.Increment()` through that field) is also accepted: that is where the defect shows.
+    explanation: |
+      A `readonly` field can be changed only in an initializer or in a constructor. According to the C#
+      specification, accessing such a field outside a constructor yields a value, not a variable. For a method
+      call on a value of a struct type the specification (the function member invocation rule) has a dedicated
+      case: if the struct is not declared as a `readonly struct` and the expression is a `readonly` field, a
+      temporary local variable is created, the value of the field is copied into it, and the method is called on
+      that temporary copy. This is how the compiler keeps the `readonly` guarantee: the ordinary (non-`readonly`)
+      method `Increment` could change the fields of the struct.
+
+      As a result every `Track` call increments `Value` on a copy that is thrown away immediately, while the
+      `_counter` field itself stays at `0`. The compiler reports neither an error nor a warning. The documentation
+      describes the same mechanism for `readonly` members of a struct: when they call a non-`readonly` member, a
+      copy of the instance is created and the original instance is not modified.
+
+      Fixes:
+
+      - remove `readonly` from the field if the struct really has to change (this is what the fixed code does);
+      - or make `Counter` a class;
+      - or, usually better, design structs as immutable (`readonly struct`) and return a new value instead of
+        mutating fields: then a method like `Increment` that changes a field does not compile at all.
+    linkTitles:
+      - "C# specification: Expressions (member access and function member invocation)"
+      - "readonly keyword"
+      - "Structure types"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

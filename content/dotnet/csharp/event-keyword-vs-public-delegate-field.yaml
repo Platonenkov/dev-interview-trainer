@@ -1,0 +1,108 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNWBRAZAR6TA58DXSV
+slug: event-keyword-vs-public-delegate-field
+stack: dotnet
+topic: csharp
+level: middle
+type: open
+grading: self
+tags: [delegates, events, encapsulation]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/event
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/events/
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: От чего защищает ключевое слово event по сравнению с публичным полем-делегатом?
+    prompt: |
+      Класс `Publisher` может оповещать подписчиков двумя способами:
+
+      - `public EventHandler Changed;` - публичное поле типа делегата;
+      - `public event EventHandler Changed;` - событие того же типа.
+
+      Подписка через `+=` выглядит одинаково в обоих случаях. От чего защищает ключевое слово `event`
+      и что при этом может сделать внешний код с публичным полем?
+    hint: |
+      Какие операции с членом `Changed` компилятор разрешит коду, который находится за пределами класса `Publisher`?
+    answer: |
+      - **Снаружи объявляющего типа с событием доступны только `+=` и `-=`**, то есть подписка и отписка.
+        Вызвать событие, присвоить ему значение через `=` или прочитать его (сравнить с `null`, вызвать
+        `GetInvocationList()`) внешний код не может: это ошибка компиляции.
+      - **Публичное поле-делегат разрешает всё это любому коду:**
+        - `publisher.Changed = null;` стирает всех подписчиков разом;
+        - `publisher.Changed = handler;`, написанное по ошибке вместо `+=`, молча отписывает всех остальных;
+        - `publisher.Changed(publisher, EventArgs.Empty);` позволяет постороннему коду поднять событие от имени
+          издателя, хотя ничего не произошло;
+        - любой может прочитать список вызовов и узнать, кто подписан.
+      - **Вызывать событие может только тип, который его объявил.** Даже наследник не может вызвать
+        поле-подобное событие базового класса, поэтому принято добавлять метод `protected virtual void OnChanged(EventArgs e)`.
+      - Дополнительно: событие можно объявить в интерфейсе, а поле нельзя. Для поле-подобного события компилятор
+        создаёт приватное поле-делегат и методы доступа `add` и `remove`, которые можно заменить своими
+        (например, чтобы хранить обработчики в словаре).
+    explanation: |
+      `event` относится к делегату примерно так же, как свойство к полю: это член с методами доступа `add` и
+      `remove`, а само поле-делегат остаётся приватным. Внутри объявляющего типа поле-подобное событие ведёт себя
+      как обычный делегат, поэтому издатель вызывает его, например, через `Changed?.Invoke(this, EventArgs.Empty)`.
+      Снаружи выражение `publisher.Changed` допустимо только слева от `+=` или `-=`, и компилятор превращает эти
+      операторы в вызовы `add` и `remove`.
+
+      Смысл в том, что список подписчиков принадлежит издателю. Подписчик управляет только своей подпиской и не
+      может ни удалить чужие обработчики, ни поднять событие сам. С публичным полем один неверный символ (`=`
+      вместо `+=`) ломает чужие подписки без единого предупреждения.
+
+      При этом `event` не решает другие проблемы: исключение в одном обработчике прерывает вызов остальных,
+      подписка долгоживущего издателя удерживает подписчика в памяти, а событие без подписчиков равно `null`
+      внутри издателя, поэтому его вызывают через `?.Invoke`.
+    linkTitles:
+      - "Ключевое слово event (справочник по C#)"
+      - "Обработка и вызов событий"
+  en:
+    title: What does the event keyword protect against compared with a public delegate field?
+    prompt: |
+      A `Publisher` class can notify subscribers in two ways:
+
+      - `public EventHandler Changed;` - a public field of a delegate type;
+      - `public event EventHandler Changed;` - an event of the same type.
+
+      Subscribing with `+=` looks the same in both cases. What does the `event` keyword protect against,
+      and what can outside code do with the public field?
+    hint: |
+      Which operations on the `Changed` member will the compiler allow for code that lives outside the `Publisher` class?
+    answer: |
+      - **Outside the declaring type, an event allows only `+=` and `-=`**, that is subscribing and unsubscribing.
+        Outside code cannot invoke the event, assign it with `=` or read it (compare it with `null`, call
+        `GetInvocationList()`): that is a compile error.
+      - **A public delegate field allows all of this to any code:**
+        - `publisher.Changed = null;` wipes out every subscriber at once;
+        - `publisher.Changed = handler;`, written by mistake instead of `+=`, silently unsubscribes everyone else;
+        - `publisher.Changed(publisher, EventArgs.Empty);` lets unrelated code raise the event on behalf of the
+          publisher even though nothing happened;
+        - anyone can read the invocation list and find out who is subscribed.
+      - **Only the declaring type can raise the event.** Even a derived class cannot invoke a field-like event
+        of its base class, which is why the usual pattern adds a `protected virtual void OnChanged(EventArgs e)` method.
+      - In addition, an event can be declared in an interface, a field cannot. For a field-like event the compiler
+        generates a private delegate field and `add` and `remove` accessors, which you can replace with your own
+        (for example, to store handlers in a dictionary).
+    explanation: |
+      `event` relates to a delegate roughly as a property relates to a field: it is a member with `add` and
+      `remove` accessors, while the delegate field itself stays private. Inside the declaring type a field-like
+      event behaves like an ordinary delegate, so the publisher raises it, for example, with
+      `Changed?.Invoke(this, EventArgs.Empty)`. Outside, the expression `publisher.Changed` is allowed only on the
+      left of `+=` or `-=`, and the compiler turns these operators into calls to `add` and `remove`.
+
+      The point is that the subscriber list belongs to the publisher. A subscriber controls only its own
+      subscription and can neither remove other handlers nor raise the event itself. With a public field, one
+      wrong character (`=` instead of `+=`) breaks other subscriptions without a single warning.
+
+      `event` does not solve other problems, though: an exception in one handler stops the remaining handlers,
+      a subscription to a long-lived publisher keeps the subscriber in memory, and an event with no subscribers
+      is `null` inside the publisher, which is why it is raised with `?.Invoke`.
+    linkTitles:
+      - "event keyword (C# reference)"
+      - "Handling and raising events"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

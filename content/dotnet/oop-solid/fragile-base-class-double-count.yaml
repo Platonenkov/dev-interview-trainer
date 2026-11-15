@@ -1,0 +1,163 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WN4AXB6FADZ2QTWFF5
+slug: fragile-base-class-double-count
+stack: dotnet
+topic: oop-solid
+level: middle
+type: find-bug
+grading: auto
+tags: [inheritance, composition, fragile-base-class, virtual-methods]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    var bag = new CountingBag();
+    bag.AddRange(new[] { "a", "b", "c" });
+    Console.WriteLine(bag.AddedCount);
+
+    class Bag
+    {
+        private readonly List<string> _items = new();
+
+        public virtual void Add(string item) => _items.Add(item);
+
+        public virtual void AddRange(IEnumerable<string> items)
+        {
+            foreach (string item in items)
+            {
+                Add(item);
+            }
+        }
+    }
+
+    class CountingBag : Bag
+    {
+        public int AddedCount { get; private set; }
+
+        public override void Add(string item)
+        {
+            AddedCount++;
+            base.Add(item);
+        }
+
+        public override void AddRange(IEnumerable<string> items)
+        {
+            AddedCount += items.Count();
+            base.AddRange(items);
+        }
+    }
+bugLineSets: [[32]]
+fixedSource: |
+  var bag = new CountingBag(new Bag());
+  bag.AddRange(new[] { "a", "b", "c" });
+  Console.WriteLine(bag.AddedCount);
+
+  class Bag
+  {
+      private readonly List<string> _items = new();
+
+      public virtual void Add(string item) => _items.Add(item);
+
+      public virtual void AddRange(IEnumerable<string> items)
+      {
+          foreach (string item in items)
+          {
+              Add(item);
+          }
+      }
+  }
+
+  class CountingBag
+  {
+      private readonly Bag _inner;
+
+      public CountingBag(Bag inner) => _inner = inner;
+
+      public int AddedCount { get; private set; }
+
+      public void Add(string item)
+      {
+          AddedCount++;
+          _inner.Add(item);
+      }
+
+      public void AddRange(IEnumerable<string> items)
+      {
+          List<string> list = items.ToList();
+          AddedCount += list.Count;
+          _inner.AddRange(list);
+      }
+  }
+fixedExpect: { kind: output, value: "3" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/design-guidelines/virtual-members
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/object-oriented/inheritance
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строку, из-за которой счётчик добавлений удваивается
+    prompt: |
+      `CountingBag` наследуется от `Bag` и переопределяет `Add` и `AddRange`, чтобы считать добавленные
+      элементы. Программа добавляет три элемента через `AddRange` и должна вывести `3`, но выводит `6`.
+      Щёлкните по строке с дефектом.
+    hint: Какие методы и в каком порядке реально выполняются, когда у `CountingBag` вызывают `AddRange`?
+    answer: Строка 32, `AddedCount += items.Count();` в переопределении `AddRange`.
+    explanation: |
+      `Bag.AddRange` виртуальный и внутри вызывает виртуальный `Add` для каждого элемента. Этот внутренний
+      вызов `Add` из `AddRange` - деталь реализации `Bag`, которая нигде не задокументирована. `CountingBag`
+      переопределяет оба метода: `AddRange` прибавляет 3 в строке 32, затем `base.AddRange` трижды вызывает
+      `Add`, и виртуальная диспетчеризация отправляет каждый вызов в `CountingBag.Add`, который прибавляет ещё
+      по 1. Итог - 6.
+
+      Дефект именно в строке 32: она считает те же элементы второй раз. Строка 26 (`AddedCount++;`) не
+      ошибка: без неё перестали бы учитываться прямые вызовы `bag.Add(...)`.
+
+      Если просто удалить строку 32, вывод сегодня станет верным, но наследник останется привязан к
+      внутреннему устройству базового класса: если следующая версия `Bag` будет добавлять элементы в список
+      напрямую, без `Add`, счётчик станет 0. Это проблема хрупкого базового класса. Исправленная версия
+      использует композицию: `CountingBag` хранит `Bag` и считает в своих методах, поэтому ей неважно, как
+      реализован `Bag.AddRange`. Заодно она один раз материализует последовательность через `ToList()`, чтобы
+      ленивая последовательность не перечислялась дважды.
+
+      Рекомендации по проектированию .NET предупреждают, что виртуальные члены дорого проектировать,
+      тестировать и сопровождать, потому что любой вызов виртуального члена может быть переопределён
+      непредсказуемым образом. Именно это происходит здесь: внутренний вызов `Add` из `AddRange` перехватывает
+      наследник.
+    linkTitles:
+      - "Виртуальные члены: рекомендации по проектированию"
+      - "Наследование в C#"
+  en:
+    title: Find the line that makes the addition count double
+    prompt: |
+      `CountingBag` derives from `Bag` and overrides `Add` and `AddRange` to count added items. The program
+      adds three items through `AddRange` and should print `3`, but it prints `6`.
+      Click the line that contains the defect.
+    hint: Which methods actually run, and in what order, when `AddRange` is called on a `CountingBag`?
+    answer: Line 32, `AddedCount += items.Count();` in the `AddRange` override.
+    explanation: |
+      `Bag.AddRange` is virtual and internally calls the virtual `Add` for each item. This internal call from
+      `AddRange` to `Add` is an implementation detail of `Bag` that is not documented anywhere. `CountingBag`
+      overrides both methods: `AddRange` adds 3 on line 32, then `base.AddRange` calls `Add` three times, and
+      virtual dispatch sends each call to `CountingBag.Add`, which adds 1 more each time. The result is 6.
+
+      The defect is line 32 specifically: it counts the same items a second time. Line 26 (`AddedCount++;`) is
+      not the bug: without it, direct calls to `bag.Add(...)` would no longer be counted.
+
+      Simply deleting line 32 makes the output correct today, but the subclass stays tied to the internals of
+      the base class: if a later version of `Bag` adds items to the list directly, without `Add`, the count
+      becomes 0. This is the fragile base class problem. The fixed version uses composition: `CountingBag` holds
+      a `Bag` and counts in its own methods, so it does not care how `Bag.AddRange` is implemented. It also
+      materializes the sequence once with `ToList()`, so a lazy sequence is not enumerated twice.
+
+      The .NET design guidelines warn that virtual members are costly to design, test and maintain, because any
+      call to a virtual member can be overridden in unpredictable ways. That is exactly what happens here: the
+      internal call from `AddRange` to `Add` is overridden by the subclass.
+    linkTitles:
+      - "Virtual members: design guidelines"
+      - "Inheritance in C#"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

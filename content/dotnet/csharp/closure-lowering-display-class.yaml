@@ -1,0 +1,138 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WND3THTHSYAWQEV7V6
+slug: closure-lowering-display-class
+stack: dotnet
+topic: csharp
+level: senior
+type: open
+grading: self
+tags: [closures, lambda, compiler-lowering, allocations, memory-leaks]
+code:
+  language: csharp
+  harness: none
+  source: |
+    static Func<int> CreateCounter(string path)
+    {
+        int counter = 0;
+        byte[] data = File.ReadAllBytes(path);
+
+        Action log = () => Console.WriteLine($"Loaded {data.Length} bytes");
+        log();
+
+        return () => ++counter;
+    }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/lambda-expressions
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/language-specification/expressions
+    lang: en
+    kind: spec
+locales:
+  ru:
+    title: Как компилятор C# реализует лямбду, захватывающую локальную переменную, и чем это оборачивается?
+    prompt: |
+      Как компилятор C# превращает в IL лямбду, которая захватывает локальную переменную метода? Объясните на
+      примере метода `CreateCounter`:
+
+      - что компилятор сгенерирует для переменных `counter` и `data` и для двух лямбд;
+      - сколько живёт массив `data` после возврата из метода и почему;
+      - какие объекты выделяются в куче при каждом вызове `CreateCounter`.
+    hint: Делегат в CLR - это только ссылка на объект-цель и указатель на метод. Где тогда может храниться переменная, которую делегат читает и меняет уже после возврата из метода?
+    answer: |
+      1. **Переписывание кода.** Компилятор создаёт скрытый вложенный класс замыкания (в Roslyn он называется
+         вроде `<>c__DisplayClass0_0`). Захваченные `counter` и `data` становятся его полями, а тела обеих лямбд -
+         его экземплярными методами. Все обращения к этим переменным, в том числе в самом `CreateCounter`,
+         переписываются в обращения к полям экземпляра. Делегат хранит ссылку на этот экземпляр как цель вызова.
+      2. **Один объект на область видимости.** Класс замыкания создаётся на область видимости (блок), где
+         объявлены захваченные переменные, а не на лямбду. Обе лямбды здесь делят один экземпляр, в котором лежат
+         и `counter`, и `data`.
+      3. **Время жизни.** Захваченная переменная живёт в куче, пока достижим объект замыкания, то есть пока жив
+         хотя бы один делегат, который на него ссылается. Возвращённый счётчик использует только `counter`, но
+         держит весь объект замыкания, а значит и массив `data`. Массив не будет собран, пока жив счётчик: это
+         скрытая утечка памяти.
+      4. **Аллокации.** При каждом вызове: один объект замыкания (создаётся при входе в область видимости, ещё до
+         `counter = 0`, даже если лямбду в итоге не создадут) и по делегату на каждое вычисление захватывающего
+         лямбда-выражения, здесь два. Если захваченная переменная объявлена в теле цикла, замыкание создаётся
+         заново на каждой итерации. Делегат для лямбды без захвата компилятор кэширует в статическом поле и создаёт
+         один раз.
+      5. **Как уменьшить цену.** Сузить область видимости тяжёлых переменных: вынести `data` вместе с лямбдой,
+         которая её использует, во вложенный блок или отдельный метод. Тогда у этого блока будет своё замыкание,
+         и возвращённый счётчик не будет держать массив. Передавать состояние параметром вместо захвата
+         (перегрузки с аргументом состояния, например `ConcurrentDictionary.GetOrAdd(key, factory, arg)`).
+         Помечать лямбды `static` (C# 9), чтобы компилятор запрещал случайный захват.
+    explanation: |
+      В CLR нет понятия замыкания: делегат умеет только вызвать метод на объекте-цели. Переменная, которую
+      делегат может прочитать после возврата из метода, не может жить в кадре стека, поэтому компилятор переносит
+      её в поле объекта в куче. Спецификация C# гарантирует лишь, что время жизни захваченной внешней переменной
+      продлевается как минимум до момента, когда делегат, созданный из анонимной функции, станет доступен для
+      сборки мусора. Класс замыкания и правило «один экземпляр на область видимости» - это детали реализации
+      Roslyn, описанные здесь для компилятора из SDK .NET 10.
+
+      Из того, что захватывается переменная, а не значение, следует и семантика: все лямбды области и сам метод
+      видят одно и то же поле, изменения одной стороны видны другой. Из того, что замыкание общее, следует утечка:
+      короткоживущая лямбда, захватившая большой объект, заставляет долгоживущую лямбду из той же области держать
+      его в памяти.
+
+      По тем же причинам нельзя захватить `ref`-локальные переменные и экземпляры `ref struct`, например
+      `Span<T>`: их нельзя сделать полями класса в куче. На практике такие проблемы видны в профилировщике памяти
+      как множество объектов типов `<>c__DisplayClass...`, а сгенерированный код удобно смотреть декомпилятором.
+    linkTitles:
+      - "Лямбда-выражения и захват внешних переменных"
+      - "Спецификация C#: выражения (анонимные функции и внешние переменные)"
+  en:
+    title: How does the C# compiler implement a lambda that captures a local variable, and what does it cost?
+    prompt: |
+      How does the C# compiler turn a lambda that captures a local variable of a method into IL? Explain it
+      using the `CreateCounter` method:
+
+      - what the compiler generates for the variables `counter` and `data` and for the two lambdas;
+      - how long the `data` array lives after the method returns, and why;
+      - which objects are allocated on the heap on every call to `CreateCounter`.
+    hint: In the CLR a delegate is only a reference to a target object and a method pointer. So where can a variable live if a delegate reads and changes it after the method has returned?
+    answer: |
+      1. **Rewriting.** The compiler creates a hidden nested closure class (Roslyn names it something like
+         `<>c__DisplayClass0_0`). The captured `counter` and `data` become its fields, and the bodies of both
+         lambdas become its instance methods. Every access to these variables, including the ones in
+         `CreateCounter` itself, is rewritten into an access to the instance fields. The delegate stores a
+         reference to this instance as its call target.
+      2. **One object per scope.** A closure class is created per scope (block) that declares captured
+         variables, not per lambda. Both lambdas here share one instance that holds both `counter` and `data`.
+      3. **Lifetime.** A captured variable lives on the heap while the closure object is reachable, that is
+         while at least one delegate that references it is alive. The returned counter uses only `counter`, but
+         it holds the whole closure object, and therefore the `data` array. The array cannot be collected while
+         the counter is alive: a hidden memory leak.
+      4. **Allocations.** On every call: one closure object (created on entry to the scope, before
+         `counter = 0`, even if no lambda ends up being created) and one delegate per evaluation of a capturing
+         lambda expression, two here. If a captured variable is declared inside a loop body, a new closure is
+         created on every iteration. For a lambda that captures nothing, the compiler caches the delegate in a
+         static field and creates it once.
+      5. **How to reduce the cost.** Narrow the scope of heavy variables: move `data` together with the lambda
+         that uses it into a nested block or a separate method. That block then gets its own closure, and the
+         returned counter no longer holds the array. Pass state as an argument instead of capturing it (overloads
+         with a state argument, such as `ConcurrentDictionary.GetOrAdd(key, factory, arg)`). Mark lambdas
+         `static` (C# 9) so the compiler forbids accidental capture.
+    explanation: |
+      The CLR has no notion of a closure: a delegate can only call a method on a target object. A variable that
+      a delegate may read after the method returns cannot live in the stack frame, so the compiler moves it into
+      a field of an object on the heap. The C# specification only guarantees that the lifetime of a captured
+      outer variable is extended at least until the delegate created from the anonymous function becomes
+      eligible for garbage collection. The closure class and the "one instance per scope" rule are Roslyn
+      implementation details, described here for the compiler in the .NET 10 SDK.
+
+      Capturing the variable rather than its value also defines the semantics: all lambdas of the scope and the
+      method itself see the same field, and a change made by one side is visible to the other. Sharing the
+      closure causes the leak: a short-lived lambda that captured a large object forces a long-lived lambda from
+      the same scope to keep that object in memory.
+
+      For the same reasons `ref` locals and `ref struct` instances such as `Span<T>` cannot be captured: they
+      cannot become fields of a heap class. In practice these problems show up in a memory profiler as many
+      objects of `<>c__DisplayClass...` types, and a decompiler is a convenient way to see the generated code.
+    linkTitles:
+      - "Lambda expressions and capture of outer variables"
+      - "C# specification: expressions (anonymous functions and outer variables)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"
+  noRunReason: Illustrative code for an open question about the code the compiler generates; its console output is not the subject of the question.

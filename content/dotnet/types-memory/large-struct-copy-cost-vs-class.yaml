@@ -1,0 +1,137 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WR1T5X5PEBGP126S3T
+slug: large-struct-copy-cost-vs-class
+stack: dotnet
+topic: types-memory
+level: senior
+type: open
+grading: self
+tags: [struct, readonly-struct, in-parameters, copying, performance]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/design-guidelines/choosing-between-class-and-struct
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/method-parameters
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/struct
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/advanced-topics/performance/
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Когда большая изменяемая структура в горячем цикле обходится дороже класса и как снизить цену копирования?
+    prompt: |
+      Изменяемая структура размером 64 байта в горячем цикле передаётся по значению через несколько уровней
+      методов: обработчик вызывает валидатор, тот вызывает калькулятор, и так далее. Её сделали структурой,
+      чтобы не выделять память в куче.
+
+      В каких случаях такой код работает медленнее, чем если бы тип был классом? Какими средствами языка
+      можно снизить цену и о каких ловушках при этом надо помнить?
+    hint: Посчитайте, сколько байт перемещается на каждом уровне вызовов для структуры и для класса. Что именно копирует каждая из этих операций?
+    answer: |
+      1. **Откуда берётся цена.** Каждая передача по значению, возврат из метода, присваивание переменной,
+         чтение из `List<T>` через индексатор или `foreach` копирует все 64 байта. Через четыре уровня вызовов
+         в наивном случае это до четырёх копий на итерацию, а при стиле `s = Update(s)` копий примерно вдвое больше.
+         Экземпляр класса выделяется один раз, а дальше передаётся ссылка размером 8 байт на x64.
+      2. **Когда класс выгоднее.** Если экземпляр создаётся редко, а передаётся и возвращается часто, суммарное
+         копирование большой структуры может стоить дороже одной аллокации и сборки мусора. Структура выигрывает,
+         когда экземпляры короткоживущие и создаются в каждой итерации или лежат плотно в массиве. Решение
+         принимают по замерам (BenchmarkDotNet, профилировщик), а не на глаз.
+      3. **Как убрать копии.**
+         - Сделать тип `readonly struct` (или пометить методы `readonly`): неизменяемость устраняет защитные копии
+           и ошибки с изменением копии вместо оригинала.
+         - Передавать по ссылке: `in` или `ref readonly` (C# 12) для чтения, `ref`, если метод должен менять
+           экземпляр вызывающего кода.
+         - Работать с элементами на месте: `ref` локальные переменные и `ref` возвраты, `ref var item = ref array[i]`,
+           `CollectionsMarshal.AsSpan(list)` вместо индексатора `List<T>`.
+         - Уменьшить структуру (вынести редко используемые поля) или перейти на класс, если экземпляр
+           долгоживущий и разделяется между многими владельцами.
+      4. **Ловушка.** `in`-параметр изменяемой (не `readonly`) структуры: сам вызов не копирует, но внутри
+         метода при каждом вызове у такого параметра члена, не помеченного `readonly`, компилятор копирует
+         структуру во временную переменную и вызывает член у копии. В итоге `in` без `readonly` может
+         копировать даже больше, чем передача по значению.
+    explanation: |
+      Рекомендации по проектированию .NET советуют выбирать структуру только для маленьких (меньше примерно 16 байт),
+      неизменяемых типов, представляющих одно значение. Причина как раз в семантике значения: структура
+      копируется целиком при каждой передаче и каждом присваивании, а у класса копируется только ссылка.
+      64 байта - это уже размер целой строки кэша на типичном x64-процессоре, и каждая копия на каждом уровне
+      вызовов - это реальная работа с памятью. Экономия на аллокации при этом одна на экземпляр, а копии
+      повторяются при каждом вызове.
+
+      `in` и `ref readonly` передают адрес, поэтому сам вызов структуру не копирует. Внутри метода параметр
+      доступен только для чтения. Если структура не `readonly`, а вызываемый у параметра член не помечен
+      `readonly`, компилятор не может доказать, что член оставит структуру без изменений. Поэтому он копирует
+      структуру во временную переменную и вызывает член у этой защитной копии, и каждый такой вызов может
+      копировать снова. `readonly struct` или модификатор `readonly` на членах сообщает компилятору, что копия
+      не нужна. Изменяемость здесь вредна вдвойне: помимо защитных копий она приводит к ошибкам, когда
+      изменение применяется к копии и теряется.
+
+      JIT может встроить небольшие методы и иногда убрать часть копий, но это не гарантировано, поэтому эффект
+      проверяют бенчмарком и, при необходимости, по дизассемблеру. Всё описанное доступно в C# 14 на .NET 10;
+      `readonly`-члены появились в C# 8, параметры `ref readonly` - в C# 12.
+    linkTitles:
+      - "Выбор между классом и структурой"
+      - "Параметры методов и модификаторы"
+      - "Типы структур"
+      - "Сокращение выделений памяти с помощью возможностей C#"
+  en:
+    title: When does a large mutable struct in a hot loop cost more than a class, and how do you reduce the copying cost?
+    prompt: |
+      A 64-byte mutable struct is passed by value through several method layers in a hot loop: a handler calls
+      a validator, which calls a calculator, and so on. It was made a struct to avoid a heap allocation.
+
+      In which cases is this code slower than if the type were a class? Which language features can reduce
+      the cost, and which pitfalls do you need to keep in mind?
+    hint: Count how many bytes move at each call layer for the struct and for a class. What exactly does each of those operations copy?
+    answer: |
+      1. **Where the cost comes from.** Every pass by value, return from a method, assignment to a variable,
+         read from a `List<T>` through the indexer or `foreach` copies all 64 bytes. Through four call layers that
+         is up to four copies per iteration in the naive case, and with the `s = Update(s)` style roughly twice as
+         many. A class instance is allocated once, and after that an 8-byte reference (on x64) is passed around.
+      2. **When a class wins.** If an instance is created rarely but passed and returned often, the total copying
+         of a large struct can cost more than one allocation plus garbage collection. A struct wins when instances
+         are short-lived and created every iteration, or stored densely in an array. Decide by measurement
+         (BenchmarkDotNet, a profiler), not by intuition.
+      3. **How to remove copies.**
+         - Make the type a `readonly struct` (or mark methods `readonly`): immutability removes defensive copies
+           and bugs where a copy is changed instead of the original.
+         - Pass by reference: `in` or `ref readonly` (C# 12) for reading, `ref` when the method must change the
+           caller's instance.
+         - Work with elements in place: `ref` locals and `ref` returns, `ref var item = ref array[i]`,
+           `CollectionsMarshal.AsSpan(list)` instead of the `List<T>` indexer.
+         - Shrink the struct (move rarely used fields out), or switch to a class if the instance is long-lived
+           and shared by many owners.
+      4. **The pitfall.** An `in` parameter of a mutable (non-`readonly`) struct: the call itself does not copy,
+         but inside the method, every time you call a member that is not marked `readonly` on that parameter, the
+         compiler copies the struct to a temporary and calls the member on the copy. As a result, `in` without
+         `readonly` can copy even more than passing by value.
+    explanation: |
+      The .NET design guidelines recommend a struct only for small (under about 16 bytes), immutable types that
+      represent a single value. The reason is value semantics: a struct is copied as a whole on every pass and
+      every assignment, while for a class only the reference is copied. 64 bytes is already a whole cache line on
+      a typical x64 processor, and every copy at every call layer is real memory work. The saving on allocation
+      happens once per instance, while the copies repeat on every call.
+
+      `in` and `ref readonly` pass an address, so the call itself does not copy the struct. Inside the method the
+      parameter is read-only. If the struct is not `readonly` and the member you call on the parameter is not
+      marked `readonly`, the compiler cannot prove that the member leaves the struct unchanged. So it copies the
+      struct to a temporary and calls the member on that defensive copy, and each such call can copy again. A
+      `readonly struct`, or the `readonly` modifier on members, tells the compiler that no copy is needed.
+      Mutability hurts twice here: besides the defensive copies, it leads to bugs where a change is applied to a
+      copy and lost.
+
+      The JIT may inline small methods and sometimes remove copies, but this is not guaranteed, so measure with a
+      benchmark and, if needed, inspect the disassembly. Everything described is available in C# 14 on .NET 10;
+      `readonly` members appeared in C# 8 and `ref readonly` parameters in C# 12.
+    linkTitles:
+      - "Choosing between class and struct"
+      - "Method parameters and modifiers"
+      - "Structure types"
+      - "Reduce memory allocations using C# features"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"

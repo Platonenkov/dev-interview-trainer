@@ -1,0 +1,142 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNN9H0XEBXZTV9T7EF
+slug: nullable-attributes-notnullwhen
+stack: dotnet
+topic: csharp
+level: senior
+type: open
+grading: self
+tags: [nullable, nullable-attributes, flow-analysis, notnullwhen]
+code:
+  language: csharp
+  harness: none
+  source: |
+    #nullable enable
+    public class UserCache
+    {
+        private readonly Dictionary<string, string> _names = new();
+
+        public bool TryFind(string key, out string? value)
+        {
+            if (_names.TryGetValue(key, out string? name))
+            {
+                value = name;
+                return true;
+            }
+
+            value = null;
+            return false;
+        }
+    }
+
+    public static class CacheClient
+    {
+        public static void PrintLength(UserCache cache)
+        {
+            if (cache.TryFind("42", out string? userName))
+            {
+                Console.WriteLine(userName.Length); // warning CS8602
+            }
+        }
+    }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/attributes/nullable-analysis
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.diagnostics.codeanalysis.notnullwhenattribute
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/null-safety/nullable-reference-types
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Почему метод TryFind с параметром out string? даёт ложные предупреждения и как их убрать атрибутом NotNullWhen?"
+    prompt: |
+      В проекте включён анализ ссылочных типов на `null`: `<Nullable>enable</Nullable>`. Метод `TryFind` возвращает
+      `true` только после того, как записал в `value` найденную строку. Тем не менее в точке вызова внутри ветки `if`
+      компилятор выдаёт предупреждение `CS8602` о возможном разыменовании `null`.
+
+      Почему компилятор не видит, что значение не равно `null`, когда результат равен `true`? Как правильно описать
+      этот контракт и какие решения выглядят рабочими, но на самом деле хуже?
+    hint: "Где компилятору пришлось бы искать связь между результатом метода и значением `value`, и может ли аннотация `?` сама по себе выразить условие?"
+    answer: |
+      - **Причина.** Анализ состояния `null` не заглядывает в тела вызываемых методов. В точке вызова компилятор
+        видит только сигнатуру `TryFind`, а для `out string? value` она говорит одно: после вызова `value` может быть
+        равно `null`, и это никак не связано с возвращаемым `bool`.
+      - **Исправление.** Описать условный контракт атрибутом из пространства имён `System.Diagnostics.CodeAnalysis`:
+        `public bool TryFind(string key, [NotNullWhen(true)] out string? value)`. Теперь в ветке, где метод вернул
+        `true`, переменная считается не равной `null`, а в ветке `false` по-прежнему может быть `null`.
+      - **Зеркальный вариант** - `[MaybeNullWhen(false)] out string value`: параметр объявлен как не допускающий
+        `null`, но может его содержать, когда результат равен `false`. Так объявлен `Dictionary<TKey, TValue>.TryGetValue`.
+        Этот вариант удобен для обобщённого `T`, где `T?` без ограничения ведёт себя иначе, чем для ссылочных типов.
+      - **Плохие обходные пути:** ставить `!` в каждой точке вызова (оператор только подавляет предупреждение и прячет
+        настоящие ошибки) или объявить `out string value` и писать `value = null!` (сигнатура обманывает вызывающий код).
+    explanation: |
+      Анализ состояния `null` выполняется внутри каждого метода и не прослеживает выполнение в телах вызываемых
+      методов. Поэтому сигнатура - единственный контракт, который видит вызывающий код, и вся нужная ему информация
+      о `null` должна быть в ней. Аннотация `?` описывает только безусловное состояние, а у методов вида `Try...`
+      состояние зависит от результата. Именно такие условные постусловия и описывают атрибуты анализа.
+
+      Это целое семейство атрибутов: предусловия (`AllowNull`, `DisallowNull`), постусловия (`MaybeNull`, `NotNull`),
+      условные постусловия (`NotNullWhen`, `MaybeNullWhen`, `NotNullIfNotNull`), атрибуты вспомогательных методов и
+      свойств, которые гарантируют, что перечисленные члены не равны `null` (`MemberNotNull`, `MemberNotNullWhen`),
+      и атрибуты недостижимого кода для методов, которые не возвращают управление (`DoesNotReturn`, `DoesNotReturnIf`).
+      Библиотеки .NET используют их сами: например, `string.IsNullOrEmpty` объявлен с
+      `[NotNullWhen(false)] string? value`, поэтому после проверки `if (!string.IsNullOrEmpty(s))` переменная `s`
+      считается не равной `null`.
+
+      Атрибуты влияют только на предупреждения компилятора и не добавляют проверок во время выполнения. Ссылочные
+      типы, допускающие `null`, появились в C# 8; описанное поведение относится к C# 14 и .NET 10.
+    linkTitles:
+      - "Атрибуты для статического анализа состояния null"
+      - "Класс NotNullWhenAttribute"
+      - "Ссылочные типы, допускающие значение null"
+  en:
+    title: "Why does a TryFind method with an out string? parameter produce false warnings, and how does NotNullWhen fix them?"
+    prompt: |
+      The project turns on `null` analysis for reference types: `<Nullable>enable</Nullable>`. `TryFind` returns
+      `true` only after it has written the found string into `value`. Still, at the call site inside the `if` branch
+      the compiler reports warning `CS8602` about a possible dereference of `null`.
+
+      Why does the compiler not see that the value is not `null` when the result is `true`? How do you describe
+      this contract correctly, and which fixes look like they work but are actually worse?
+    hint: "Where would the compiler have to look to learn that `value` depends on the method's result, and can the `?` annotation alone express a condition?"
+    answer: |
+      - **Cause.** Analysis of the `null` state does not look into the bodies of called methods. At the call site the
+        compiler sees only the signature of `TryFind`, and for `out string? value` it says one thing: after the call
+        `value` may be `null`, with no link to the returned `bool`.
+      - **Fix.** Describe the conditional contract with an attribute from the `System.Diagnostics.CodeAnalysis`
+        namespace: `public bool TryFind(string key, [NotNullWhen(true)] out string? value)`. Now in the branch where
+        the method returned `true` the variable is treated as not `null`, and in the `false` branch it may still be `null`.
+      - **The mirror option** is `[MaybeNullWhen(false)] out string value`: the parameter is declared as not allowing
+        `null`, but may hold it when the result is `false`. `Dictionary<TKey, TValue>.TryGetValue` is declared this way.
+        This option is convenient for a generic `T`, where an unconstrained `T?` behaves differently than for
+        reference types.
+      - **Bad workarounds:** putting `!` at every call site (the operator only suppresses the warning and hides real
+        bugs), or declaring `out string value` and writing `value = null!` (the signature lies to the calling code).
+    explanation: |
+      Analysis of the `null` state runs inside each method and does not trace into the bodies of the methods it
+      calls. So the signature is the only contract the caller sees, and all the `null` information the caller needs
+      must be in it. The `?` annotation describes only an unconditional state, while for `Try...` methods the state
+      depends on the result. Conditional postconditions like this are exactly what the analysis attributes describe.
+
+      They form a whole family: preconditions (`AllowNull`, `DisallowNull`), postconditions (`MaybeNull`, `NotNull`),
+      conditional postconditions (`NotNullWhen`, `MaybeNullWhen`, `NotNullIfNotNull`), helper method and property
+      attributes that state that the listed members are not `null` (`MemberNotNull`, `MemberNotNullWhen`), and
+      unreachable-code attributes for methods that do not return (`DoesNotReturn`, `DoesNotReturnIf`).
+      The .NET libraries use them too: for example, `string.IsNullOrEmpty` is declared with
+      `[NotNullWhen(false)] string? value`, so after `if (!string.IsNullOrEmpty(s))` the variable `s` is treated as
+      not `null`.
+
+      The attributes affect only compiler warnings and add no runtime checks. Reference types that can hold `null`
+      (nullable reference types) arrived in C# 8; the behaviour described here applies to C# 14 and .NET 10.
+    linkTitles:
+      - "Attributes for null-state static analysis"
+      - "NotNullWhenAttribute class"
+      - "Nullable reference types"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"
+  noRunReason: "The question is about compiler nullable warnings, which the sandbox does not check; the sandbox also compiles with nullable annotations disabled."

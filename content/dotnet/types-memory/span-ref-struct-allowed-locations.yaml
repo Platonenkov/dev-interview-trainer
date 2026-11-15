@@ -1,0 +1,117 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WQBD8SPXX57G01X12S
+slug: span-ref-struct-allowed-locations
+stack: dotnet
+topic: types-memory
+level: middle
+type: multi
+grading: auto
+tags: [span, ref-struct, stack, generics, closures]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: true
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+  - id: f
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/ref-struct
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.span-1
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Где в C# 13 можно использовать переменную типа Span<int>, а где компилятор выдаст ошибку?
+    prompt: |
+      Код компилируется с C# 13 на .NET 9 или более поздней версии (правила те же и для C# 14 на .NET 10).
+      Выберите все места, где значение типа `Span<int>` можно объявить и использовать без ошибки компиляции.
+    hint: "`Span<T>` объявлен как `ref struct`. Какие из этих мест могут оказаться внутри объекта в управляемой куче?"
+    options:
+      a: Локальная переменная в синхронном методе
+      b: Параметр метода
+      c: "Поле экземпляра типа, объявленного как `ref struct`"
+      d: Поле экземпляра класса
+      e: "Элемент списка `List<Span<int>>`"
+      f: Локальная переменная, захваченная лямбда-выражением
+    optionExplanations:
+      d: "Объект класса живёт в куче, и поле `Span<int>` оказалось бы там же, переживая память, на которую указывает. Поле типа `ref struct` разрешено только как поле экземпляра другого `ref struct`, поэтому компилятор выдаёт ошибку."
+      e: "Тип `ref struct` можно передать как аргумент типа только параметру с антиограничением `where T : allows ref struct`, появившимся в C# 13. У `List<T>` такого антиограничения нет: список хранит элементы во внутреннем массиве в куче, а массив элементов `Span<int>` невозможен."
+      f: "Захваченные переменные компилятор переносит в поле скрытого класса-замыкания, то есть в кучу. Поэтому переменную типа `ref struct` нельзя захватить ни в лямбда-выражении, ни в локальной функции. Объявить `Span<int>` внутри тела лямбды или принять его как параметр лямбды при этом можно."
+    answer: Локальная переменная в синхронном методе, параметр метода и поле экземпляра `ref struct`.
+    explanation: |
+      `Span<T>` - это `ref struct`: он может содержать управляемую ссылку на чужую память (элемент массива,
+      буфер из `stackalloc`), поэтому компилятор гарантирует, что экземпляр никогда не попадёт в управляемую кучу
+      и не переживёт память, на которую указывает.
+
+      Разрешено всё, что живёт в стеке вызовов или внутри другого `ref struct`:
+
+      - локальные переменные и параметры методов;
+      - поля экземпляра другого `ref struct`, который подчиняется тем же ограничениям.
+
+      Запрещено всё, что может оказаться в куче:
+
+      - поле класса или обычной структуры, элемент массива, упаковка в `object`;
+      - захват в лямбде или локальной функции, потому что замыкание - это объект в куче;
+      - аргумент типа обобщения без `allows ref struct`, как у `List<T>`.
+
+      C# 13 ослабил часть правил: `ref struct` можно объявлять локальной переменной в асинхронных методах и
+      итераторах, если она не используется после `await` или `yield return`, ref struct может реализовывать
+      интерфейсы, а обобщения могут явно разрешить его через `allows ref struct`. Но ни одно из этих изменений не
+      позволяет хранить `Span<T>` в куче. Если срез буфера нужно сохранить в поле класса или пронести через
+      `await`, используют `Memory<T>`.
+    linkTitles:
+      - Типы ref struct
+      - Структура Span<T>
+  en:
+    title: Where may a Span<int> be used in C# 13, and where does the compiler report an error?
+    prompt: |
+      The code is compiled with C# 13 on .NET 9 or later (the rules are the same for C# 14 on .NET 10).
+      Select every place where a value of type `Span<int>` can be declared and used without a compile error.
+    hint: "`Span<T>` is declared as a `ref struct`. Which of these places can end up inside an object on the managed heap?"
+    options:
+      a: A local variable in a synchronous method
+      b: A method parameter
+      c: "An instance field of a type declared as `ref struct`"
+      d: An instance field of a class
+      e: "An element of a `List<Span<int>>`"
+      f: A local variable captured by a lambda expression
+    optionExplanations:
+      d: "A class instance lives on the heap, and a `Span<int>` field would live there too and could outlive the memory it points to. A field of a `ref struct` type is allowed only as an instance field of another `ref struct`, so the compiler reports an error."
+      e: "A `ref struct` can be a type argument only for a type parameter with the `where T : allows ref struct` anti-constraint introduced in C# 13. `List<T>` does not have it: the list keeps its elements in an internal array on the heap, and an array of `Span<int>` is impossible."
+      f: "The compiler moves captured variables into a field of a hidden closure class, that is onto the heap. That is why a variable of a `ref struct` type cannot be captured by a lambda expression or a local function. Declaring a `Span<int>` inside the lambda body or taking it as a lambda parameter is still fine."
+    answer: A local variable in a synchronous method, a method parameter and an instance field of a `ref struct`.
+    explanation: |
+      `Span<T>` is a `ref struct`: it can hold a managed reference to someone else's memory (an array element,
+      a `stackalloc` buffer), so the compiler guarantees that an instance never reaches the managed heap and never
+      outlives the memory it points to.
+
+      Allowed is everything that lives on the call stack or inside another `ref struct`:
+
+      - local variables and method parameters;
+      - instance fields of another `ref struct`, which follows the same restrictions.
+
+      Forbidden is everything that can end up on the heap:
+
+      - a field of a class or an ordinary struct, an array element, boxing to `object`;
+      - capture by a lambda or a local function, because a closure is a heap object;
+      - a generic type argument without `allows ref struct`, as with `List<T>`.
+
+      C# 13 relaxed some rules: a `ref struct` local can be declared in async methods and iterators as long as it
+      is not used after an `await` or `yield return`, a ref struct can implement interfaces, and generics can opt in
+      with `allows ref struct`. None of these changes lets a `Span<T>` be stored on the heap. To keep a slice of a
+      buffer in a class field or carry it across an `await`, use `Memory<T>`.
+    linkTitles:
+      - ref struct types
+      - Span<T> struct
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

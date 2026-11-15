@@ -1,0 +1,99 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNVNQECFR1FG9HGZT5
+slug: generic-covariance-assignment-compiles
+stack: dotnet
+topic: csharp
+level: middle
+type: single
+grading: auto
+tags: [generics, variance, covariance]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: false
+  - id: c
+    correct: false
+  - id: d
+    correct: true
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/generics/covariance-and-contravariance
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/concepts/covariance-contravariance/variance-in-generic-interfaces
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какое присваивание List<string> переменной обобщённого типа от object скомпилируется?
+    prompt: |
+      Есть переменная `List<string> names = new() { "a", "b" };`. Какое из присваиваний ниже скомпилируется?
+    hint: Какие из этих типов позволяют записать в коллекцию новый элемент, а какой только отдаёт элементы наружу? И может ли вариантность вообще относиться к классу?
+    options:
+      a: "`List<object> items = names;`"
+      b: "`IList<object> items = names;`"
+      c: "`ICollection<object> items = names;`"
+      d: "`IEnumerable<object> items = names;`"
+    optionExplanations:
+      a: "`List<T>` - это класс, а в C# вариантными бывают только параметры типа обобщённых интерфейсов и делегатов. Поэтому `List<string>` и `List<object>` - два несвязанных типа, и неявного преобразования между ними нет."
+      b: "`IList<T>` инвариантен: `T` в нём стоит и на выходе (индексатор на чтение), и на входе (`Add`, `Insert`, индексатор на запись). Если бы присваивание было разрешено, через `items.Add(42)` в список строк попало бы число."
+      c: "`ICollection<T>` тоже инвариантен, потому что принимает `T` на вход в методе `Add`. Иначе через `items.Add(42)` можно было бы положить `int` в `List<string>`."
+    answer: "`IEnumerable<object> items = names;`"
+    explanation: |
+      Начиная с C# 4 и .NET Framework 4 интерфейс объявлен как `IEnumerable<out T>`: параметр типа помечен `out`,
+      то есть он ковариантен. `T` встречается в нём только в выходных позициях (элементы можно лишь читать),
+      поэтому `IEnumerable<string>` безопасно считать `IEnumerable<object>`: любая строка - это `object`.
+      `List<string>` реализует `IEnumerable<string>`, и компилятор разрешает неявное преобразование.
+
+      Остальные варианты не компилируются по двум причинам:
+
+      - `List<T>` - класс, а модификаторы `out` и `in` допустимы только у параметров типа интерфейсов и делегатов.
+      - `IList<T>` и `ICollection<T>` принимают `T` на вход (`Add`, запись по индексу), поэтому они инвариантны.
+        Ковариантность здесь сломала бы типобезопасность.
+
+      Если нужен доступ только на чтение с индексом или `Count`, подходят ковариантные `IReadOnlyList<out T>` и
+      `IReadOnlyCollection<out T>`. Ещё одна оговорка: вариантность работает только для ссылочных типов,
+      поэтому `List<int>` к `IEnumerable<object>` неявно не приводится. Для сравнения, массивы ковариантны
+      исторически и небезопасно: `object[] arr = new string[1];` компилируется, но `arr[0] = 42;` выбросит
+      `ArrayTypeMismatchException` во время выполнения.
+    linkTitles:
+      - "Ковариантность и контравариантность в обобщениях"
+      - "Вариантность в обобщённых интерфейсах (C#)"
+  en:
+    title: Which assignment of a List<string> to a generic variable of object compiles?
+    prompt: |
+      There is a variable `List<string> names = new() { "a", "b" };`. Which of the assignments below compiles?
+    hint: Which of these types let you write a new element into the collection, and which one only hands elements out? And can variance apply to a class at all?
+    options:
+      a: "`List<object> items = names;`"
+      b: "`IList<object> items = names;`"
+      c: "`ICollection<object> items = names;`"
+      d: "`IEnumerable<object> items = names;`"
+    optionExplanations:
+      a: "`List<T>` is a class, and in C# only type parameters of generic interfaces and delegates can be variant. So `List<string>` and `List<object>` are two unrelated types, and there is no implicit conversion between them."
+      b: "`IList<T>` is invariant: `T` appears both as output (the indexer getter) and as input (`Add`, `Insert`, the indexer setter). If the assignment were allowed, `items.Add(42)` would put a number into a list of strings."
+      c: "`ICollection<T>` is invariant too, because its `Add` method takes `T` as input. Otherwise `items.Add(42)` could put an `int` into a `List<string>`."
+    answer: "`IEnumerable<object> items = names;`"
+    explanation: |
+      Since C# 4 and .NET Framework 4 the interface is declared as `IEnumerable<out T>`: the type parameter is
+      marked `out`, which makes it covariant. `T` appears only in output positions (elements can only be read),
+      so it is safe to treat an `IEnumerable<string>` as an `IEnumerable<object>`: every string is an `object`.
+      `List<string>` implements `IEnumerable<string>`, and the compiler allows the implicit conversion.
+
+      The other options do not compile for two reasons:
+
+      - `List<T>` is a class, and the `out` and `in` modifiers are allowed only on type parameters of interfaces and delegates.
+      - `IList<T>` and `ICollection<T>` take `T` as input (`Add`, indexed writes), so they are invariant.
+        Covariance there would break type safety.
+
+      If you need read-only access with an index or `Count`, the covariant `IReadOnlyList<out T>` and
+      `IReadOnlyCollection<out T>` fit. One more caveat: variance works only for reference types, so a
+      `List<int>` does not convert implicitly to `IEnumerable<object>`. For comparison, arrays are covariant for
+      historical reasons and unsafely: `object[] arr = new string[1];` compiles, but `arr[0] = 42;` throws
+      `ArrayTypeMismatchException` at run time.
+    linkTitles:
+      - "Covariance and contravariance in generics"
+      - "Variance in generic interfaces (C#)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

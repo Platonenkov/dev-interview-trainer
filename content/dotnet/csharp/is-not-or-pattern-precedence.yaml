@@ -1,0 +1,88 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNJAZBM5ZB2CCHSY8H
+slug: is-not-or-pattern-precedence
+stack: dotnet
+topic: csharp
+level: middle
+type: find-bug
+grading: auto
+tags: [pattern-matching, logical-patterns, operator-precedence]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    string word = "cake";
+    int consonants = word.Count(IsConsonant);
+    Console.WriteLine(consonants);
+
+    static bool IsConsonant(char c)
+    {
+        return c is not 'a' or 'e';
+    }
+bugLineSets: [[7]]
+fixedSource: |
+  string word = "cake";
+  int consonants = word.Count(IsConsonant);
+  Console.WriteLine(consonants);
+
+  static bool IsConsonant(char c)
+  {
+      return c is not ('a' or 'e');
+  }
+fixedExpect: { kind: output, value: "2" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/patterns
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строку, из-за которой буква e считается согласной
+    prompt: |
+      В этой упрощённой модели согласной считается любая буква, кроме `'a'` и `'e'`. Для слова `"cake"`
+      программа должна вывести `2` (буквы `c` и `k`), но выводит `3`: буква `'e'` тоже засчитывается
+      как согласная. Щёлкните по строке с дефектом.
+    hint: Какой комбинатор применяется первым в шаблоне `not 'a' or 'e'` - `not` или `or`?
+    answer: Строка 7, шаблон `c is not 'a' or 'e'`.
+    explanation: |
+      В логических шаблонах (появились в C# 9) комбинатор `not` связывает сильнее, чем `or`: он относится
+      только к ближайшему шаблону справа. Документация перечисляет порядок от самого сильного к самому слабому:
+      `not`, `and`, `or`. Поэтому `c is not 'a' or 'e'` разбирается как `c is (not 'a') or 'e'`, а не как
+      «ни `'a'`, ни `'e'`».
+
+      Для `'e'` срабатывает уже первая ветка: `'e'` не равна `'a'`, значит `not 'a'` истинно. Ветка `or 'e'`
+      ничего не добавляет, и весь шаблон эквивалентен `c is not 'a'`. В слове `"cake"` под него подходят
+      `c`, `k` и `e`, отсюда `3`. Код компилируется, потому что такой шаблон синтаксически корректен:
+      ошибка логическая, а не синтаксическая.
+
+      Исправление - явно задать порядок скобками: `c is not ('a' or 'e')`, или записать условие через `and`:
+      `c is not 'a' and not 'e'`. Оба варианта дают `2`. Поведение проверено запуском на .NET 10.
+    linkTitles:
+      - "Сопоставление шаблонов: логические шаблоны"
+  en:
+    title: Find the line that makes the letter e count as a consonant
+    prompt: |
+      In this simplified model a consonant is any letter except `'a'` and `'e'`. For the word `"cake"` the
+      program should print `2` (the letters `c` and `k`), but it prints `3`: the letter `'e'` is also counted
+      as a consonant. Click the line that contains the defect.
+    hint: Which combinator is applied first in the pattern `not 'a' or 'e'` - `not` or `or`?
+    answer: Line 7, the pattern `c is not 'a' or 'e'`.
+    explanation: |
+      In logical patterns (introduced in C# 9) the `not` combinator binds tighter than `or`: it applies only
+      to the nearest pattern on its right. The documentation lists the order from tightest to loosest as
+      `not`, `and`, `or`. So `c is not 'a' or 'e'` is parsed as `c is (not 'a') or 'e'`, not as
+      "neither `'a'` nor `'e'`".
+
+      For `'e'` the first branch already matches: `'e'` is not `'a'`, so `not 'a'` is true. The `or 'e'`
+      branch adds nothing, and the whole pattern is equivalent to `c is not 'a'`. In the word `"cake"` it
+      matches `c`, `k` and `e`, hence `3`. The code compiles because the pattern is syntactically valid:
+      the defect is logical, not syntactic.
+
+      The fix is to make the order explicit with parentheses, `c is not ('a' or 'e')`, or to write the
+      condition with `and`: `c is not 'a' and not 'e'`. Both versions give `2`. The behaviour is verified by
+      running it on .NET 10.
+    linkTitles:
+      - "Pattern matching: logical patterns"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"

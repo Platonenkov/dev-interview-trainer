@@ -1,0 +1,121 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WQ2WE6GJP1VB9TDKN8
+slug: span-slice-writes-through-to-array
+stack: dotnet
+topic: types-memory
+level: middle
+type: output
+grading: auto
+tags: [span, slicing, arrays, memory]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    int[] numbers = { 1, 2, 3, 4, 5 };
+    Span<int> span = numbers;
+    Span<int> slice = span.Slice(1, 3);
+
+    slice[0] = 20;
+    slice[2] = 40;
+
+    Console.Write(string.Join(" ", numbers));
+expect:
+  kind: output
+  value: "1 20 3 40 5"
+acceptedOutputs: ["1 20 3 40 5"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "1 20 3 40 5" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "1 2 3 4 5" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "20 2 40 4 5" }
+  - id: d
+    correct: false
+    expect: { kind: exception, value: System.IndexOutOfRangeException }
+  - id: e
+    correct: false
+    expect: { kind: compile-error }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.span-1
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/memory-and-spans/
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что выведет массив после записи в срез Span<int>, полученный через Slice?
+    prompt: |
+      Что выведет эта программа в консоль? Запись идёт только в `slice`, а печатается исходный массив `numbers`.
+    hint: Что хранит `Span<T>` внутри и что делает `Slice` с этим содержимым - копирует его или нет?
+    options:
+      a: "1 20 3 40 5"
+      b: "1 2 3 4 5"
+      c: "20 2 40 4 5"
+      d: Исключение `IndexOutOfRangeException`
+      e: Ошибка компиляции
+    optionExplanations:
+      b: Так было бы, если бы `Slice` копировал элементы в новый буфер. Но `Slice` не выделяет память и не копирует данные, он возвращает представление над тем же массивом, поэтому запись через срез меняет `numbers`.
+      c: "Индексы среза отсчитываются от его начала, а срез `Slice(1, 3)` начинается с `numbers[1]`. Поэтому `slice[0]` - это `numbers[1]`, а `slice[2]` - это `numbers[3]`, а не `numbers[0]` и `numbers[2]`."
+      d: "Второй аргумент `Slice(1, 3)` - это длина, а не индекс конца. Срез содержит 3 элемента (`numbers[1]`..`numbers[3]`), поэтому индекс 2 в нём допустим и исключения нет."
+      e: Код корректен. Массив `int[]` неявно преобразуется в `Span<int>`, а у `string.Join` есть обобщённая перегрузка для `IEnumerable<T>`, которая и выбирается для `int[]`.
+    answer: "1 20 3 40 5"
+    explanation: |
+      `Span<T>` - это не копия данных, а представление непрерывного участка памяти: внутри он хранит ссылку
+      на начало участка и длину. Строка `Span<int> span = numbers;` создаёт представление над всем массивом,
+      ничего не копируя.
+
+      `Slice(1, 3)` тоже ничего не копирует: он возвращает новый `Span<int>`, который начинается с элемента
+      `numbers[1]` и имеет длину 3. Индексы среза отсчитываются от его начала, поэтому `slice[0]` - это
+      `numbers[1]`, а `slice[2]` - это `numbers[3]`. Запись через срез попадает прямо в массив, и после неё
+      `numbers` содержит `1, 20, 3, 40, 5`.
+
+      Именно поэтому срезы `Span<T>` дешёвые: разбор строки или буфера по частям не создаёт аллокаций. Обратная
+      сторона - изменения через срез видны всем, кто держит исходный массив. Если нужна независимая копия, её
+      делают явно, например через `ToArray()`. Код рассчитан на .NET 10, но `Span<T>` и `Slice` ведут себя
+      так же во всех версиях, где они есть.
+    linkTitles:
+      - "Структура Span<T>"
+      - "Типы, связанные с памятью и диапазонами"
+  en:
+    title: What does the array print after writing to a Span<int> slice made with Slice?
+    prompt: |
+      What does this program print to the console? The writes go only to `slice`, and the original array `numbers` is printed.
+    hint: What does a `Span<T>` hold inside, and what does `Slice` do with that content - copy it or not?
+    options:
+      a: "1 20 3 40 5"
+      b: "1 2 3 4 5"
+      c: "20 2 40 4 5"
+      d: "`IndexOutOfRangeException`"
+      e: Compile error
+    optionExplanations:
+      b: That would be the result if `Slice` copied the elements into a new buffer. But `Slice` allocates nothing and copies nothing, it returns a view over the same array, so writing through the slice changes `numbers`.
+      c: "Slice indexes count from the start of the slice, and `Slice(1, 3)` starts at `numbers[1]`. So `slice[0]` is `numbers[1]` and `slice[2]` is `numbers[3]`, not `numbers[0]` and `numbers[2]`."
+      d: "The second argument of `Slice(1, 3)` is a length, not an end index. The slice holds 3 elements (`numbers[1]`..`numbers[3]`), so index 2 is valid and nothing is thrown."
+      e: The code is valid. An `int[]` converts implicitly to `Span<int>`, and `string.Join` has a generic overload for `IEnumerable<T>`, which is the one chosen for `int[]`.
+    answer: "1 20 3 40 5"
+    explanation: |
+      A `Span<T>` is not a copy of data but a view over a contiguous region of memory: inside it holds a
+      reference to the start of the region and a length. The line `Span<int> span = numbers;` creates a view
+      over the whole array without copying anything.
+
+      `Slice(1, 3)` does not copy either: it returns a new `Span<int>` that starts at `numbers[1]` and has
+      length 3. Slice indexes count from the start of the slice, so `slice[0]` is `numbers[1]` and `slice[2]`
+      is `numbers[3]`. The writes through the slice land directly in the array, and afterwards `numbers`
+      holds `1, 20, 3, 40, 5`.
+
+      This is why `Span<T>` slices are cheap: parsing a string or a buffer piece by piece creates no
+      allocations. The other side is that changes through a slice are visible to everyone who holds the
+      original array. If you need an independent copy, make it explicitly, for example with `ToArray()`. The
+      snippet targets .NET 10, but `Span<T>` and `Slice` behave the same in every version that has them.
+    linkTitles:
+      - "Span<T> struct"
+      - "Memory- and span-related types"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

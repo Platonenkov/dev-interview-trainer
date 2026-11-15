@@ -1,0 +1,136 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNP3XABVCPN2668DP4
+slug: growing-switch-on-payment-provider
+stack: dotnet
+topic: oop-solid
+level: senior
+type: situation
+grading: self
+tags: [open-closed, polymorphism, refactoring, dependency-injection]
+links:
+  - url: https://blog.cleancoder.com/uncle-bob/2014/05/12/TheOpenClosedPrinciple.html
+    lang: en
+    kind: article
+  - url: https://refactoring.com/catalog/replaceConditionalWithPolymorphism.html
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/dotnet/architecture/modern-web-apps-azure/architectural-principles
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/extensions/dependency-injection/overview
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Switch по платёжному провайдеру в пяти классах ломает соседних провайдеров при каждой правке
+    prompt: |
+      Сервис платежей работает с несколькими провайдерами. Поведение зависит от перечисления `ProviderType`, и
+      `switch` по нему есть в пяти классах: построение запроса, расчёт комиссии, возврат средств, разбор
+      webhook-уведомлений и сопоставление статусов. Каждый спринт кто-то добавляет или меняет ветку, и почти
+      каждая такая правка вызывает регрессию у других провайдеров. Бизнес планирует подключить ещё два
+      провайдера.
+
+      Что вы будете делать и в каком порядке?
+    hint: Какая ось изменений повторяется каждый спринт и сколько мест приходится трогать, чтобы её расширить?
+    answer: |
+      1. **Зафиксировать поведение.** Составить карту: какие операции зависят от провайдера, где стоят `switch`,
+         какие регрессии уже были. Написать характеризационные тесты на каждую пару «провайдер и операция» на
+         записанных запросах и ответах, без реальной сети, чтобы рефакторинг не менял поведение.
+      2. **Выделить абстракцию по оси изменений.** Каждый спринт меняется провайдер, значит, абстракция нужна
+         именно по провайдеру. Ввести интерфейс, например `IPaymentProvider` с ключом `ProviderType` и
+         операциями из пяти классов, или несколько узких интерфейсов по возможностям, если не все провайдеры
+         умеют всё. Специфичное для провайдера переезжает в его класс; общий поток (валидация, идемпотентность,
+         журналирование, повторы) остаётся в общем коде и вызывает абстракцию.
+      3. **Выбирать реализацию в одном месте.** Зарегистрировать все реализации в контейнере DI и при старте
+         построить из `IEnumerable<IPaymentProvider>` словарь по `ProviderType`. Сразу проверять, что для каждого
+         значения `ProviderType` есть ровно одна реализация, и падать при старте, а не на платеже. Только это
+         место знает список провайдеров.
+      4. **Мигрировать постепенно.** По одному провайдеру и одной операции: ветка `switch` делегирует новому
+         классу, тесты зелёные, ветка удаляется. Каждый шаг выкатывается отдельно, при необходимости за флагом.
+         Когда перенесены все провайдеры, `switch` исчезает.
+      5. **Закрепить.** Общий набор контрактных тестов, который прогоняется для каждой реализации; архитектурный
+         тест или правило code review, запрещающее новый `switch` по `ProviderType` вне регистрации; чек-лист
+         подключения провайдера. Новый провайдер теперь - это новый класс, его тесты и одна строка регистрации.
+      6. **Не переусердствовать.** Различия, которые являются данными (ставки комиссий, адреса, таймауты),
+         выносятся в конфигурацию, а не в отдельные классы.
+    explanation: |
+      Несколько `switch` по одному и тому же типу в разных классах означают, что знание о провайдере размазано
+      по системе: чтобы добавить или изменить провайдера, нужно править пять мест, и каждая правка проходит
+      через код, общий для всех провайдеров. Отсюда регрессии: изменение ветки одного провайдера задевает общие
+      переменные, порядок проверок или ветку по умолчанию, через которую идут другие.
+
+      Принцип открытости/закрытости требует, чтобы поведение модуля можно было расширять добавлением нового
+      кода, не изменяя уже работающий. Замена условий полиморфизмом собирает поведение провайдера в одном
+      классе, и правка одного провайдера физически не касается кода других. Применять принцип стоит там, где
+      изменения действительно повторяются; здесь это подтверждают история спринтов и планы бизнеса. Выбор
+      реализации через DI дополнительно отделяет общий поток от конкретных провайдеров: общий код зависит от
+      абстракции, а не от деталей, как требует принцип инверсии зависимостей.
+
+      У решения есть цена. Добавить провайдера становится дёшево, а добавить новую операцию дороже: её придётся
+      реализовать во всех классах провайдеров. Это разумный обмен, пока провайдеры появляются чаще, чем
+      операции. Если провайдер не поддерживает операцию, лучше отдельный интерфейс возможности, чем
+      `NotSupportedException`, которое нарушает принцип подстановки Лисков.
+    linkTitles:
+      - "Роберт Мартин: The Open Closed Principle"
+      - "Рефакторинг Replace Conditional with Polymorphism"
+      - "Архитектурные принципы"
+      - "Внедрение зависимостей в .NET"
+  en:
+    title: A switch on payment provider spread across five classes causes regressions on every edit
+    prompt: |
+      A payment service works with several providers. Behaviour depends on the `ProviderType` enum, and there
+      is a `switch` on it in five classes: request building, fee calculation, refunds, webhook parsing and
+      status mapping. Every sprint someone adds or changes a branch, and almost every such edit causes a
+      regression for other providers. The business plans to onboard two more providers.
+
+      What do you do, and in what order?
+    hint: Which axis of change recurs every sprint, and how many places do you have to touch to extend it?
+    answer: |
+      1. **Pin the behaviour.** Build a map: which operations depend on the provider, where the `switch`
+         statements are, which regressions have already happened. Write characterization tests for every
+         "provider and operation" pair on recorded requests and responses, without a real network, so the
+         refactoring does not change behaviour.
+      2. **Extract an abstraction along the axis of change.** The provider is what changes every sprint, so the
+         abstraction belongs there. Introduce an interface, for example `IPaymentProvider` with a `ProviderType`
+         key and the operations from the five classes, or several narrow capability interfaces if not every
+         provider supports everything. Provider-specific code moves into its class; the shared flow
+         (validation, idempotency, logging, retries) stays in shared code and calls the abstraction.
+      3. **Choose the implementation in one place.** Register every implementation in the DI container and at
+         startup build a dictionary keyed by `ProviderType` from `IEnumerable<IPaymentProvider>`. Check right
+         away that every `ProviderType` value has exactly one implementation, and fail at startup rather than
+         during a payment. Only this place knows the list of providers.
+      4. **Migrate incrementally.** One provider and one operation at a time: the `switch` branch delegates to
+         the new class, tests are green, the branch is deleted. Each step ships on its own, behind a flag if
+         needed. When every provider has moved, the `switch` is gone.
+      5. **Lock it in.** A shared contract test suite that runs against every implementation; an architecture
+         test or a code review rule that forbids a new `switch` on `ProviderType` outside the registration; a
+         checklist for onboarding a provider. A new provider is now a new class, its tests and one
+         registration line.
+      6. **Do not overdo it.** Differences that are data (fee rates, endpoints, timeouts) go into
+         configuration, not into separate classes.
+    explanation: |
+      Several `switch` statements on the same type in different classes mean that knowledge about a provider
+      is smeared across the system: adding or changing a provider requires editing five places, and every edit
+      goes through code shared by all providers. That is where the regressions come from: changing one
+      provider's branch disturbs shared variables, the order of checks or the default branch that others use.
+
+      The open/closed principle asks that a module's behaviour can be extended by adding new code without
+      modifying code that already works. Replacing conditionals with polymorphism gathers a provider's
+      behaviour in one class, so an edit for one provider does not physically touch the code of the others.
+      Apply the principle where change actually recurs; here the sprint history and the business plans
+      confirm it. Selecting the implementation through DI also separates the shared flow from concrete
+      providers: the shared code depends on an abstraction, not on details, as the dependency inversion
+      principle requires.
+
+      The solution has a cost. Adding a provider becomes cheap, but adding a new operation becomes more
+      expensive: it has to be implemented in every provider class. That is a reasonable trade while providers
+      appear more often than operations. If a provider does not support an operation, a separate capability
+      interface is better than a `NotSupportedException`, which violates the Liskov substitution principle.
+    linkTitles:
+      - "Robert Martin: The Open Closed Principle"
+      - "Replace Conditional with Polymorphism refactoring"
+      - "Architectural principles"
+      - "Dependency injection in .NET"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

@@ -1,0 +1,131 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WN697094CGHHRWJWC3
+slug: getter-exposes-mutable-list
+stack: dotnet
+topic: oop-solid
+level: junior
+type: find-bug
+grading: auto
+tags: [encapsulation, invariants, collections, read-only]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    Order order = new();
+    order.AddItem(new OrderItem("Book", 30m));
+    order.Items.Add(new OrderItem("Pen", 5m));
+    Console.WriteLine($"{order.Items.Count} {order.Total}");
+
+    record OrderItem(string Name, decimal Price);
+
+    class Order
+    {
+        private readonly List<OrderItem> _items = new();
+
+        public decimal Total { get; private set; }
+
+        public List<OrderItem> Items => _items;
+
+        public void AddItem(OrderItem item)
+        {
+            if (item.Price <= 0)
+            {
+                throw new ArgumentException("Price must be positive.");
+            }
+
+            _items.Add(item);
+            Total += item.Price;
+        }
+    }
+bugLineSets: [[14]]
+fixedSource: |
+  Order order = new();
+  order.AddItem(new OrderItem("Book", 30m));
+  order.AddItem(new OrderItem("Pen", 5m));
+  Console.WriteLine($"{order.Items.Count} {order.Total}");
+
+  record OrderItem(string Name, decimal Price);
+
+  class Order
+  {
+      private readonly List<OrderItem> _items = new();
+
+      public decimal Total { get; private set; }
+
+      public IReadOnlyList<OrderItem> Items => _items.AsReadOnly();
+
+      public void AddItem(OrderItem item)
+      {
+          if (item.Price <= 0)
+          {
+              throw new ArgumentException("Price must be positive.");
+          }
+
+          _items.Add(item);
+          Total += item.Price;
+      }
+  }
+fixedExpect: { kind: output, value: "2 35" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/design-guidelines/guidelines-for-collections
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/object-oriented/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.list-1.asreadonly
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строку, через которую внешний код ломает сумму заказа
+    prompt: |
+      Класс `Order` проверяет позиции в `AddItem` и должен поддерживать правило: `Total` всегда равен сумме цен
+      всех позиций. Программа выводит `2 30`, хотя в заказе две позиции на 35. Щёлкните по строке класса `Order`,
+      которая позволяет внешнему коду нарушить это правило.
+    hint: Каким способом, кроме `AddItem`, вызывающий код может положить позицию в заказ?
+    answer: Строка 14, свойство `Items`, которое возвращает внутренний изменяемый `List<OrderItem>`.
+    explanation: |
+      Поле `_items` закрыто модификатором `private` (это и уровень доступа по умолчанию для членов класса), но
+      свойство `Items` отдаёт наружу ссылку на тот же самый список. Поэтому инкапсуляция всё равно нарушена: любой
+      код может вызвать `order.Items.Add(...)` в обход `AddItem`. Тогда не выполняется ни проверка цены, ни
+      пересчёт `Total`, и инвариант "сумма равна сумме цен позиций" ломается: позиций две, а `Total` равен 30.
+
+      Исправление - отдавать наружу представление только для чтения, например `IReadOnlyList<OrderItem>` через
+      `_items.AsReadOnly()`. Метод возвращает обёртку `ReadOnlyCollection<T>` над тем же списком, поэтому
+      `order.Items.Add(...)` не скомпилируется, и единственный способ добавить позицию - `AddItem`. Просто сменить
+      тип свойства на `IReadOnlyList<OrderItem>` и вернуть `_items` слабее: вызывающий код может привести результат
+      обратно к `List<OrderItem>`. Framework Design Guidelines (2-е издание 2008 года, перепечатано на Microsoft
+      Learn) тоже советуют не использовать `List<T>` в публичных API и возвращать `ReadOnlyCollection<T>` для
+      коллекций только для чтения.
+    linkTitles:
+      - "Рекомендации по коллекциям (Framework Design Guidelines)"
+      - "Классы, структуры и записи"
+      - "Метод List<T>.AsReadOnly"
+  en:
+    title: Find the line that lets caller code break the order total
+    prompt: |
+      The `Order` class validates items in `AddItem` and must keep one rule: `Total` is always the sum of the
+      prices of all items. The program prints `2 30`, although the order holds two items worth 35. Click the line
+      of the `Order` class that lets caller code break this rule.
+    hint: Apart from `AddItem`, how can caller code put an item into the order?
+    answer: Line 14, the `Items` property that returns the internal mutable `List<OrderItem>`.
+    explanation: |
+      The `_items` field is `private` (which is also the default accessibility of class members), but the `Items`
+      property hands out a reference to the same list. So encapsulation is still broken: any code can call
+      `order.Items.Add(...)` and bypass `AddItem`. Then neither the price check nor the `Total` update runs, and the
+      invariant "the total equals the sum of item prices" breaks: there are two items, but `Total` is 30.
+
+      The fix is to expose a read-only view, for example `IReadOnlyList<OrderItem>` through `_items.AsReadOnly()`.
+      The method returns a `ReadOnlyCollection<T>` wrapper over the same list, so `order.Items.Add(...)` no longer
+      compiles, and the only way to add an item is `AddItem`. Only changing the property type to
+      `IReadOnlyList<OrderItem>` and returning `_items` is weaker: the caller can cast the result back to
+      `List<OrderItem>`. The Framework Design Guidelines (2nd edition from 2008, reprinted on Microsoft Learn) also
+      advise against `List<T>` in public APIs and recommend `ReadOnlyCollection<T>` for read-only collections.
+    linkTitles:
+      - "Guidelines for collections (Framework Design Guidelines)"
+      - "Classes, structs, and records"
+      - "List<T>.AsReadOnly method"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-15

@@ -1,0 +1,125 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNRADS7VJ6XC77ZZCD
+slug: nullable-rollout-legacy-solution
+stack: dotnet
+topic: csharp
+level: lead
+type: single
+grading: auto
+tags: [nullable, nullable-reference-types, migration, msbuild]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: false
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/advanced-topics/update-applications/nullable-migration-strategies
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/null-safety/nullable-reference-types
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/compiler-options/errors-warnings
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как с наименьшим риском включить nullable reference types в большом legacy-решении?
+    prompt: |
+      В решении около 80 проектов, которыми владеют шесть команд. Код писался до C# 8 и никогда не размечался
+      аннотациями nullable. Руководство хочет включить nullable reference types. Какой план внедрения несёт
+      наименьший риск?
+    hint: Что станет со сборкой и с ценностью аннотаций, если огромное число предупреждений появится разом, и кто пользуется аннотациями библиотеки?
+    options:
+      a: "За один релиз добавить `<Nullable>enable</Nullable>` и `<TreatWarningsAsErrors>true</TreatWarningsAsErrors>` в `Directory.Build.props` для всего решения и исправить все ошибки в одной долгоживущей ветке перед слиянием."
+      b: "Включить `<Nullable>enable</Nullable>` сразу для всего решения, а сборку держать зелёной, добавляя `!` и `#pragma warning disable` везде, где появилось предупреждение; настоящие исправления сделать потом."
+      c: "Идти проект за проектом, начиная с проектов, которые не зависят от других проектов решения: включать контекст на уровне проекта или файла через `#nullable enable`, исправлять предупреждения и только когда проект чист, превращать его nullable-предупреждения в ошибки через свойство `<WarningsAsErrors>` этого проекта."
+      d: "Начать с верхних проектов-приложений, где `NullReferenceException` реально возникает в production, а общие библиотеки оставить без аннотаций, пока приложения не станут чистыми."
+    optionExplanations:
+      a: "Это big bang: в большом решении включение сразу даёт огромное число предупреждений, а с `TreatWarningsAsErrors` сборка падает сразу у всех шести команд. Долгоживущая ветка с правками по всему коду постоянно конфликтует с основной разработкой, и её слияние превращается в отдельный рискованный релиз."
+      b: "Оператор `!` и `#pragma` только подавляют диагностику и ничего не делают во время выполнения. Массовое подавление прячет реальные места, где приходит `null`, а неверные аннотации вроде `string` вместо `string?` выглядят как проверенный контракт и вводят в заблуждение вызывающий код. Позже эти подавления почти никто не разбирает."
+      d: "API библиотек, собранных без nullable-контекста, для компилятора «oblivious»: на значения, которые они возвращают, приложение не получает предупреждений. Собственный код приложения анализируется, но самые важные потоки `null`, идущие из общих библиотек, остаются без проверки. Когда библиотеки разметят позже, во всех потребителях появится новая волна предупреждений, и часть работы придётся делать второй раз."
+    answer: "Постепенно, проект за проектом, начиная с проектов, от которых зависят остальные: включить контекст, исправить предупреждения и только потом сделать nullable-предупреждения ошибками для этого проекта."
+    explanation: |
+      Руководство Microsoft по миграции описывает её как последовательность шагов: выбрать значение контекста по
+      умолчанию, открывать предупреждения файл за файлом и в итоге прийти к `<Nullable>enable</Nullable>` для всего
+      проекта. Можно оставить контекст выключенным и включать его в отдельных файлах через `#nullable enable` или
+      включить его для проекта и временно отключить в ещё не готовых файлах через `#nullable disable`. Кроме
+      `enable` и `disable` свойство `<Nullable>` принимает значения `warnings` (сначала исправить предупреждения,
+      аннотации добавить позже) и `annotations` (сначала разметить публичный API, предупреждения разобрать потом).
+
+      Для перехода по файлам руководство советует начинать с самых глубоких листовых типов. Отдельного правила о
+      порядке проектов в решении там нет, но та же логика переносится на граф проектов: аннотации библиотеки - это
+      то, что видят её потребители, а код, собранный без nullable-контекста, остаётся для компилятора «oblivious»,
+      и на значения из него предупреждений нет. Поэтому разумно идти снизу вверх: сначала проекты, от которых
+      зависят остальные, затем их потребители. Каждый следующий проект получает уже честные аннотации зависимостей.
+
+      Для лида в этом плане важны и организационные свойства:
+
+      - сборка остаётся зелёной, нет долгоживущей ветки и массовых конфликтов слияния;
+      - каждая команда отвечает за свои проекты и мигрирует их параллельно с обычной работой;
+      - после того как проект чист, его nullable-предупреждения становятся ошибками, и новые регрессии ловятся
+        уже при сборке;
+      - прогресс измерим: число проектов или файлов с включённым контекстом и число оставшихся предупреждений.
+
+      Оператор `!` при этом допустим точечно, когда разработчик знает больше компилятора, но не как способ
+      быстро заглушить миграцию. Nullable reference types появились в C# 8 и полностью работают при компиляции,
+      поэтому постепенное включение не меняет поведение программы во время выполнения.
+    linkTitles:
+      - "Стратегии миграции на nullable reference types"
+      - "Ссылочные типы, допускающие null"
+      - "Параметры компилятора C# для ошибок и предупреждений"
+  en:
+    title: How do you enable nullable reference types in a large legacy solution with the least risk?
+    prompt: |
+      A solution has about 80 projects owned by six teams. The code was written before C# 8 and has never been
+      annotated for nullability. Management wants nullable reference types enabled. Which rollout plan carries
+      the least risk?
+    hint: What happens to the build and to the value of annotations if a huge number of warnings appears at once, and who consumes a library's annotations?
+    options:
+      a: "In one release, add `<Nullable>enable</Nullable>` and `<TreatWarningsAsErrors>true</TreatWarningsAsErrors>` to `Directory.Build.props` for the whole solution, and fix all errors in one long-lived branch before merging."
+      b: "Enable `<Nullable>enable</Nullable>` for the whole solution at once and keep the build green by adding `!` and `#pragma warning disable` wherever a warning appears; real fixes come later."
+      c: "Go project by project, starting with projects that depend on no other projects of the solution: enable the context per project or per file with `#nullable enable`, fix the warnings, and only when a project is clean turn its nullable warnings into errors with that project's `<WarningsAsErrors>` property."
+      d: "Start with the top-level application projects, where `NullReferenceException` actually shows up in production, and leave the shared libraries unannotated until the applications are clean."
+    optionExplanations:
+      a: "This is a big bang: in a large solution enabling the feature produces a huge number of warnings at once, and with `TreatWarningsAsErrors` the build breaks for all six teams at the same time. A long-lived branch that touches the whole codebase keeps conflicting with ongoing work, and merging it becomes a risky release of its own."
+      b: "The `!` operator and `#pragma` only suppress diagnostics and do nothing at run time. Mass suppression hides the real places where `null` arrives, and wrong annotations such as `string` instead of `string?` look like a checked contract and mislead calling code. In practice these suppressions are rarely revisited."
+      d: "APIs of libraries compiled without a nullable context are oblivious to the compiler, so the application gets no warnings for values returned from them. The application's own code is still analysed, but the most important `null` flows, the ones coming from shared libraries, stay unchecked. When the libraries are annotated later, a new wave of warnings appears in every consumer and part of the work is done twice."
+    answer: "Incrementally, project by project, starting with the projects that others depend on: enable the context, fix the warnings, and only then make nullable warnings errors for that project."
+    explanation: |
+      The Microsoft migration guidance describes migration as sequencing the work: choose a default context,
+      expose warnings file by file, and converge on `<Nullable>enable</Nullable>` for the whole project. You can
+      keep the context disabled and enable it in individual files with `#nullable enable`, or enable it for the
+      project and temporarily disable it in files that are not ready with `#nullable disable`. Besides `enable`
+      and `disable`, the `<Nullable>` property accepts `warnings` (fix warnings first, annotate later) and
+      `annotations` (annotate the public API first, deal with warnings afterwards).
+
+      For the file-by-file approach the guidance suggests starting with the deepest leaf types. It gives no
+      separate rule about the order of projects in a solution, but the same logic carries over to the project
+      graph: a library's annotations are what its consumers see, and code compiled without a nullable context
+      stays oblivious to the compiler, so values coming from it produce no warnings. So it makes sense to go
+      bottom up: first the projects that others depend on, then their consumers. Every next project then gets
+      honest annotations from its dependencies.
+
+      For a lead the organisational properties of this plan matter too:
+
+      - the build stays green, with no long-lived branch and no mass merge conflicts;
+      - each team owns its projects and migrates them alongside regular work;
+      - once a project is clean its nullable warnings become errors, so new regressions are caught at build
+        time;
+      - progress is measurable: the number of projects or files with the context enabled and the warnings left.
+
+      The `!` operator is still fine in specific places where the developer knows more than the compiler, but not
+      as a way to silence the migration quickly. Nullable reference types arrived in C# 8 and are entirely a
+      compile-time feature, so enabling them step by step does not change the program's run-time behaviour.
+    linkTitles:
+      - "Nullable migration strategies"
+      - "Nullable reference types"
+      - "C# compiler options for errors and warnings"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-15

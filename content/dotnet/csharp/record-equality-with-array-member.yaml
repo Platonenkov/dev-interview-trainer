@@ -1,0 +1,125 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNJ4DSBAY1BPS5BXXW
+slug: record-equality-with-array-member
+stack: dotnet
+topic: csharp
+level: middle
+type: output
+grading: auto
+tags: [records, equality, arrays, reference-equality]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    int[] items = { 1, 2, 3 };
+    Order a = new Order("A-1", items);
+    Order b = new Order("A-1", new[] { 1, 2, 3 });
+    Order c = new Order("A-1", items);
+
+    Console.Write($"{a == b} {a == c}");
+
+    record Order(string Id, int[] Items);
+expect:
+  kind: output
+  value: "False True"
+acceptedOutputs: ["False True"]
+options:
+  - id: a
+    correct: false
+    expect: { kind: output, value: "True True" }
+  - id: b
+    correct: true
+    expect: { kind: output, value: "False True" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "False False" }
+  - id: d
+    correct: false
+    expect: { kind: compile-error }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/record
+    lang: en
+    kind: docs
+  - url: https://github.com/dotnet/csharplang/blob/main/proposals/csharp-9.0/records.md
+    lang: en
+    kind: spec
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.object.equals
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Равны ли две записи record, если их свойство int[] содержит одинаковые элементы в разных массивах?
+    prompt: |
+      Что выведет эта программа в консоль? У `a` и `c` свойство `Items` ссылается на один и тот же массив,
+      а у `b` - на отдельный массив с теми же элементами.
+    hint: Как сгенерированный для записи `Equals` сравнивает поле типа `int[]` - по содержимому или как-то иначе?
+    options:
+      a: "True True"
+      b: "False True"
+      c: "False False"
+      d: Ошибка компиляции
+    optionExplanations:
+      a: "Равенство записей не сравнивает содержимое коллекций поэлементно. Поле `int[]` сравнивается через `EqualityComparer<int[]>.Default`, а массив не переопределяет `Equals`, поэтому сравниваются ссылки, и `a` и `b` с разными массивами не равны."
+      c: "Сами записи сравниваются по значениям полей, а не по ссылке на объект записи. У `a` и `c` строка `Id` одинаковая и `Items` указывает на один и тот же массив, поэтому все поля равны и результат `True`."
+      d: "Код корректен. Позиционная запись со свойством-массивом допустима, а объявление типа можно разместить после операторов верхнего уровня."
+    answer: "False True"
+    explanation: |
+      Для `record` компилятор генерирует `Equals(Order? other)`, который проверяет, что у записей один и тот же
+      тип (`EqualityContract`), и затем сравнивает каждое поле экземпляра. По спецификации записей C# 9 поле
+      `fieldN` типа `TN` сравнивается вызовом `EqualityComparer<TN>.Default.Equals(fieldN, other.fieldN)`.
+      Для `string` это сравнение строк по содержимому. Массивы не переопределяют `Object.Equals`, а реализация
+      по умолчанию для ссылочных типов проверяет равенство ссылок, поэтому `EqualityComparer<int[]>.Default`
+      сравнивает ссылки на массивы.
+
+      - `a == b`: `Items` указывают на два разных массива, и хотя элементы совпадают, поле считается неравным.
+        Результат `False`.
+      - `a == c`: `Items` указывают на один и тот же массив `items`, все поля равны. Результат `True`.
+
+      То же касается сгенерированного `GetHashCode`: хеш массива зависит от экземпляра, поэтому такие записи
+      плохо работают как ключи словаря. Если нужно сравнение по содержимому, в записи явно объявляют
+      `public virtual bool Equals(Order? other)`, который сравнивает `Items` через `SequenceEqual`, и
+      согласованный с ним `GetHashCode`. Поведение одинаково для записей начиная с C# 9, в том числе в .NET 10.
+    linkTitles:
+      - Записи (record)
+      - "Спецификация C# 9: записи"
+      - Метод Object.Equals
+  en:
+    title: Are two records equal when their int[] property holds the same elements in different arrays?
+    prompt: |
+      What does this program print to the console? For `a` and `c` the `Items` property refers to the same array,
+      while for `b` it refers to a separate array with the same elements.
+    hint: How does the `Equals` generated for a record compare a field of type `int[]` - by contents or some other way?
+    options:
+      a: "True True"
+      b: "False True"
+      c: "False False"
+      d: Compile error
+    optionExplanations:
+      a: "Record equality does not compare collection contents element by element. The `int[]` field is compared with `EqualityComparer<int[]>.Default`, and an array does not override `Equals`, so the references are compared, and `a` and `b` with different arrays are not equal."
+      c: "The records themselves are compared by field values, not by the reference to the record object. `a` and `c` have the same `Id` string and `Items` points to the same array, so every field is equal and the result is `True`."
+      d: "The code is valid. A positional record with an array property is allowed, and a type declaration may follow top-level statements."
+    answer: "False True"
+    explanation: |
+      For a `record` the compiler generates an `Equals(Order? other)` that checks that both records have the same
+      type (`EqualityContract`) and then compares every instance field. According to the C# 9 records
+      specification, a field `fieldN` of type `TN` is compared with
+      `EqualityComparer<TN>.Default.Equals(fieldN, other.fieldN)`. For `string` that compares the text. Arrays do
+      not override `Object.Equals`, and the default implementation for reference types checks reference
+      equality, so `EqualityComparer<int[]>.Default` compares the array references.
+
+      - `a == b`: `Items` point to two different arrays, and although the elements match, the field is unequal.
+        The result is `False`.
+      - `a == c`: `Items` point to the same array `items`, so all fields are equal. The result is `True`.
+
+      The same applies to the generated `GetHashCode`: the hash of an array depends on the instance, so such
+      records make poor dictionary keys. If you need comparison by contents, declare your own
+      `public virtual bool Equals(Order? other)` that compares `Items` with `SequenceEqual`, plus a matching
+      `GetHashCode`. The behaviour is the same for records since C# 9, including on .NET 10.
+    linkTitles:
+      - Records
+      - "C# 9 specification: records"
+      - Object.Equals method
+meta:
+  authors: [platonenkov]
+  verified: 1970-01-01
+  dotnetVersion: "10"

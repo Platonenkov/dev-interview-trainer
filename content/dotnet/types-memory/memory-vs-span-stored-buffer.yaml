@@ -1,0 +1,103 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WRFHYKPQ94W7GXKH6N
+slug: memory-vs-span-stored-buffer
+stack: dotnet
+topic: types-memory
+level: senior
+type: single
+grading: auto
+tags: [span, memory, ref-struct, async]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: false
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/memory-and-spans/memory-t-usage-guidelines
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.memory-1
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Каким типом хранить срез входного буфера в поле класса, если он нужен после await?
+    prompt: |
+      Класс-парсер разбирает сообщение в несколько шагов. Он получает срез входного буфера, сохраняет его
+      в поле класса, затем ждёт следующую порцию данных через `await` и после этого обрабатывает сохранённый
+      срез. Копировать данные нельзя. Какого типа должно быть поле? Ответ дан для C# 14 и .NET 10.
+    hint: Где оказываются локальные переменные асинхронного метода, которые нужны после `await`, и где живёт поле объекта класса?
+    options:
+      a: "`Span<byte>`"
+      b: "Собственная `ref struct`, внутри которой лежит `ReadOnlySpan<byte>`"
+      c: "`Memory<byte>`"
+      d: "`byte[]`, заполненный через `slice.ToArray()`"
+    optionExplanations:
+      a: "`Span<byte>` - это `ref struct`, она может жить только на стеке. Поле класса такого типа объявить нельзя (ошибка компиляции), и держать её живой через `await` тоже нельзя: состояние асинхронного метода переносится в объект в куче."
+      b: Структура, которая содержит span, сама обязана быть `ref struct`, и на неё действуют те же ограничения. Класс не может иметь поле такого типа, обёртка не переносит span в кучу.
+      d: "`ToArray` выделяет новый массив и копирует в него данные. Код скомпилируется и будет работать, но нарушит требование не копировать данные и добавит аллокацию на каждое сообщение."
+    answer: "`Memory<byte>`"
+    explanation: |
+      `Span<T>` объявлен как `ref struct`: компилятор не даёт ему попасть в кучу. Поэтому span не может быть
+      полем класса, элементом коллекции или захваченной переменной, и его нельзя использовать после `await`,
+      ведь переменные, нужные после `await`, сохраняются в объекте конечного автомата в куче. Начиная с C# 13
+      локальную переменную типа `Span<T>` можно объявить в асинхронном методе, но только если она не используется
+      через границу `await`.
+
+      `Memory<T>` - обычная структура, не `ref struct`. Она хранит ссылку на владельца памяти (массив или
+      `MemoryManager<T>`), смещение и длину, поэтому её можно положить в поле класса, в коллекцию и пронести
+      через `await`. Когда нужна синхронная обработка, код берёт `_slice.Span` и работает со span только
+      внутри этого синхронного участка. Если парсер данные только читает, ещё точнее подойдёт
+      `ReadOnlyMemory<byte>`.
+
+      Важная оговорка: `Memory<T>` не владеет буфером. Если буфер взят из `ArrayPool<byte>` и возвращён в пул,
+      сохранённый `Memory<byte>` продолжит указывать на память, которую уже использует кто-то другой. Правила
+      владения и времени жизни описаны в рекомендациях по использованию `Memory<T>` и `Span<T>`.
+    linkTitles:
+      - "Рекомендации по использованию Memory<T> и Span<T>"
+      - "Структура Memory<T>"
+  en:
+    title: Which type should hold a slice of an input buffer in a class field that is used after await?
+    prompt: |
+      A parser class reads a message in several steps. It receives a slice of an input buffer, saves it in
+      a field of the class, then waits for the next chunk of data with `await` and processes the saved slice
+      afterwards. The data must not be copied. Which type should the field have? The answer is given for
+      C# 14 and .NET 10.
+    hint: Where do the local variables of an async method that are needed after an `await` end up, and where does a field of a class instance live?
+    options:
+      a: "`Span<byte>`"
+      b: "A custom `ref struct` that contains a `ReadOnlySpan<byte>`"
+      c: "`Memory<byte>`"
+      d: "A `byte[]` filled with `slice.ToArray()`"
+    optionExplanations:
+      a: "`Span<byte>` is a `ref struct`, so it can live only on the stack. A class field of that type cannot be declared (compile error), and it cannot be kept alive across `await` either: the state of an async method is moved into an object on the heap."
+      b: A struct that contains a span must itself be a `ref struct`, and the same restrictions apply to it. A class cannot have a field of that type; the wrapper does not move the span to the heap.
+      d: "`ToArray` allocates a new array and copies the data into it. The code compiles and works, but it breaks the no-copy requirement and adds an allocation per message."
+    answer: "`Memory<byte>`"
+    explanation: |
+      `Span<T>` is declared as a `ref struct`: the compiler does not let it reach the heap. That is why a span
+      cannot be a field of a class, an element of a collection or a captured variable, and it cannot be used
+      after an `await`, because the variables needed after an `await` are stored in the state machine object on
+      the heap. Since C# 13 a local of type `Span<T>` may be declared in an async method, but only if it is not
+      used across an `await` boundary.
+
+      `Memory<T>` is an ordinary struct, not a `ref struct`. It holds a reference to the owner of the memory
+      (an array or a `MemoryManager<T>`), an offset and a length, so it can be stored in a class field, in a
+      collection and carried across `await`. When synchronous processing is needed, the code takes `_slice.Span`
+      and works with the span only inside that synchronous section. If the parser only reads the data,
+      `ReadOnlyMemory<byte>` is an even better fit.
+
+      An important caveat: `Memory<T>` does not own the buffer. If the buffer was rented from `ArrayPool<byte>`
+      and returned to the pool, the stored `Memory<byte>` still points to memory that someone else is now using.
+      The ownership and lifetime rules are described in the usage guidelines for `Memory<T>` and `Span<T>`.
+    linkTitles:
+      - "Memory<T> and Span<T> usage guidelines"
+      - "Memory<T> struct"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

@@ -1,0 +1,115 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNVJ9JJCDC3Y5WKN13
+slug: record-inheritance-equality-contract
+stack: dotnet
+topic: csharp
+level: senior
+type: output
+grading: auto
+tags: [records, equality, inheritance, equality-contract]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    A a1 = new A(1);
+    A a2 = new A(1);
+    A b = new B(1);
+
+    Console.Write($"{a1 == a2} {a1 == b} {b == a1}");
+
+    record A(int X);
+    record B(int X) : A(X);
+expect:
+  kind: output
+  value: "True False False"
+acceptedOutputs: ["True False False"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "True False False" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "True True True" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "True True False" }
+  - id: d
+    correct: false
+    expect: { kind: compile-error }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/record
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что выведет сравнение через == базовой записи A(1) и производной записи B(1) с теми же значениями?
+    prompt: |
+      Что выведет эта программа в консоль? Запись `B` наследует `A` и не добавляет новых членов,
+      а все три переменные объявлены с типом `A`.
+    hint: Смотрит ли сгенерированный для записи метод `Equals` только на значения свойств?
+    options:
+      a: "True False False"
+      b: "True True True"
+      c: "True True False"
+      d: Ошибка компиляции
+    optionExplanations:
+      b: "Так было бы, если бы равенство записей сравнивало только значения свойств. Сгенерированный `Equals` дополнительно сравнивает `EqualityContract`, то есть тип времени выполнения, а у `A` и `B` он разный."
+      c: "Это несимметричное равенство, типичное для ручной реализации `Equals` в иерархии классов, где базовый тип проверяет только свои поля. Записи защищены от этого: сгенерированное равенство учитывает тип времени выполнения обоих объектов, поэтому и `a1 == b`, и `b == a1` дают `False`."
+      d: "Код корректен. Позиционная запись может наследовать другую запись и передавать параметры в её первичный конструктор (`record B(int X) : A(X);`), а объявления типов разрешено размещать после операторов верхнего уровня."
+    answer: "True False False"
+    explanation: |
+      Для каждой записи-класса компилятор генерирует защищённое свойство `EqualityContract` типа `Type`:
+      в базовой записи `A` оно виртуальное и возвращает `typeof(A)`, а в производной записи `B` переопределено
+      и возвращает `typeof(B)`. Сгенерированный метод `Equals(A other)` сравнивает `EqualityContract` обоих
+      объектов и значения полей. Сгенерированный оператор `==` вызывает `Equals`.
+
+      - `a1 == a2`: оба объекта имеют тип `A`, контракты равны, `X` совпадает, результат `True`.
+      - `a1 == b`: у `b` тип времени выполнения `B`, контракты `typeof(A)` и `typeof(B)` различаются, результат `False`,
+        хотя значение `X` одинаковое и статический тип обеих переменных `A`.
+      - `b == a1`: оператор выбирается по статическому типу `A`, но вызывается переопределённый в `B` метод
+        `Equals(A other)`, который требует, чтобы аргумент тоже был `B`. `a1` им не является, результат снова `False`.
+
+      Смысл этого устройства в том, чтобы равенство в иерархии записей было симметричным: две записи равны,
+      только если совпадает их тип времени выполнения и значения полей. С обычными классами легко написать
+      `Equals`, который даёт `True` в одну сторону и `False` в другую. Поведение одинаково начиная с C# 9
+      и проверено на .NET 10.
+    linkTitles:
+      - Записи (record)
+  en:
+    title: What does == print when a base record A(1) is compared with a derived record B(1) with the same values?
+    prompt: |
+      What does this program print to the console? The record `B` inherits from `A` and adds no new members,
+      and all three variables are declared with the type `A`.
+    hint: Does the generated `Equals` of a record look only at the property values?
+    options:
+      a: "True False False"
+      b: "True True True"
+      c: "True True False"
+      d: Compile error
+    optionExplanations:
+      b: "That would be the result if record equality compared only property values. The generated `Equals` also compares `EqualityContract`, that is the runtime type, and it differs between `A` and `B`."
+      c: "This is the asymmetric equality typical of a hand-written `Equals` in a class hierarchy, where the base type checks only its own fields. Records are protected against it: the generated equality takes the runtime type of both objects into account, so both `a1 == b` and `b == a1` give `False`."
+      d: "The code is valid. A positional record may inherit from another record and pass parameters to its primary constructor (`record B(int X) : A(X);`), and type declarations may follow top-level statements."
+    answer: "True False False"
+    explanation: |
+      For every record class the compiler generates a protected `EqualityContract` property of type `Type`:
+      in the base record `A` it is virtual and returns `typeof(A)`, and the derived record `B` overrides it to
+      return `typeof(B)`. The generated `Equals(A other)` method compares the `EqualityContract` of both objects
+      and the field values. The generated `==` operator calls `Equals`.
+
+      - `a1 == a2`: both objects are of type `A`, the contracts are equal, `X` matches, the result is `True`.
+      - `a1 == b`: the runtime type of `b` is `B`, the contracts `typeof(A)` and `typeof(B)` differ, the result is `False`,
+        even though `X` is the same and the static type of both variables is `A`.
+      - `b == a1`: the operator is chosen by the static type `A`, but the `Equals(A other)` override in `B` runs, and it
+        requires the argument to be a `B` as well. `a1` is not, so the result is again `False`.
+
+      The point of this design is to keep equality symmetric across a record hierarchy: two records are equal
+      only if their runtime types and their field values match. With ordinary classes it is easy to write an
+      `Equals` that returns `True` in one direction and `False` in the other. The behaviour is the same since
+      C# 9 and is verified on .NET 10.
+    linkTitles:
+      - Records
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"

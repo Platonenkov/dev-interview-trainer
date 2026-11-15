@@ -1,0 +1,113 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WN4YSG05ZS494HFZCA
+slug: dependency-inversion-abstraction-ownership
+stack: dotnet
+topic: oop-solid
+level: middle
+type: single
+grading: auto
+tags: [solid, dependency-inversion, dependency-injection]
+code:
+  language: csharp
+  harness: none
+  source: |
+    public class OrderService
+    {
+        private readonly SqlOrderRepository _repository;
+
+        public OrderService(string connectionString)
+        {
+            _repository = new SqlOrderRepository(connectionString);
+        }
+
+        public void PlaceOrder(Order order)
+        {
+            // validation and pricing rules live here
+            _repository.Save(order);
+        }
+    }
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/architecture/modern-web-apps-azure/architectural-principles
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/extensions/dependency-injection
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какое изменение OrderService применяет принцип инверсии зависимостей?
+    prompt: |
+      `OrderService` содержит бизнес-правила оформления заказа и сам создаёт `SqlOrderRepository` через `new`.
+      Какое изменение применяет принцип инверсии зависимостей (DIP)?
+    hint: Подумайте, в какую сторону должна указывать зависимость между бизнес-логикой и кодом доступа к SQL и в каком модуле объявлена абстракция.
+    options:
+      a: "Унаследовать `OrderService` от `SqlOrderRepository`, чтобы вызывать `Save` напрямую, без поля."
+      b: "Объявить рядом с `OrderService` интерфейс `IOrderRepository` с нужными ему операциями (`Save(Order)`), принимать его в конструкторе, а `SqlOrderRepository` в слое доступа к данным сделать реализацией этого интерфейса."
+      c: "Выделить в проекте доступа к данным интерфейс `ISqlOrderRepository`, который повторяет методы `SqlOrderRepository` вместе с параметрами `SqlConnection` и `SqlTransaction`, и ссылаться на него из `OrderService`."
+      d: "Заменить поле на статическое свойство-синглтон `SqlOrderRepository.Instance`, чтобы `OrderService` не создавал репозиторий сам."
+    optionExplanations:
+      a: "Наследование делает бизнес-логику подтипом класса доступа к данным. Зависимость от конкретного SQL-кода становится ещё жёстче, а подменить хранилище, например в тестах, по-прежнему нельзя."
+      c: "Интерфейс появился, но им владеет низкоуровневый модуль, и он описан в деталях SQL. `OrderService` по-прежнему зависит от проекта доступа к данным и от `SqlConnection`, то есть направление зависимости не изменилось, а абстракция зависит от деталей."
+      d: "`OrderService` всё так же обращается к конкретному классу `SqlOrderRepository`, только через глобальную точку доступа. Зависимость стала скрытой, но не инвертированной."
+    answer: "Объявить `IOrderRepository` на стороне `OrderService`, получать реализацию через конструктор, а `SqlOrderRepository` сделать реализацией этого интерфейса."
+    explanation: |
+      DIP говорит: модули верхнего уровня не должны зависеть от модулей нижнего уровня, оба должны зависеть от
+      абстракций, а абстракции не должны зависеть от деталей. Важен не сам факт появления интерфейса, а то, кто
+      им владеет и в каких терминах он описан.
+
+      Когда `IOrderRepository` объявлен в слое бизнес-логики и выражен в понятиях предметной области
+      (`Save(Order)`), зависимость в коде указывает от SQL-слоя к бизнес-логике: `SqlOrderRepository` ссылается
+      на интерфейс, а `OrderService` о SQL ничего не знает. Направление зависимости во время компиляции
+      противоположно направлению вызова во время выполнения - отсюда и слово «инверсия».
+
+      Получение реализации через конструктор - это внедрение зависимостей. Контейнер DI в .NET лишь связывает
+      `IOrderRepository` с `SqlOrderRepository` в одном месте при запуске приложения. Заодно `OrderService`
+      можно тестировать с фейковым репозиторием.
+    linkTitles:
+      - "Архитектурные принципы"
+      - "Внедрение зависимостей в .NET"
+  en:
+    title: Which change to OrderService applies the dependency inversion principle?
+    prompt: |
+      `OrderService` holds the business rules for placing an order and creates `SqlOrderRepository` itself with `new`.
+      Which change applies the dependency inversion principle (DIP)?
+    hint: Think about which way the dependency between the business logic and the SQL access code should point, and which module declares the abstraction.
+    options:
+      a: "Make `OrderService` inherit from `SqlOrderRepository` so it can call `Save` directly, without a field."
+      b: "Declare an `IOrderRepository` interface next to `OrderService` with the operations it needs (`Save(Order)`), accept it in the constructor, and make `SqlOrderRepository` in the data access layer implement that interface."
+      c: "Extract an `ISqlOrderRepository` interface in the data access project that mirrors the methods of `SqlOrderRepository`, including their `SqlConnection` and `SqlTransaction` parameters, and reference it from `OrderService`."
+      d: "Replace the field with a static singleton property `SqlOrderRepository.Instance` so that `OrderService` no longer creates the repository itself."
+    optionExplanations:
+      a: "Inheritance makes the business logic a subtype of the data access class. The dependency on concrete SQL code becomes even tighter, and the storage still cannot be swapped, for example in tests."
+      c: "There is now an interface, but the low-level module owns it and it is expressed in SQL details. `OrderService` still depends on the data access project and on `SqlConnection`, so the direction of the dependency has not changed and the abstraction depends on details."
+      d: "`OrderService` still reaches the concrete `SqlOrderRepository` class, only through a global access point. The dependency is hidden, not inverted."
+    answer: "Declare `IOrderRepository` on the `OrderService` side, receive the implementation through the constructor, and make `SqlOrderRepository` implement that interface."
+    explanation: |
+      DIP says that high-level modules should not depend on low-level modules, both should depend on
+      abstractions, and abstractions should not depend on details. What matters is not that an interface exists,
+      but who owns it and in which terms it is expressed.
+
+      When `IOrderRepository` is declared in the business logic layer and expressed in domain terms
+      (`Save(Order)`), the source code dependency points from the SQL layer to the business logic:
+      `SqlOrderRepository` references the interface, and `OrderService` knows nothing about SQL. The compile-time
+      dependency points opposite to the runtime call, which is where the word inversion comes from.
+
+      Receiving the implementation through the constructor is dependency injection. The .NET DI container only
+      binds `IOrderRepository` to `SqlOrderRepository` in one place at startup. As a bonus, `OrderService` can be
+      tested with a fake repository.
+    linkTitles:
+      - "Architectural principles"
+      - "Dependency injection in .NET"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  noRunReason: Illustrative fragment that references Order and SqlOrderRepository, which are not defined, so it is not a complete program.

@@ -1,0 +1,100 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNSJ8H54B7WS2KS8S6
+slug: generic-constraint-enables-member-calls
+stack: dotnet
+topic: csharp
+level: junior
+type: open
+grading: self
+tags: [generics, constraints, icomparable]
+code:
+  language: csharp
+  harness: none
+  source: |
+    static T Max<T>(T a, T b)
+    {
+        // does not compile: T is not known to have CompareTo
+        return a.CompareTo(b) >= 0 ? a : b;
+    }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/generics/constraints-on-type-parameters
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.icomparable-1
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему обобщённый метод Max<T> не компилируется при вызове CompareTo и как это исправляет where?
+    prompt: |
+      Обобщённый метод `Max<T>` должен вернуть большее из двух значений, но компилятор сообщает, что у `T`
+      нет метода `CompareTo`. Почему так происходит, хотя метод собираются вызывать для `int` и `string`,
+      у которых `CompareTo` есть? Как исправить метод с помощью ограничения `where` и что это ограничение
+      меняет для кода, который вызывает `Max`?
+    hint: Что компилятор знает о типе `T` в момент компиляции самого метода, если ему ничего о нём не сказали?
+    answer: |
+      - Тело обобщённого метода компилируется один раз, без знания конкретного аргумента типа. Без ограничений
+        `T` может быть любым типом, поэтому компилятор разрешает обращаться только к членам `System.Object`
+        (`ToString`, `Equals`, `GetHashCode` и так далее). Метода `CompareTo` у `object` нет, отсюда ошибка.
+      - Исправление - объявить ограничение: `static T Max<T>(T a, T b) where T : IComparable<T>`.
+        Теперь компилятор знает, что у любого `T` есть `CompareTo(T other)`, и вызов `a.CompareTo(b)` компилируется.
+      - Ограничение работает в обе стороны: оно открывает доступ к членам интерфейса внутри метода и одновременно
+        сужает набор допустимых аргументов типа. `Max(3, 5)` и `Max("a", "b")` компилируются, потому что `int`
+        и `string` реализуют `IComparable<T>`, а вызов с типом, который этот интерфейс не реализует, даёт ошибку
+        компиляции в месте вызова.
+    explanation: |
+      Обобщения в C# проверяются компилятором заранее, а не для каждой подстановки отдельно. Поэтому внутри
+      метода можно использовать только то, что гарантированно есть у любого допустимого `T`. Ограничение
+      `where` и есть такая гарантия: это контракт между методом и вызывающим кодом. Метод получает право
+      вызывать `CompareTo`, а вызывающий код обязан передать подходящий тип, и нарушение контракта видно
+      сразу при сборке, а не во время выполнения.
+
+      Почему `IComparable<T>`, а не необобщённый `IComparable`: метод `CompareTo(object)` принимает `object`,
+      поэтому для типов значений вроде `int` аргумент упаковывается, и проверка совпадения типов переносится
+      на время выполнения. Обобщённый интерфейс сравнивает значения того же типа без упаковки.
+
+      Для сравнения: `Comparer<T>.Default.Compare(a, b)` компилируется и без ограничения, но тогда ошибка для
+      несравнимого типа проявится только во время выполнения в виде исключения. Ограничение делает требование
+      явным в сигнатуре метода.
+    linkTitles:
+      - "Ограничения параметров типа"
+      - "Интерфейс IComparable<T>"
+  en:
+    title: Why does a generic Max<T> method fail to compile when it calls CompareTo, and how does where fix it?
+    prompt: |
+      A generic `Max<T>` method should return the larger of two values, but the compiler reports that `T`
+      has no `CompareTo` method. Why does this happen, even though the method is meant to be called with `int`
+      and `string`, which do have `CompareTo`? How do you fix the method with a `where` constraint, and what
+      does that constraint change for the code that calls `Max`?
+    hint: What does the compiler know about the type `T` when it compiles the method itself, if nothing has been said about it?
+    answer: |
+      - The body of a generic method is compiled once, without knowing the actual type argument. Without
+        constraints `T` can be any type, so the compiler only allows the members of `System.Object`
+        (`ToString`, `Equals`, `GetHashCode` and so on). `object` has no `CompareTo` method, hence the error.
+      - The fix is to declare a constraint: `static T Max<T>(T a, T b) where T : IComparable<T>`.
+        Now the compiler knows that every `T` has `CompareTo(T other)`, and the call `a.CompareTo(b)` compiles.
+      - The constraint works both ways: it makes the interface members available inside the method and at the
+        same time narrows the set of allowed type arguments. `Max(3, 5)` and `Max("a", "b")` compile because
+        `int` and `string` implement `IComparable<T>`, while a call with a type that does not implement the
+        interface is a compile error at the call site.
+    explanation: |
+      C# generics are checked by the compiler up front, not separately for every substitution. So inside the
+      method you may only use what is guaranteed to exist on every allowed `T`. A `where` constraint is exactly
+      that guarantee: a contract between the method and its callers. The method gains the right to call
+      `CompareTo`, the caller must pass a suitable type, and a broken contract shows up at build time rather
+      than at run time.
+
+      Why `IComparable<T>` and not the non-generic `IComparable`: `CompareTo(object)` takes an `object`, so for
+      value types such as `int` the argument is boxed, and the check that both values have the same type moves
+      to run time. The generic interface compares values of the same type without boxing.
+
+      For comparison: `Comparer<T>.Default.Compare(a, b)` compiles without any constraint, but then a
+      non-comparable type fails only at run time with an exception. A constraint makes the requirement explicit
+      in the method signature.
+    linkTitles:
+      - "Constraints on type parameters"
+      - "IComparable<T> interface"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  noRunReason: "Open question: the snippet intentionally does not compile and only illustrates the error."

@@ -1,0 +1,107 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WN0EKDG43A67Z765XA
+slug: lambda-unsubscribe-does-nothing
+stack: dotnet
+topic: csharp
+level: middle
+type: find-bug
+grading: auto
+tags: [lambda, events, delegates, unsubscribe]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    Publisher publisher = new();
+    int calls = 0;
+    publisher.Changed += (sender, e) => calls++;
+    publisher.Raise();
+    publisher.Changed -= (sender, e) => calls++;
+    publisher.Raise();
+    Console.WriteLine(calls);
+
+    class Publisher
+    {
+        public event EventHandler Changed;
+
+        public void Raise() => Changed?.Invoke(this, EventArgs.Empty);
+    }
+bugLineSets: [[5]]
+fixedSource: |
+  Publisher publisher = new();
+  int calls = 0;
+  EventHandler handler = (sender, e) => calls++;
+  publisher.Changed += handler;
+  publisher.Raise();
+  publisher.Changed -= handler;
+  publisher.Raise();
+  Console.WriteLine(calls);
+
+  class Publisher
+  {
+      public event EventHandler Changed;
+
+      public void Raise() => Changed?.Invoke(this, EventArgs.Empty);
+  }
+fixedExpect: { kind: output, value: "1" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/events/how-to-subscribe-to-and-unsubscribe-from-events
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.delegate.remove
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строку, на которой отписка лямбды от события не срабатывает
+    prompt: |
+      Программа должна посчитать только первое событие: обработчик подписывается, событие возникает,
+      затем обработчик отписывается, и второе событие уже не должно его вызывать. Ожидается вывод `1`,
+      но программа выводит `2`. Щёлкните по строке с дефектом.
+    hint: Что создаёт каждое лямбда-выражение, когда выполняется, и как `-=` решает, какой именно обработчик удалить?
+    answer: Строка 5, `publisher.Changed -= (sender, e) => calls++;` - отписка новой лямбдой, а не тем делегатом, который был подписан.
+    explanation: |
+      Каждое лямбда-выражение в коде - это отдельная анонимная функция: компилятор создаёт для неё свой метод,
+      и при выполнении получается новый экземпляр делегата. Две лямбды на строках 3 и 5 выглядят одинаково,
+      но это два разных метода, поэтому делегаты не равны.
+
+      Оператор `-=` для события вызывает `Delegate.Remove`, который ищет в списке вызова делегат, равный
+      переданному (тот же целевой объект и тот же метод). Совпадения нет, и `Remove` молча возвращает список
+      без изменений: ни исключения, ни предупреждения. Поэтому исходный обработчик срабатывает и на втором
+      `Raise()`, и `calls` становится равным 2.
+
+      Исправление - сохранить делегат в переменной и использовать одну и ту же ссылку для подписки и отписки:
+      `EventHandler handler = (sender, e) => calls++;`, затем `+= handler` и `-= handler`. На практике такая
+      ошибка часто приводит к утечкам памяти: долгоживущий источник события продолжает держать ссылку на
+      подписчика через замыкание. Поведение проверено на .NET 10.
+    linkTitles:
+      - "Как подписаться на события и отменить подписку"
+      - "Метод Delegate.Remove"
+  en:
+    title: Find the line where unsubscribing a lambda from an event does nothing
+    prompt: |
+      The program should count only the first event: the handler subscribes, the event is raised, then the
+      handler unsubscribes, and the second event should no longer call it. The expected output is `1`, but the
+      program prints `2`. Click the line that contains the defect.
+    hint: What does each lambda expression create when it runs, and how does `-=` decide which handler to remove?
+    answer: Line 5, `publisher.Changed -= (sender, e) => calls++;` - it unsubscribes a new lambda, not the delegate that was subscribed.
+    explanation: |
+      Every lambda expression in the source is a separate anonymous function: the compiler emits its own method
+      for it, and evaluating it produces a new delegate instance. The lambdas on lines 3 and 5 look identical,
+      but they are two different methods, so the delegates are not equal.
+
+      The `-=` operator on an event calls `Delegate.Remove`, which looks in the invocation list for a delegate
+      equal to the one passed in (same target object and same method). There is no match, and `Remove` silently
+      returns the list unchanged: no exception and no warning. So the original handler also runs on the second
+      `Raise()`, and `calls` ends up as 2.
+
+      The fix is to store the delegate in a variable and use the same reference to subscribe and unsubscribe:
+      `EventHandler handler = (sender, e) => calls++;`, then `+= handler` and `-= handler`. In real code this
+      mistake often causes memory leaks: a long-lived event source keeps a reference to the subscriber through
+      the closure. The behaviour is verified on .NET 10.
+    linkTitles:
+      - "How to subscribe to and unsubscribe from events"
+      - "Delegate.Remove method"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

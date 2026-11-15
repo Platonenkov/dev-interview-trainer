@@ -1,0 +1,126 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNGWXHZXVTW6NBSXGN
+slug: generic-static-field-per-closed-type
+stack: dotnet
+topic: csharp
+level: senior
+type: output
+grading: auto
+tags: [generics, static-fields, closed-constructed-types]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    Counter<int>.Count++;
+    Counter<int>.Count++;
+    Counter<string>.Count++;
+
+    Console.Write($"{Counter<int>.Count} {Counter<string>.Count}");
+
+    class Counter<T>
+    {
+        public static int Count;
+    }
+expect:
+  kind: output
+  value: "2 1"
+acceptedOutputs: ["2 1"]
+options:
+  - id: a
+    correct: false
+    expect: { kind: output, value: "3 3" }
+  - id: b
+    correct: true
+    expect: { kind: output, value: "2 1" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "2 0" }
+  - id: d
+    correct: false
+    expect: { kind: compile-error }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/language-specification/classes
+    lang: en
+    kind: spec
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/generics/generics-in-the-run-time
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/generics/generic-classes
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что выведет код, который увеличивает статическое поле обобщённого класса для разных аргументов типа?
+    prompt: |
+      Что выведет эта программа в консоль? Поле `Count` объявлено в обобщённом классе `Counter<T>` как `static`.
+    hint: Где хранится статическое поле обобщённого класса - при самом объявлении `Counter<T>` или где-то ещё?
+    options:
+      a: "3 3"
+      b: "2 1"
+      c: "2 0"
+      d: Ошибка компиляции
+    optionExplanations:
+      a: Так было бы, если бы статическое поле было одно на все варианты `Counter<T>`. На самом деле у каждого закрытого сконструированного типа своя копия статических полей, поэтому три увеличения распределяются между двумя независимыми счётчиками.
+      c: "`Counter<string>.Count++` выполняется один раз и увеличивает поле именно типа `Counter<string>`. Это поле изначально равно 0 и после увеличения становится 1, а не остаётся нулём."
+      d: Объявлять статические поля в обобщённых классах разрешено, а объявление класса после операторов верхнего уровня допустимо. Код компилируется без ошибок.
+    answer: "2 1"
+    explanation: |
+      Обобщённый класс `Counter<T>` - это шаблон, а не готовый тип. Каждый набор аргументов типа даёт отдельный
+      закрытый сконструированный тип (closed constructed type): `Counter<int>` и `Counter<string>` - два разных
+      типа. Статическое поле принадлежит не экземпляру, а закрытому типу: оно общее для всех экземпляров одного
+      закрытого сконструированного типа, но у разных закрытых типов свои отдельные копии.
+
+      Поэтому два вызова `Counter<int>.Count++` увеличивают только счётчик `Counter<int>` до 2, а
+      `Counter<string>.Count++` - отдельный счётчик `Counter<string>` до 1. Результат: `2 1`.
+
+      Важно не путать хранение статических полей с машинным кодом. Среда выполнения создаёт отдельную
+      специализированную версию обобщённого типа для каждого аргумента-типа значения, а для ссылочных аргументов
+      типа использует одну общую версию кода: `Counter<string>` и, скажем, `Counter<object>` выполняют один и тот
+      же скомпилированный код. На статические поля это не влияет: они всё равно хранятся отдельно для каждого
+      закрытого типа, так что `Counter<string>.Count` и `Counter<object>.Count` тоже были бы разными счётчиками.
+
+      Практическое следствие: статическое поле обобщённого типа удобно как кэш «одно значение на тип `T`» без
+      словаря. Обратная сторона: если нужен один общий счётчик для всех `T`, его надо вынести в необобщённый класс.
+    linkTitles:
+      - "Спецификация C#: классы (статические и экземплярные поля)"
+      - Обобщения во время выполнения
+      - "Обобщённые классы: закрытые и открытые сконструированные типы"
+  en:
+    title: What does code print that increments a static field of a generic class for different type arguments?
+    prompt: |
+      What does this program print to the console? The field `Count` is declared as `static` in the generic class `Counter<T>`.
+    hint: Where is the storage of a static field of a generic class kept - with the `Counter<T>` declaration itself, or somewhere else?
+    options:
+      a: "3 3"
+      b: "2 1"
+      c: "2 0"
+      d: Compile error
+    optionExplanations:
+      a: That would be true if there were one static field for every variant of `Counter<T>`. In fact every closed constructed type has its own copy of the static fields, so the three increments are split between two independent counters.
+      c: "`Counter<string>.Count++` runs once and increments the field of the type `Counter<string>` itself. That field starts at 0 and becomes 1 after the increment; it does not stay at zero."
+      d: Static fields are allowed in generic classes, and a class declaration may follow top-level statements. The code compiles without errors.
+    answer: "2 1"
+    explanation: |
+      The generic class `Counter<T>` is a template, not a finished type. Every set of type arguments produces a
+      separate closed constructed type: `Counter<int>` and `Counter<string>` are two different types. A static
+      field belongs to a closed type rather than to an instance: it is shared by all instances of the same closed
+      constructed type, but different closed types each have their own copy.
+
+      So the two `Counter<int>.Count++` calls increment only the counter of `Counter<int>` to 2, and
+      `Counter<string>.Count++` increments the separate counter of `Counter<string>` to 1. The result is `2 1`.
+
+      Do not confuse static field storage with machine code. The runtime creates a separate specialized version of
+      a generic type for each value type argument, but for reference type arguments it reuses one shared version of
+      the code: `Counter<string>` and, say, `Counter<object>` run the same compiled code. That does not affect static
+      fields: they are still stored separately for each closed type, so `Counter<string>.Count` and
+      `Counter<object>.Count` would also be different counters.
+
+      The practical consequence: a static field of a generic type works well as a "one value per type `T`" cache
+      with no dictionary. The flip side: if you need one counter shared by every `T`, move it into a non-generic class.
+    linkTitles:
+      - "C# specification: classes (static and instance fields)"
+      - Generics in the runtime
+      - "Generic classes: closed and open constructed types"
+meta:
+  authors: [platonenkov]
+  verified: 1970-01-01

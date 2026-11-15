@@ -1,3 +1,4 @@
+using System.Text;
 using Trainer.Content.Reading;
 using Trainer.Content.Rendering;
 using Trainer.Content.Validation;
@@ -13,6 +14,9 @@ Console.CancelKeyPress += (_, e) =>
 };
 
 ContentReader reader = new();
+
+// Console.Out uses the OEM code page on Windows when redirected; dump output is parsed as UTF-8 by tooling.
+await using StreamWriter utf8Output = new(Console.OpenStandardOutput(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)) { AutoFlush = true };
 DockerSnippetRunner runner = new();
 ICliCommand[] commands =
 [
@@ -23,6 +27,7 @@ ICliCommand[] commands =
         Environment.GetEnvironmentVariable("GITHUB_STEP_SUMMARY"), Console.Out, Console.Error),
     new NewQuestionCommand(new QuestionTemplateBuilder(TimeProvider.System), Console.Out, Console.Error),
     new GenerateSchemasCommand(Console.Out, Console.Error),
+    new DumpCommand(reader, utf8Output, Console.Error),
 ];
 
 ICliCommand? command = args.Length == 0

@@ -837,6 +837,7 @@ dotnet run --project tools/Trainer.ContentCli -- run-snippets
 dotnet run --project tools/Trainer.ContentCli -- check-links [--content <dir>]
 dotnet run --project tools/Trainer.ContentCli -- new-question <stack> <topic> <slug> <type> [root]
 dotnet run --project tools/Trainer.ContentCli -- generate-schemas [root]
+dotnet run --project tools/Trainer.ContentCli -- dump [root]
 ```
 
 - `validate` reads every file, runs all semantic checks and prints one line per
@@ -853,6 +854,10 @@ dotnet run --project tools/Trainer.ContentCli -- generate-schemas [root]
 - `generate-schemas` rewrites `content/schema/*.schema.json` from the C# model.
   Run it only when the format changes; a test fails if the committed schemas are
   out of date.
+- `dump` prints the parsed content as one JSON object (`hash`, `questions` with
+  path, SHA-256 of the file bytes and the parsed document, `topics` and
+  `redirects` per stack, `readIssues`) for
+  tooling that must not parse YAML itself; read issues are data and exit `0`.
 
 | Exit code | Meaning |
 |---|---|

@@ -1,0 +1,104 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WQFDNVRPTD47ZNWXGT
+slug: ef-inmemory-provider-test-pitfalls
+stack: dotnet
+topic: testing
+level: middle
+type: multi
+grading: auto
+tags: [ef-core, in-memory-provider, integration-tests, test-doubles]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: true
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+  - id: e
+    correct: true
+  - id: f
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/ef/core/testing/choosing-a-testing-strategy
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/ef/core/providers/in-memory/
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему провайдер EF Core In-Memory плохо заменяет реляционную базу в тестах?
+    prompt: |
+      Команда тестирует слой доступа к данным на провайдере `Microsoft.EntityFrameworkCore.InMemory`, а в
+      production работает SQL Server. Выберите все различия, из-за которых такие тесты могут проходить, хотя
+      с настоящей базой код упадёт или поведёт себя иначе.
+    hint: Подумайте, что из перечисленного - свойство реляционной СУБД, а что - просто работа с объектами в памяти.
+    options:
+      a: "Не проверяются внешние ключи и уникальные индексы: вставка, которую отклонила бы база, проходит успешно."
+      b: "Нет настоящих транзакций: откат не может отменить изменения, которые уже применил `SaveChanges`."
+      c: "Сырой SQL (`FromSql`, `ExecuteSql`) выполнить нельзя: это возможности реляционных провайдеров."
+      d: "Асинхронные методы вроде `ToListAsync` и `SaveChangesAsync` не поддерживаются, поэтому тесты вынуждены вызывать синхронные версии."
+      e: "LINQ-запрос, который реальный провайдер не сможет перевести в SQL, в памяти выполняется без ошибок."
+      f: "Каждый новый экземпляр `DbContext` получает пустую базу, поэтому данные, сохранённые одним контекстом, не видны другому."
+    optionExplanations:
+      d: "Провайдер поддерживает асинхронные методы EF Core, так что асинхронный код тестируется без переделок. Это не отличие от реальной базы."
+      f: "Контексты, настроенные на одно и то же имя базы в `UseInMemoryDatabase`, разделяют данные. Наоборот, типичная проблема - утечка данных между тестами, если имя общее."
+    answer: "Варианты a, b, c и e."
+    explanation: |
+      Провайдер In-Memory - это не реляционная база, а хранилище объектов в памяти процесса. Запросы к нему
+      выполняются как LINQ to Objects, поэтому:
+
+      - ограничения схемы вроде внешних ключей и уникальных индексов не проверяются;
+      - транзакции не поддерживаются: по умолчанию начало транзакции выбрасывает исключение из-за предупреждения
+        `TransactionIgnoredWarning`, а если его подавить, транзакция игнорируется и откат ничего не отменяет;
+      - методы сырого SQL недоступны, ведь SQL выполнять некому;
+      - запрос, который SQL Server не сможет перевести, в памяти просто вызовет C#-код и пройдёт. Сравнение строк
+        тоже работает по правилам .NET, а не по сортировке базы, например с учётом регистра.
+
+      Поэтому документация EF Core не рекомендует In-Memory для тестирования кода доступа к данным: лучше
+      тестировать на той же СУБД, что и в production (например, в контейнере), или подменять слой
+      репозитория целиком.
+    linkTitles:
+      - "Выбор стратегии тестирования в EF Core"
+      - "Провайдер базы данных In-Memory в EF Core"
+  en:
+    title: Why is the EF Core in-memory provider a poor substitute for a relational database in tests?
+    prompt: |
+      A team tests its data access layer with the `Microsoft.EntityFrameworkCore.InMemory` provider, while
+      production runs SQL Server. Select all differences that can make such tests pass even though the code
+      would fail or behave differently against the real database.
+    hint: Think about which of these are properties of a relational database engine and which are just objects held in memory.
+    options:
+      a: "Foreign keys and unique indexes are not enforced: an insert the database would reject succeeds."
+      b: "There are no real transactions: a rollback cannot undo changes that `SaveChanges` already applied."
+      c: "Raw SQL (`FromSql`, `ExecuteSql`) cannot run: it is a feature of relational providers."
+      d: "Async methods such as `ToListAsync` and `SaveChangesAsync` are not supported, so tests have to call the synchronous versions."
+      e: "A LINQ query that the real provider cannot translate to SQL runs in memory without errors."
+      f: "Every new `DbContext` instance gets an empty database, so data saved by one context is invisible to another."
+    optionExplanations:
+      d: "The provider supports the EF Core async methods, so async code is tested as is. This is not a difference from a real database."
+      f: "Contexts configured with the same database name in `UseInMemoryDatabase` share data. The usual problem is the opposite: data leaking between tests that share a name."
+    answer: "Options a, b, c and e."
+    explanation: |
+      The in-memory provider is not a relational database but an object store in the process memory. Queries
+      against it run as LINQ to Objects, so:
+
+      - schema constraints such as foreign keys and unique indexes are not checked;
+      - transactions are not supported: by default starting one throws because of the
+        `TransactionIgnoredWarning` warning, and if you suppress it, the transaction is ignored and a rollback
+        undoes nothing;
+      - raw SQL methods are unavailable, because there is nothing to execute SQL;
+      - a query that SQL Server cannot translate simply calls C# code in memory and passes. String comparison
+        also follows .NET rules rather than the database collation, for example it is case-sensitive.
+
+      That is why the EF Core documentation discourages the in-memory provider for testing data access code:
+      test against the same database engine as production (for example, in a container), or replace the
+      repository layer as a whole.
+    linkTitles:
+      - "Choosing a testing strategy in EF Core"
+      - "EF Core In-Memory database provider"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

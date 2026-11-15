@@ -1,0 +1,127 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WPPDQ54Q0SYCYVVR4V
+slug: lazy-singleton-caches-factory-exception
+stack: dotnet
+topic: patterns
+level: senior
+type: output
+grading: auto
+tags: [singleton, lazy-initialization, exceptions]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    for (int i = 1; i <= 2; i++)
+    {
+        try
+        {
+            _ = Config.Instance;
+        }
+        catch (InvalidOperationException)
+        {
+            Console.Write($"fail{i} ");
+        }
+    }
+    Console.Write(Config.FactoryCalls);
+
+    sealed class Config
+    {
+        private static readonly Lazy<Config> lazy = new(() =>
+        {
+            FactoryCalls++;
+            throw new InvalidOperationException("Config file is missing");
+        });
+
+        public static int FactoryCalls;
+
+        public static Config Instance => lazy.Value;
+
+        private Config() { }
+    }
+expect:
+  kind: output
+  value: "fail1 fail2 1"
+acceptedOutputs: ["fail1 fail2 1"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "fail1 fail2 1" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "fail1 fail2 2" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "fail1 1" }
+  - id: d
+    correct: false
+    expect: { kind: exception, value: System.TypeInitializationException }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/framework/performance/lazy-initialization
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.lazy-1
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что выведет Singleton на Lazy<T>, если фабрика выбрасывает исключение?
+    prompt: |
+      Singleton `Config` создаётся через `Lazy<T>`, а фабрика при первом вызове увеличивает счётчик и выбрасывает
+      исключение. Что выведет эта программа в консоль на .NET 10?
+    hint: Что `Lazy<T>`, созданный с фабрикой и режимом потокобезопасности по умолчанию, запоминает после первой попытки инициализации?
+    options:
+      a: "fail1 fail2 1"
+      b: "fail1 fail2 2"
+      c: "fail1 1"
+      d: Необработанное исключение `TypeInitializationException`
+    optionExplanations:
+      b: Фабрика вызывается повторно только в режиме `PublicationOnly`. В режиме по умолчанию исключение кэшируется, и второе чтение `Value` фабрику не запускает.
+      c: Неудачная инициализация не помечает значение как созданное с `null`. Второе чтение `Value` снова выбрасывает исключение.
+      d: Статический инициализатор только создаёт объект `Lazy<Config>`, фабрика в нём не выполняется. Она запускается позже, при чтении `Value` внутри `try`, где исключение перехватывается.
+    answer: "fail1 fail2 1"
+    explanation: |
+      Конструктор `Lazy<T>(Func<T>)` использует режим `LazyThreadSafetyMode.ExecutionAndPublication`. В этом
+      режиме, если фабрика выбросила исключение, `Lazy<T>` кэширует его: каждое следующее чтение `Value`
+      выбрасывает то же исключение, а фабрика больше не вызывается. Поэтому оба чтения попадают в `catch`, а
+      счётчик остаётся равен `1`. Поведение проверено для .NET 10.
+
+      Для Singleton это значит, что временный сбой при первой инициализации (недоступный файл или база)
+      ломает экземпляр навсегда, до перезапуска процесса. Если нужен повтор, выбирают режим
+      `LazyThreadSafetyMode.PublicationOnly`, который не кэширует исключения, но допускает параллельный запуск
+      фабрики в нескольких потоках, либо пишут собственную логику инициализации с повторными попытками.
+    linkTitles:
+      - "Ленивая инициализация"
+      - "Класс Lazy<T>"
+  en:
+    title: What does a Lazy<T> Singleton print when its factory throws?
+    prompt: |
+      The `Config` singleton is created through `Lazy<T>`, and its factory increments a counter and throws an
+      exception. What does this program print to the console on .NET 10?
+    hint: What does a `Lazy<T>` created with a factory and the default thread-safety mode remember after the first initialization attempt?
+    options:
+      a: "fail1 fail2 1"
+      b: "fail1 fail2 2"
+      c: "fail1 1"
+      d: Unhandled `TypeInitializationException`
+    optionExplanations:
+      b: The factory is called again only in `PublicationOnly` mode. In the default mode the exception is cached, and the second read of `Value` does not run the factory.
+      c: A failed initialization does not mark the value as created with `null`. The second read of `Value` throws again.
+      d: The static initializer only creates the `Lazy<Config>` object; the factory does not run there. It runs later, when `Value` is read inside `try`, where the exception is caught.
+    answer: "fail1 fail2 1"
+    explanation: |
+      The `Lazy<T>(Func<T>)` constructor uses `LazyThreadSafetyMode.ExecutionAndPublication`. In this mode, if
+      the factory throws, `Lazy<T>` caches the exception: every later read of `Value` throws the same exception
+      and the factory is not called again. So both reads land in `catch`, and the counter stays at `1`. The
+      behaviour is checked for .NET 10.
+
+      For a Singleton this means that a transient failure during the first initialization (a missing file or an
+      unavailable database) breaks the instance for good, until the process restarts. If you need a retry, use
+      `LazyThreadSafetyMode.PublicationOnly`, which does not cache exceptions but allows the factory to run
+      concurrently on several threads, or write your own initialization logic with retries.
+    linkTitles:
+      - "Lazy initialization"
+      - "Lazy<T> class"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

@@ -1,0 +1,125 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WQMZZ6PPDWSYG3H0C8
+slug: static-fake-repository-leaks-between-tests
+stack: dotnet
+topic: testing
+level: middle
+type: find-bug
+grading: auto
+tags: [test-design, test-doubles, fakes, test-isolation, static-state]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    TestAddOne();
+    TestAddTwo();
+
+    static void TestAddOne()
+    {
+        var repo = new FakeOrderRepository();
+        repo.Add("A");
+        Console.WriteLine(repo.Count() == 1 ? "PASS" : "FAIL");
+    }
+
+    static void TestAddTwo()
+    {
+        var repo = new FakeOrderRepository();
+        repo.Add("B");
+        repo.Add("C");
+        Console.WriteLine(repo.Count() == 2 ? "PASS" : "FAIL");
+    }
+
+    class FakeOrderRepository
+    {
+        private static readonly List<string> Items = new();
+
+        public void Add(string item) => Items.Add(item);
+
+        public int Count() => Items.Count;
+    }
+bugLineSets: [[21]]
+fixedSource: |
+  TestAddOne();
+  TestAddTwo();
+
+  static void TestAddOne()
+  {
+      var repo = new FakeOrderRepository();
+      repo.Add("A");
+      Console.WriteLine(repo.Count() == 1 ? "PASS" : "FAIL");
+  }
+
+  static void TestAddTwo()
+  {
+      var repo = new FakeOrderRepository();
+      repo.Add("B");
+      repo.Add("C");
+      Console.WriteLine(repo.Count() == 2 ? "PASS" : "FAIL");
+  }
+
+  class FakeOrderRepository
+  {
+      private readonly List<string> _items = new();
+
+      public void Add(string item) => _items.Add(item);
+
+      public int Count() => _items.Count;
+  }
+fixedExpect: { kind: output, value: "PASS\nPASS" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/core/testing/unit-testing-best-practices
+    lang: en
+    kind: docs
+  - url: https://martinfowler.com/articles/nonDeterminism.html
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Почему второй тест с фейковым репозиторием видит лишний элемент?
+    prompt: |
+      Два самописных теста выполняются друг за другом. Каждый создаёт свой экземпляр `FakeOrderRepository`,
+      добавляет элементы и проверяет их количество. Оба теста должны вывести `PASS`, но программа выводит
+      `PASS`, а затем `FAIL`. Щёлкните по строке с дефектом.
+    hint: Что из фейкового репозитория живёт дольше, чем один его экземпляр?
+    answer: Строка 21, объявление списка `Items` как `static`.
+    explanation: |
+      Статическое поле принадлежит типу, а не экземпляру. Вызов `new FakeOrderRepository()` во втором тесте
+      создаёт новый объект, но список `Items` остаётся тем же, и в нём уже лежит элемент `"A"` из первого теста.
+      Поэтому `TestAddTwo` видит три элемента вместо двух и выводит `FAIL`.
+
+      Хуже всего то, что результат зависит от порядка запуска: по отдельности каждый тест проходит, а если
+      поменять их местами, падать начнёт уже `TestAddOne`. Такие тесты становятся нестабильными при смене
+      порядка, фильтрации или параллельном запуске, ведь фреймворки вроде xUnit создают новый экземпляр
+      тестового класса на каждый тест, но статические поля переживают все тесты в процессе.
+
+      Исправление - хранить состояние в поле экземпляра (строка 21 без `static`), чтобы каждый тест получал
+      свежий фейк. После исправления программа выводит `PASS` дважды.
+    linkTitles:
+      - "Рекомендации по модульному тестированию в .NET"
+      - "Eradicating Non-Determinism in Tests (Мартин Фаулер)"
+  en:
+    title: Why does the second test with a fake repository see an extra item?
+    prompt: |
+      Two hand-written tests run one after the other. Each creates its own `FakeOrderRepository` instance,
+      adds items and checks how many there are. Both tests should print `PASS`, but the program prints
+      `PASS` and then `FAIL`. Click the line that contains the defect.
+    hint: What part of the fake repository lives longer than one instance of it?
+    answer: Line 21, the `Items` list declared as `static`.
+    explanation: |
+      A static field belongs to the type, not to an instance. The call `new FakeOrderRepository()` in the second
+      test creates a new object, but the `Items` list is the same one, and it still holds `"A"` from the first
+      test. So `TestAddTwo` sees three items instead of two and prints `FAIL`.
+
+      Worse, the result depends on execution order: each test passes when run alone, and if you swap them,
+      `TestAddOne` is the one that fails. Such tests become unstable when the order, a filter or parallel runs
+      change, because frameworks such as xUnit create a new test class instance for every test, but static
+      fields survive across all tests in the process.
+
+      The fix is to keep the state in an instance field (line 21 without `static`), so that every test gets a
+      fresh fake. After the fix the program prints `PASS` twice.
+    linkTitles:
+      - "Unit testing best practices for .NET"
+      - "Eradicating Non-Determinism in Tests (Martin Fowler)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

@@ -1,0 +1,139 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WQ5A67WGAB7AV81M0W
+slug: large-upload-direct-to-object-storage-sas
+stack: dotnet
+topic: system-design
+level: senior
+type: situation
+grading: self
+tags: [valet-key, sas, object-storage, file-upload, blob-storage]
+links:
+  - url: https://learn.microsoft.com/en-us/azure/architecture/patterns/valet-key
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/azure/storage/common/storage-sas-overview
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/mvc/models/file-uploads
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Экземпляры API падают при загрузке пользователями видео размером в несколько гигабайт
+    prompt: |
+      Пользователи загружают видео через эндпоинт `POST /api/videos` в ASP.NET Core API, который работает в
+      нескольких экземплярах за балансировщиком. Файлы весят несколько гигабайт. Под нагрузкой экземплярам API
+      не хватает памяти, заканчиваются соединения, загрузки обрываются по таймаутам, а добавление экземпляров
+      помогает ненадолго. Как вы перепроектируете путь загрузки?
+    hint: |
+      Что именно удерживает на экземпляре API одна долгая загрузка и какое решение о загрузке API действительно должен принять сам?
+    answer: |
+      1. **Подтвердить причину.** Проверить, что эндпоинт буферизует тело запроса в памяти (например, копирует
+         файл в `MemoryStream` или `byte[]`) или на локальный диск, и что каждая загрузка держит соединение и
+         ресурсы экземпляра минутами: медленный клиент с файлом в несколько гигабайт занимает их надолго.
+         Новые экземпляры лишь умножают число таких дорогих «прокси».
+      2. **Убрать байты из API.** Клиент загружает файл напрямую в объектное хранилище (Azure Blob Storage,
+         Amazon S3), а API только выдаёт разрешение и хранит метаданные. Это паттерн Valet Key.
+      3. **Выдать узкое разрешение.** Клиент вызывает, например, `POST /api/uploads` с именем, размером и типом
+         файла. API проверяет пользователя, квоты, допустимый тип и заявленный размер, создаёт запись в статусе
+         `Pending`, сам генерирует имя объекта и возвращает SAS URL (в S3 - pre-signed URL):
+         - только на этот один объект, а не на весь контейнер;
+         - только права на создание и запись, без чтения, перечисления и удаления;
+         - короткий срок жизни и только HTTPS;
+         - предпочтительно user delegation SAS, подписанный учётными данными Microsoft Entra ID, а не ключом
+           учётной записи хранилища.
+      4. **Загружать частями.** Клиент отправляет файл блоками (блоки и `Put Block List` в Azure, multipart
+         upload в S3). Клиентские библиотеки хранилищ сами делят файл на блоки, загружают их параллельно и
+         повторяют неудачные блоки. Чтобы продолжить загрузку после перезапуска клиента, клиент должен сам
+         запоминать уже загруженные блоки (или идентификатор multipart upload). Для браузера на хранилище
+         настраивается CORS только для своих источников.
+      5. **Подтвердить загрузку на сервере.** Сервер узнаёт о завершении из события хранилища (например,
+         `BlobCreated` через Event Grid) или из вызова клиента `complete`, проверяет, что объект существует, его
+         фактический размер и тип, переводит запись в `Uploaded` и ставит обработку (антивирус, транскодирование)
+         в очередь.
+      6. **Изолировать и очистить.** Файлы попадают в отдельный контейнер входящих и не публикуются до проверки.
+         Зависшие записи `Pending` и брошенные загрузки удаляет фоновая задача или политика жизненного цикла
+         хранилища. Готовые видео отдаются так же, мимо API: через SAS только на чтение или CDN.
+      7. **Если прямая загрузка запрещена** (например, требованиями безопасности): потоковая обработка без
+         буферизации (`MultipartReader`, копирование потока в хранилище по частям), отдельный пул экземпляров для
+         загрузок, явные лимиты размера тела и таймауты. Это убирает нехватку памяти, но соединения всё равно
+         заняты на всё время загрузки.
+    explanation: |
+      В исходной схеме сервер приложения не добавляет ценности: он только пересылает байты, но платит за них
+      памятью, соединениями и временем. Объектное хранилище спроектировано для приёма больших объектов и
+      масштабируется независимо от API, поэтому самый эффективный путь - не пропускать данные через приложение.
+
+      Valet Key сохраняет контроль доступа: решение «можно ли загружать» принимает API, а токен ограничивает, что
+      именно и до какого момента может сделать клиент. У подхода есть цена:
+
+      - во время загрузки приложение не видит содержимое, поэтому всё, что не выражается правами токена
+        (реальный размер, тип, вредоносность), проверяется после загрузки;
+      - утёкший токен действует до истечения срока, поэтому область и время жизни минимальны; SAS, подписанный
+        ключом учётной записи, без хранимой политики доступа отзывается только сменой ключа, а user delegation SAS
+        можно отозвать, отозвав ключи делегирования;
+      - клиент становится сложнее и зависит от протокола конкретного хранилища;
+      - появляются состояния «запись есть, файла нет» и «файл есть, записи нет», которые нужно обрабатывать явно.
+    linkTitles:
+      - "Паттерн Valet Key"
+      - "Подписанные URL общего доступа (SAS) в Azure Storage"
+      - "Загрузка файлов в ASP.NET Core"
+  en:
+    title: API instances run out of memory when users upload multi-gigabyte videos
+    prompt: |
+      Users upload videos through a `POST /api/videos` endpoint of an ASP.NET Core API that runs as several
+      instances behind a load balancer. The files are several gigabytes each. Under load the API instances run out
+      of memory, connections are exhausted, uploads fail with timeouts, and adding instances helps only for a
+      while. How do you redesign the upload path?
+    hint: |
+      What does one long upload hold on an API instance, and what does the API actually need to decide about an upload?
+    answer: |
+      1. **Confirm the cause.** Check that the endpoint buffers the request body in memory (for example, copies the
+         file into a `MemoryStream` or a `byte[]`) or on local disk, and that every upload holds a connection and
+         instance resources for minutes: a slow client with a file of several gigabytes keeps them busy for a long
+         time. New instances only multiply the number of these expensive "proxies".
+      2. **Take the bytes out of the API.** The client uploads the file directly to object storage (Azure Blob
+         Storage, Amazon S3), and the API only grants permission and stores metadata. This is the Valet Key pattern.
+      3. **Grant a narrow permission.** The client calls, for example, `POST /api/uploads` with the file name, size
+         and type. The API checks the user, quotas, the allowed type and the declared size, creates a record in the
+         `Pending` state, generates the object name itself and returns a SAS URL (in S3, a pre-signed URL):
+         - for this one object only, not the whole container;
+         - with create and write permissions only, no read, list or delete;
+         - with a short lifetime and HTTPS only;
+         - preferably a user delegation SAS signed with Microsoft Entra ID credentials rather than the storage
+           account key.
+      4. **Upload in parts.** The client sends the file in blocks (blocks and `Put Block List` in Azure, multipart
+         upload in S3). The storage client libraries split the file into blocks, upload them in parallel and retry
+         failed blocks. Resuming after a client restart needs the client to track the blocks already uploaded (or
+         the multipart upload id). For browsers, CORS on the storage account allows only your own origins.
+      5. **Confirm the upload on the server.** The server learns about completion from a storage event (for example
+         `BlobCreated` through Event Grid) or from a client `complete` call, checks that the object exists, its
+         actual size and type, moves the record to `Uploaded` and queues processing (malware scan, transcoding).
+      6. **Isolate and clean up.** Files land in a separate incoming container and are not published before the
+         checks. A background job or a storage lifecycle policy removes stale `Pending` records and abandoned
+         uploads. Finished videos are served the same way, bypassing the API: through a read-only SAS or a CDN.
+      7. **If direct upload is not allowed** (for example, by security requirements): streaming without buffering
+         (`MultipartReader`, copying the stream to storage in chunks), a separate pool of instances for uploads,
+         explicit body size limits and timeouts. This removes the memory pressure, but connections are still held
+         for the whole upload.
+    explanation: |
+      In the original design the application server adds no value: it only relays bytes but pays for them with
+      memory, connections and time. Object storage is built to accept large objects and scales independently of
+      the API, so the most efficient path is to keep the data out of the application.
+
+      Valet Key keeps access control in place: the API decides whether an upload is allowed, and the token limits
+      what exactly the client may do and until when. The approach has costs:
+
+      - during the upload the application does not see the content, so everything the token permissions cannot
+        express (actual size, type, malware) is checked after the upload;
+      - a leaked token works until it expires, so its scope and lifetime are kept minimal; a SAS signed with the
+        account key and not tied to a stored access policy can be revoked only by rotating the key, while a user
+        delegation SAS can be revoked by revoking the user delegation keys;
+      - the client gets more complex and depends on the protocol of a specific storage service;
+      - new states appear, "record without a file" and "file without a record", which must be handled explicitly.
+    linkTitles:
+      - "Valet Key pattern"
+      - "Shared access signatures (SAS) in Azure Storage"
+      - "File uploads in ASP.NET Core"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

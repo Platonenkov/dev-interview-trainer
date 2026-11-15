@@ -1,0 +1,115 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WQQVKZA6AAE7KCEH6Y
+slug: scale-out-state-to-externalize
+stack: dotnet
+topic: system-design
+level: middle
+type: multi
+grading: auto
+tags: [scale-out, web-farm, data-protection, session, distributed-cache]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: true
+  - id: c
+    correct: true
+  - id: d
+    correct: true
+  - id: e
+    correct: false
+  - id: f
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/web-farm
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/performance/caching/distributed
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какое состояние нужно вынести из процесса перед запуском приложения ASP.NET Core на нескольких экземплярах?
+    prompt: |
+      Приложение ASP.NET Core работало на одном сервере. Теперь его запускают в трёх экземплярах за
+      балансировщиком нагрузки без привязки сессий (sticky sessions): каждый запрос может попасть на любой
+      экземпляр. Что из перечисленного придётся вынести в общее хранилище или настроить отдельно, чтобы
+      приложение работало корректно? Выберите все подходящие варианты.
+    hint: Для каждого варианта спросите себя, записывает ли его один экземпляр так, что другой потом должен это прочитать.
+    options:
+      a: "Ключи Data Protection в расположении по умолчанию, которыми защищены cookie аутентификации и токены antiforgery"
+      b: "Данные сессии `ISession`, когда в качестве хранилища зарегистрирован `AddDistributedMemoryCache`"
+      c: "Одноразовые коды подтверждения, которые хранятся только в `IMemoryCache` и больше нигде"
+      d: "Файлы, которые загружают пользователи и которые сохраняются в папку на локальном диске экземпляра"
+      e: "Синглтон-сервис без изменяемых полей, который форматирует денежные суммы"
+      f: "Настройки, которые читаются из `appsettings.json` при запуске и не меняются во время работы"
+    optionExplanations:
+      e: "Сервис не хранит общего состояния: у каждого экземпляра своя копия, и результат не зависит от того, какой экземпляр обработал запрос."
+      f: "Конфигурация только для чтения разворачивается вместе с приложением и одинакова на всех экземплярах, поэтому выносить её не нужно."
+    answer: "Ключи Data Protection, данные сессии в хранилище в памяти, значения, которые есть только в `IMemoryCache`, и файлы на локальном диске."
+    explanation: |
+      Когда экземпляров несколько, любое состояние, которое один экземпляр записывает, а другой должен прочитать,
+      обязано жить вне процесса и вне локальной машины. Иначе поведение зависит от того, на какой экземпляр
+      балансировщик отправил запрос.
+
+      - **Data Protection.** Ключами защищены cookie аутентификации, токены antiforgery и другие данные. Если у
+        каждого экземпляра своё кольцо ключей, cookie, выданную одним экземпляром, другой не расшифрует:
+        пользователя внезапно разлогинивает, формы падают на проверке antiforgery. Кольцо ключей хранят в общем
+        месте (например, `PersistKeysToFileSystem` на общем сетевом ресурсе, Azure Blob Storage или Redis) и
+        задают одинаковое имя приложения через `SetApplicationName`.
+      - **Сессия.** Middleware сессий хранит данные в `IDistributedCache`, а `AddDistributedMemoryCache`,
+        несмотря на название, хранит их в памяти процесса. Нужна общая реализация, например Redis или SQL Server.
+      - **`IMemoryCache` как источник истины.** Кэш в памяти принадлежит одному процессу. Код, который сохранил
+        один экземпляр, другой не найдёт. Копия данных из базы в `IMemoryCache` допустима, а единственная копия -
+        нет.
+      - **Локальный диск.** Файл, сохранённый на одном экземпляре, недоступен остальным и пропадёт при
+        пересоздании экземпляра. Нужно объектное хранилище или общий файловый ресурс.
+
+      Синглтон без изменяемого состояния и неизменяемая конфигурация одинаковы на всех экземплярах, поэтому
+      масштабирование их не затрагивает.
+    linkTitles:
+      - "Размещение ASP.NET Core в веб-ферме"
+      - "Распределённое кэширование в ASP.NET Core"
+  en:
+    title: Which state must be moved out of the process before running an ASP.NET Core app as several instances?
+    prompt: |
+      An ASP.NET Core app ran on one server. Now it runs as three instances behind a load balancer without
+      session affinity (sticky sessions): any request can reach any instance. Which of the following must be
+      moved to shared storage or configured separately for the app to work correctly? Select all that apply.
+    hint: For each option ask whether one instance writes it in a way that another instance must read later.
+    options:
+      a: "Data Protection keys in their default location, which protect authentication cookies and antiforgery tokens"
+      b: "`ISession` data when the store is registered with `AddDistributedMemoryCache`"
+      c: "One-time confirmation codes that are kept only in `IMemoryCache` and nowhere else"
+      d: "Files that users upload and that are saved to a folder on the instance's local disk"
+      e: "A singleton service with no mutable fields that formats money amounts"
+      f: "Settings read from `appsettings.json` at startup that do not change at run time"
+    optionExplanations:
+      e: "The service holds no shared state: each instance has its own copy, and the result does not depend on which instance handled the request."
+      f: "Read-only configuration is deployed with the app and is the same on every instance, so it does not need to move."
+    answer: "The Data Protection keys, session data in an in-memory store, values that exist only in `IMemoryCache`, and files on the local disk."
+    explanation: |
+      With several instances, any state that one instance writes and another must read has to live outside the
+      process and outside the local machine. Otherwise the behaviour depends on which instance the load balancer
+      picked.
+
+      - **Data Protection.** The keys protect authentication cookies, antiforgery tokens and other data. If each
+        instance has its own key ring, a cookie issued by one instance cannot be decrypted by another: users are
+        suddenly signed out and forms fail antiforgery validation. Store the key ring in a shared place (for
+        example `PersistKeysToFileSystem` on a network share, Azure Blob Storage or Redis) and set the same
+        application name with `SetApplicationName`.
+      - **Session.** The session middleware stores data in `IDistributedCache`, and `AddDistributedMemoryCache`,
+        despite its name, keeps it in process memory. Use a shared implementation such as Redis or SQL Server.
+      - **`IMemoryCache` as the source of truth.** An in-memory cache belongs to one process. A code saved by one
+        instance is not found by another. A copy of database data in `IMemoryCache` is fine; the only copy is not.
+      - **Local disk.** A file saved on one instance is invisible to the others and is lost when the instance is
+        recreated. Use object storage or a shared file share.
+
+      A singleton without mutable state and read-only configuration are identical on every instance, so scaling
+      out does not affect them.
+    linkTitles:
+      - "Host ASP.NET Core in a web farm"
+      - "Distributed caching in ASP.NET Core"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

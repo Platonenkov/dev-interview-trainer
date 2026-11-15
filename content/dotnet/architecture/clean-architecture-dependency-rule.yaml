@@ -1,0 +1,100 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WM7FAXFM2Z1TQMCEEV
+slug: clean-architecture-dependency-rule
+stack: dotnet
+topic: architecture
+level: middle
+type: single
+grading: auto
+tags: [clean-architecture, dependency-inversion, project-references]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/architecture/modern-web-apps-azure/common-web-application-architectures
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/architecture/modern-web-apps-azure/architectural-principles
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как правильно расставить ссылки между проектами Core, Infrastructure и Web в чистой архитектуре?
+    prompt: |
+      Решение построено по чистой архитектуре и состоит из трёх проектов: `Core` (модель предметной области и
+      сценарии приложения), `Infrastructure` (EF Core, внешние сервисы) и `Web` (ASP.NET Core). Сервису из
+      `Core` нужно сохранять заказы в базу, а сам доступ к базе реализован классом `SqlOrderRepository` на EF Core.
+
+      Какая схема размещения типов и ссылок между проектами правильная?
+    hint: В какую сторону должны указывать зависимости между проектами и кто должен владеть абстракцией, которой пользуется ядро?
+    options:
+      a: "`Core` ссылается на `Infrastructure` и напрямую использует `SqlOrderRepository`; `Infrastructure` ни на что не ссылается; `Web` ссылается на `Core`."
+      b: "`Core` объявляет `IOrderRepository` и не ссылается ни на `Infrastructure`, ни на `Web`; `Infrastructure` ссылается на `Core` и реализует `IOrderRepository` в `SqlOrderRepository`; `Web` ссылается на `Core` и, чтобы зарегистрировать реализацию в DI при старте, на `Infrastructure`."
+      c: "`Infrastructure` объявляет и `IOrderRepository`, и `SqlOrderRepository`; `Core` ссылается на `Infrastructure` только ради интерфейса; `Web` ссылается на `Core`."
+      d: "`Core` объявляет `IOrderRepository` и ссылается на `Infrastructure`, чтобы создавать экземпляры `SqlOrderRepository`; `Infrastructure` ссылается на `Core`, чтобы реализовать интерфейс."
+    optionExplanations:
+      a: Ядро зависит от инфраструктуры, то есть зависимость направлена наружу. Любая замена или изменение EF Core затрагивает `Core`, а протестировать сценарии без базы нельзя.
+      c: Интерфейс лежит во внешнем слое, поэтому `Core` всё равно зависит от `Infrastructure` и транзитивно от EF Core. Абстракцией должно владеть ядро, которое ею пользуется.
+      d: Получается цикл ссылок между проектами, который сборка .NET не допускает. Но даже без цикла `Core` знал бы о конкретной реализации, а создавать её должен контейнер DI во внешнем слое.
+    answer: "`Core` объявляет `IOrderRepository` и ни на что внешнее не ссылается, `Infrastructure` ссылается на `Core` и реализует интерфейс, а `Web` подключает реализацию через DI."
+    explanation: |
+      Главное правило чистой архитектуры - зависимости указывают внутрь, к ядру. `Core` содержит модель и
+      сценарии и не знает ни о базе данных, ни о веб-фреймворке. То, что ему нужно от внешнего мира, он
+      описывает своими интерфейсами, например `IOrderRepository`.
+
+      Это принцип инверсии зависимостей: инфраструктура зависит от абстракции, объявленной в ядре, а не
+      наоборот. `Infrastructure` ссылается на `Core` и реализует интерфейс с помощью EF Core. Во время
+      выполнения реализацию подставляет контейнер DI, который настраивается в `Web` при старте приложения.
+      Ссылка `Web` на `Infrastructure` нужна только для этой регистрации, остальной код UI работает с
+      интерфейсами из `Core`.
+
+      В результате ядро можно тестировать с фейковым репозиторием, а технологию хранения - менять, не трогая
+      бизнес-логику.
+    linkTitles:
+      - "Распространённые архитектуры веб-приложений"
+      - "Архитектурные принципы"
+  en:
+    title: How should project references between Core, Infrastructure and Web be arranged in clean architecture?
+    prompt: |
+      A solution follows clean architecture and has three projects: `Core` (the domain model and application
+      use cases), `Infrastructure` (EF Core, external services) and `Web` (ASP.NET Core). A service in `Core`
+      needs to save orders to the database, and database access is implemented by the `SqlOrderRepository`
+      class on EF Core.
+
+      Which arrangement of types and project references is correct?
+    hint: Which way should dependencies between projects point, and who should own the abstraction that the core uses?
+    options:
+      a: "`Core` references `Infrastructure` and uses `SqlOrderRepository` directly; `Infrastructure` references nothing; `Web` references `Core`."
+      b: "`Core` declares `IOrderRepository` and references neither `Infrastructure` nor `Web`; `Infrastructure` references `Core` and implements `IOrderRepository` in `SqlOrderRepository`; `Web` references `Core` and, to register the implementation in DI at startup, `Infrastructure`."
+      c: "`Infrastructure` declares both `IOrderRepository` and `SqlOrderRepository`; `Core` references `Infrastructure` only to see the interface; `Web` references `Core`."
+      d: "`Core` declares `IOrderRepository` and references `Infrastructure` to create `SqlOrderRepository` instances; `Infrastructure` references `Core` to implement the interface."
+    optionExplanations:
+      a: The core depends on the infrastructure, so the dependency points outward. Any change to EF Core or to the storage affects `Core`, and the use cases cannot be tested without the database.
+      c: The interface lives in an outer layer, so `Core` still depends on `Infrastructure` and transitively on EF Core. The abstraction must be owned by the core that uses it.
+      d: This creates a reference cycle between projects, which a .NET build does not allow. Even without the cycle, `Core` would know the concrete implementation, while creating it is the job of the DI container in the outer layer.
+    answer: "`Core` declares `IOrderRepository` and references nothing outward, `Infrastructure` references `Core` and implements the interface, and `Web` wires the implementation in through DI."
+    explanation: |
+      The main rule of clean architecture is that dependencies point inward, toward the core. `Core` holds the
+      model and the use cases and knows nothing about the database or the web framework. Whatever it needs
+      from the outside world it describes with its own interfaces, such as `IOrderRepository`.
+
+      This is the dependency inversion principle: the infrastructure depends on an abstraction declared in the
+      core, not the other way round. `Infrastructure` references `Core` and implements the interface with EF
+      Core. At run time the DI container, configured in `Web` at application startup, supplies the
+      implementation. The `Web` reference to `Infrastructure` exists only for that registration; the rest of
+      the UI code works with the interfaces from `Core`.
+
+      As a result the core can be tested with a fake repository, and the storage technology can be replaced
+      without touching the business logic.
+    linkTitles:
+      - "Common web application architectures"
+      - "Architectural principles"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

@@ -1,0 +1,141 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WP5RH7A7JYZ0T1YNSJ
+slug: flyweight-shared-mutable-state-output
+stack: dotnet
+topic: patterns
+level: middle
+type: output
+grading: auto
+tags: [flyweight, gof, shared-state, immutability]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    var factory = new GlyphFactory();
+
+    // Client A
+    Glyph clientA = factory.Get('a');
+    clientA.Color = "Red";
+
+    // Client B
+    Glyph clientB = factory.Get('a');
+    Console.Write($"{clientB.Color} {ReferenceEquals(clientA, clientB)}");
+
+    class Glyph
+    {
+        public char Symbol { get; }
+        public string Color { get; set; } = "Black";
+
+        public Glyph(char symbol) => Symbol = symbol;
+    }
+
+    class GlyphFactory
+    {
+        private readonly Dictionary<char, Glyph> _cache = new();
+
+        public Glyph Get(char symbol)
+        {
+            if (!_cache.TryGetValue(symbol, out Glyph glyph))
+            {
+                glyph = new Glyph(symbol);
+                _cache[symbol] = glyph;
+            }
+            return glyph;
+        }
+    }
+expect:
+  kind: output
+  value: "Red True"
+acceptedOutputs: ["Red True"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "Red True" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "Black False" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "Black True" }
+  - id: d
+    correct: false
+    expect: { kind: output, value: "Red False" }
+links:
+  - url: https://refactoring.guru/design-patterns/flyweight
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.dictionary-2.trygetvalue
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что выведет программа, если клиент меняет объект, полученный из фабрики легковесов?
+    prompt: |
+      `GlyphFactory` кэширует объекты `Glyph` по символу в словаре. Клиент A получает глиф для `'a'` и
+      меняет его цвет на `Red`, затем клиент B запрашивает глиф для того же символа и печатает его цвет.
+      Что выведет программа в консоль?
+    hint: Сколько объектов `Glyph` создаёт фабрика, если символ запрашивают дважды?
+    options:
+      a: "Red True"
+      b: "Black False"
+      c: "Black True"
+      d: "Red False"
+    optionExplanations:
+      b: Так было бы, если бы фабрика создавала новый объект при каждом вызове. Но второй вызов `Get('a')` находит глиф в словаре и возвращает уже созданный экземпляр.
+      c: Если `ReferenceEquals` возвращает `True`, то обе переменные указывают на один объект с одним полем `Color`. Клиент A уже записал в него `Red`, поэтому `Black` прочитать нельзя.
+      d: Клиент B видит `Red` именно потому, что получил тот же объект. Два разных объекта имели бы независимые свойства `Color`, и у второго остался бы `Black`.
+    answer: "Red True"
+    explanation: |
+      Фабрика легковесов кэширует объекты по ключу. Первый вызов `Get('a')` создаёт `Glyph` и кладёт его в
+      словарь, второй находит его через `TryGetValue` и возвращает тот же экземпляр. Поэтому `clientA` и
+      `clientB` - две ссылки на один объект: `ReferenceEquals` даёт `True`, а цвет, который выставил клиент A,
+      видит клиент B.
+
+      Смысл паттерна Flyweight - разделять между многими клиентами внутреннее (intrinsic) состояние, например
+      сам символ. Такое состояние обязано быть неизменяемым. Внешнее (extrinsic) состояние, такое как цвет или
+      позиция, хранит клиент и передаёт в методы легковеса, например `Draw(x, y, color)`.
+
+      Изменяемое свойство `Color` в разделяемом объекте превращает кэш в глобальное общее состояние: изменение
+      в одном месте программы незаметно меняет поведение во всех остальных, а при доступе из нескольких потоков
+      добавляется ещё и состояние гонки. Исправление - сделать `Glyph` неизменяемым (только `get` или `init`) и
+      вынести цвет во внешнее состояние.
+    linkTitles:
+      - "Паттерн Flyweight (Легковес)"
+      - "Метод Dictionary<TKey,TValue>.TryGetValue"
+  en:
+    title: What does the program print when a client changes an object returned by a flyweight factory?
+    prompt: |
+      `GlyphFactory` caches `Glyph` objects by character in a dictionary. Client A gets the glyph for `'a'`
+      and sets its color to `Red`, then client B requests the glyph for the same character and prints its color.
+      What does the program print to the console?
+    hint: How many `Glyph` objects does the factory create when the same character is requested twice?
+    options:
+      a: "Red True"
+      b: "Black False"
+      c: "Black True"
+      d: "Red False"
+    optionExplanations:
+      b: That would happen if the factory created a new object on every call. But the second `Get('a')` call finds the glyph in the dictionary and returns the instance that already exists.
+      c: If `ReferenceEquals` returns `True`, both variables point to one object with one `Color` property. Client A has already written `Red` into it, so `Black` cannot be read.
+      d: Client B sees `Red` precisely because it received the same object. Two different objects would have independent `Color` properties, and the second one would still be `Black`.
+    answer: "Red True"
+    explanation: |
+      A flyweight factory caches objects by key. The first `Get('a')` call creates a `Glyph` and stores it in
+      the dictionary, the second finds it with `TryGetValue` and returns the same instance. So `clientA` and
+      `clientB` are two references to one object: `ReferenceEquals` gives `True`, and the color set by client A
+      is visible to client B.
+
+      The point of the Flyweight pattern is to share intrinsic state, such as the character itself, among many
+      clients. That state must be immutable. Extrinsic state, such as color or position, is kept by the client
+      and passed into the flyweight's methods, for example `Draw(x, y, color)`.
+
+      A mutable `Color` property on a shared object turns the cache into global shared state: a change in one
+      part of the program silently changes behaviour everywhere else, and with access from several threads it
+      also becomes a race condition. The fix is to make `Glyph` immutable (`get` or `init` only) and move the
+      color into extrinsic state.
+    linkTitles:
+      - "Flyweight pattern"
+      - "Dictionary<TKey,TValue>.TryGetValue method"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

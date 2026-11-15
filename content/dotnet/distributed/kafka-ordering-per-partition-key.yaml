@@ -1,0 +1,110 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNWYHZMAX29M25H7Z8
+slug: kafka-ordering-per-partition-key
+stack: dotnet
+topic: distributed
+level: middle
+type: single
+grading: auto
+tags: [kafka, ordering, partitioning, message-key]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+links:
+  - url: https://kafka.apache.org/documentation/
+    lang: en
+    kind: docs
+  - url: https://docs.confluent.io/platform/current/installation/configuration/producer-configs.html
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какая настройка продюсера Kafka гарантирует порядок событий одного заказа?
+    prompt: |
+      Сервис заказов публикует события `OrderCreated`, `OrderPaid` и `OrderShipped` в топик Kafka с 12 партициями.
+      Потребитель должен получать события одного и того же заказа строго в том порядке, в котором они были
+      отправлены. Порядок событий разных заказов между собой не важен.
+
+      Какая настройка на стороне продюсера обеспечивает это?
+    hint: "Между какими сообщениями Kafka вообще гарантирует порядок: между всеми сообщениями топика или только между некоторыми из них?"
+    options:
+      a: Задавать идентификатор заказа как ключ сообщения для всех событий этого заказа
+      b: "Установить `acks=all`"
+      c: "Установить `max.in.flight.requests.per.connection=1`"
+      d: Отправлять сообщения без ключа, чтобы продюсер равномерно распределял их по 12 партициям
+      e: "Установить `enable.idempotence=true` и отправлять сообщения без ключа"
+    optionExplanations:
+      b: "`acks=all` отвечает за надёжность записи: лидер подтверждает сообщение после того, как его получили все синхронные реплики. На выбор партиции и порядок событий между партициями это не влияет."
+      c: "Эта настройка исключает перестановку батчей при повторных отправках, но только внутри одной партиции. События одного заказа без общего ключа всё равно попадут в разные партиции."
+      d: Без ключа события одного заказа окажутся в разных партициях, а между партициями Kafka порядок не гарантирует. Равномерная нагрузка здесь достигается ценой порядка.
+      e: Идемпотентный продюсер защищает от дублей и перестановок при повторах внутри партиции, но не выбирает партицию. Без ключа события одного заказа по-прежнему расходятся по разным партициям.
+    answer: Задавать идентификатор заказа как ключ сообщения, чтобы все события заказа попадали в одну партицию.
+    explanation: |
+      Kafka гарантирует порядок только внутри партиции: сообщения в ней образуют упорядоченный журнал, и
+      потребитель читает их по возрастанию смещения. Между разными партициями топика порядка нет.
+
+      Партиционер продюсера по умолчанию вычисляет партицию по хешу ключа, поэтому сообщения с одинаковым ключом
+      попадают в одну и ту же партицию. Если ключом сделать идентификатор заказа, все события заказа окажутся в
+      одной партиции и будут прочитаны в порядке отправки. В группе потребителей каждую партицию читает один
+      экземпляр, так что порядок сохраняется и при масштабировании, если потребитель обрабатывает сообщения
+      партиции последовательно.
+
+      Важные оговорки:
+
+      - связь ключа с партицией сохраняется, только пока не меняется число партиций: после их добавления ключи
+        перераспределяются;
+      - идемпотентный продюсер и ограничение `max.in.flight.requests.per.connection` дополняют ключ: они
+        защищают порядок внутри партиции при повторных отправках, но сами не собирают события в одну партицию.
+    linkTitles:
+      - "Документация Apache Kafka"
+      - "Confluent: параметры конфигурации продюсера Kafka"
+  en:
+    title: Which Kafka producer setting guarantees the order of events of one order?
+    prompt: |
+      An order service publishes `OrderCreated`, `OrderPaid` and `OrderShipped` events to a Kafka topic with 12
+      partitions. The consumer must receive the events of the same order strictly in the order they were sent.
+      The relative order of events of different orders does not matter.
+
+      Which producer-side setting ensures this?
+    hint: "Between which messages does Kafka guarantee order at all: between all messages of a topic, or only between some of them?"
+    options:
+      a: Use the order id as the message key for every event of that order
+      b: "Set `acks=all`"
+      c: "Set `max.in.flight.requests.per.connection=1`"
+      d: Send messages without a key so that the producer spreads them evenly across the 12 partitions
+      e: "Set `enable.idempotence=true` and send messages without a key"
+    optionExplanations:
+      b: "`acks=all` is about write durability: the leader acknowledges a message after all in-sync replicas have received it. It does not affect partition choice or ordering across partitions."
+      c: This setting prevents reordering of batches on retries, but only within one partition. Without a shared key the events of one order still land in different partitions.
+      d: Without a key the events of one order end up in different partitions, and Kafka gives no ordering across partitions. Even load is bought at the price of ordering.
+      e: An idempotent producer protects against duplicates and reordering on retries within a partition, but it does not choose the partition. Without a key the events of one order still spread across partitions.
+    answer: Use the order id as the message key so that all events of the order land in one partition.
+    explanation: |
+      Kafka guarantees order only within a partition: its messages form an ordered log, and a consumer reads
+      them by increasing offset. There is no ordering across the partitions of a topic.
+
+      The producer's default partitioner derives the partition from a hash of the key, so messages with the same
+      key go to the same partition. If the key is the order id, all events of the order end up in one partition and
+      are read in the order they were sent. In a consumer group each partition is read by one instance, so the
+      order survives scaling as long as the consumer processes the messages of a partition sequentially.
+
+      Important caveats:
+
+      - the key-to-partition mapping holds only while the partition count stays the same: adding partitions
+        remaps keys;
+      - an idempotent producer and a limit on `max.in.flight.requests.per.connection` complement the key: they
+        protect order within a partition on retries, but they do not put the events into one partition.
+    linkTitles:
+      - "Apache Kafka documentation"
+      - "Confluent: Kafka producer configuration reference"
+meta:
+  authors: [platonenkov]
+  verified: 1970-01-01

@@ -1,0 +1,146 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNZ1BYNC8MXFVHJF83
+slug: duplicate-payments-after-broker-failover
+stack: dotnet
+topic: distributed
+level: lead
+type: situation
+grading: self
+tags: [idempotency, payments, at-least-once, incident-response, reconciliation]
+links:
+  - url: https://microservices.io/patterns/communication-style/idempotent-consumer.html
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/azure/architecture/patterns/retry
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как действовать, если после переключения брокера сообщений клиентам дважды списали оплату?
+    prompt: |
+      Ночью кластер брокера сообщений переключился на резервный узел. Утром поддержка получает жалобы:
+      несколько десятков клиентов заплатили за заказ дважды. Выясняется, что сервис платежей читает команды
+      `ChargePayment` из очереди и для каждой вызывает API платёжного провайдера, а после переключения брокер
+      повторно доставил команды, подтверждения которых не успели до него дойти.
+
+      Вы техлид команды, которая владеет сервисом платежей. Как вы организуете реакцию на инцидент и что
+      измените в системе и в процессе, чтобы это не повторилось?
+    hint: |
+      Кто в цепочке на самом деле может отказаться выполнить второе списание, если ваш сервис отправит тот же запрос дважды, и по какому признаку он поймёт, что это повтор?
+    answer: |
+      1. **Остановить ущерб.** Объявить инцидент, назначить ответственного за координацию и канал связи.
+         Проверить, продолжаются ли повторные доставки; при сомнении приостановить потребителя платежей или
+         выключить путь списания флагом, пока не понятен масштаб. Задержка платежа дешевле ещё одного
+         двойного списания.
+      2. **Оценить масштаб по данным, а не по жалобам.** Сверить собственные записи о платежах с отчётом
+         провайдера о транзакциях за окно инцидента и получить точный список заказов с несколькими
+         списаниями. Жалобы покажут только часть пострадавших.
+      3. **Вернуть деньги и сообщить клиентам.** Оформить возвраты лишних списаний, причём сами возвраты
+         тоже делать идемпотентно, чтобы повторный запуск скрипта не вернул деньги дважды. Вместе с
+         поддержкой, финансами и, если нужно, юристами подготовить сообщение клиентам и ответы поддержки.
+      4. **Найти корневую причину.** Брокер работает в режиме at-least-once: сообщения без подтверждения
+         при переключении доставляются снова, и это штатное поведение, а не сбой брокера. Дефект в том, что
+         шаг оплаты не был идемпотентным: потребитель не отличал повтор от новой команды, а провайдер
+         получал запросы без ключа идемпотентности или с новым ключом на каждую попытку.
+      5. **Сделать оплату идемпотентной от начала до конца.**
+         - Стабильный ключ идемпотентности создаётся один раз, когда появляется намерение оплатить
+           (например, идентификатор платежа), передаётся в сообщении и не меняется при повторах.
+         - Этот ключ передаётся провайдеру, если он поддерживает ключи идемпотентности: тогда провайдер
+           сам отклонит повтор, даже если сервис упал между вызовом и записью результата.
+         - У платежа есть состояние в базе (создан, отправлен провайдеру, оплачен, ошибка) с уникальным
+           ограничением по ключу. Повторная команда для оплаченного платежа подтверждается без вызова
+           провайдера, а при неизвестном исходе (таймаут) статус сначала запрашивается у провайдера, а не
+           выполняется новое списание.
+      6. **Добавить сверку как страховочную сеть.** Регулярная задача сравнивает внутренний учёт с данными
+         провайдера и поднимает алерт на расхождения: двойные списания, списания без заказа, оплаченные
+         заказы без списания. Метрика расхождений выводится на дашборд.
+      7. **Закрепить в процессе.** Безобвинительный разбор инцидента с задачами, у которых есть владельцы и
+         сроки. Тест, который доставляет каждую команду дважды, и учения с переключением брокера.
+         Проверить остальные потребители с внешними побочными эффектами (письма, начисления, отгрузки)
+         и внести требование идемпотентности в чек-лист code review для обработчиков сообщений.
+    explanation: |
+      Главная ошибка в такой ситуации - считать виноватым брокер и пытаться настроить доставку «ровно один
+      раз». Переключение, падение потребителя или потерянное подтверждение всегда могут привести к повторной
+      доставке, поэтому повторы надо считать нормой. Правильная гарантия - идемпотентная обработка: эффект
+      от повтора такой же, как от первой доставки.
+
+      Дедупликации только в потребителе недостаточно. Если сервис вызвал провайдера и упал до записи
+      результата, его собственная таблица ничего не знает о списании, и повтор снова спишет деньги. Закрыть
+      это окно может только сторона, которая выполняет побочный эффект, поэтому ключ передаётся провайдеру.
+      Ключ должен быть привязан к бизнес-операции: ключ, который генерируется заново при каждой попытке,
+      ничего не защищает. Та же логика относится к повторным попыткам в коде: повторять можно только
+      идемпотентные операции.
+
+      Сверка нужна потому, что любая защита может иметь пробелы (ограниченный срок хранения ключей у
+      провайдера, ручные операции, ошибки в новом коде). Она превращает тихую потерю денег в алерт.
+
+      Для техлида важен порядок: сначала остановить ущерб и помочь клиентам, затем исправить причину и
+      распространить урок на похожие места, а не ограничиться точечной заплаткой в одном обработчике.
+    linkTitles:
+      - "Паттерн Idempotent Consumer"
+      - "Паттерн Retry"
+  en:
+    title: How do you respond when customers are charged twice after a message broker failover?
+    prompt: |
+      Overnight the message broker cluster failed over to a standby node. In the morning support receives
+      complaints: several dozen customers paid for their order twice. It turns out that the payment service
+      reads `ChargePayment` commands from a queue and calls the payment provider's API for each one, and after
+      the failover the broker redelivered commands whose acknowledgements had not reached it.
+
+      You are the tech lead of the team that owns the payment service. How do you organize the incident
+      response, and what do you change in the system and in the process so that it does not happen again?
+    hint: |
+      Who in the chain can actually refuse to perform a second charge if your service sends the same request twice, and how would it recognize the repeat?
+    answer: |
+      1. **Stop the damage.** Declare an incident, assign a coordinator and a communication channel. Check
+         whether redeliveries are still happening; if in doubt, pause the payment consumer or switch off the
+         charge path with a flag until the scope is clear. A delayed payment is cheaper than another double
+         charge.
+      2. **Size the impact from data, not from complaints.** Reconcile your own payment records with the
+         provider's transaction report for the incident window and get the exact list of orders with several
+         charges. Complaints show only part of the affected customers.
+      3. **Refund and inform customers.** Issue refunds for the extra charges, and make the refunds idempotent
+         too, so that rerunning the script does not refund twice. Together with support, finance and legal if
+         needed, prepare the customer message and the support answers.
+      4. **Find the root cause.** The broker works at least once: unacknowledged messages are delivered again
+         on failover, and that is expected behaviour, not a broker defect. The defect is that the payment step
+         was not idempotent: the consumer could not tell a repeat from a new command, and the provider received
+         requests without an idempotency key or with a fresh key on every attempt.
+      5. **Make payment idempotent end to end.**
+         - A stable idempotency key is created once, when the intent to pay appears (for example the payment
+           id), travels in the message and does not change on repeats.
+         - The key is passed to the provider, if it supports idempotency keys: then the provider itself rejects
+           the repeat, even if the service crashed between the call and recording the result.
+         - The payment has a state in the database (created, sent to provider, paid, failed) with a unique
+           constraint on the key. A repeated command for a paid payment is acknowledged without calling the
+           provider, and when the outcome is unknown (a timeout) the status is first queried from the provider
+           instead of charging again.
+      6. **Add reconciliation as a safety net.** A scheduled job compares internal records with the provider's
+         data and raises an alert on mismatches: double charges, charges without an order, paid orders without
+         a charge. The mismatch metric goes on a dashboard.
+      7. **Lock it into the process.** A blameless postmortem with action items that have owners and dates. A
+         test that delivers every command twice, and broker failover drills. Review the other consumers with
+         external side effects (emails, bonus points, shipments) and add idempotency to the code review
+         checklist for message handlers.
+    explanation: |
+      The main mistake here is to blame the broker and try to configure "exactly once" delivery. A failover, a
+      consumer crash or a lost acknowledgement can always cause a redelivery, so repeats must be treated as
+      normal. The right guarantee is idempotent processing: a repeat has the same effect as the first delivery.
+
+      Deduplication in the consumer alone is not enough. If the service called the provider and crashed before
+      recording the result, its own table knows nothing about the charge, and the repeat charges again. Only
+      the party that performs the side effect can close that window, which is why the key goes to the provider.
+      The key must be tied to the business operation: a key generated anew on every attempt protects nothing.
+      The same logic applies to retries in code: only idempotent operations are safe to retry.
+
+      Reconciliation is needed because any protection can have gaps (a limited key retention period at the
+      provider, manual operations, bugs in new code). It turns a silent loss of money into an alert.
+
+      For a tech lead the order matters: first stop the damage and help customers, then fix the cause and
+      spread the lesson to similar places, rather than settling for a spot patch in one handler.
+    linkTitles:
+      - "Idempotent Consumer pattern"
+      - "Retry pattern"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

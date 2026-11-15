@@ -1,0 +1,143 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WP0Z70DCK2G4EE258D
+slug: speculative-patterns-single-implementation-pr
+stack: dotnet
+topic: patterns
+level: lead
+type: situation
+grading: self
+tags: [speculative-generality, yagni, over-engineering, code-review, anti-patterns]
+links:
+  - url: https://refactoring.guru/smells/speculative-generality
+    lang: en
+    kind: article
+  - url: https://martinfowler.com/bliki/Yagni.html
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: "Что делать техлиду с pull request, где вокруг экспорта отчёта в одном формате построены фабрика, стратегия и строитель?"
+    prompt: |
+      Разработчик открыл pull request для экспорта отчёта. Формат экспорта ровно один, и в бэклоге нет
+      планов добавлять второй. При этом в PR появились абстрактная фабрика экспортёров, интерфейс стратегии
+      форматирования с единственной реализацией и строитель для настроек экспорта, тоже с одним вариантом
+      использования. Код аккуратный, тесты есть, но на одну простую функцию приходится десяток файлов и
+      несколько регистраций в DI.
+
+      Вы техлид команды. Что вы будете делать с этим PR и что сделаете, чтобы такие случаи повторялись реже?
+    hint: |
+      Какую проблему решает каждый из этих паттернов и есть ли эта проблема в коде сейчас? И как сделать так,
+      чтобы решение опиралось на договорённость команды, а не на мнение одного человека?
+    answer: |
+      1. **Сначала понять мотивацию, а не отклонять.** Спросить автора, какую конкретную потребность решают
+         фабрика, стратегия и строитель. Возможно, он знает о требовании, которого нет в бэклоге: тогда
+         уточнить его у владельца продукта. Если второго формата нет ни в планах, ни в обязательствах,
+         абстракции построены на догадке.
+      2. **Назвать цену, а не вкус.** Каждая абстракция с одной реализацией добавляет косвенность, файлы,
+         регистрации в DI и тесты на моки. Код дольше читать и сопровождать. Главное - абстракция угадывает
+         ось изменений заранее, и когда второй формат действительно появится, он может меняться совсем по
+         другой оси (потоковая запись, постраничность, другие данные), так что угаданную иерархию придётся
+         ломать.
+      3. **Договориться о более простом дизайне.** Один класс экспортёра с понятным входом и выходом, внутри
+         которого сбор данных отделён от форматирования обычными методами, и тесты на результат экспорта.
+         Интерфейс оставить только там, где он нужен сейчас, например как шов для тестов. Когда появится
+         второй формат, выделить стратегию рефакторингом: с тестами это дешёвый шаг.
+      4. **Решать разговором, а не веткой комментариев.** Короткий синхронный разговор с автором, объяснение
+         причин, признание того, что качество кода хорошее. Упрощение лучше сделать до слияния: пока от новых
+         абстракций ничего не зависит, убрать их дешевле всего. Если срок горит, допустимо слить и сразу
+         завести задачу на упрощение с конкретным сроком, но не оставлять это "на потом" без владельца.
+      5. **Превратить случай в правило команды.** Обсудить ситуацию на встрече команды без указания на
+         автора и записать договорённость в инженерные правила или чек-лист code review: новая абстракция
+         вводится, когда есть реальная вторая вариация или явная потребность (шов для тестов, точка расширения
+         публичной библиотеки, подтверждённое требование с датой), и обоснование пишется в описании PR.
+         Тогда ревьюеры ссылаются на общее правило, а не на личное мнение лида.
+      6. **Сдвинуть обсуждение дизайна раньше.** Для задач, где автор планирует новую структуру, - короткий
+         обзор дизайна до написания кода, чтобы не тратить дни работы впустую.
+      7. **Посмотреть на причину.** Если разработчик хочет вырасти и применяет паттерны "на всякий случай",
+         это повод для наставничества: показать, как распознавать момент, когда паттерн окупается. Если
+         команда так делает из страха перед дорогими изменениями, надо лечить именно это: тесты и привычку к
+         рефакторингу.
+    explanation: |
+      Это запах кода Speculative Generality: классы, интерфейсы и параметры созданы "на будущее" и не
+      используются ни одним реальным сценарием. Паттерны вроде стратегии и абстрактной фабрики решают
+      проблему вариативности: несколько алгоритмов или семейств объектов, между которыми надо выбирать. Когда
+      вариант один, паттерн не решает никакой проблемы и остаётся только накладными расходами.
+
+      Принцип YAGNI объясняет, почему это дорого, даже если второй формат когда-нибудь появится: команда
+      платит за построение ненужного сейчас, за его сопровождение всё это время и за переделку, если догадка
+      окажется неверной. Важно, что YAGNI работает только при дешёвом рефакторинге: тесты и небольшие
+      изменения делают "выделить абстракцию потом" безопасным решением.
+
+      Роль лида здесь не в том, чтобы победить в споре. Личное вето решает один PR, но не учит команду и
+      делает code review непредсказуемым. Правило, записанное и принятое командой, даёт критерий, о котором
+      можно спорить по существу, и допускает обоснованные исключения: публичный API библиотеки, где
+      изменения сигнатур ломают потребителей, плагинные точки расширения или требование, у которого уже есть
+      срок.
+    linkTitles:
+      - "Запах кода Speculative Generality"
+      - "Мартин Фаулер: YAGNI"
+  en:
+    title: "What should a tech lead do with a pull request that wraps a single-format report export in a factory, a strategy and a builder?"
+    prompt: |
+      A developer opens a pull request for a report export. There is exactly one export format, and the
+      backlog has no plans for a second one. Yet the PR adds an abstract factory of exporters, a formatting
+      strategy interface with a single implementation, and a builder for export settings, also with one use
+      case. The code is tidy and tested, but one simple feature now spans a dozen files and several DI
+      registrations.
+
+      You are the tech lead of the team. What do you do with this PR, and what do you do so that such cases
+      happen less often?
+    hint: |
+      What problem does each of these patterns solve, and does that problem exist in the code today? And how
+      do you make the decision rest on a team agreement rather than on one person's opinion?
+    answer: |
+      1. **Understand the motivation first instead of rejecting.** Ask the author which concrete need the
+         factory, the strategy and the builder address. The author may know about a requirement that is not in
+         the backlog: then confirm it with the product owner. If a second format is neither planned nor
+         committed, the abstractions are built on a guess.
+      2. **Name the cost, not a taste.** Every abstraction with a single implementation adds indirection,
+         files, DI registrations and tests against mocks. The code takes longer to read and maintain. Most
+         importantly, the abstraction guesses the axis of change in advance, and when a second format really
+         arrives it may vary along a different axis (streaming output, paging, different data), so the guessed
+         hierarchy has to be torn apart.
+      3. **Agree on a simpler design.** One exporter class with clear input and output, where data gathering
+         is separated from formatting by ordinary methods, and tests on the export result. Keep an interface
+         only where it is needed now, for example as a test seam. When a second format appears, extract the
+         strategy as a refactoring: with tests in place it is a cheap step.
+      4. **Settle it in a conversation, not a comment thread.** A short synchronous talk with the author,
+         explaining the reasons and acknowledging that the code quality is good. Simplifying before the merge
+         is best: while nothing depends on the new abstractions, removing them is cheapest. If a deadline is
+         pressing, merging and immediately opening a simplification task with an owner and a date is
+         acceptable, but not an ownerless "later".
+      5. **Turn the case into a team rule.** Discuss the situation at a team meeting without pointing at the
+         author, and record the agreement in the engineering guidelines or the code review checklist: a new
+         abstraction is introduced when a real second variation or an explicit need exists (a test seam, an
+         extension point of a public library, a confirmed requirement with a date), and the justification goes
+         into the PR description. Reviewers then refer to a shared rule rather than to the lead's personal
+         opinion.
+      6. **Move design discussion earlier.** For tasks where the author plans a new structure, a short design
+         review before the code is written, so that days of work are not wasted.
+      7. **Look at the root cause.** If the developer wants to grow and applies patterns "just in case", it is
+         a mentoring opportunity: show how to recognise when a pattern pays off. If the team does this out of
+         fear of expensive changes, fix that instead: tests and a habit of refactoring.
+    explanation: |
+      This is the Speculative Generality code smell: classes, interfaces and parameters created "for the
+      future" and used by no real scenario. Patterns such as Strategy and Abstract Factory solve a variation
+      problem: several algorithms or families of objects to choose between. With a single variant the pattern
+      solves nothing and remains pure overhead.
+
+      The YAGNI principle explains why this is expensive even if a second format arrives one day: the team
+      pays to build what is not needed now, pays to carry it all that time, and pays to repair it if the guess
+      turns out wrong. Crucially, YAGNI only works when refactoring is cheap: tests and small changes make
+      "extract the abstraction later" a safe decision.
+
+      The lead's role here is not to win an argument. A personal veto settles one PR but teaches the team
+      nothing and makes code review unpredictable. A rule that the team has written down and accepted gives a
+      criterion that can be debated on its merits and allows justified exceptions: a public library API where
+      signature changes break consumers, plugin extension points, or a requirement that already has a date.
+    linkTitles:
+      - "Speculative Generality code smell"
+      - "Martin Fowler: YAGNI"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

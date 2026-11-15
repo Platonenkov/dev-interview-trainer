@@ -1,0 +1,157 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNTCDK01SNB4ESG0W5
+slug: exactly-once-delivery-limits
+stack: dotnet
+topic: distributed
+level: architect
+type: open
+grading: self
+tags: [kafka, exactly-once, at-least-once, idempotency, idempotent-consumer]
+links:
+  - url: https://kafka.apache.org/documentation/
+    lang: en
+    kind: docs
+  - url: https://cwiki.apache.org/confluence/display/KAFKA/KIP-98+-+Exactly+Once+Delivery+and+Transactional+Messaging
+    lang: en
+    kind: spec
+  - url: https://microservices.io/patterns/communication-style/idempotent-consumer.html
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Избавляет ли exactly-once в Kafka от дедупликации в потребителях, которые пишут в SQL Server и вызывают платёжный API?
+    prompt: |
+      Команда включила в Kafka идемпотентный producer и транзакции и утверждает, что теперь у неё
+      exactly-once. Поэтому их потребителям, которые читают события из топика, записывают результат в
+      SQL Server и вызывают внешний платёжный API, дедупликация не нужна.
+
+      Верно ли это? Какую сквозную гарантию обработки можно реально обеспечить в такой системе и как вы её
+      спроектируете?
+    hint: |
+      Какие системы участвуют в транзакции Kafka и где оказываются результаты обработки в этом конвейере?
+    answer: |
+      1. **Нет, для этого конвейера утверждение неверно.** Exactly-once в Kafka (EOS) действует внутри самой
+         Kafka. Идемпотентный producer убирает дубликаты в партиции, возникшие из-за его собственных повторных
+         отправок. Транзакции атомарно фиксируют записи в выходные топики вместе со смещениями потребителя
+         (`sendOffsetsToTransaction`), а потребители с `isolation.level=read_committed` не видят записей из
+         прерванных транзакций. Это exactly-once для цепочки «прочитать из топика - обработать - записать в
+         топик».
+      2. **Внешние побочные эффекты в транзакцию не входят.** Коммит в SQL Server и вызов платёжного API нельзя
+         включить в транзакцию Kafka. Потребитель фиксирует смещение либо до побочного эффекта (падение между
+         ними - сообщение потеряно, at-most-once), либо после (падение между ними - сообщение придёт снова,
+         at-least-once). Повторную доставку дают падения, ребалансировка группы, истёкшая сессия, деплой.
+         Кроме того, дубликаты приходят и от источника: outbox-релей или повторяющий запрос клиент публикует
+         то же бизнес-событие второй записью с новым смещением, и EOS такой дубль не распознаёт.
+      3. **Проектировать нужно effectively-once: доставка at-least-once плюс идемпотентная обработка.**
+         - **SQL Server.** Идемпотентный потребитель: в той же локальной транзакции, что и бизнес-изменения,
+           вставлять идентификатор сообщения (или бизнес-ключ) в таблицу обработанных сообщений с уникальным
+           ключом. Нарушение уникальности означает дубль: пропустить и зафиксировать смещение. Вариант - хранить
+           topic, partition и offset в той же транзакции SQL, а при назначении партиций переходить (seek) к
+           сохранённой позиции, тогда смещения в Kafka становятся вторичными.
+         - **Платёжный API.** С ним общей транзакции нет вообще. Стабильный ключ идемпотентности строится из
+           бизнес-сущности (идентификатор платежа или заказа), а не из случайного значения. До вызова намерение
+           сохраняется в базе со статусом `Pending`, ключ передаётся провайдеру, результат записывается. При
+           повторной доставке: `Completed` - пропустить, `Pending` - повторить с тем же ключом или запросить
+           статус у провайдера. Если провайдер не поддерживает ключи идемпотентности, перед списанием искать
+           платёж по своей ссылке.
+         - **Сверка.** Регулярная сверка своих записей с выписками провайдера и алерт на расхождения - последняя
+           линия защиты для случаев, которые не закрыл код.
+      4. **Учесть эксплуатационные детали.** Записи дедупликации хранить дольше, чем максимальное окно повторной
+         доставки и плановой перечитки. Осознанный replay (сброс смещений) проходит через те же проверки.
+         Где можно, делать операции идемпотентными по природе: `UPDATE ... SET Status = 'Paid'` или upsert, а не
+         `Balance = Balance + @amount`.
+      5. **Где EOS действительно достаточно.** Если сервис только читает из топиков и пишет в топики (Kafka
+         Streams с exactly-once или транзакционный producer), транзакций Kafka хватает. Как только появляется
+         внешняя система, дедупликация - обязанность потребителя.
+    explanation: |
+      Основная причина в том, что нет атомарной операции, которая охватывала бы Kafka, SQL Server и
+      внешний HTTP-сервис. Подтверждение обработки (коммит смещения) всегда может потеряться уже после того,
+      как побочный эффект случился, и тогда система обязана либо доставить сообщение повторно, либо рискнуть
+      его потерять. Раздел документации Kafka о семантике доставки сообщений говорит, что exactly-once для
+      внешних систем-получателей обычно требует их участия, а Kafka лишь даёт смещение, с помощью которого это
+      можно реализовать. KIP-98, в котором спроектированы транзакции, тоже ограничивает их записью в партиции
+      Kafka и фиксацией смещений.
+
+      Поэтому честная сквозная гарантия - не «доставка ровно один раз», а «эффект ровно один раз»: сообщение
+      может прийти несколько раз, но наблюдаемый результат от этого не меняется. Для базы это достигается
+      локальной транзакцией, в которой вместе фиксируются результат и отметка об обработке (или смещение).
+      Для внешнего API, который в транзакцию не включить, - ключом идемпотентности на стороне провайдера,
+      записанным заранее намерением и сверкой.
+
+      У подхода есть цена: лишняя запись и уникальный индекс на каждое сообщение, рост таблицы дедупликации и
+      задача её очистки, зависимость от того, как долго провайдер помнит ключи. Но альтернатива - двойные
+      списания после первой же ребалансировки или отказа брокера, и исправлять их придётся вручную.
+    linkTitles:
+      - "Документация Apache Kafka"
+      - "KIP-98: Exactly Once Delivery and Transactional Messaging"
+      - "Паттерн Idempotent Consumer"
+  en:
+    title: Does Kafka's exactly-once semantics remove the need for deduplication in consumers that write to SQL Server and call a payment API?
+    prompt: |
+      A team has enabled the idempotent producer and transactions in Kafka and claims that they now have
+      exactly-once. Therefore, they say, their consumers, which read events from a topic, write the result to
+      SQL Server and call an external payment API, need no deduplication.
+
+      Is that true? What end-to-end processing guarantee can you actually provide in such a system, and how
+      would you design for it?
+    hint: |
+      Which systems take part in a Kafka transaction, and where do this pipeline's results end up?
+    answer: |
+      1. **No, the claim is wrong for this pipeline.** Kafka's exactly-once semantics (EOS) apply inside Kafka.
+         The idempotent producer removes duplicates in a partition caused by its own retries. Transactions
+         atomically commit records written to output topics together with the consumer offsets
+         (`sendOffsetsToTransaction`), and consumers with `isolation.level=read_committed` do not see records
+         from aborted transactions. That is exactly-once for the "read from a topic - process - write to a topic"
+         chain.
+      2. **External side effects are outside the transaction.** A SQL Server commit and a call to the payment
+         API cannot be enlisted in a Kafka transaction. The consumer commits the offset either before the side
+         effect (a crash in between loses the message, at-most-once) or after it (a crash in between redelivers
+         the message, at-least-once). Redelivery comes from crashes, consumer group rebalances, expired sessions
+         and deployments. Duplicates also come from upstream: an outbox relay or a retrying client publishes the
+         same business event as a second record with a new offset, and EOS does not recognise it.
+      3. **Design for effectively-once: at-least-once delivery plus idempotent processing.**
+         - **SQL Server.** An idempotent consumer: in the same local transaction as the business changes, insert
+           the message id (or a business key) into a processed-messages table with a unique key. A uniqueness
+           violation means a duplicate: skip it and commit the offset. An alternative is to store topic,
+           partition and offset in the same SQL transaction and seek to the stored position when partitions are
+           assigned, so Kafka's own offsets become secondary.
+         - **Payment API.** There is no shared transaction with it at all. A stable idempotency key is derived
+           from the business entity (the payment or order id), not from a random value. Before the call the
+           intent is stored in the database with status `Pending`, the key is passed to the provider, and the
+           result is recorded. On redelivery: `Completed` means skip, `Pending` means retry with the same key or
+           ask the provider for the status. If the provider does not support idempotency keys, look the payment
+           up by your own reference before charging.
+         - **Reconciliation.** A regular comparison of your records with the provider's statements and an alert
+           on mismatches is the last line of defence for cases the code did not cover.
+      4. **Handle the operational details.** Keep deduplication records longer than the maximum window of
+         redelivery and planned reprocessing. A deliberate replay (offset reset) goes through the same checks.
+         Where possible, make operations idempotent by nature: `UPDATE ... SET Status = 'Paid'` or an upsert
+         instead of `Balance = Balance + @amount`.
+      5. **Where EOS really is enough.** If a service only reads from topics and writes to topics (Kafka Streams
+         with exactly-once, or a transactional producer), Kafka transactions suffice. As soon as an external
+         system appears, deduplication is the consumer's job.
+    explanation: |
+      The root cause is that no atomic operation spans Kafka, SQL Server and an external HTTP service. The
+      acknowledgement of processing (the offset commit) can always be lost after the side effect has already
+      happened, and then the system must either deliver the message again or risk losing it. The message
+      delivery semantics section of the Kafka documentation states that exactly-once delivery for other
+      destination systems generally requires cooperation from those systems, and Kafka only provides the offset
+      that makes implementing it feasible. KIP-98, which designed transactions, likewise scopes them to writes
+      to Kafka partitions and offset commits.
+
+      So the honest end-to-end guarantee is not "delivered exactly once" but "the effect happens exactly once":
+      a message may arrive several times, but the observable result does not change. For the database this is
+      achieved with a local transaction that commits the result together with the processed marker (or the
+      offset). For an external API that cannot join a transaction, it is achieved with an idempotency key on
+      the provider side, an intent recorded in advance, and reconciliation.
+
+      The approach has a cost: an extra write and a unique index per message, a growing deduplication table that
+      needs cleanup, and a dependency on how long the provider remembers keys. The alternative, however, is
+      double charges after the first rebalance or broker failure, and those have to be fixed by hand.
+    linkTitles:
+      - "Apache Kafka documentation"
+      - "KIP-98: Exactly Once Delivery and Transactional Messaging"
+      - "Idempotent Consumer pattern"
+meta:
+  authors: [platonenkov]
+  verified: 1970-01-01

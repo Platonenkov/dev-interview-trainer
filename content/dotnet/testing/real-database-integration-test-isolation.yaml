@@ -1,0 +1,126 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WQM3XXEQPFTV9HEEM6
+slug: real-database-integration-test-isolation
+stack: dotnet
+topic: testing
+level: senior
+type: open
+grading: self
+tags: [integration-tests, testcontainers, ef-core, test-isolation]
+links:
+  - url: https://learn.microsoft.com/en-us/ef/core/testing/testing-with-the-database
+    lang: en
+    kind: docs
+  - url: https://dotnet.testcontainers.org/
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как изолировать интеграционные тесты на реальной базе данных в контейнере и сохранить скорость?
+    prompt: |
+      Интеграционные тесты сервиса работают с настоящим движком базы данных (например, SQL Server или PostgreSQL),
+      который запускается в контейнере через Testcontainers. Тестов несколько сотен, и они не должны влиять друг
+      на друга. Как организовать жизненный цикл контейнера, схемы и данных, чтобы тесты были изолированы, а прогон
+      оставался быстрым? Какие ограничения есть у выбранного подхода?
+    hint: |
+      Какие части окружения общие для всех тестов, а какую часть один тест может изменить, не затрагивая остальные?
+    answer: |
+      - **Контейнер - один на прогон, общий для всех коллекций.** Старт движка занимает секунды, поэтому он
+        выполняется один раз: в xUnit v3 через сборочную фикстуру (`[assembly: AssemblyFixture(typeof(DatabaseContainerFixture))]`)
+        с асинхронным запуском в `IAsyncLifetime`, в xUnit v2 через статический экземпляр с ленивой асинхронной
+        инициализацией. Фикстура коллекции (`ICollectionFixture<T>`) для этого не подходит: xUnit создаёт её один
+        раз на коллекцию, и при нескольких параллельных коллекциях каждая запустила бы свой контейнер.
+      - **База и схема - один раз на коллекцию.** Фикстура коллекции создаёт в общем контейнере свою базу, применяет
+        миграции (`Database.MigrateAsync()`, или `EnsureCreated`, если миграций нет) и засеивает общие справочные
+        данные. Тесты одной коллекции выполняются последовательно и делят эту базу, а разные коллекции работают
+        параллельно на разных базах. Заодно тесты проверяют сами миграции.
+      - **Изоляция теста - на уровне данных, а не базы.**
+        - Транзакция на тест: открыть транзакцию, выполнить действие и проверки внутри неё и не фиксировать;
+          при `Dispose` она откатывается, даже если тест упал. Если в тесте несколько `DbContext`, они делят
+          соединение и транзакцию (`Database.UseTransaction`). Перед проверками вызвать `ChangeTracker.Clear()`,
+          чтобы читать данные из базы, а не из отслеживаемых сущностей.
+        - Сброс к известному состоянию: для кода, который сам фиксирует транзакции или открывает свои соединения,
+          очищать таблицы до или после теста в порядке внешних ключей (вручную или утилитой вроде Respawn) и
+          заново засеивать базовые данные.
+        - Уникальные данные: каждый тест создаёт свои ключи (отдельного клиента, арендатора) и проверяет только их,
+          что позволяет запускать такие тесты параллельно даже на одной базе.
+      - **Чего избегать:** пересоздавать базу или контейнер на каждый тест, полагаться на порядок выполнения тестов
+        и делить одну очищаемую базу между параллельными коллекциями.
+    explanation: |
+      Стоимость распределена неравномерно: запуск контейнера занимает секунды, создание схемы с десятками миграций -
+      тоже заметное время, а строки, которые пишет один тест, почти ничего не стоят. Поэтому дорогое создают как
+      можно реже, а изолируют только дешёвую часть - данные. Пересоздание базы на каждый тест умножает самую дорогую
+      операцию на число тестов.
+
+      Важно понимать время жизни фикстур xUnit: фикстура класса живёт один класс, фикстура коллекции - одну
+      коллекцию, и только сборочная фикстура xUnit v3 или статический экземпляр живут весь прогон. Поэтому контейнер
+      держат на уровне прогона, а базу и схему - на уровне коллекции: так параллельные коллекции не мешают друг другу
+      и не запускают лишние контейнеры.
+
+      Откат транзакции - самый быстрый способ вернуть базу в исходное состояние, и он ничего не оставляет после
+      упавшего теста. Его ограничение - изменённая семантика: тест не видит настоящей фиксации, не подходит для кода,
+      который сам управляет транзакциями, и не проверяет взаимодействие параллельных транзакций. Для таких тестов
+      нужен явный сброс данных: он медленнее, но честнее. Уникальные данные на тест снимают зависимость от
+      порядка и дают параллельность, но требуют проверок, ограниченных своими ключами.
+
+      Типичная ошибка - разделить одну базу между параллельными коллекциями, где один тест чистит таблицы, пока
+      другой их читает: так появляются нестабильные тесты.
+    linkTitles:
+      - "Тестирование с рабочей СУБД в EF Core"
+      - "Testcontainers для .NET"
+  en:
+    title: How do you isolate integration tests on a real database in a container and keep them fast?
+    prompt: |
+      A service's integration tests run against a real database engine (for example SQL Server or PostgreSQL)
+      started in a container through Testcontainers. There are several hundred tests, and they must not affect
+      each other. How do you organise the lifetime of the container, the schema and the data so that the tests are
+      isolated and the run stays fast? What are the limits of the approach you choose?
+    hint: |
+      Which parts of the setup do all tests share, and which part can one test change without affecting the others?
+    answer: |
+      - **One container per run, shared by all collections.** Starting the engine takes seconds, so it happens
+        once: in xUnit v3 through an assembly fixture (`[assembly: AssemblyFixture(typeof(DatabaseContainerFixture))]`)
+        with an async start in `IAsyncLifetime`, in xUnit v2 through a static instance with lazy async
+        initialisation. A collection fixture (`ICollectionFixture<T>`) does not fit here: xUnit creates it once per
+        collection, so with several parallel collections each one would start its own container.
+      - **A database and schema once per collection.** The collection fixture creates its own database in the shared
+        container, applies the migrations (`Database.MigrateAsync()`, or `EnsureCreated` if there are no migrations)
+        and seeds shared reference data. Tests in one collection run sequentially and share this database, while
+        different collections run in parallel on different databases. The tests then also check the migrations.
+      - **Isolate each test at the data level, not the database level.**
+        - Transaction per test: begin a transaction, run the action and the assertions inside it and never commit;
+          on `Dispose` it rolls back, even if the test failed. If a test uses several `DbContext` instances, they
+          share the connection and the transaction (`Database.UseTransaction`). Call `ChangeTracker.Clear()` before
+          the assertions so they read from the database, not from tracked entities.
+        - Reset to a known state: for code that commits its own transactions or opens its own connections, clear
+          the tables before or after the test in foreign key order (by hand or with a tool such as Respawn) and
+          reseed the base data.
+        - Unique data: each test creates its own keys (its own customer or tenant) and asserts only on them, which
+          lets such tests run in parallel even on one database.
+      - **Avoid:** recreating the database or the container for every test, relying on test execution order, and
+        sharing one database that tests clean between parallel collections.
+    explanation: |
+      The cost is uneven: starting the container takes seconds, creating a schema with dozens of migrations takes
+      noticeable time too, while the rows one test writes cost almost nothing. So you create the expensive parts as
+      rarely as possible and isolate only the cheap part, the data. Recreating the database for every test
+      multiplies the most expensive operation by the number of tests.
+
+      It matters to know the lifetime of xUnit fixtures: a class fixture lives for one class, a collection fixture
+      for one collection, and only an xUnit v3 assembly fixture or a static instance lives for the whole run. That is
+      why the container is held at run level and the database and schema at collection level: parallel collections
+      do not interfere with each other and do not start extra containers.
+
+      Rolling back a transaction is the fastest way to return the database to its initial state, and it leaves
+      nothing behind after a failed test. Its limit is changed semantics: the test never sees a real commit, it does
+      not fit code that manages its own transactions, and it does not check how concurrent transactions interact.
+      Those tests need an explicit data reset: slower, but more honest. Unique data per test removes the dependency
+      on order and allows parallelism, but the assertions must be scoped to the test's own keys.
+
+      A common mistake is to share one database between parallel collections, where one test clears tables while
+      another reads them: this is how flaky tests appear.
+    linkTitles:
+      - "Testing against your production database system"
+      - "Testcontainers for .NET"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

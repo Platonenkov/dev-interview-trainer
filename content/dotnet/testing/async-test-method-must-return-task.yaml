@@ -1,0 +1,93 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WQGG5941PX73EHA2V7
+slug: async-test-method-must-return-task
+stack: dotnet
+topic: testing
+level: junior
+type: single
+grading: auto
+tags: [async, async-void, unit-tests]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/asynchronous-programming/async-return-types
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.tasks.task-1.result
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какую сигнатуру должен иметь тест, который ожидает асинхронный метод?
+    prompt: |
+      Тестируемый метод объявлен как `Task<Order> GetOrderAsync(int id)`. Тест должен вызвать его через `await`
+      и затем проверить результат. Какую сигнатуру должен иметь тестовый метод, чтобы тестовый фреймворк
+      дождался его завершения и увидел исключение или упавшую проверку?
+    hint: Как фреймворк узнаёт, что асинхронный тест закончился и не выбросил исключение?
+    options:
+      a: "`public async void GetOrder_ReturnsOrder()`"
+      b: "`public async Task GetOrder_ReturnsOrder()`"
+      c: "`public void GetOrder_ReturnsOrder()`, внутри которого вместо `await` используется `.Result`"
+      d: "`public void GetOrder_ReturnsOrder()`, внутри которого используется `await`"
+    optionExplanations:
+      a: "Метод `async void` ничего не возвращает: вызывающий код не может дождаться его окончания или перехватить его исключение. Поэтому фреймворк не может надёжно дождаться такого теста и увидеть его исключение. В зависимости от фреймворка и версии такой тест либо отклоняется (так поступает, например, NUnit), либо может быть засчитан до того, как выполнится всё тело метода, и пропустить исключение."
+      c: "Здесь нет `await`, что противоречит условию: `.Result` синхронно блокирует поток до завершения задачи, а исключение приходит обёрнутым в `AggregateException`. При однопоточном `SynchronizationContext` такая блокировка может привести к взаимной блокировке (deadlock)."
+      d: "Оператор `await` можно использовать только в методе с модификатором `async`, поэтому такой код не компилируется."
+    answer: "`public async Task GetOrder_ReturnsOrder()`"
+    explanation: |
+      Метод `async Task` возвращает задачу, которая завершается только после выполнения всего тела метода,
+      включая код после `await`. Если тестируемый код или проверка выбрасывает исключение, оно сохраняется в этой
+      задаче и выбрасывается повторно, когда задачу ожидают. Фреймворк (xUnit, NUnit, MSTest) ожидает задачу и по
+      её состоянию помечает тест как пройденный или упавший.
+
+      У `async void` возвращаемого значения нет, поэтому такой метод нельзя ожидать: вызывающий код не знает, когда
+      метод закончился, и не может перехватить его исключение. Документация C# прямо говорит, что `void` нужен
+      асинхронным обработчикам событий, а остальные методы без результата должны возвращать `Task`.
+
+      Свойство `Result` блокирует текущий поток, пока задача не завершится, и оборачивает исключение задачи в
+      `AggregateException`. Документация рекомендует в большинстве случаев получать значение через `await`.
+    linkTitles:
+      - "Асинхронные типы возвращаемых значений (C#)"
+      - "Свойство Task<TResult>.Result"
+  en:
+    title: What signature should a test that awaits an async method have?
+    prompt: |
+      The method under test is declared as `Task<Order> GetOrderAsync(int id)`. The test must call it with `await`
+      and then check the result. Which signature should the test method have so that the test framework waits
+      for it to finish and sees an exception or a failed assertion?
+    hint: How does the framework learn that an async test has finished and did not throw?
+    options:
+      a: "`public async void GetOrder_ReturnsOrder()`"
+      b: "`public async Task GetOrder_ReturnsOrder()`"
+      c: "`public void GetOrder_ReturnsOrder()` that uses `.Result` instead of `await`"
+      d: "`public void GetOrder_ReturnsOrder()` that uses `await` in its body"
+    optionExplanations:
+      a: "An `async void` method returns nothing: the caller cannot wait for it to end or catch its exception. So a framework cannot reliably wait for such a test or observe its exception. Depending on the framework and version, the test is either rejected (NUnit does this, for example) or may be counted before its whole body has run and miss the exception."
+      c: "There is no `await` here, which breaks the requirement: `.Result` blocks the thread synchronously until the task completes, and the exception arrives wrapped in an `AggregateException`. With a single-threaded `SynchronizationContext` this blocking can lead to a deadlock."
+      d: "The `await` operator can only be used in a method marked `async`, so this code does not compile."
+    answer: "`public async Task GetOrder_ReturnsOrder()`"
+    explanation: |
+      An `async Task` method returns a task that completes only after the whole method body has run, including
+      the code after `await`. If the code under test or an assertion throws, the exception is stored in that task
+      and rethrown when the task is awaited. The framework (xUnit, NUnit, MSTest) awaits the task and uses its
+      state to mark the test as passed or failed.
+
+      `async void` has no return value, so such a method cannot be awaited: the caller does not know when it has
+      finished and cannot catch its exception. The C# documentation states that `void` is for async event
+      handlers, and other methods that return no value should return `Task`.
+
+      The `Result` property blocks the current thread until the task completes and wraps the task's exception in
+      an `AggregateException`. The documentation recommends getting the value with `await` in most cases.
+    linkTitles:
+      - "Async return types (C#)"
+      - "Task<TResult>.Result property"
+meta:
+  authors: [platonenkov]
+  verified: 1970-01-01

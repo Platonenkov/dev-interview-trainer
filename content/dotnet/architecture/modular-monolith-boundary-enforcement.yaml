@@ -1,0 +1,146 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMH2WR001PKN56DP13
+slug: modular-monolith-boundary-enforcement
+stack: dotnet
+topic: architecture
+level: lead
+type: open
+grading: self
+tags: [modular-monolith, module-boundaries, architecture-tests, data-ownership, internal]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/internal
+    lang: en
+    kind: docs
+  - url: https://martinfowler.com/bliki/MonolithFirst.html
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Как не дать модулям модульного монолита на .NET незаметно срастись друг с другом по мере роста команды?
+    prompt: |
+      Команда строит модульный монолит на .NET: одно приложение, один процесс развёртывания, внутри модули
+      `Orders`, `Billing`, `Catalog` и другие. Пока разработчиков пятеро, границы держатся на договорённостях.
+      Команда вырастает до нескольких групп, и через год модули рискуют превратиться в один клубок зависимостей.
+
+      Как вы обеспечите, чтобы модули не связывались друг с другом незаметно? Что закрепите в коде, в данных,
+      в CI и в процессе работы команды?
+    hint: |
+      Что происходит с правилом, которое никто не проверяет автоматически, если релиз завтра, а самый короткий
+      путь к цели - прямая ссылка на чужой класс или JOIN с чужой таблицей?
+    answer: |
+      Главная мысль: границы должны проверяться механически, а не держаться на соглашениях.
+
+      1. **Сделать модуль единицей компиляции.** У каждого модуля свои проекты, например `Orders.Contracts`
+         (публичный контракт: интерфейсы, DTO, интеграционные события) и `Orders` (реализация). Другие модули
+         ссылаются только на `*.Contracts`. Типы реализации объявлены `internal`, поэтому даже случайная ссылка
+         на сборку не открывает их. `InternalsVisibleTo` - только для собственного тестового проекта модуля.
+         Один проект с папками этого не даёт: `internal` работает на уровне сборки.
+      2. **Отдать каждому модулю его данные.** Своя схема в базе и свой `DbContext` на модуль, никаких
+         внешних ключей и JOIN между схемами, никакого чтения чужих таблиц. Нужны чужие данные - запрос через
+         контракт модуля или локальная копия для чтения, которую обновляют его события. По возможности - отдельная
+         учётная запись базы с правами только на свою схему, тогда нарушение отклонит сама база.
+      3. **Сузить способы общения.** Синхронные вызовы - только через интерфейсы контракта, побочные эффекты -
+         через события (в процессе, с outbox, если нужна надёжность). Транзакция не охватывает несколько модулей.
+      4. **Проверять границы в CI.** Архитектурные тесты (например, на NetArchTest или ArchUnitNET, либо
+         простой тест по ссылкам сборок через рефлексию) валят сборку, если модуль ссылается на реализацию
+         другого модуля, контракт зависит от реализации или в контракт протекла сущность. Отдельный тест
+         проверяет, что `DbContext` модуля отображает только таблицы своей схемы.
+      5. **Выстроить владение вокруг модулей.** У каждого модуля есть команда-владелец. Изменения контракта
+         требуют ревью владельца (например, через `CODEOWNERS`), изменение правил зависимостей между модулями
+         оформляется как ADR. Общий проект `Shared` или `Common` держать под контролем: только технический код
+         без доменных типов, иначе он станет обходным путём для связей.
+      6. **Для существующего кода - храповик.** Зафиксировать текущие нарушения как явный базовый список,
+         запретить новые и сокращать список по плану.
+    explanation: |
+      Соглашения не выдерживают роста команды, потому что прямая ссылка на чужой класс или JOIN с чужой таблицей
+      почти всегда самый дешёвый способ закрыть задачу. Каждое такое нарушение выглядит безобидным, в большом
+      diff на code review его легко пропустить, а через год связи уже нельзя распутать без переписывания.
+      Механическая проверка превращает незаметное решение в заметное: сборка падает, и обойти границу можно
+      только осознанно, с согласия владельца модуля.
+
+      Данные - самый частый скрытый канал связи. Код модулей может быть идеально разделён, но общая таблица или
+      JOIN между схемами связывают модули так же жёстко, как ссылка на класс: ни один из них уже не может менять
+      свою модель данных самостоятельно.
+
+      Мартин Фаулер в статье Monolith First отмечает, что правильные границы трудно угадать заранее, и монолит
+      позволяет дешевле их сдвигать. Это работает, только пока границы явные: тогда их можно передвинуть одним
+      изменением правил, а модуль при реальной необходимости вынести в отдельный сервис.
+
+      У подхода есть цена, которую лид должен назвать команде:
+
+      - больше проектов и маппинга между внутренними типами и DTO контракта;
+      - дублирование данных и согласованность в конечном счёте между модулями;
+      - функции, затрагивающие несколько модулей, делаются медленнее.
+
+      Поэтому модулей должно быть немного, и их границы должны совпадать с ограниченными контекстами. Иначе
+      правила превращаются в трение, и команда начинает искать обходные пути.
+    linkTitles:
+      - "Модификатор доступа internal"
+      - "Martin Fowler: Monolith First"
+  en:
+    title: How do you keep the modules of a .NET modular monolith from silently coupling as the team grows?
+    prompt: |
+      A team builds a modular monolith in .NET: one application, one deployment, with modules such as `Orders`,
+      `Billing`, `Catalog` and others inside. With five developers the boundaries are held by agreement. The
+      team grows to several groups, and within a year the modules risk turning into one tangle of dependencies.
+
+      How do you make sure the modules do not silently couple to each other? What do you put in place in the
+      code, in the data, in CI and in the way the team works?
+    hint: |
+      What happens to a rule that nobody checks automatically when the release is tomorrow and the shortest path
+      to the goal is a direct reference to another module's class or a JOIN with its table?
+    answer: |
+      The core idea: boundaries must be enforced mechanically, not held by convention.
+
+      1. **Make the module a unit of compilation.** Each module has its own projects, for example
+         `Orders.Contracts` (the public contract: interfaces, DTOs, integration events) and `Orders` (the
+         implementation). Other modules reference only `*.Contracts`. Implementation types are declared
+         `internal`, so even an accidental assembly reference does not expose them. `InternalsVisibleTo` is used
+         only for the module's own test project. One project with folders gives none of this: `internal` works
+         at the assembly level.
+      2. **Give each module its own data.** A separate database schema and its own `DbContext` per module, no
+         foreign keys or JOINs across schemas, no reading another module's tables. If you need another module's
+         data, ask its contract or keep a local read copy updated by its events. Where possible, a separate
+         database login with rights only on its own schema, so the database itself rejects a violation.
+      3. **Narrow the ways modules talk.** Synchronous calls only through contract interfaces, side effects
+         through events (in-process, with an outbox when reliability matters). No transaction spans several
+         modules.
+      4. **Check the boundaries in CI.** Architecture tests (for example with NetArchTest or ArchUnitNET, or a
+         simple test over assembly references via reflection) fail the build when a module references another
+         module's implementation, when a contract depends on an implementation, or when an entity leaks into a
+         contract. A separate test checks that a module's `DbContext` maps only tables of its own schema.
+      5. **Organise ownership around modules.** Each module has an owning team. Contract changes require a
+         review by the owner (for example through `CODEOWNERS`), and a change to the dependency rules between
+         modules is recorded as an ADR. Keep the `Shared` or `Common` project under control: technical code
+         only, no domain types, otherwise it becomes the back door for coupling.
+      6. **For an existing codebase, use a ratchet.** Record the current violations as an explicit baseline,
+         forbid new ones and shrink the baseline on a plan.
+    explanation: |
+      Conventions do not survive team growth because a direct reference to another module's class or a JOIN with
+      its table is almost always the cheapest way to finish a task. Each violation looks harmless, it is easy to
+      miss in a large diff during code review, and a year later the coupling cannot be untangled without a
+      rewrite. Mechanical enforcement turns an invisible decision into a visible one: the build fails, and the
+      boundary can be crossed only deliberately, with the module owner's consent.
+
+      Data is the most common hidden coupling channel. The module code can be perfectly separated, but a shared
+      table or a JOIN across schemas couples modules as tightly as a class reference: neither can change its
+      data model on its own any more.
+
+      Martin Fowler notes in Monolith First that the right boundaries are hard to guess up front and that a
+      monolith makes it cheaper to move them. That only works while the boundaries are explicit: then they can be
+      moved by changing the rules, and a module can be extracted into a service when there is a real need.
+
+      The approach has a cost that a lead should name to the team:
+
+      - more projects and more mapping between internal types and contract DTOs;
+      - duplicated data and eventual consistency between modules;
+      - features that touch several modules take longer.
+
+      That is why modules should be few and their boundaries should match bounded contexts. Otherwise the rules
+      become friction and the team starts looking for workarounds.
+    linkTitles:
+      - "The internal access modifier"
+      - "Martin Fowler: Monolith First"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

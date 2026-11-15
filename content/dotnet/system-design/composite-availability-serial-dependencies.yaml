@@ -1,0 +1,155 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WQWHDVNV8ZS2PW8CGQ
+slug: composite-availability-serial-dependencies
+stack: dotnet
+topic: system-design
+level: architect
+type: situation
+grading: self
+tags: [availability, slo, composite-availability, redundancy, graceful-degradation]
+links:
+  - url: https://learn.microsoft.com/en-us/azure/well-architected/reliability/metrics
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/azure/well-architected/reliability/redundancy
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/azure/architecture/patterns/circuit-breaker
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Продукт требует 99,99% доступности оформления заказа, а оно синхронно зовёт пять зависимостей по 99,9%: что ответить и что изменить?"
+    prompt: |
+      Продуктовая команда требует, чтобы оформление заказа (checkout) было доступно на 99,99%. Сейчас
+      обработка запроса синхронно вызывает пять зависимостей: платёжный сервис, резервирование на складе,
+      расчёт налогов, проверку на мошенничество и сервис уведомлений. Каждая из них по своему SLO или SLA
+      обещает 99,9%. Запрос считается успешным, только если ответили все пять.
+
+      Что вы скажете продукту и что измените в архитектуре?
+    hint: |
+      С какой вероятностью все пять зависимостей доступны одновременно? И все ли они действительно нужны,
+      чтобы принять заказ прямо сейчас?
+    answer: |
+      1. **Показать арифметику.** Если запрос успешен только при успехе всех звеньев, а отказы независимы,
+         вероятности перемножаются: 0,999 в пятой степени - примерно 99,5%. Это около 43,7 часа простоя в
+         год (примерно 3,6 часа в месяц) против 52,6 минуты в год (около 4,4 минуты в месяц) при 99,99%.
+         Собственные компоненты checkout (экземпляры, база, сеть) снижают цифру ещё. Вывод: при текущей
+         схеме цель недостижима никакой настройкой, нужно менять архитектуру или цель.
+      2. **Уточнить, что именно измеряем.** Договориться об SLI (например, доля успешных запросов на
+         оформление заказа), окне измерения и бюджете ошибок. Проверить реальные показатели зависимостей,
+         а не только обещанные: SLA - это обязательство с компенсацией, а не гарантия работы.
+      3. **Убрать из синхронного пути всё, без чего заказ можно принять.** Уведомления отправлять
+         асинхронно через очередь и outbox. Для проверки на мошенничество и расчёта налогов предусмотреть
+         деградацию: упрощённые правила, кэшированные справочники, отложенная проверка с последующей
+         отменой заказа. Но даже две оставшиеся синхронные зависимости (платёж и резервирование на складе)
+         по 99,9% дают около 99,8%, поэтому одного сокращения цепочки мало.
+      4. **Дать критичным зависимостям избыточность.** Несколько экземпляров в разных зонах доступности или
+         регионах, второй платёжный провайдер. Параллельные независимые копии дают 1 - (1 - a)^n: две копии
+         по 99,9% теоретически дают 99,9999%. На практике мешают коррелированные отказы и сам механизм
+         переключения, поэтому его тоже нужно проектировать и тестировать.
+      5. **Добавить защитные механизмы.** Таймауты на каждый вызов, повторы с экспоненциальной задержкой
+         только для временных сбоев, circuit breaker, чтобы не ждать заведомо упавшую зависимость, и
+         изоляцию пулов ресурсов (паттерн «переборка»), чтобы медленная зависимость не забрала все ресурсы
+         checkout.
+      6. **Вернуться к продукту с вариантами и ценой.** Например: асинхронные уведомления и деградация
+         второстепенных проверок поднимают доступность примерно до 99,8% за небольшие деньги, а 99,99%
+         требует мультизонной или мультирегиональной схемы и второго платёжного провайдера за заметно более
+         высокие затраты. Возможно, 99,99% нужно только для приёма заказа, а не для всего процесса. Решение о
+         цели и бюджете принимает бизнес, архитектор обязан показать, сколько стоит каждая следующая девятка.
+    explanation: |
+      Главная мысль: доступность последовательных синхронных зависимостей не может быть выше доступности
+      самого слабого звена и обычно ниже каждого из них. Это обычная теория вероятностей: запрос успешен,
+      только если успешны все звенья, поэтому при независимых отказах вероятности перемножаются. Чтобы пять
+      последовательных звеньев вместе дали 99,99%, каждое должно иметь около 99,998%, что больше, чем
+      обещает любая из зависимостей.
+
+      Поэтому есть только три рычага:
+
+      - **меньше звеньев в синхронном пути** - асинхронная обработка и деградация с запасным поведением;
+      - **надёжнее каждое звено** - избыточность, при которой отказ одной копии не означает отказ звена;
+      - **другая цель** - явно согласованная с бизнесом, с учётом стоимости.
+
+      Azure Well-Architected Framework описывает тот же второй рычаг: если между независимыми копиями
+      развёртывания можно переключиться, общий SLO нагрузки выше, но за это платят сложностью эксплуатации,
+      и стоит взвесить, оправдано ли снижение риска.
+
+      Формула произведения предполагает независимые отказы. В реальности отказы бывают коррелированы
+      (общий регион, общая сеть), а повторы и ожидание упавшей зависимости могут каскадно положить и
+      вызывающий сервис. Отсюда таймауты и circuit breaker: они превращают отказ зависимости в быструю
+      деградацию, а не в отказ всего checkout. Сильный ответ не обещает 99,99% сразу, а показывает расчёт,
+      план изменений и их цену.
+    linkTitles:
+      - "Стратегии определения целевых показателей надёжности"
+      - "Стратегии проектирования избыточности"
+      - "Паттерн Circuit Breaker"
+  en:
+    title: "Product demands 99.99% availability for checkout, which synchronously calls five dependencies at 99.9% each: what do you say and what do you change?"
+    prompt: |
+      The product team demands that the checkout flow be available 99.99% of the time. Today a checkout
+      request synchronously calls five dependencies: the payment service, warehouse reservation, tax
+      calculation, fraud screening and the notification service. Each of them promises 99.9% in its SLO or
+      SLA. A request succeeds only if all five respond.
+
+      What do you tell the product team, and what do you change in the architecture?
+    hint: |
+      What is the probability that all five dependencies are available at the same time? And are all of them
+      really needed to accept an order right now?
+    answer: |
+      1. **Show the arithmetic.** If a request succeeds only when every link succeeds and failures are
+         independent, the probabilities multiply: 0.999 to the fifth power is about 99.5%. That is about 43.7
+         hours of downtime per year (about 3.6 hours per month) versus 52.6 minutes per year (about 4.4 minutes
+         per month) at 99.99%. The checkout's own components (instances, database, network) lower the figure
+         further. Conclusion: with the current design no tuning reaches the target, so either the architecture
+         or the target has to change.
+      2. **Agree on what is measured.** Define the SLI (for example, the share of successful checkout
+         requests), the measurement window and the error budget. Check the dependencies' real track record, not
+         only their promises: an SLA is a commitment with compensation, not a guarantee of uptime.
+      3. **Move everything the order can be accepted without off the synchronous path.** Send notifications
+         asynchronously through a queue and an outbox. Give fraud screening and tax calculation a degraded mode:
+         simplified rules, cached reference data, a deferred check that can cancel the order later. But even the
+         two remaining synchronous dependencies (payment and warehouse reservation) at 99.9% give about 99.8%,
+         so shortening the chain alone is not enough.
+      4. **Make the critical dependencies redundant.** Several instances across availability zones or regions,
+         a second payment provider. Independent parallel copies give 1 - (1 - a)^n: two copies at 99.9% give
+         99.9999% in theory. In practice correlated failures and the failover mechanism itself get in the way,
+         so failover has to be designed and tested too.
+      5. **Add protective mechanisms.** A timeout on every call, retries with exponential backoff for
+         transient faults only, a circuit breaker so that checkout does not wait on a dependency that is known to
+         be down, and isolated resource pools (the Bulkhead pattern) so that a slow dependency cannot exhaust the
+         checkout service.
+      6. **Go back to the product team with options and prices.** For example: asynchronous notifications and
+         degradation of secondary checks raise availability to about 99.8% at a small cost, while 99.99% needs a
+         multi-zone or multi-region setup and a second payment provider at a much higher cost. Perhaps 99.99% is
+         needed only for accepting the order, not for the whole process. The business decides on the target and
+         the budget; the architect must show what each additional nine costs.
+    explanation: |
+      The key point: the availability of serial synchronous dependencies cannot exceed that of the weakest
+      link and is usually lower than each of them. This is plain probability: a request succeeds only if every
+      link succeeds, so with independent failures the probabilities multiply. For five serial links to reach
+      99.99% together, each would need about 99.998%, which is more than any of the dependencies promises.
+
+      That leaves only three levers:
+
+      - **fewer links on the synchronous path** - asynchronous processing and degradation with fallback
+        behaviour;
+      - **a more reliable link** - redundancy, so that the failure of one copy does not mean the failure of
+        the link;
+      - **a different target** - explicitly agreed with the business, with the cost in view.
+
+      The Azure Well-Architected Framework describes the same second lever: if you can fail over between
+      independent copies of a deployment, the overall workload SLO is higher, but you pay with operational
+      complexity and should weigh whether the risk reduction is worth it.
+
+      The product formula assumes independent failures. In reality failures can be correlated (a shared
+      region, a shared network), and retries and waiting on a dead dependency can cascade and take down the
+      caller too. That is why timeouts and circuit breakers matter: they turn a dependency failure into fast
+      degradation instead of a failure of the whole checkout. A strong answer does not promise 99.99% at once;
+      it shows the calculation, the plan of changes and their price.
+    linkTitles:
+      - "Architecture strategies for defining reliability targets"
+      - "Architecture strategies for designing for redundancy"
+      - "Circuit Breaker pattern"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

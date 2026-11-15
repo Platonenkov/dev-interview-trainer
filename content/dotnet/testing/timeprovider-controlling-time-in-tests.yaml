@@ -1,0 +1,100 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WQNJFSMDCVR5S8PXW1
+slug: timeprovider-controlling-time-in-tests
+stack: dotnet
+topic: testing
+level: middle
+type: multi
+grading: auto
+tags: [timeprovider, faketimeprovider, async-testing, time]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/datetime/timeprovider-overview
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.timeprovider
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что верно о тестировании кода, зависящего от времени, с помощью TimeProvider?
+    prompt: |
+      Сервис проверяет срок действия токена через `DateTime.UtcNow` и ждёт между повторными попытками через
+      `Task.Delay`. Его тесты идут медленно и иногда падают на границе минуты. Команда переписывает сервис так,
+      чтобы он получал `TimeProvider` через конструктор (тип появился в .NET 8, утверждения проверяются для .NET 10).
+      Выберите все верные утверждения.
+    hint: Кто решает, какие часы читаются и какой таймер используется, - тест или сам сервис?
+    options:
+      a: "Если сервис вызывает `GetUtcNow()` у внедрённого `TimeProvider`, тест может передать `FakeTimeProvider`, выставленный на фиксированный момент, и получать одно и то же время при каждом запуске."
+      b: "`Task.Delay(TimeSpan, TimeProvider)` с `FakeTimeProvider` завершается, когда тест вызывает `Advance` на величину не меньше задержки, без реального ожидания."
+      c: "После регистрации `TimeProvider` в DI-контейнере `DateTime.UtcNow` и `Task.Delay(TimeSpan)` в сервисе тоже начинают возвращать фальшивое время."
+      d: "`TimeProvider` - это интерфейс без встроенной реализации, поэтому в production-коде нужно написать собственный класс, читающий системные часы."
+      e: "`FakeTimeProvider.Advance(TimeSpan.FromMinutes(5))` блокирует поток теста на пять реальных минут, поэтому задержки всё равно надо делать короткими."
+    optionExplanations:
+      c: "Регистрация в DI ничего не перехватывает. `DateTime.UtcNow` и `Task.Delay(TimeSpan)` без провайдера всегда используют реальные часы и таймеры; фальшивое время видит только код, который явно обращается к внедрённому `TimeProvider`."
+      d: "`TimeProvider` - абстрактный класс в пространстве имён `System`, а реализация на системных часах уже есть: `TimeProvider.System`. Её и передают в production."
+      e: "`Advance` только сдвигает внутреннее время фальшивого провайдера и запускает наступившие таймеры. Реального ожидания нет, поэтому в тесте можно сдвигать время на часы и дни."
+    answer: "Верны утверждения a и b."
+    explanation: |
+      `TimeProvider` - абстрактный класс, который прячет за собой источник времени: `GetUtcNow()`, `GetLocalNow()`,
+      `GetTimestamp()` и создание таймеров через `CreateTimer`. В production передают `TimeProvider.System`, который
+      читает системные часы. Начиная с .NET 8 в BCL есть перегрузки, принимающие провайдер: `Task.Delay(TimeSpan, TimeProvider)`,
+      `Task.WaitAsync(TimeSpan, TimeProvider)`, конструктор `CancellationTokenSource(TimeSpan, TimeProvider)`.
+
+      В тестах вместо него передают `FakeTimeProvider` из пакета `Microsoft.Extensions.TimeProvider.Testing`. Его время
+      стоит на месте, пока тест не вызовет `SetUtcNow` или `Advance`; при сдвиге срабатывают таймеры, срок которых
+      наступил, и задержки, созданные через этот провайдер, завершаются. Тест становится быстрым и детерминированным.
+
+      Абстракция работает только там, где код действительно идёт через неё: любой оставшийся прямой вызов
+      `DateTime.UtcNow` или `Task.Delay(TimeSpan)` по-прежнему читает реальные часы.
+    linkTitles:
+      - "Что такое TimeProvider"
+      - "Класс TimeProvider"
+  en:
+    title: Which statements about testing time-dependent code with TimeProvider are true?
+    prompt: |
+      A service checks token expiry with `DateTime.UtcNow` and waits between retries with `Task.Delay`. Its tests
+      are slow and sometimes fail at a minute boundary. The team rewrites the service to receive a `TimeProvider`
+      through its constructor (the type exists since .NET 8, the statements are checked for .NET 10).
+      Select all true statements.
+    hint: Who decides which clock is read and which timer is used - the test or the service itself?
+    options:
+      a: "If the service calls `GetUtcNow()` on the injected `TimeProvider`, a test can pass a `FakeTimeProvider` set to a fixed moment and get the same time on every run."
+      b: "`Task.Delay(TimeSpan, TimeProvider)` with a `FakeTimeProvider` completes when the test calls `Advance` by at least the delay, with no real waiting."
+      c: "Once `TimeProvider` is registered in the DI container, `DateTime.UtcNow` and `Task.Delay(TimeSpan)` in the service also return the fake time."
+      d: "`TimeProvider` is an interface with no built-in implementation, so production code must supply its own class that reads the system clock."
+      e: "`FakeTimeProvider.Advance(TimeSpan.FromMinutes(5))` blocks the test thread for five real minutes, so delays still have to be kept short."
+    optionExplanations:
+      c: "Registering it in DI intercepts nothing. `DateTime.UtcNow` and `Task.Delay(TimeSpan)` without a provider always use the real clock and timers; only code that explicitly goes through the injected `TimeProvider` sees the fake time."
+      d: "`TimeProvider` is an abstract class in the `System` namespace, and a system clock implementation already exists: `TimeProvider.System`. That is what production code passes in."
+      e: "`Advance` only moves the fake provider's internal time and fires the timers that became due. There is no real waiting, so a test can move time by hours or days."
+    answer: "Statements a and b are true."
+    explanation: |
+      `TimeProvider` is an abstract class that hides the source of time: `GetUtcNow()`, `GetLocalNow()`,
+      `GetTimestamp()` and timer creation through `CreateTimer`. Production code passes `TimeProvider.System`, which
+      reads the system clock. Since .NET 8 the BCL has overloads that accept a provider: `Task.Delay(TimeSpan, TimeProvider)`,
+      `Task.WaitAsync(TimeSpan, TimeProvider)` and the `CancellationTokenSource(TimeSpan, TimeProvider)` constructor.
+
+      Tests pass a `FakeTimeProvider` from the `Microsoft.Extensions.TimeProvider.Testing` package instead. Its time
+      stands still until the test calls `SetUtcNow` or `Advance`; moving it fires the timers that became due, and
+      delays created through this provider complete. The test becomes fast and deterministic.
+
+      The abstraction only works where the code actually goes through it: any remaining direct call to
+      `DateTime.UtcNow` or `Task.Delay(TimeSpan)` still reads the real clock.
+    linkTitles:
+      - "What is TimeProvider?"
+      - "TimeProvider class"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

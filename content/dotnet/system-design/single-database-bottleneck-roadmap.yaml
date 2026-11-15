@@ -1,0 +1,161 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WQ6NFXSM74RGWAJKRB
+slug: single-database-bottleneck-roadmap
+stack: dotnet
+topic: system-design
+level: architect
+type: situation
+grading: self
+tags: [scaling, relational-database, read-replicas, partitioning, sharding]
+links:
+  - url: https://learn.microsoft.com/en-us/azure/well-architected/design-guides/partition-data
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/azure/architecture/patterns/sharding
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Нагрузка вырастет в пять раз, а единственная реляционная база уже узкое место. Какой план масштабирования?
+    prompt: |
+      Система построена вокруг одной реляционной базы данных: с ней работают все сервисы и отчёты. Уже сейчас в
+      часы пик база упирается в ресурсы, растут задержки запросов и ожидания блокировок. По прогнозу бизнеса
+      трафик за два года вырастет в пять раз. Вам поручили составить план. Какие шаги и в каком порядке вы
+      предложите и по каким признакам будете переходить от одного шага к следующему?
+    hint: |
+      О каком из возможных шагов вы пожалели бы больше всего, если бы прогноз роста оказался ошибочным?
+    answer: |
+      1. **Сначала измерить.** Выяснить, во что именно упирается база: процессор, ввод-вывод, память, блокировки
+         или соединения. Разделить нагрузку на чтение и запись, отсортировать запросы по суммарной стоимости
+         (частота, умноженная на длительность) встроенными средствами СУБД, например Query Store в SQL Server или
+         `pg_stat_statements` в PostgreSQL, и построить модель роста: какие таблицы и операции растут вместе с
+         трафиком. Перевести прогноз «в пять раз» в целевую мощность с запасом и договориться о порогах (загрузка
+         процессора, задержки, отставание реплик), при которых начинается следующий шаг.
+      2. **Оптимизировать запросы и схему.** Недостающие и лишние индексы, N+1 и «болтливые» вызовы из
+         приложения, выборки без ограничений, длинные транзакции, удерживающие блокировки, размер пула соединений.
+         Вынести тяжёлые отчёты из транзакционной нагрузки, архивировать холодные данные. Шаг дешёвый, обратимый и
+         часто возвращает заметную долю мощности. Параллельно можно увеличить сервер: это даёт время, но не
+         заменяет план.
+      3. **Разгрузить чтение.** Реплики для чтения - для запросов, которые допускают отставание (списки, поиск,
+         отчёты); операции, которым нужно увидеть собственную запись, продолжают читать с основного сервера. Кэш
+         для горячих и редко меняющихся данных с согласованным допустимым устареванием. Аналитику - в отдельное
+         хранилище, которое наполняется через ETL или захват изменений (CDC).
+      4. **Разгрузить запись.** Перенести то, чему не нужна реляционная база, в подходящие хранилища (логи,
+         аудит, сессии, телеметрия). Некритичные записи сделать асинхронными через очередь и группировать в
+         пакеты. Проверить, не сериализуют ли запись горячие строки (счётчики, одна строка «баланса»).
+      5. **Функциональное секционирование.** Разделить базу по слабо связанным наборам данных: каталог, заказы,
+         пользователи, биллинг. У каждого набора свой владелец и своя база, которую можно масштабировать
+         отдельно. До разделения убрать из кода соединения и транзакции между наборами: модули обмениваются
+         данными через API или события. Это дороже предыдущих шагов, но каждая часть остаётся обычной
+         реляционной базой с соединениями, ограничениями и ACID-транзакциями.
+      6. **Шардировать, только когда запись одного набора данных не помещается на один сервер** даже после всех
+         предыдущих шагов. Ключ шардирования выбирать по модели доступа (например, арендатор или клиент), чтобы
+         большинство запросов и транзакций попадало в один шард, а запись распределялась равномерно. Заранее
+         продумать карту шардов и маршрутизацию, перебалансировку, запросы по нескольким шардам, глобально
+         уникальные ключи, миграции схемы, резервное копирование и мониторинг на всех шардах. Начинать подготовку
+         рано: это месяцы работы, и она должна быть готова до достижения порога, а не после.
+      7. **Вести всё как дорожную карту.** У каждого шага цель по мощности, нагрузочный тест на данных объёма
+         production, план отката и точка пересмотра. Прогноз пересматривать раз в несколько месяцев: если первых
+         шагов хватает на два года вперёд, до шардирования дело может не дойти.
+    explanation: |
+      Порядок шагов определяется стоимостью и обратимостью. Индекс или реплику можно убрать за день, и они не
+      меняют модель программирования. Функциональное секционирование меняет границы между модулями, но каждая
+      часть остаётся обычной базой данных. Шардирование разрезает один набор данных между серверами: соединения,
+      транзакции, уникальные ограничения и агрегаты по нескольким шардам переезжают в код приложения, а каждый
+      запрос должен знать ключ шарда. Транзакции поддерживаются только внутри одного шарда, запросы по нескольким
+      секциям и перебалансировка при неравномерном росте бьют по производительности и надёжности, а резервное
+      копирование и восстановление приходится согласовывать между секциями. Объединить шарды обратно или сменить
+      ключ - значит перенести все данные, поэтому на практике это решение почти необратимо.
+
+      Руководство по паттерну Sharding прямо называет случаи, когда он не подходит: объём данных и пропускная
+      способность помещаются в один экземпляр базы даже с учётом прогнозируемого роста, или узкое место - чтение,
+      которое разгружают реплики для чтения и кэш. Там же сказано, что шардирование вносит существенную и
+      постоянную сложность на всё время жизни системы.
+
+      Рост в пять раз за два года нередко закрывается первыми шагами: нагрузку обычно определяет небольшое число
+      запросов, и их оптимизация вместе с разгрузкой чтения может дать кратный, а не процентный выигрыш. Поэтому
+      план начинается с измерений, а не с выбора технологии.
+
+      Типичные ошибки:
+
+      - шардировать «на вырост», когда данные ещё не показали потолка по записи;
+      - добавить реплики для чтения и не учесть в коде отставание репликации, из-за чего пользователь не видит
+        собственных изменений;
+      - начать с кэша и спрятать за ним неэффективные запросы, которые продолжают расти;
+      - разделить базу, но оставить транзакции, охватывающие несколько баз.
+    linkTitles:
+      - "Рекомендации по секционированию данных для обеспечения надёжности"
+      - "Паттерн Sharding"
+  en:
+    title: Traffic will grow fivefold and the single relational database is already the bottleneck. What is your scaling plan?
+    prompt: |
+      The system is built around one relational database: every service and every report works with it. Already
+      at peak hours the database runs out of resources, and query latency and lock waits grow. The business
+      forecasts that traffic will grow fivefold over two years. You are asked to draw up a plan. Which steps do
+      you propose, in what order, and what signals tell you to move from one step to the next?
+    hint: |
+      Which of the options would you regret most if the forecast turned out to be wrong?
+    answer: |
+      1. **Measure first.** Find out what exactly saturates: CPU, I/O, memory, locks or connections. Split the
+         load into reads and writes, rank queries by total cost (frequency times duration) with the database's
+         own tools, for example Query Store in SQL Server or `pg_stat_statements` in PostgreSQL, and build a
+         growth model: which tables and operations grow with traffic. Turn the "fivefold" forecast into a target
+         capacity with headroom, and agree on thresholds (CPU load, latency, replica lag) that start the next step.
+      2. **Tune queries and the schema.** Missing and redundant indexes, N+1 and chatty calls from the
+         application, unbounded selects, long transactions that hold locks, connection pool size. Move heavy
+         reports off the transactional workload and archive cold data. The step is cheap, reversible and often
+         returns a noticeable share of capacity. Scaling the server up in parallel buys time but does not
+         replace the plan.
+      3. **Offload reads.** Read replicas for queries that tolerate lag (lists, search, reports); operations
+         that must see their own writes keep reading from the primary. A cache for hot, rarely changing data with
+         an agreed acceptable staleness. Analytics goes to a separate store fed by ETL or change data capture (CDC).
+      4. **Relieve writes.** Move what does not need a relational database to fitting stores (logs, audit,
+         sessions, telemetry). Make non-critical writes asynchronous through a queue and group them into batches.
+         Check whether hot rows serialize writes (counters, a single "balance" row).
+      5. **Functional partitioning.** Split the database by loosely related data sets: catalog, orders, users,
+         billing. Each set gets an owner and its own database that can be scaled separately. Before the split,
+         remove joins and transactions across sets from the code: modules exchange data through APIs or events.
+         This costs more than the previous steps, but each part stays an ordinary relational database with joins,
+         constraints and ACID transactions.
+      6. **Shard only when writes of one data set no longer fit on one server** even after all the previous
+         steps. Choose the shard key from the access pattern (for example tenant or customer), so that most
+         queries and transactions hit one shard and writes spread evenly. Plan in advance the shard map and
+         routing, rebalancing, queries across shards, globally unique keys, schema migrations, backups and
+         monitoring on every shard. Start preparing early: it takes months of work, and it must be ready before
+         the threshold is reached, not after.
+      7. **Run it all as a roadmap.** Each step has a capacity goal, a load test on production-sized data, a
+         rollback plan and a review point. Revisit the forecast every few months: if the first steps cover the
+         next two years, sharding may never be needed.
+    explanation: |
+      The order of the steps follows cost and reversibility. An index or a replica can be removed in a day, and
+      neither changes the programming model. Functional partitioning changes the boundaries between modules, but
+      each part stays an ordinary database. Sharding cuts one data set across servers: joins, transactions,
+      unique constraints and aggregates across shards move into the application code, and every query has to
+      know the shard key. Transactions are supported only inside one shard, queries across partitions and
+      rebalancing after uneven growth hurt performance and reliability, and backup and restore must be
+      coordinated across partitions. Merging shards back or changing the key means moving all the data, so in
+      practice the decision is close to one-way.
+
+      The Sharding pattern guidance names the cases where it does not fit: the data volume and throughput fit in
+      a single database instance even with projected growth, or the bottleneck is read volume, which read
+      replicas and caching can offload. It also says that sharding introduces substantial and permanent
+      complexity for the lifetime of the system.
+
+      Fivefold growth over two years is often covered by the first steps: the load is usually dominated by a
+      small number of queries, and tuning them together with offloading reads can give a gain measured in
+      multiples, not percents. That is why the plan starts with measurements rather than with picking a
+      technology.
+
+      Typical mistakes:
+
+      - sharding "for future growth" before the data has shown a write ceiling;
+      - adding read replicas without handling replication lag in the code, so users do not see their own
+        changes;
+      - starting with a cache and hiding inefficient queries behind it while they keep growing;
+      - splitting the database but keeping transactions that span several databases.
+    linkTitles:
+      - "Data partitioning recommendations for reliability"
+      - "Sharding pattern"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

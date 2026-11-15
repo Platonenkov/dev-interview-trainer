@@ -1,0 +1,134 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNKQAHWTGMSMDTMHVS
+slug: strong-vs-eventual-consistency-boundaries
+stack: dotnet
+topic: distributed
+level: architect
+type: open
+grading: self
+tags: [consistency, eventual-consistency, invariants, saga, microservices]
+links:
+  - url: https://learn.microsoft.com/en-us/azure/architecture/microservices/design/data-considerations
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/azure/architecture/patterns/saga
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как решить, какие инварианты в микросервисах должны быть строго согласованы, а какие допускают согласованность в конечном счёте?
+    prompt: |
+      Система состоит из сервисов заказов, склада и биллинга, у каждого своя база данных. Среди бизнес-правил:
+      сумма заказа равна сумме его позиций, нельзя продать больше товара, чем есть на складе, заказ нельзя
+      отгрузить без оплаты, номера счетов уникальны.
+
+      Как вы решаете, какие инварианты должны соблюдаться строго в каждый момент времени, а какие могут
+      нарушаться на короткое время и становиться согласованными в конечном счёте? Что бизнес должен принять
+      для второй группы?
+    hint: |
+      Спросите не «можно ли это сделать технически», а «чего стоит бизнесу нарушение этого правила на несколько секунд и можно ли его заметить и исправить потом».
+    answer: |
+      1. **Составить список инвариантов и оценить каждый вместе с бизнесом.** Для каждого правила выяснить:
+         чего стоит его нарушение, как долго оно допустимо, можно ли его обнаружить и исправить задним числом.
+         Правила делятся на две группы: «не должно нарушаться ни на мгновение» и «может временно нарушаться,
+         если нарушение обнаруживается и устраняется».
+      2. **Строгие инварианты держать внутри одной локальной транзакции одного сервиса.** Сумма заказа и его
+         позиции - один агрегат в сервисе заказов. Резерв не больше остатка по товару - одна транзакция с
+         контролем параллелизма в сервисе склада. Уникальность номеров счетов - ограничение в базе биллинга.
+         Граница сервиса должна совпадать с границей строгой согласованности.
+      3. **Если строгое правило требует данных двух сервисов, это сигнал пересмотреть границы.** Перенести
+         данные к владельцу правила или объединить сервисы, а не строить распределённую транзакцию: двухфазная
+         фиксация связывает доступность и задержку всех участников, и многие хранилища и брокеры её не поддерживают.
+      4. **Межсервисные правила делать согласованными в конечном счёте.** «Заказ подтверждён, только если товар
+         зарезервирован и оплата прошла» реализуется сагой: локальные транзакции в каждом сервисе, события
+         (через outbox), идемпотентные обработчики и компенсации (снять резерв, вернуть деньги).
+      5. **Сделать промежуточные состояния явными.** В модели и в интерфейсе есть статусы вроде «ожидает
+         оплаты» и «резервируется»; пользователю не обещают «подтверждено», пока сага не завершилась.
+      6. **Явно зафиксировать, что принимает бизнес** для правил второй группы:
+         - окно рассогласования и его целевую длительность (секунды, минуты), с мониторингом отставания;
+         - чтение устаревших данных: каталог может показать товар, которого уже нет;
+         - видимые клиенту компенсации: отмена заказа с извинением, возврат денег вместо отказа в списании;
+         - сверку (reconciliation) по расписанию и очередь ручного разбора для случаев, которые автоматика не исправила;
+         - допустимую долю компенсаций как метрику.
+      7. **Снижать риск окна.** Резерв с истечением срока, квоты остатков, чтение собственных записей для
+         пользователя, который только что сделал заказ.
+      8. **Пересматривать решение по данным.** Если доля компенсаций или ручных разборов выше договорённой,
+         граница выбрана неверно: правило переносят внутрь одного сервиса.
+    explanation: |
+      Строгая согласованность между сервисами требует синхронной координации: каждая операция ждёт всех
+      участников, а отказ любого из них останавливает всю операцию. Доступность системы становится
+      произведением доступностей сервисов, задержки складываются. Поэтому строгие гарантии оставляют только там,
+      где их даёт локальная транзакция одной базы, а границы сервисов проводят так, чтобы важнейшие инварианты
+      оказались внутри одной границы.
+
+      Всё, что пересекает границу, становится бизнес-процессом, а не ограничением базы: проверка переносится из
+      транзакции в сагу, события и сверку. Это не уступка технологии, а часто то, как бизнес и так работает:
+      банки сверяют счета в конце дня, перевозчики продают билеты с перебронированием и компенсируют отказ.
+
+      Главный критерий выбора - не «можно ли технически сделать это согласованным в конечном счёте», а цена
+      временного нарушения и возможность его заметить и исправить. Если исправить нельзя (например, деньги ушли
+      безвозвратно), правило должно жить в одной транзакции или процесс нужно перестроить так, чтобы необратимый
+      шаг шёл последним.
+    linkTitles:
+      - "Данные в микросервисах"
+      - "Паттерн Saga"
+  en:
+    title: How do you decide which invariants in microservices must be strongly consistent and which may be eventually consistent?
+    prompt: |
+      A system consists of order, inventory and billing services, each with its own database. Among the business
+      rules: an order total equals the sum of its lines, you cannot sell more goods than are in stock, an order
+      cannot ship before it is paid, invoice numbers are unique.
+
+      How do you decide which invariants must hold strictly at every moment and which may be violated for a
+      short time and become consistent eventually? What must the business accept for the second group?
+    hint: |
+      Ask not "can this be done technically" but "what does it cost the business if this rule is broken for a few seconds, and can the violation be noticed and fixed afterwards".
+    answer: |
+      1. **List the invariants and assess each one with the business.** For every rule find out what a
+         violation costs, how long it can be tolerated, and whether it can be detected and fixed after the fact.
+         The rules fall into two groups: "must never be violated, not even for a moment" and "may be violated
+         temporarily if the violation is detected and corrected".
+      2. **Keep strong invariants inside one local transaction of one service.** An order total and its lines
+         form one aggregate in the order service. A reservation not exceeding the stock of an item is one
+         transaction with concurrency control in the inventory service. Unique invoice numbers are a constraint
+         in the billing database. The service boundary should match the strong consistency boundary.
+      3. **If a strong rule needs data from two services, revisit the boundaries.** Move the data to the owner
+         of the rule or merge the services instead of building a distributed transaction: two-phase commit ties
+         together the availability and latency of all participants, and many stores and brokers do not support it.
+      4. **Make cross-service rules eventually consistent.** "An order is confirmed only when stock is reserved
+         and payment succeeded" is implemented as a saga: local transactions in each service, events (through an
+         outbox), idempotent handlers and compensations (release the reservation, refund the payment).
+      5. **Make intermediate states explicit.** The model and the UI have statuses such as "awaiting payment"
+         and "reserving"; the user is not told "confirmed" until the saga has finished.
+      6. **Record explicitly what the business accepts** for rules in the second group:
+         - an inconsistency window and its target duration (seconds, minutes), with lag monitoring;
+         - stale reads: the catalog may show an item that is already gone;
+         - compensations visible to the customer: a cancelled order with an apology, a refund instead of never charging;
+         - scheduled reconciliation and a manual review queue for cases automation did not fix;
+         - an acceptable compensation rate as a metric.
+      7. **Reduce the risk of the window.** Reservations that expire, stock quotas, read-your-writes for the
+         user who has just placed an order.
+      8. **Revisit the decision with data.** If the share of compensations or manual reviews exceeds the agreed
+         level, the boundary is wrong: the rule moves inside one service.
+    explanation: |
+      Strong consistency across services requires synchronous coordination: every operation waits for all
+      participants, and a failure of any of them stops the whole operation. The availability of the system becomes
+      the product of the services' availabilities, and latencies add up. That is why strong guarantees are kept
+      only where a local transaction of one database provides them, and service boundaries are drawn so that the
+      most important invariants fall inside one boundary.
+
+      Everything that crosses a boundary becomes a business process rather than a database constraint: the check
+      moves from a transaction into a saga, events and reconciliation. This is not a concession to technology but
+      often how the business already works: banks reconcile accounts at the end of the day, airlines overbook
+      flights and compensate passengers who are denied boarding.
+
+      The main criterion is not "can this technically be made eventually consistent" but the cost of a temporary
+      violation and whether it can be noticed and corrected. If it cannot be corrected (for example, money has left
+      irreversibly), the rule must live in one transaction, or the process must be reshaped so that the
+      irreversible step comes last.
+    linkTitles:
+      - "Data considerations for microservices"
+      - "Saga design pattern"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

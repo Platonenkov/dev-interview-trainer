@@ -1,0 +1,96 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WQKJ1EBCP2M56NTA50
+slug: monotonic-shard-key-hot-partition
+stack: dotnet
+topic: system-design
+level: senior
+type: single
+grading: auto
+tags: [sharding, partition-key, hot-partition, scaling]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/azure/architecture/patterns/sharding
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/azure/well-architected/design-guides/partition-data
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему автоинкрементный id или время создания - плохой ключ для шардирования заказов по диапазонам?
+    prompt: |
+      Таблицу заказов, в которую идёт интенсивная запись, решили разнести по нескольким шардам по диапазонам
+      ключа (range-based sharding). Ключом шардирования выбрали автоинкрементный `OrderId` (вариант - время
+      создания заказа `CreatedAt`). Почему это плохой выбор?
+    hint: Как значение ключа каждого нового заказа соотносится со значениями ключей уже существующих заказов?
+    options:
+      a: "Шардирование по диапазонам вообще не умеет обслуживать запросы по диапазону ключа, поэтому любой запрос придётся рассылать по всем шардам."
+      b: "Каждый новый ключ больше предыдущих, поэтому все вставки идут в шард с последним диапазоном, а остальные шарды простаивают."
+      c: "Запись распределяется равномерно, но старые шарды растут быстрее новых, поэтому со временем разъезжается только объём хранимых данных."
+      d: "Последовательные ключи вызывают частые разбиения страниц индекса во всех шардах сразу, и вставка одинаково замедляется везде."
+    optionExplanations:
+      a: "Запросы по диапазону ключа шардирования - как раз сильная сторона шардирования по диапазонам: такой запрос попадает только в шарды, чьи интервалы его покрывают. Проблема этого ключа в распределении записи, а не чтения."
+      c: "Всё наоборот: в старые диапазоны новые заказы уже не попадают, растёт только последний шард, и запись распределена максимально неравномерно."
+      d: "Последовательные ключи дописываются в конец B-дерева и почти не вызывают разбиений страниц. И главное, вставки идут не во все шарды, а только в один."
+    answer: "Монотонный ключ отправляет все новые записи в последний диапазон, поэтому один шард принимает все вставки, а остальные простаивают."
+    explanation: |
+      При шардировании по диапазонам каждому шарду принадлежит непрерывный интервал значений ключа. Автоинкремент
+      и время создания растут монотонно: каждое новое значение больше всех существующих и всегда попадает в
+      последний интервал. В итоге вся запись таблицы идёт в один шард, его процессор, журнал и диск ограничивают
+      общую пропускную способность записи, и добавление шардов её не увеличивает. Остальные шарды обслуживают
+      только чтение старых данных. Поэтому руководство Microsoft по паттерну Sharding прямо советует избегать
+      монотонно растущих ключей: автоинкрементных чисел и последовательных меток времени.
+
+      Разделение последнего диапазона не помогает: новый последний диапазон снова забирает все вставки.
+
+      Исправление - ключ с равномерным распределением записи: хеш от ключа (стратегия Hash) или ключ с высокой
+      кардинальностью, не связанный со временем, например хеш от идентификатора клиента. У этого есть цена:
+      запросы по диапазону дат или идентификаторов приходится рассылать по всем шардам, а перебалансировку
+      нужно продумать заранее.
+    linkTitles:
+      - "Паттерн Sharding"
+      - "Рекомендации по секционированию данных"
+  en:
+    title: Why is an auto-increment id or a creation timestamp a poor key for range sharding of orders?
+    prompt: |
+      An orders table with heavy write traffic is to be spread across several shards by key ranges
+      (range-based sharding). The chosen shard key is the auto-incrementing `OrderId` (or, alternatively, the
+      order creation time `CreatedAt`). Why is this a poor choice?
+    hint: How does the key value of each new order compare with the key values of the existing orders?
+    options:
+      a: "Range sharding cannot serve range queries by key at all, so every query must be sent to all shards."
+      b: "Each new key is greater than the previous ones, so all inserts go to the shard with the last range while the others sit idle."
+      c: "Writes are spread evenly, but the old shards grow faster than the new ones, so over time only the stored data volume drifts apart."
+      d: "Sequential keys cause frequent index page splits in all shards at once, so inserts slow down equally everywhere."
+    optionExplanations:
+      a: "Range queries on the shard key are exactly the strength of range sharding: such a query only hits the shards whose intervals cover it. The problem with this key is how writes are distributed, not reads."
+      c: "It is the opposite: new orders no longer reach the old ranges, only the last shard grows, and writes are as unevenly distributed as possible."
+      d: "Sequential keys are appended at the end of the B-tree and cause few page splits. More importantly, inserts do not go to all shards, only to one."
+    answer: "A monotonic key sends every new write to the last range, so one shard takes all the inserts while the others sit idle."
+    explanation: |
+      With range sharding each shard owns a contiguous interval of key values. An auto-increment value and a
+      creation timestamp grow monotonically: each new value is greater than every existing one and always
+      falls into the last interval. As a result all writes to the table go to a single shard, its CPU, log and
+      disk cap the total write throughput, and adding shards does not raise it. The other shards only serve
+      reads of old data. That is why the Microsoft guidance on the Sharding pattern explicitly advises avoiding
+      monotonically increasing keys: autoincrement integers and sequential timestamps.
+
+      Splitting the last range does not help: the new last range takes over all the inserts again.
+
+      The fix is a key that spreads writes evenly: a hash of the key (the Hash strategy) or a high-cardinality
+      key that is not tied to time, such as a hash of the customer id. This has a cost: queries over a range of
+      dates or ids must fan out to all shards, and rebalancing must be planned up front.
+    linkTitles:
+      - "Sharding pattern"
+      - "Data partitioning recommendations"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

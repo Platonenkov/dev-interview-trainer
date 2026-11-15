@@ -1,0 +1,104 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WN51XH1FNRAHVQ7GD6
+slug: kafka-consumer-group-scaling-partitions
+stack: dotnet
+topic: distributed
+level: senior
+type: single
+grading: auto
+tags: [kafka, consumer-group, partitions, scaling]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://kafka.apache.org/documentation/
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что даст увеличение числа потребителей в группе Kafka сверх числа партиций?
+    prompt: |
+      Группа потребителей (consumer group) читает топик Kafka с 6 партициями. Под нагрузкой отставание
+      (consumer lag) растёт, и команда увеличивает число экземпляров сервиса в этой группе с 6 до 12. Все
+      экземпляры используют один и тот же `group.id`, топик не меняли.
+
+      Как это повлияет на пропускную способность группы?
+    hint: Сколько потребителей одной группы может одновременно читать одну партицию?
+    options:
+      a: "Пропускная способность вырастет примерно вдвое: Kafka поделит сообщения каждой партиции между двумя экземплярами."
+      b: "Пропускная способность не вырастет: 6 экземпляров получат по партиции, остальные 6 будут простаивать. Чтобы масштабироваться, нужны новые партиции."
+      c: "Kafka при ребалансировке автоматически увеличит число партиций топика до 12, и нагрузка распределится на все экземпляры."
+      d: "Каждое сообщение начнут обрабатывать два экземпляра, потому что потребителей в группе больше, чем партиций."
+    optionExplanations:
+      a: "В группе потребителей каждая партиция назначается не более чем одному потребителю. Сообщения одной партиции не делятся между экземплярами группы."
+      c: "Ребалансировка меняет только назначение партиций потребителям. Число партиций меняет администратор топика, Kafka сама его не увеличивает."
+      d: "Внутри одной группы каждая партиция читается одним потребителем, поэтому дублирования нет. Копию каждого сообщения получает каждая отдельная группа, а не каждый экземпляр."
+    answer: "Пропускная способность не вырастет: 6 экземпляров получат по партиции, остальные 6 будут простаивать."
+    explanation: |
+      Единица параллелизма в группе потребителей Kafka - партиция. Каждая партиция назначается ровно одному
+      потребителю группы, поэтому одновременно работать могут не больше потребителей, чем партиций. Новые
+      экземпляры вызовут ребалансировку (короткую паузу в чтении), после которой 6 из 12 останутся без партиций.
+      Пользы от них нет, разве что как горячий резерв на случай падения активных экземпляров.
+
+      Чтобы масштабировать чтение, нужно увеличить число партиций. У этого есть цена:
+
+      - сообщение с ключом попадает в партицию по хешу ключа с учётом числа партиций, поэтому после изменения
+        новые сообщения того же ключа могут уйти в другую партицию, а старые останутся в прежней. На время
+        перехода порядок событий одного ключа может нарушиться;
+      - уменьшить число партиций потом нельзя, поэтому их добавляют с запасом и в период низкой нагрузки.
+
+      Альтернатива - ускорить обработку внутри потребителя: параллельная обработка разных ключей одной партиции
+      с сохранением порядка внутри ключа или устранение медленной операции, из-за которой растёт отставание.
+
+      Правило относится к обычной группе потребителей. Share groups из Kafka 4.x устроены иначе, но в вопросе
+      речь не о них.
+    linkTitles:
+      - "Документация Apache Kafka"
+  en:
+    title: What happens when you add more consumers to a Kafka consumer group than there are partitions?
+    prompt: |
+      A consumer group reads a Kafka topic with 6 partitions. Under load the consumer lag grows, and the team
+      scales the service in this group from 6 to 12 instances. All instances use the same `group.id`, and the
+      topic is unchanged.
+
+      What effect does this have on the throughput of the group?
+    hint: How many consumers of one group can read a single partition at the same time?
+    options:
+      a: "Throughput roughly doubles: Kafka splits the messages of each partition between two instances."
+      b: "Throughput does not grow: 6 instances get a partition each and the other 6 stay idle. Scaling needs more partitions."
+      c: "During the rebalance Kafka automatically raises the partition count of the topic to 12, and the load spreads over all instances."
+      d: "Every message is now processed by two instances, because the group has more consumers than partitions."
+    optionExplanations:
+      a: "In a consumer group each partition is assigned to at most one consumer. The messages of one partition are not split between instances of the group."
+      c: "A rebalance only changes which consumer owns which partition. The topic administrator changes the partition count, Kafka does not raise it by itself."
+      d: "Inside one group each partition is read by one consumer, so there is no duplication. Every separate group gets its own copy of each message, not every instance."
+    answer: "Throughput does not grow: 6 instances get a partition each and the other 6 stay idle."
+    explanation: |
+      The unit of parallelism in a Kafka consumer group is the partition. Each partition is assigned to exactly
+      one consumer of the group, so no more consumers than partitions can work at the same time. The new
+      instances trigger a rebalance (a short pause in consumption), after which 6 of the 12 have no partitions.
+      They add nothing, except as a warm standby in case active instances fail.
+
+      To scale consumption you need more partitions. That has a cost:
+
+      - a keyed message goes to a partition by a hash of its key that depends on the partition count, so after
+        the change new messages for the same key may land in a different partition while older ones stay in the
+        old one. During the transition the order of events for one key can break;
+      - the partition count cannot be reduced later, so partitions are added with headroom and during low load.
+
+      The alternative is to make each consumer faster: process different keys of one partition in parallel
+      while keeping order within a key, or remove the slow operation that causes the lag.
+
+      The rule applies to a classic consumer group. Share groups in Kafka 4.x work differently, but the
+      question is not about them.
+    linkTitles:
+      - "Apache Kafka documentation"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

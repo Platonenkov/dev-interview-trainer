@@ -1,0 +1,126 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WPT7Y0TRJGNB43HBJH
+slug: static-readonly-singleton-no-double-checked-lock
+stack: dotnet
+topic: patterns
+level: senior
+type: single
+grading: auto
+tags: [singleton, static-constructor, thread-safety, double-checked-locking]
+code:
+  language: csharp
+  harness: none
+  source: |
+    public sealed class AppSettings
+    {
+        public static readonly AppSettings Instance = new AppSettings();
+
+        private AppSettings()
+        {
+            // Expensive one-time setup, for example reading configuration files.
+        }
+    }
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/classes-and-structs/static-constructors
+    lang: en
+    kind: docs
+  - url: https://csharpindepth.com/articles/Singleton
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Почему Singleton на поле static readonly не нуждается в блокировке с двойной проверкой?
+    prompt: |
+      Класс `AppSettings` реализует Singleton через инициализатор поля `static readonly`. На code review коллега
+      предлагает переписать его на классическую блокировку с двойной проверкой (`if`, `lock`, снова `if`),
+      «чтобы было потокобезопасно». Почему в этом коде ручная блокировка не нужна?
+    hint: |
+      В какой метод компилятор переносит инициализатор статического поля и что среда выполнения обещает про этот метод?
+    options:
+      a: "`readonly` делает поле потокобезопасным: он запрещает одновременную запись, поэтому конструктор не может выполниться дважды."
+      b: "Среда выполнения запускает статическую инициализацию типа не более одного раза и под блокировкой на уровне типа, а остальные потоки ждут её завершения, поэтому все потоки видят один и тот же полностью созданный экземпляр."
+      c: "Компилятор C# превращает каждое чтение статического поля в блокировку с двойной проверкой, так что ручная версия её только повторяет."
+      d: "Блокировку с двойной проверкой в C# вообще нельзя написать корректно: модель памяти .NET позволяет потоку увидеть недостроенный объект."
+      e: "Статические поля хранятся отдельно для каждого потока, поэтому у каждого потока свой экземпляр и синхронизировать нечего."
+    optionExplanations:
+      a: "`readonly` лишь запрещает присваивать поле вне инициализатора и статического конструктора. О синхронизации он ничего не говорит: однократность обеспечивает инициализация типа, а не модификатор."
+      c: "Компилятор не вставляет блокировок в чтение поля. После инициализации типа чтение `Instance` - обычная загрузка поля, а проверку инициализации выполняет среда выполнения, и JIT может вовсе её убрать, если тип уже инициализирован."
+      d: "Двойную проверку можно написать корректно, например с полем `volatile` или через `Lazy<T>`. Проблема не в том, что это невозможно, а в том, что это лишний и хрупкий код там, где гарантию уже даёт среда выполнения."
+      e: "Отдельное значение для каждого потока дают `[ThreadStatic]` и `ThreadLocal<T>`. Обычное статическое поле одно на тип и общее для всех потоков."
+    answer: "Среда выполнения выполняет статическую инициализацию типа только один раз и потокобезопасно, поэтому поле `static readonly` уже даёт единственный корректно опубликованный экземпляр."
+    explanation: |
+      Инициализатор статического поля компилятор помещает в инициализатор типа (статический конструктор, `.cctor`).
+      Среда выполнения вызывает его не более одного раза, причём под блокировкой, привязанной к конкретному типу:
+      если несколько потоков одновременно впервые обращаются к `AppSettings.Instance`, один из них выполняет
+      инициализацию, а остальные ждут и затем читают уже готовое значение. Это та же гарантия, ради которой
+      пишут двойную проверку, только её даёт среда выполнения и без лишнего кода.
+
+      Нюансы, которые стоит знать:
+
+      - Если у класса нет явного статического конструктора, тип помечается `beforefieldinit`, и среда выполнения
+        может инициализировать его раньше первого обращения. Однократность и потокобезопасность сохраняются, но
+        момент создания менее предсказуем. Явный, даже пустой, статический конструктор делает инициализацию
+        строго ленивой.
+      - Если конструктор бросит исключение, среда выполнения не вызовет инициализатор повторно: все обращения к
+        типу будут бросать `TypeInitializationException`. Когда создание дорогое или может завершиться ошибкой,
+        лучше подходит `Lazy<T>`.
+      - В статическом конструкторе не стоит ждать другие потоки, задачи или блокировки: инициализация типа сама
+        выполняется под блокировкой, и такое ожидание может привести к deadlock.
+    linkTitles:
+      - "Статические конструкторы"
+      - "Джон Скит: реализация паттерна Singleton в C#"
+  en:
+    title: Why does a Singleton on a static readonly field not need double-checked locking?
+    prompt: |
+      The `AppSettings` class implements Singleton with a `static readonly` field initializer. In code review a
+      colleague suggests rewriting it as classic double-checked locking (`if`, `lock`, `if` again) "to make it
+      thread-safe". Why is manual locking unnecessary in this code?
+    hint: |
+      Into which method does the compiler move a static field initializer, and what does the runtime promise about that method?
+    options:
+      a: "`readonly` makes the field thread-safe: it forbids concurrent writes, so the constructor cannot run twice."
+      b: "The runtime runs a type's static initialization at most once and under a per-type lock, and other threads wait until it finishes, so every thread sees the same fully constructed instance."
+      c: "The C# compiler turns every read of a static field into a double-checked lock, so the hand-written version only repeats it."
+      d: "Double-checked locking cannot be written correctly in C# at all: the .NET memory model lets a thread see a half-constructed object."
+      e: "Static fields are stored per thread, so every thread has its own instance and there is nothing to synchronize."
+    optionExplanations:
+      a: "`readonly` only forbids assigning the field outside the initializer and the static constructor. It says nothing about synchronization: the run-once guarantee comes from type initialization, not from the modifier."
+      c: "The compiler does not insert locks into field reads. After the type is initialized, reading `Instance` is a plain field load; the initialization check is done by the runtime, and the JIT can drop it entirely when the type is already initialized."
+      d: "Double-checked locking can be written correctly, for example with a `volatile` field or through `Lazy<T>`. The problem is not that it is impossible, but that it is extra, fragile code where the runtime already gives the guarantee."
+      e: "A separate value per thread comes from `[ThreadStatic]` and `ThreadLocal<T>`. An ordinary static field exists once per type and is shared by all threads."
+    answer: "The runtime runs a type's static initialization only once and in a thread-safe way, so a `static readonly` field already gives a single, correctly published instance."
+    explanation: |
+      The compiler puts a static field initializer into the type initializer (the static constructor, `.cctor`).
+      The runtime calls it at most once, under a lock tied to that specific type: if several threads touch
+      `AppSettings.Instance` for the first time at once, one of them runs the initialization and the others wait
+      and then read the finished value. This is the same guarantee that double-checked locking is written for,
+      except that the runtime provides it with no extra code.
+
+      Nuances worth knowing:
+
+      - If the class has no explicit static constructor, the type is marked `beforefieldinit`, and the runtime
+        may initialize it before the first access. Run-once and thread safety still hold, but the moment of
+        creation is less predictable. An explicit static constructor, even an empty one, makes initialization
+        strictly lazy.
+      - If the constructor throws, the runtime does not call the initializer again: every access to the type
+        throws `TypeInitializationException`. When creation is expensive or may fail, `Lazy<T>` is a better fit.
+      - Do not wait for other threads, tasks or locks in a static constructor: type initialization itself runs
+        under a lock, and such a wait can cause a deadlock.
+    linkTitles:
+      - "Static constructors"
+      - "Jon Skeet: Implementing the Singleton pattern in C#"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  noRunReason: Only the class declaration is shown to illustrate the pattern; it has no entry point and single questions are not executed.

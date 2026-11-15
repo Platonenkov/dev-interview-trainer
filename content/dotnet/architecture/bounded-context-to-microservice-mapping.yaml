@@ -1,0 +1,151 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WM9NXHXA6M2Q88BEDX
+slug: bounded-context-to-microservice-mapping
+stack: dotnet
+topic: architecture
+level: architect
+type: open
+grading: self
+tags: [ddd, bounded-context, microservices, service-boundaries, aggregates]
+links:
+  - url: https://learn.microsoft.com/en-us/azure/architecture/microservices/model/microservice-boundaries
+    lang: en
+    kind: docs
+  - url: https://martinfowler.com/bliki/BoundedContext.html
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Должен ли каждый ограниченный контекст становиться ровно одним микросервисом?
+    prompt: |
+      Команда провела анализ предметной области по DDD и выделила ограниченные контексты. Теперь нужно решить,
+      как они лягут на микросервисы. Должен ли каждый ограниченный контекст стать ровно одним микросервисом?
+      Что ломается, если один сервис охватывает несколько контекстов, и что ломается, если один контекст
+      раздробить на множество мелких сервисов? В каких случаях дробить контекст всё же оправдано?
+    hint: |
+      Подумайте о верхней границе размера сервиса и о том, что происходит при движении вниз: внутри чего правила
+      предметной области могут проверяться в одной транзакции, а что теряется, когда операция пересекает границу
+      процесса?
+    answer: |
+      Не обязательно ровно один, но ограниченный контекст - естественная **верхняя граница** сервиса.
+
+      1. **Сервис не должен охватывать несколько контекстов.** Контекст - это граница одной модели предметной
+         области. Сервис, который охватывает несколько контекстов, смешивает в одном коде и одной схеме данных
+         модели с разным единым языком: одно и то же слово означает разные вещи, а модель превращается в
+         компромисс, удобный никому. У такого сервиса несколько владельцев, изменение для одного контекста
+         требует выпуска и регрессии другого, масштабировать и развёртывать части по отдельности нельзя. Если
+         сервис смешивает модели, стоит вернуться к анализу предметной области.
+      2. **Внутри контекста начать с одного сервиса.** Контекст - это граница согласованной модели и, как
+         правило, одной команды. Один развёртываемый сервис (при необходимости модульный внутри) сохраняет
+         локальные транзакции и простую эволюцию модели.
+      3. **Дробление контекста на мелкие сервисы дорого.** Правило, которое раньше проверялось в одной
+         транзакции, теперь требует саги или согласованности в конечном счёте. Появляются болтливые синхронные
+         вызовы между сервисами: задержки складываются, а каждое звено цепочки - ещё одна зависимость, которая
+         может отказать, поэтому доступность цепочки ниже доступности любого звена. Сервисы делят одну модель,
+         поэтому меняются и выпускаются вместе, то есть получается распределённый монолит с операционными
+         расходами на каждый сервис.
+      4. **Если делить, то по агрегатам, а не сквозь них.** Внутри контекста хорошими кандидатами в отдельные
+         сервисы часто оказываются агрегаты (а иногда доменные службы): агрегат выводится из бизнес-требований,
+         обладает высокой функциональной связностью и является границей хранения. Разрез, проходящий через
+         агрегат, ставит его инварианты по разные стороны сетевого вызова, поэтому на практике агрегат - самая
+         мелкая разумная единица. Делить ли контекст до этого уровня, решает следующий пункт.
+      5. **Дробить только по конкретной нефункциональной причине:** заметно разные требования к
+         масштабированию, разные требования к доступности (в том числе изоляция отказов рискованной части),
+         требования безопасности или регуляторов (например, изоляция платёжных данных), разные типы данных или
+         технологии хранения, слишком большая для одного сервиса команда. Те же факторы могут быть и поводом
+         объединить сервисы обратно.
+      6. **Проверить разрез.** Каждый сервис отвечает за одно, между сервисами нет болтливых вызовов, сервис
+         под силу небольшой команде, его можно развёртывать и развивать независимо, а границы не создают проблем
+         с согласованностью данных. Признаки неверного разреза: одна фича требует правок в нескольких сервисах,
+         сервисы выпускаются только вместе, общая база, постоянные синхронные цепочки вызовов. Разбиение можно
+         пересматривать: начать крупнее и делить, когда причина подтвердилась измерениями.
+    explanation: |
+      Ограниченный контекст по определению - область, внутри которой модель и язык однозначны. Граница
+      сервиса - это граница развёртывания, данных и обычно владения командой. Если сервис шире контекста, он
+      нарушает именно то, ради чего контекст выделяли: однозначность модели и независимость её эволюции.
+
+      Если сервис уже контекста, проблема другая: связность внутри контекста высокая, и разрезая её сетью, мы
+      превращаем дешёвые вызовы в памяти и атомарные транзакции в дорогие и ненадёжные удалённые
+      взаимодействия. Сеть не отменяет связанность, она лишь делает её медленнее и сложнее в отладке. Руководство
+      Microsoft прямо называет болтливость между двумя сервисами признаком того, что функции стоит держать в
+      одном сервисе, а сохранение согласованности данных - причиной группировать связанную функциональность.
+      Отсюда ориентир: сервис не больше контекста; внутри контекста агрегаты часто служат хорошими кандидатами
+      на выделение; а нефункциональные требования решают, делить дальше или, наоборот, объединять.
+
+      Важно различать логический сервис и единицы развёртывания. Один контекст может иметь, например, API и
+      фоновый обработчик в разных процессах, но с одной моделью, одним хранилищем и одной командой - это не
+      дробление модели, а вопрос развёртывания. И практическое наблюдение, а не задокументированное правило:
+      часто проще выделить часть из более крупного сервиса, когда причина подтверждена, чем сливать обратно
+      множество болтливых сервисов с их отдельными хранилищами и контрактами. Поэтому многие команды начинают с
+      более крупного разреза.
+    linkTitles:
+      - "Определение границ микросервисов"
+      - "Bounded Context (Martin Fowler)"
+  en:
+    title: Should every bounded context become exactly one microservice?
+    prompt: |
+      A team has run a DDD analysis of the domain and identified bounded contexts. Now it has to decide how
+      they map to microservices. Should every bounded context become exactly one microservice? What goes
+      wrong when one service spans several contexts, and what goes wrong when one context is split into many
+      tiny services? When is splitting a context still justified?
+    hint: |
+      Think about an upper bound for the size of a service and what happens as you go below it: inside what can
+      domain rules be checked in one transaction, and what is lost when an operation crosses a process boundary?
+    answer: |
+      Not necessarily exactly one, but a bounded context is the natural **upper bound** of a service.
+
+      1. **A service should not span several contexts.** A context marks the boundary of one domain model. A
+         service that spans several contexts mixes, in one codebase and one data schema, models with different
+         ubiquitous languages: the same word means different things, and the model turns into a compromise that
+         suits nobody. Such a service has several owners, a change for one context forces a release and
+         regression testing of another, and the parts cannot be scaled or deployed separately. If a service mixes
+         models, go back and refine the domain analysis.
+      2. **Start with one service per context.** A context is the boundary of a consistent model and usually of
+         one team. One deployable service (modular inside if needed) keeps local transactions and simple model
+         evolution.
+      3. **Splitting a context into tiny services is expensive.** A rule that used to be checked in one
+         transaction now needs a saga or eventual consistency. Chatty synchronous calls appear between services:
+         latencies add up, and every link in a call chain is one more dependency that can fail, so the chain is
+         less available than any single link. The services share one model, so they change and release
+         together, which is a distributed monolith with operational overhead per service.
+      4. **If you split, split along aggregates, not through them.** Inside a context, aggregates (and sometimes
+         domain services) are often good candidates for separate services: an aggregate is derived from business
+         requirements, has high functional cohesion and is a boundary of persistence. A cut that goes through an
+         aggregate puts its invariants on both sides of a network call, so in practice an aggregate is the
+         smallest sensible unit. Whether to split a context that far is decided by the next point.
+      5. **Split only for a concrete non-functional reason:** clearly different scalability requirements,
+         different availability requirements (including isolating failures of a risky part), security or
+         regulatory requirements (for example isolating payment data), different data types or storage
+         technologies, or a team too large to own one service. The same factors can also justify merging
+         services back together.
+      6. **Validate the cut.** Each service has a single responsibility, there are no chatty calls between
+         services, a small team can own a service, it can be deployed and evolved independently, and the
+         boundaries do not create data consistency problems. Signs of a wrong cut: one feature needs changes in
+         several services, services can only be released together, a shared database, constant synchronous call
+         chains. The split can be revisited: start coarser and split when the reason is confirmed by measurements.
+    explanation: |
+      A bounded context is, by definition, an area inside which the model and the language are unambiguous. A
+      service boundary is a boundary of deployment, data and usually team ownership. A service wider than a
+      context breaks exactly what the context was drawn for: an unambiguous model that evolves independently.
+
+      A service narrower than a context has a different problem: cohesion inside a context is high, and cutting
+      it with a network turns cheap in-memory calls and atomic transactions into costly and unreliable remote
+      interactions. The network does not remove coupling, it only makes it slower and harder to debug. The
+      Microsoft guidance explicitly calls chattiness between two services a sign that the functions belong in
+      the same service, and names data consistency as a reason to group related functionality. Hence a
+      guideline: a service is no larger than a context; inside a context, aggregates are often good candidates
+      for extraction; and non-functional requirements decide whether to split further or, on the contrary, to
+      merge.
+
+      Distinguish a logical service from deployment units. One context may have, for example, an API and a
+      background worker in separate processes but with one model, one store and one team; that is not splitting
+      the model, it is a deployment choice. And a practitioner's observation rather than a documented rule: it
+      is often easier to carve a part out of a coarser service once the reason is confirmed than to merge many
+      chatty services, with their separate stores and contracts, back together. That is why many teams start
+      with the coarser cut.
+    linkTitles:
+      - "Identify microservice boundaries"
+      - "Bounded Context (Martin Fowler)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

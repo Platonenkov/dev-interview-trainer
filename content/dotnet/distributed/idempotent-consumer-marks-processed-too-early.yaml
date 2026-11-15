@@ -1,0 +1,164 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNW2YB9F18MPD7PA32
+slug: idempotent-consumer-marks-processed-too-early
+stack: dotnet
+topic: distributed
+level: middle
+type: find-bug
+grading: auto
+tags: [idempotency, idempotent-consumer, at-least-once, redelivery]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    var processed = new HashSet<string>();
+    int balance = 0;
+    int attempts = 0;
+
+    void CreditAccount(int amount)
+    {
+        attempts++;
+        if (attempts == 1)
+            throw new TimeoutException("Database timeout");
+        balance += amount;
+    }
+
+    void Handle(string messageId, int amount)
+    {
+        if (processed.Contains(messageId))
+            return; // duplicate, already handled
+        processed.Add(messageId);
+        CreditAccount(amount);
+    }
+
+    // The broker redelivers the message until the handler succeeds.
+    for (int delivery = 1; delivery <= 2; delivery++)
+    {
+        try
+        {
+            Handle("msg-42", 100);
+            break;
+        }
+        catch (TimeoutException)
+        {
+            // No ack, so the broker delivers the message again.
+        }
+    }
+
+    Console.WriteLine(balance);
+bugLineSets: [[17], [17, 18]]
+fixedSource: |
+  var processed = new HashSet<string>();
+  int balance = 0;
+  int attempts = 0;
+
+  void CreditAccount(int amount)
+  {
+      attempts++;
+      if (attempts == 1)
+          throw new TimeoutException("Database timeout");
+      balance += amount;
+  }
+
+  void Handle(string messageId, int amount)
+  {
+      if (processed.Contains(messageId))
+          return; // duplicate, already handled
+      CreditAccount(amount);
+      processed.Add(messageId); // mark only after the side effect succeeded
+  }
+
+  // The broker redelivers the message until the handler succeeds.
+  for (int delivery = 1; delivery <= 2; delivery++)
+  {
+      try
+      {
+          Handle("msg-42", 100);
+          break;
+      }
+      catch (TimeoutException)
+      {
+          // No ack, so the broker delivers the message again.
+      }
+  }
+
+  Console.WriteLine(balance);
+fixedExpect: { kind: output, value: "100" }
+links:
+  - url: https://microservices.io/patterns/communication-style/idempotent-consumer.html
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/azure/service-bus-messaging/duplicate-detection
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строку, из-за которой повторная доставка сообщения теряет зачисление
+    prompt: |
+      Код моделирует идемпотентного потребителя сообщений. Брокер доставляет сообщения «хотя бы один раз», поэтому
+      обработчик запоминает идентификаторы обработанных сообщений и пропускает дубликаты. Сообщение `msg-42`
+      должно зачислить на счёт 100 ровно один раз.
+
+      Первая попытка зачисления падает с `TimeoutException`, сообщение не подтверждено, и брокер доставляет его
+      повторно. Ожидается, что программа выведет `100`, но она выводит `0`. Щёлкните по строке с дефектом.
+    hint: Что видит обработчик при повторной доставке, если первая попытка упала на середине?
+    answer: |
+      Строка 17, вызов `processed.Add(messageId)` до `CreditAccount(amount)`. Сообщение помечается обработанным
+      раньше, чем выполнен побочный эффект.
+    explanation: |
+      При первой доставке обработчик добавляет `msg-42` в `processed`, после чего `CreditAccount` выбрасывает
+      исключение. Сообщение не подтверждено, и брокер честно доставляет его ещё раз. Но теперь `Contains`
+      возвращает `true`, обработчик считает сообщение дубликатом и молча выходит. Цикл завершается, баланс
+      остаётся `0`: повторная доставка, которая должна была спасти ситуацию, превратилась в потерю сообщения.
+
+      Идентификатор нужно записывать только вместе с успешным побочным эффектом или после него. В исправленном
+      коде `processed.Add` стоит после `CreditAccount`, и вторая доставка зачисляет 100.
+
+      В реальной системе и этого мало: если процесс упадёт между зачислением и записью идентификатора, повторная
+      доставка зачислит деньги дважды. Поэтому идемпотентный потребитель обычно сохраняет идентификатор сообщения
+      в той же локальной транзакции базы данных, что и изменение баланса (например, в таблицу с уникальным ключом
+      по идентификатору). Тогда либо фиксируются оба изменения, либо ни одно.
+
+      Дедупликация на стороне брокера, как в Azure Service Bus, эту задачу не снимает: она отсекает повторные
+      отправки одного и того же сообщения в пределах временного окна, но не защищает от повторной доставки
+      потребителю после сбоя обработки.
+    linkTitles:
+      - "Паттерн Idempotent Consumer"
+      - "Обнаружение дубликатов в Azure Service Bus"
+  en:
+    title: Find the line that makes a redelivered message lose the credit
+    prompt: |
+      The code simulates an idempotent message consumer. The broker delivers messages at least once, so the handler
+      remembers the ids of processed messages and skips duplicates. Message `msg-42` must credit 100 to the account
+      exactly once.
+
+      The first credit attempt fails with `TimeoutException`, the message is not acknowledged, and the broker
+      delivers it again. The program is expected to print `100`, but it prints `0`. Click the line that contains the
+      defect.
+    hint: What does the handler see on redelivery if the first attempt failed halfway through?
+    answer: |
+      Line 17, the call `processed.Add(messageId)` before `CreditAccount(amount)`. The message is marked as processed
+      before the side effect has happened.
+    explanation: |
+      On the first delivery the handler adds `msg-42` to `processed`, and then `CreditAccount` throws. The message
+      is not acknowledged, so the broker correctly delivers it again. But now `Contains` returns `true`, the handler
+      treats the message as a duplicate and silently returns. The loop ends and the balance stays `0`: the
+      redelivery that should have recovered from the failure turned into a lost message.
+
+      The id must be recorded only together with a successful side effect, or after it. In the fixed code
+      `processed.Add` comes after `CreditAccount`, and the second delivery credits 100.
+
+      In a real system even that is not enough: if the process crashes between the credit and recording the id, the
+      redelivery credits the money twice. That is why an idempotent consumer usually stores the message id in the
+      same local database transaction as the balance change (for example in a table with a unique key on the id).
+      Then either both changes commit or neither does.
+
+      Broker-side deduplication, as in Azure Service Bus, does not solve this: it drops repeated sends of the same
+      message within a time window, but it does not protect against redelivery to the consumer after a processing
+      failure.
+    linkTitles:
+      - "Idempotent Consumer pattern"
+      - "Duplicate detection in Azure Service Bus"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

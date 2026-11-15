@@ -1,0 +1,117 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMZS874J57P7B44J5C
+slug: domain-events-vs-integration-events
+stack: dotnet
+topic: architecture
+level: senior
+type: single
+grading: auto
+tags: [ddd, domain-events, integration-events, eventual-consistency, outbox]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/architecture/microservices/microservice-ddd-cqrs-patterns/domain-events-design-implementation
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/architecture/microservices/multi-container-microservice-net-applications/integration-event-based-microservice-communications
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/architecture/microservices/multi-container-microservice-net-applications/subscribe-events
+    lang: en
+    kind: docs
+  - url: https://microservices.io/patterns/data/transactional-outbox.html
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Чем доменные события отличаются от интеграционных событий в DDD?
+    prompt: |
+      В сервисе заказов, построенном по DDD, подтверждение заказа должно, во-первых, обновить другой агрегат
+      того же сервиса (например, резерв товара), а во-вторых, сообщить сервису биллинга, что заказ подтверждён.
+      Для этого используют доменные и интеграционные события. Какое утверждение правильно описывает разницу
+      между ними?
+    hint: Какие части системы потребляют каждый вид событий и докуда доходит граница транзакции?
+    options:
+      a: "Это одно и то же понятие: разница только в названии, и оба вида событий можно публиковать в брокер сообщений в любой момент операции."
+      b: "Доменные события обрабатываются внутри процесса в том же ограниченном контексте, обычно в рамках той же транзакции, а интеграционные уведомляют другие ограниченные контексты или сервисы и публикуются только после фиксации транзакции."
+      c: "Интеграционные события нужно публиковать в брокер до сохранения изменений, чтобы другие сервисы узнали о них как можно раньше; доменные события при этом обрабатываются внутри того же сервиса."
+      d: "Доменные события всегда передаются через брокер сообщений в другие микросервисы, а интеграционные события - это вызовы обработчиков в памяти внутри одного процесса."
+    optionExplanations:
+      a: "У них разные подписчики, способ доставки и момент публикации. Интеграционное событие, отправленное до фиксации транзакции, может сообщить другим сервисам об изменении, которое потом откатится."
+      c: "Публиковать интеграционное событие до сохранения нельзя: если транзакция затем откатится, другие сервисы уже отреагируют на изменение, которого не было. Интеграционное событие описывает зафиксированный факт."
+      d: "Роли перепутаны. Доменные события остаются внутри ограниченного контекста и обрабатываются в процессе, а через брокер сообщений между сервисами передаются интеграционные события."
+    answer: "Доменные события обрабатываются внутри процесса в том же ограниченном контексте, обычно в той же транзакции; интеграционные уведомляют другие контексты или сервисы и публикуются только после фиксации транзакции."
+    explanation: |
+      **Доменное событие** говорит о том, что произошло в предметной области, другим частям того же
+      ограниченного контекста: например, подтверждение заказа должно изменить другой агрегат того же сервиса.
+      Его обрабатывают в памяти; сервис заказов в руководстве Microsoft использует для этого MediatR. Руководство
+      рекомендует отложенный подход: события собираются в сущностях и рассылаются в момент фиксации, в EF Core -
+      в `SaveChanges` контекста, непосредственно перед фиксацией транзакции или сразу после неё. Рассылка до
+      фиксации включает изменения обработчиков в ту же транзакцию, рассылка после - требует согласованности в
+      конечном счёте между агрегатами. В обоих случаях событие не покидает ограниченный контекст.
+
+      **Интеграционное событие** - это сообщение другим ограниченным контекстам или микросервисам, которое
+      синхронизирует их состояние с изменением в вашем сервисе. Оно идёт асинхронно через шину событий или
+      брокер, поэтому должно описывать уже зафиксированное изменение: если опубликовать его до фиксации, а
+      транзакция откатится, подписчики отреагируют на операцию, которой не было.
+
+      Публикация после фиксации порождает обратный риск: транзакция прошла, а отправка в брокер упала. Его
+      закрывают транзакционным outbox: событие записывается в таблицу журнала событий в той же транзакции, что и
+      бизнес-данные, а отдельный шаг публикует его после фиксации и повторяет попытки, пока брокер не примет
+      сообщение.
+    linkTitles:
+      - "Доменные события: проектирование и реализация"
+      - "Взаимодействие микросервисов через интеграционные события"
+      - "Подписка на события и атомарная публикация интеграционных событий"
+      - "Паттерн Transactional outbox"
+  en:
+    title: How do domain events differ from integration events in DDD?
+    prompt: |
+      In an ordering service built with DDD, confirming an order must, first, update another aggregate of the
+      same service (for example, a stock reservation), and second, tell the billing service that the order is
+      confirmed. Domain events and integration events are used for this. Which statement correctly describes the
+      difference between them?
+    hint: Which parts of the system consume each kind of event, and how far does the transaction boundary reach?
+    options:
+      a: "They are the same concept: only the name differs, and both kinds of events can be published to a message broker at any point of the operation."
+      b: "Domain events are handled in-process within the same bounded context, typically as part of the same transaction, while integration events notify other bounded contexts or services and are published only after the transaction commits."
+      c: "Integration events should be published to the broker before the changes are saved so that other services learn about them as early as possible; domain events, meanwhile, are handled inside the same service."
+      d: "Domain events always travel through a message broker to other microservices, while integration events are in-memory handler calls inside one process."
+    optionExplanations:
+      a: "They have different subscribers, delivery and publication timing. An integration event sent before the transaction commits can tell other services about a change that is later rolled back."
+      c: "An integration event must not be published before the save: if the transaction then rolls back, other services have already reacted to a change that never happened. An integration event describes a committed fact."
+      d: "The roles are swapped. Domain events stay inside the bounded context and are handled in-process, while integration events are the ones that travel between services through a message broker."
+    answer: "Domain events are handled in-process within the same bounded context, typically in the same transaction; integration events notify other contexts or services and are published only after the transaction commits."
+    explanation: |
+      A **domain event** tells other parts of the same bounded context that something happened in the domain:
+      for example, confirming an order must change another aggregate of the same service. It is handled in memory;
+      the ordering service in the Microsoft guide uses MediatR for that. The guide recommends a deferred approach:
+      events are collected in the entities and dispatched when the transaction is committed, in EF Core inside the
+      `SaveChanges` of the context, right before or right after the commit. Dispatching before the commit puts the
+      handlers' changes into the same transaction; dispatching after it means eventual consistency between
+      aggregates. Either way the event does not leave the bounded context.
+
+      An **integration event** is a message to other bounded contexts or microservices that brings their state in
+      sync with a change in your service. It travels asynchronously through an event bus or broker, so it must
+      describe a change that is already committed: if it is published before the commit and the transaction rolls
+      back, subscribers react to an operation that never happened.
+
+      Publishing after the commit creates the opposite risk: the transaction succeeds but sending to the broker
+      fails. The transactional outbox closes that gap: the event is written to an event log table in the same
+      transaction as the business data, and a separate step publishes it after the commit and retries until the
+      broker accepts the message.
+    linkTitles:
+      - "Domain events: design and implementation"
+      - "Implementing event-based communication between microservices (integration events)"
+      - "Subscribing to events and publishing integration events atomically"
+      - "Transactional outbox pattern"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

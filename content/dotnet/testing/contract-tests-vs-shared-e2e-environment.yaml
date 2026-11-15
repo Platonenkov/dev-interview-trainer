@@ -1,0 +1,139 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WQHZ3TN9YBWF1CZ9EC
+slug: contract-tests-vs-shared-e2e-environment
+stack: dotnet
+topic: testing
+level: architect
+type: open
+grading: self
+tags: [contract-testing, consumer-driven-contracts, end-to-end-tests, microservices]
+links:
+  - url: https://martinfowler.com/articles/consumerDrivenContracts.html
+    lang: en
+    kind: article
+  - url: https://martinfowler.com/articles/practical-test-pyramid.html
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Как проверять совместимость независимо развёртываемых сервисов без общего e2e-стенда?
+    prompt: |
+      В системе около 40 сервисов, их развёртывают разные команды, каждая по своему графику. Сейчас совместимость
+      проверяется на одном общем стенде, где перед каждым релизом прогоняется большой набор сквозных тестов.
+      Стенд постоянно занят, тесты нестабильны, а падение одного сервиса блокирует релизы всех остальных.
+
+      Как бы вы выстроили проверку совместимости сервисов, чтобы не зависеть от общего сквозного окружения?
+      Что остаётся на долю сквозных тестов и какие у предложенного подхода риски?
+    hint: |
+      Откуда сервис-поставщик может узнать, какие именно части его API используют потребители, не запуская
+      самих потребителей?
+    answer: |
+      - **Почему общий стенд не масштабируется.** Сквозной тест проверяет всю систему сразу: он медленный,
+        нестабильный, а причину падения трудно приписать конкретному сервису и команде. Стенд превращается в очередь
+        и связывает релизы, так что независимое развёртывание остаётся только на бумаге.
+      - **Каждый сервис проверяет себя сам.** Модульные и интеграционные тесты внутри сервиса, соседние сервисы
+        заменены заглушками. Это быстро, но заглушка может незаметно разойтись с настоящим поставщиком. Этот разрыв
+        и закрывают контракты.
+      - **Контракты, управляемые потребителями (consumer-driven contracts).**
+        1. Потребитель в своих тестах описывает запросы, которые он отправляет, и минимальные ответы, на которые он
+           опирается, то есть только поля, которые он реально читает. Тесты потребителя идут против заглушки, а из
+           них получается файл контракта.
+        2. Контракты с версией потребителя публикуются в общее хранилище, например в брокер контрактов.
+        3. Пайплайн поставщика проигрывает контракты всех своих потребителей против настоящего сервиса (его
+           собственные зависимости при этом заглушены) и падает, если изменение ломает кого-то из потребителей.
+           Ошибка обнаруживается в сборке той команды, которая её внесла, и до развёртывания.
+        4. Перед развёртыванием проверяется, что версия совместима с версиями соседей, уже развёрнутыми в целевом
+           окружении (например, команда `can-i-deploy` в Pact Broker).
+      - **Асинхронное взаимодействие тоже под контрактом.** Для сообщений и событий контрактом служит схема
+        сообщения: контрактные тесты для сообщений или реестр схем с правилами обратной совместимости.
+      - **Дисциплина изменений.** Только обратно совместимые изменения API: сначала добавить новое, а старое убрать,
+        когда контракты показывают, что им больше никто не пользуется. Потребители читают ответы толерантно и
+        игнорируют незнакомые поля.
+      - **Тонкий слой сквозных тестов.** Несколько сценариев по критическим пользовательским путям (вход,
+        оформление заказа, оплата), которые запускаются после развёртывания или работают как синтетические проверки
+        в production, плюс канареечные релизы и мониторинг.
+      - **Риски и цена.** Контракт проверяет форму и смысл взаимодействия, а не бизнес-процесс целиком, и не ловит
+        ошибки конфигурации, сети и авторизации. Нужны инфраструктура (брокер, публикация, проверка в пайплайнах) и
+        договорённость о владении: ожидания пишет потребитель, а поломку исправляет поставщик. Если контракты
+        превращаются в функциональные тесты поставщика, они становятся хрупкими и мешают его развитию.
+    explanation: |
+      Общий стенд пытается доказать совместимость, собрав все версии всех сервисов в одном месте. Число
+      сочетаний версий растёт вместе с числом сервисов, а обратная связь приходит поздно и не тому, кто ошибся.
+      Это признак распределённого монолита: сервисы формально независимы, но выпускаются только вместе.
+
+      Контракты, управляемые потребителями, меняют направление знания. Обычно поставщик публикует свой контракт
+      целиком и не знает, какая его часть реально используется. Когда каждый потребитель явно описывает свои
+      ожидания, поставщик видит объединение этих ожиданий: всё, что в него входит, менять нельзя, всё остальное
+      можно развивать свободно. Проверка выполняется в пайплайне поставщика за секунды или минуты, без запуска
+      потребителей, поэтому команды сохраняют независимое развёртывание.
+
+      В пирамиде тестов контрактные тесты занимают место между интеграционными и сквозными: они дешевле сквозных и
+      ловят именно класс ошибок на границе сервисов. Поэтому сквозные тесты можно сократить до немногих
+      критических сценариев, которые проверяют, что система в сборе работает, а не каждую деталь каждого API.
+      Сильный ответ называет и пределы подхода: контракты не заменяют наблюдаемость, канареечные релизы и проверки
+      в production.
+    linkTitles:
+      - "Контракты, управляемые потребителями: паттерн развития сервисов"
+      - "Практическая пирамида тестов"
+  en:
+    title: How do you verify compatibility of independently deployed services without a shared e2e environment?
+    prompt: |
+      A system has about 40 services, deployed by different teams on their own schedules. Today compatibility is
+      checked in one shared environment, where a large end-to-end test suite runs before every release. The
+      environment is always busy, the tests are flaky, and one broken service blocks the releases of all the others.
+
+      How would you verify compatibility between the services without depending on a shared end-to-end environment?
+      What is left for end-to-end tests, and what are the risks of your approach?
+    hint: |
+      How could a provider service learn which parts of its API its consumers actually use, without starting the
+      consumers themselves?
+    answer: |
+      - **Why a shared environment does not scale.** An end-to-end test exercises the whole system at once: it is
+        slow and flaky, and a failure is hard to attribute to one service and one team. The environment becomes a
+        queue and couples the releases, so independent deployment exists only on paper.
+      - **Each service tests itself.** Unit and integration tests inside the service, with neighbouring services
+        replaced by stubs. This is fast, but a stub can silently drift away from the real provider. Contracts close
+        that gap.
+      - **Consumer-driven contracts.**
+        1. In its own tests the consumer describes the requests it sends and the minimal responses it relies on,
+           only the fields it actually reads. The consumer tests run against a stub, and they produce a contract file.
+        2. Contracts are published, with the consumer version, to a shared store such as a contract broker.
+        3. The provider pipeline replays the contracts of all its consumers against the real service (with the
+           provider's own dependencies stubbed) and fails if a change breaks any consumer. The defect is found in the
+           build of the team that introduced it, before deployment.
+        4. Before deployment the pipeline checks that the version is compatible with the versions of its neighbours
+           already deployed in the target environment (for example, the `can-i-deploy` command of Pact Broker).
+      - **Asynchronous communication is under contract too.** For messages and events the contract is the message
+        schema: contract tests for messages, or a schema registry with backward compatibility rules.
+      - **Change discipline.** Only backward compatible API changes: add the new thing first, and remove the old one
+        once the contracts show that nobody uses it. Consumers read responses tolerantly and ignore unknown fields.
+      - **A thin layer of end-to-end tests.** A few scenarios over critical user journeys (sign-in, checkout,
+        payment) that run after deployment or as synthetic checks in production, plus canary releases and monitoring.
+      - **Risks and cost.** A contract checks the shape and meaning of an interaction, not a whole business process,
+        and it does not catch configuration, network or authorization errors. It needs infrastructure (a broker,
+        publishing and verification in pipelines) and an agreement on ownership: the consumer writes the
+        expectations, the provider fixes a break. If contracts turn into functional tests of the provider, they become
+        brittle and block its evolution.
+    explanation: |
+      A shared environment tries to prove compatibility by putting every version of every service in one place.
+      The number of version combinations grows with the number of services, and feedback arrives late and to the
+      wrong person. It is a symptom of a distributed monolith: the services are formally independent but can only
+      be released together.
+
+      Consumer-driven contracts reverse the direction of knowledge. Normally a provider publishes its whole contract
+      and does not know which part of it is actually used. When every consumer states its expectations explicitly,
+      the provider sees their union: anything in it must not change, everything else can evolve freely. The check
+      runs in the provider pipeline in seconds or minutes without starting the consumers, so the teams keep
+      independent deployment.
+
+      In the test pyramid, contract tests sit between integration and end-to-end tests: they are cheaper than
+      end-to-end tests and catch exactly the class of defects at service boundaries. That is why end-to-end tests can
+      shrink to a few critical journeys that check that the assembled system works, not every detail of every API.
+      A strong answer also names the limits of the approach: contracts do not replace observability, canary releases
+      and checks in production.
+    linkTitles:
+      - "Consumer-Driven Contracts: A Service Evolution Pattern"
+      - "The Practical Test Pyramid"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

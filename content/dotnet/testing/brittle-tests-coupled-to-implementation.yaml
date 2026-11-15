@@ -1,0 +1,110 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WQJ9M6X1Q593P5BH1B
+slug: brittle-tests-coupled-to-implementation
+stack: dotnet
+topic: testing
+level: senior
+type: multi
+grading: auto
+tags: [mocks, stubs, test-design, refactoring]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: true
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+  - id: f
+    correct: false
+links:
+  - url: https://martinfowler.com/articles/mocksArentStubs.html
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/dotnet/core/testing/unit-testing-best-practices
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какие практики тестирования ломают тесты при рефакторинге, не меняющем поведение?
+    prompt: |
+      Команда жалуется, что почти любой рефакторинг делает красными десятки модульных тестов, хотя публичное
+      поведение кода не меняется. Выберите все практики, которые привязывают тесты к деталям реализации
+      и приводят к такому эффекту.
+    hint: |
+      Представьте, что вы встроили вспомогательный класс обратно в сервис или поставили кэш перед репозиторием, не меняя того, что метод возвращает и отправляет наружу. Какие проверки при этом покраснеют?
+    options:
+      a: "Проверка через мок, что `OrderService` вызвал `IDiscountCalculator.Calculate` ровно один раз, где `IDiscountCalculator` - вспомогательный класс, выделенный из `OrderService` и больше нигде не используемый."
+      b: "Проверка, что у стаба `IProductRepository.GetById` был вызов с ожидаемым id, хотя тест уже настроил, что этот метод возвращает."
+      c: "Вызов приватного метода через рефлексию (`BindingFlags.NonPublic`) и проверка его результата."
+      d: "Проверка значения, которое публичный метод возвращает для заданных входных данных."
+      e: "Проверка через мок, что в клиент шины сообщений, на которую подписаны другие сервисы, опубликовано ровно одно сообщение `OrderPlaced`."
+      f: "Запуск кода с фейковым репозиторием в памяти и проверка состояния сохранённого заказа."
+    optionExplanations:
+      d: "Возвращаемое значение - это наблюдаемый результат. Рефакторинг, сохраняющий поведение, его не меняет, поэтому тест выживает."
+      e: "Сообщение, которое потребляют другие системы, - исходящий побочный эффект и часть контракта. Если рефакторинг его меняет, меняется поведение, так что проверка через мок здесь уместна."
+      f: "Проверка итогового состояния через фейк не зависит от того, какими вызовами код к нему пришёл."
+    answer: "a, b и c: проверка вызовов внутреннего помощника, проверка вызовов стаба и тестирование приватного метода через рефлексию."
+    explanation: |
+      Рефакторинг меняет то, *как* код работает, но не то, *что* он делает. Хрупкий тест проверяет «как».
+
+      - **a.** Выделенный помощник - деталь реализации. Если его встроить обратно, разбить на два класса или
+        вызвать дважды, наблюдаемое поведение не изменится, а тест упадёт.
+      - **b.** Стаб поставляет входные данные. Читает ли код товар одним вызовом, двумя, пакетным методом или через
+        кэш - деталь реализации. К тому же проверка ничего не добавляет: если код не получит данные, неверным
+        окажется результат, и это поймает проверка результата.
+      - **c.** Приватный метод - реализация. Переименование или разбиение ломает тест, а поиск метода по строке
+        компилятор не проверяет. Рекомендации Microsoft советуют проверять приватную логику через публичный метод.
+
+      Устойчивые тесты проверяют выходные значения, итоговое состояние и исходящие побочные эффекты, которые видны
+      за границей модуля. Моки уместны именно для последних: отправка сообщения или письма и есть поведение.
+      Мартин Фаулер описывает эту разницу как классический и «мокистский» стиль: тесты второго стиля сильнее
+      связаны с реализацией.
+    linkTitles:
+      - "Мартин Фаулер: Mocks Aren't Stubs"
+      - "Рекомендации по модульному тестированию в .NET"
+  en:
+    title: Which testing practices make tests break on refactorings that do not change behaviour?
+    prompt: |
+      A team complains that almost every refactoring turns dozens of unit tests red, even though the public
+      behaviour of the code does not change. Select all practices that couple tests to implementation details
+      and cause this effect.
+    hint: |
+      Imagine you inline a helper class back into the service or put a cache in front of the repository, without changing what the method returns or sends out. Which checks turn red?
+    options:
+      a: "Verifying with a mock that `OrderService` called `IDiscountCalculator.Calculate` exactly once, where `IDiscountCalculator` is a helper extracted from `OrderService` and used nowhere else."
+      b: "Verifying that the stubbed `IProductRepository.GetById` was called with the expected id, although the test already configures what it returns."
+      c: "Calling a private method through reflection (`BindingFlags.NonPublic`) and asserting on its result."
+      d: "Asserting on the value that a public method returns for a given input."
+      e: "Verifying with a mock that exactly one `OrderPlaced` message was published to the message bus client that other services consume."
+      f: "Running the code against a fake in-memory repository and asserting on the order state it saved."
+    optionExplanations:
+      d: "The return value is the observable outcome. A behaviour-preserving refactoring does not change it, so the test survives."
+      e: "A message that other systems consume is an outgoing side effect and part of the contract. If a refactoring changes it, behaviour changes, so verifying it with a mock is appropriate here."
+      f: "Checking the resulting state through a fake does not depend on which calls the code made to get there."
+    answer: "a, b and c: verifying calls to an internal helper, verifying calls on a stub, and testing a private method through reflection."
+    explanation: |
+      A refactoring changes *how* the code works, not *what* it does. A brittle test checks the "how".
+
+      - **a.** The extracted helper is an implementation detail. Inline it, split it into two classes or call it
+        twice, and the observable behaviour stays the same while the test fails.
+      - **b.** A stub supplies input. Whether the code reads the product in one call, two calls, a batch method or
+        through a cache is an implementation detail. The check also adds nothing: if the code did not get the data,
+        the result would be wrong, and the assertion on the result would catch it.
+      - **c.** A private method is implementation. Renaming or splitting it breaks the test, and the compiler does
+        not check a method looked up by a string. Microsoft's guidance recommends checking private logic through
+        the public method.
+
+      Robust tests assert on returned values, resulting state and outgoing side effects visible outside the module.
+      Mocks belong exactly to the last group: sending a message or an email is the behaviour. Martin Fowler
+      describes this difference as the classical versus the mockist style, where mockist tests are more coupled
+      to the implementation.
+    linkTitles:
+      - "Martin Fowler: Mocks Aren't Stubs"
+      - "Unit testing best practices for .NET"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

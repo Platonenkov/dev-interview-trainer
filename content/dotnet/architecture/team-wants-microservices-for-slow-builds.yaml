@@ -1,0 +1,135 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMP1DM9B2792HJFE88
+slug: team-wants-microservices-for-slow-builds
+stack: dotnet
+topic: architecture
+level: lead
+type: situation
+grading: self
+tags: [modular-monolith, microservices, build-performance, merge-conflicts]
+links:
+  - url: https://martinfowler.com/bliki/MonolithFirst.html
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/azure/architecture/guide/architecture-styles/microservices
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Команда предлагает разделить монолит на микросервисы из-за медленной сборки и конфликтов слияния. Что вы сделаете?
+    prompt: |
+      Вы техлид команды, которая развивает монолит на ASP.NET Core. Разработчики жалуются: сборка и прогон
+      тестов в CI занимают около 40 минут, а почти каждый pull request упирается в конфликты слияния. Команда
+      предлагает разделить монолит на микросервисы, чтобы каждый сервис собирался быстро и разработчики
+      перестали мешать друг другу. Как вы примете решение и что предложите команде?
+    hint: |
+      Какая из двух жалоб действительно зависит от числа развёртываемых единиц, а какая - от структуры кода и процесса?
+    answer: |
+      1. **Разобрать это как две конкретные проблемы, а не как выбор архитектуры.** Договориться с командой
+         об измерениях: время сборки локально и в CI с разбивкой на восстановление пакетов, компиляцию, тесты
+         и ожидание в очереди; по истории git - какие файлы и папки чаще всего дают конфликты. Поставить
+         измеримые цели, например обратная связь от CI быстрее 10 минут.
+      2. **Ускорить сборку там, где реально уходит время.** Разбить решение на проекты по границам модулей,
+         чтобы изменение пересобирало только затронутый проект и зависящие от него. Кэшировать восстановление
+         NuGet и результаты сборки в CI, запускать независимые тестовые проекты параллельно, медленные
+         интеграционные тесты вынести в отдельный этап, убрать работу, которую не нужно делать на каждый коммит.
+      3. **Убрать горячие точки конфликтов.** Типичные виновники: общий `Program.cs` со всеми регистрациями,
+         один огромный `DbContext` с общей папкой миграций, разросшиеся общие перечисления и константы, версии
+         пакетов, продублированные в каждом `.csproj`. Каждый модуль регистрирует свои сервисы через метод
+         расширения и владеет своей конфигурацией данных, версии пакетов задаются централизованно в
+         `Directory.Packages.props`. Со стороны процесса - короткоживущие ветки, которые сливаются каждый день,
+         незавершённая работа за feature-флагами, владельцы кода по модулям.
+      4. **Превратить монолит в модульный монолит.** Модули выделяются по бизнес-возможностям, открывают
+         небольшой публичный контракт и прячут остальное, владеют своими данными, а границы проверяются
+         автоматически в CI. Этот шаг всё равно понадобился бы перед выделением микросервисов.
+      5. **Договориться, когда модуль становится сервисом.** Только ради конкретной потребности, которую модуль
+         в общем процессе не закрывает: независимое масштабирование нагруженной части, другой темп релизов или
+         другие требования к доступности, отдельная команда, которую блокирует общий релиз, изоляция рискованной
+         зависимости. И только после того, как граница модуля какое-то время не менялась, а у команды есть
+         автоматическое развёртывание, мониторинг и трассировка для нескольких сервисов.
+      6. **Зафиксировать решение.** Записать его в ADR вместе с измерениями, выбранными шагами и условиями
+         пересмотра, через несколько итераций сверить метрики с командой. Если модуль соответствует критериям,
+         выделять его уже тогда, по одному за раз.
+    explanation: |
+      Микросервисы меняют единицу развёртывания, а не качество кода. Медленная сборка запутанного кода
+      превращается в несколько сборок плюс интеграционные тесты между сервисами, версионирование контрактов и
+      согласованные выкладки. Конфликты слияния в общем коде превращаются в несовместимые изменения между
+      сервисами, которые сложнее заметить: компилятор их больше не видит. Если границы проведены неверно,
+      получается распределённый монолит - сервисы, которые приходится менять и выпускать вместе, с сетевыми
+      вызовами и распределёнными транзакциями в придачу.
+
+      Аргумент Мартина Фаулера в пользу подхода "сначала монолит": правильные границы трудно угадать заранее,
+      а переносить функциональность между сервисами намного сложнее, чем внутри монолита. Поэтому границы
+      сначала стабилизируют в виде модулей. Руководство Microsoft по архитектурному стилю микросервисов
+      показывает, что нужно такой системе помимо самих сервисов: оркестрация и развёртывание, API-шлюз, обмен
+      сообщениями, наблюдаемость с централизованными логами и распределённой трассировкой, отдельные данные у
+      каждого сервиса. Главные преимущества, которые оно называет, связаны с независимым развёртыванием и
+      небольшими командами, владеющими своим сервисом. Эту цену стоит платить за независимые развёртывание,
+      масштабирование и владение, а не за скорость сборки.
+
+      Для лида важна и командная сторона. Боль команды настоящая, и простой отказ подорвёт доверие. Если
+      превратить предложение в измеримые цели и проверяемые шаги, команда получает быстрый результат, а
+      микросервисы остаются вариантом с понятными критериями, а не спором вкусов.
+    linkTitles:
+      - "Monolith First (Мартин Фаулер)"
+      - "Архитектурный стиль микросервисов"
+  en:
+    title: The team wants to split the monolith into microservices because builds are slow and merges conflict. What do you do?
+    prompt: |
+      You are the tech lead of a team that develops an ASP.NET Core monolith. Developers complain that the
+      build and test run in CI takes about 40 minutes, and almost every pull request runs into merge
+      conflicts. The team proposes splitting the monolith into microservices so that each service builds
+      quickly and developers stop getting in each other's way. How do you decide, and what do you propose?
+    hint: |
+      Which of the two complaints really depends on the number of deployable units, and which on the structure of the code and the process?
+    answer: |
+      1. **Treat it as two concrete problems, not yet as an architecture choice.** Agree with the team on
+         measurements: build time locally and in CI broken down into package restore, compilation, tests and
+         queue waiting; and from the git history, which files and folders cause most conflicts. Set measurable
+         targets, for example CI feedback in under 10 minutes.
+      2. **Speed up the build where the time actually goes.** Split the solution into projects along module
+         boundaries, so that a change rebuilds only the affected project and its dependents. Cache NuGet restore
+         and build outputs in CI, run independent test projects in parallel, move slow integration tests to a
+         separate stage, and drop work that does not need to run on every commit.
+      3. **Remove the conflict hotspots.** Typical culprits: a shared `Program.cs` with every registration, one
+         huge `DbContext` with a shared migrations folder, overgrown shared enums and constants, package versions
+         repeated in every `.csproj`. Each module registers its own services through an extension method and owns
+         its data configuration, and package versions are set centrally in `Directory.Packages.props`. On the
+         process side: short-lived branches merged daily, unfinished work behind feature flags, code owners per
+         module.
+      4. **Turn the monolith into a modular monolith.** Modules follow business capabilities, expose a small
+         public contract and hide the rest, own their data, and the boundaries are checked automatically in CI.
+         This step would be needed before extracting microservices anyway.
+      5. **Agree when a module becomes a service.** Only for a concrete need that a module in a shared process
+         cannot meet: independent scaling of a hot part, a different release cadence or availability
+         requirement, a separate team that is blocked by the shared release, isolation of a risky dependency.
+         And only after the module boundary has stayed stable for a while, and the team has automated deployment,
+         monitoring and tracing for several services.
+      6. **Record the decision.** Write it down in an ADR with the measurements, the chosen steps and the
+         conditions for revisiting it, and review the metrics with the team after a few iterations. If a module
+         meets the criteria, extract it then, one at a time.
+    explanation: |
+      Microservices change the unit of deployment, not the quality of the code. A slow build of a tangled
+      codebase turns into several builds plus integration tests across services, contract versioning and
+      coordinated releases. Merge conflicts in shared code turn into breaking changes between services that are
+      harder to notice, because the compiler no longer sees them. If the boundaries are drawn in the wrong place,
+      the result is a distributed monolith: services that must be changed and released together, with network
+      calls and distributed transactions on top.
+
+      Martin Fowler's "monolith first" argument: the right boundaries are hard to guess up front, and moving
+      functionality between services is much harder than inside a monolith. So the boundaries are stabilised as
+      modules first. The Microsoft guide to the microservices architecture style shows what such a system needs
+      besides the services themselves: orchestration and deployment, an API gateway, messaging, observability
+      with centralised logging and distributed tracing, and separate data per service. The main benefits it
+      names come from independent deployment and small teams that own their service. That cost is worth paying
+      for independent deployment, scaling and ownership, not for build speed.
+
+      For a lead the team side matters too. The team's pain is real, and a flat refusal costs trust. Turning the
+      proposal into measurable goals and verifiable steps gives the team a quick win and keeps microservices as
+      an option with clear criteria instead of a matter of taste.
+    linkTitles:
+      - "Monolith First (Martin Fowler)"
+      - "Microservice architecture style"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

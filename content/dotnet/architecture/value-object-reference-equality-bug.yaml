@@ -1,0 +1,103 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WM7N3M1HS18RXKWXA6
+slug: value-object-reference-equality-bug
+stack: dotnet
+topic: architecture
+level: middle
+type: find-bug
+grading: auto
+tags: [ddd, value-object, records, equality]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    Money price = new Money(100m, "USD");
+    Money sameAmount = new Money(100m, "USD");
+    Console.WriteLine(price == sameAmount ? "same price" : "prices differ");
+
+    class Money
+    {
+        public decimal Amount { get; }
+        public string Currency { get; }
+
+        public Money(decimal amount, string currency)
+        {
+            Amount = amount;
+            Currency = currency;
+        }
+    }
+bugLineSets: [[5]]
+fixedSource: |
+  Money price = new Money(100m, "USD");
+  Money sameAmount = new Money(100m, "USD");
+  Console.WriteLine(price == sameAmount ? "same price" : "prices differ");
+
+  record Money(decimal Amount, string Currency);
+fixedExpect: { kind: output, value: "same price" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/architecture/microservices/microservice-ddd-cqrs-patterns/implement-value-objects
+    lang: en
+    kind: docs
+  - url: https://martinfowler.com/bliki/ValueObject.html
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/record
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему две одинаковые суммы Money оказываются не равны?
+    prompt: |
+      `Money` задуман как объект-значение в терминах DDD. Программа сравнивает две цены по 100 USD и должна
+      вывести `same price`, но выводит `prices differ`. Щёлкните по строке, которая нарушает семантику
+      объекта-значения.
+    hint: Как оператор `==` сравнивает два экземпляра класса, если в классе ничего не переопределено?
+    answer: Строка 5, объявление `class Money` без собственного равенства - `==` сравнивает ссылки, а не значения.
+    explanation: |
+      Объект-значение определяется своими значениями, а не идентичностью: две суммы по 100 USD - это одна и
+      та же цена. Значит, у такого типа должно быть структурное равенство. Обычный класс без переопределений
+      наследует равенство по ссылке от `object`, и `==` для двух разных экземпляров возвращает `false`, даже
+      если все свойства совпадают.
+
+      Самое короткое исправление - объявить `Money` как `record` (C# 9 и выше; пример проверяется на .NET 10).
+      Компилятор сгенерирует `Equals`, `GetHashCode` и операторы `==` и `!=`, сравнивающие значения свойств,
+      а позиционный синтаксис сделает свойства доступными только для инициализации, что соответствует
+      неизменяемости объекта-значения.
+
+      Если нужен обычный класс, придётся переопределить `Equals` и `GetHashCode` и дополнительно перегрузить
+      `==` и `!=`: переопределение одного `Equals` не меняет поведение оператора `==` для классов. В
+      руководстве Microsoft для этого используется базовый класс `ValueObject` с методом
+      `GetEqualityComponents`.
+    linkTitles:
+      - "Реализация объектов-значений"
+      - "Мартин Фаулер: Value Object"
+      - "Записи (справочник по C#)"
+  en:
+    title: Why are two equal Money amounts not equal?
+    prompt: |
+      `Money` is meant to be a value object in DDD terms. The program compares two prices of 100 USD and
+      should print `same price`, but it prints `prices differ`. Click the line that breaks value-object
+      semantics.
+    hint: How does the `==` operator compare two instances of a class when the class overrides nothing?
+    answer: Line 5, the declaration `class Money` with no equality of its own, so `==` compares references, not values.
+    explanation: |
+      A value object is defined by its values, not by an identity: two amounts of 100 USD are the same price.
+      So the type needs structural equality. A plain class with no overrides inherits reference equality from
+      `object`, and `==` on two distinct instances returns `false` even when all properties match.
+
+      The shortest fix is to declare `Money` as a `record` (C# 9 and later; the snippet is checked on .NET 10).
+      The compiler generates `Equals`, `GetHashCode` and the `==` and `!=` operators that compare property
+      values, and the positional syntax makes the properties init-only, which matches the immutability of a
+      value object.
+
+      If you need a plain class, you must override `Equals` and `GetHashCode` and also overload `==` and `!=`:
+      overriding `Equals` alone does not change what the `==` operator does for classes. The Microsoft guide
+      does this with a `ValueObject` base class and a `GetEqualityComponents` method.
+    linkTitles:
+      - "Implement value objects"
+      - "Martin Fowler: Value Object"
+      - "Records (C# reference)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

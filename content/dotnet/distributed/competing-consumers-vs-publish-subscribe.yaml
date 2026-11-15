@@ -1,0 +1,119 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNR81QPXTG5E8RCQDR
+slug: competing-consumers-vs-publish-subscribe
+stack: dotnet
+topic: distributed
+level: junior
+type: single
+grading: auto
+tags: [queues, competing-consumers, publish-subscribe, messaging]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/azure/architecture/patterns/competing-consumers
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/azure/architecture/patterns/publisher-subscriber
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/azure/service-bus-messaging/service-bus-queues-topics-subscriptions
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Сколько получателей обработают сообщение из общей очереди и из топика с подписками?
+    prompt: |
+      Сервис заказов запущен в трёх экземплярах, и все три читают одну и ту же очередь (модель point-to-point).
+
+      В другой части системы сообщение публикуется в топик, у которого три подписки. У каждой подписки свой
+      получатель: сервис уведомлений, сервис аналитики и сервис склада.
+
+      Сколько получателей обработают одно сообщение в каждом из двух случаев, если сбоев и повторных доставок нет?
+    hint: Нужно ли брокеру отдавать одно и то же сообщение каждому читателю, если все читатели выполняют одинаковую работу?
+    options:
+      a: "Очередь - все три экземпляра, топик - все три подписчика."
+      b: "Очередь - ровно один экземпляр, топик - каждый из трёх подписчиков получает свою копию."
+      c: "Очередь - ровно один экземпляр, топик - тоже ровно один подписчик."
+      d: "Очередь - все три экземпляра, топик - ровно один подписчик."
+    optionExplanations:
+      a: "Экземпляры над одной очередью - это конкурирующие потребители, и брокер отдаёт каждое сообщение только одному из них. Если бы каждый экземпляр обрабатывал каждое сообщение, новые экземпляры не ускоряли бы обработку, а каждый заказ обрабатывался бы трижды."
+      c: "Топик с подписками работает по модели публикации-подписки. Каждая подписка получает свою копию сообщения, поэтому сообщение получат все три сервиса, а не один."
+      d: "Здесь перепутаны обе модели. Очередь распределяет сообщения между потребителями, а топик даёт копию сообщения каждой подписке."
+    answer: "Из очереди сообщение обработает ровно один экземпляр, а из топика - каждый из трёх подписчиков, у каждого своя копия."
+    explanation: |
+      Это две разные модели доставки, и они решают разные задачи.
+
+      - **Конкурирующие потребители (Competing Consumers).** Несколько экземпляров читают одну очередь и
+        соревнуются за сообщения. Каждое сообщение получает и обрабатывает только один экземпляр. Так
+        масштабируют обработку и распределяют нагрузку: больше экземпляров - больше сообщений в секунду, но
+        каждое сообщение обрабатывается один раз.
+      - **Публикация-подписка (Publisher-Subscriber).** Отправитель публикует событие во входной канал и не
+        знает получателей. У каждого подписчика свой выходной канал, и система обмена сообщениями копирует
+        сообщение из входного канала в выходные каналы всех заинтересованных подписчиков. В Azure Service Bus
+        входной канал - это топик, а выходные каналы - подписки: каждая подписка получает копию сообщения,
+        поэтому каждый сервис обрабатывает событие независимо от остальных.
+
+      На практике модели комбинируют: если сервис склада запущен в трёх экземплярах и все они читают одну
+      подписку, то внутри этой подписки они снова конкурируют, и событие обработает один экземпляр склада.
+
+      Оговорка «без сбоев» важна: брокеры обычно дают доставку «хотя бы один раз». Например, в Azure Service
+      Bus в режиме PeekLock полученное сообщение блокируется и скрыто от других потребителей. Если обработчик
+      упал и не вызвал `Complete`, сообщение снова становится доступным и может быть доставлено другому
+      экземпляру, поэтому обработчики должны быть идемпотентными.
+    linkTitles:
+      - "Паттерн Competing Consumers"
+      - "Паттерн Publisher-Subscriber"
+      - "Очереди, топики и подписки Service Bus"
+  en:
+    title: How many receivers process a message from a shared queue and from a topic with subscriptions?
+    prompt: |
+      An order service runs as three instances, and all three read the same queue (the point-to-point model).
+
+      Elsewhere in the system a message is published to a topic that has three subscriptions. Each subscription
+      has its own receiver: a notification service, an analytics service and a warehouse service.
+
+      How many receivers process one message in each of the two cases, assuming no failures and no redeliveries?
+    hint: Does the broker need to give the same message to every reader when all the readers do the same job?
+    options:
+      a: "Queue - all three instances, topic - all three subscribers."
+      b: "Queue - exactly one instance, topic - each of the three subscribers gets its own copy."
+      c: "Queue - exactly one instance, topic - also exactly one subscriber."
+      d: "Queue - all three instances, topic - exactly one subscriber."
+    optionExplanations:
+      a: "Instances reading one queue are competing consumers, and the broker hands each message to only one of them. If every instance processed every message, adding instances would not speed up processing and every order would be processed three times."
+      c: "A topic with subscriptions follows the publish-subscribe model. Each subscription gets its own copy of the message, so all three services receive it, not just one."
+      d: "This mixes up both models. A queue distributes messages among its consumers, while a topic gives a copy of the message to every subscription."
+    answer: "From the queue exactly one instance processes the message, and from the topic each of the three subscribers does, each with its own copy."
+    explanation: |
+      These are two different delivery models, and they solve different problems.
+
+      - **Competing Consumers.** Several instances read one queue and compete for messages. Each message is
+        received and processed by only one instance. This is how you scale processing and spread load: more
+        instances mean more messages per second, but each message is still processed once.
+      - **Publisher-Subscriber.** The sender publishes an event to an input channel without knowing the
+        receivers. Each subscriber has its own output channel, and the messaging system copies the message from
+        the input channel to the output channels of all interested subscribers. In Azure Service Bus the input
+        channel is a topic and the output channels are subscriptions: every subscription receives a copy of the
+        message, so every service processes the event independently of the others.
+
+      In practice the models are combined: if the warehouse service runs as three instances that all read one
+      subscription, they compete again inside that subscription, and one warehouse instance processes the event.
+
+      The "no failures" condition matters: brokers usually deliver at least once. For example, in Azure Service
+      Bus PeekLock mode a received message is locked and hidden from other consumers. If the handler crashes
+      without calling `Complete`, the message becomes available again and can be delivered to another instance,
+      so handlers must be idempotent.
+    linkTitles:
+      - "Competing Consumers pattern"
+      - "Publisher-Subscriber pattern"
+      - "Service Bus queues, topics, and subscriptions"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

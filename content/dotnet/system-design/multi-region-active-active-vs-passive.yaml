@@ -1,0 +1,175 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WQF45112BZCW12QF1Y
+slug: multi-region-active-active-vs-passive
+stack: dotnet
+topic: system-design
+level: architect
+type: situation
+grading: self
+tags: [multi-region, disaster-recovery, active-active, active-passive, rto, rpo]
+links:
+  - url: https://learn.microsoft.com/en-us/azure/architecture/patterns/geodes
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/azure/well-architected/reliability/metrics
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/azure/well-architected/reliability/disaster-recovery
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как выбрать между active-passive и active-active, если сервис должен пережить отказ целого региона?
+    prompt: |
+      Сервис (API на ASP.NET Core, реляционная база данных и очередь сообщений) работает в одном облачном
+      регионе. После громкой аварии у облачного провайдера бизнес требует, чтобы сервис пережил полный отказ
+      региона. Команда спорит, что строить: развёртывание active-passive с резервным регионом или active-active,
+      где оба региона обслуживают трафик. Как вы примете решение, какие вопросы зададите бизнесу и какую цену
+      назовёте у каждого варианта?
+    hint: |
+      Что после потери региона восстановить сложнее - вычисления или данные, и сколько последних данных бизнес готов потерять?
+    answer: |
+      1. **Перевести «пережить отказ» в числа.** Договориться с бизнесом о RTO (сколько времени процесс может
+         быть недоступен) и RPO (сколько последних данных можно потерять) для каждого критичного бизнес-процесса,
+         а не одно число на всю систему, плюс бюджет и требования к размещению данных. Проверить, что сценарий
+         действительно отказ региона: отказ одного дата-центра закрывают зоны доступности, и это намного дешевле.
+      2. **Классифицировать данные.** Балансы, остатки и платежи требуют одного источника записи и строгой
+         согласованности. Каталоги, настройки и кэши терпят задержку репликации. Данные пользователя или
+         арендатора часто можно разделить по домашнему региону. Выбор определяют данные, а не вычисления без
+         состояния.
+      3. **Честно оценить active-passive.** Резервный регион - тёплый резерв (или только инфраструктура, готовая
+         к масштабированию), база реплицируется асинхронно. RPO равен задержке репликации в момент аварии. RTO -
+         это обнаружение, решение о переключении, повышение реплики до основной, переключение трафика (TTL DNS,
+         глобальный балансировщик) и прогрев. Синхронная репликация между регионами даёт RPO около нуля, но
+         добавляет к каждой записи задержку на путь между регионами. Риски: переключение, которое ни разу не
+         проверяли на учениях, не срабатывает; резервный регион расходится по конфигурации; во время массовой
+         аварии в нём может не хватить мощностей; а при возвращении старого основного узла появляются два
+         источника записи (split brain).
+      4. **Честно оценить active-active.** Оба региона обслуживают трафик за глобальным балансировщиком, потеря
+         региона - это изменение маршрутизации, поэтому RTO для части без состояния близок к нулю. Для записи
+         есть три варианта, и у каждого своя цена: запись в нескольких регионах с разрешением конфликтов
+         (последняя запись побеждает, слияние, бесконфликтные реплицируемые типы данных) подходит только данным,
+         которые терпят параллельные изменения; разделение записи по домашнему региону означает, что при потере
+         региона его часть данных всё равно требует переключения; глобально согласованная база заставляет каждую
+         запись платить межрегиональной задержкой. Если после потери региона нужно обслуживать всю нагрузку без
+         деградации, то при двух одинаковых регионах каждый в обычном режиме загружен не больше чем примерно
+         наполовину.
+      5. **Решать по процессам и часто комбинировать.** Если допустимы часы RTO и минуты RPO, тёплый резерв
+         active-passive дешевле и проще. Если нужны минуты RTO и RPO около нуля, а данные можно разделить или
+         слить, - active-active. Частый итог - гибрид: сервисы без состояния и чтение работают в обоих регионах,
+         а критичные данные пишутся в одном месте с автоматическим переключением.
+      6. **Сделать так, чтобы это работало.** Автоматизированное переключение с инструкцией и регулярными
+         учениями, мониторинг задержки репликации относительно целевого RPO, идемпотентные операции, чтобы
+         повторы во время переключения не дублировали работу, и все зависимости (идентификация, секреты,
+         очереди, внешние провайдеры) тоже доступны во втором регионе. Развёртывание во все регионы из одного
+         конвейера, чтобы они не расходились.
+      7. **Назвать цену.** Active-active примерно удваивает инфраструктуру и заметно усложняет разработку и
+         эксплуатацию. Представить варианты как сравнение стоимости простоя и стоимости устойчивости и дать
+         бизнесу выбрать по числам.
+    explanation: |
+      Устойчивость к отказу региона - прежде всего задача про данные. Вычисления без состояния можно запустить
+      где угодно, а данные, записанные в одном регионе, попадают в другой только после репликации. Пока регионы
+      не видят друг друга, система должна выбрать: принимать запись в обоих и разрешать конфликты потом или
+      отказывать в записи в одном из них и сохранять согласованность. Active-passive выбирает согласованность и
+      платит простоем и потерей последних записей. Active-active выбирает доступность и платит конфликтами или
+      моделью записи, спроектированной вокруг них.
+
+      Поэтому утверждение «active-active даёт нулевой простой» верно только наполовину: оно верно для запросов,
+      которые уцелевший регион может обслужить без данных и сервисов утраченного региона. Паттерн Geode из Azure
+      Architecture Center описывает такое развёртывание: региональные развёртывания (геоды) позволяют продолжать
+      обслуживать критичные запросы во время отказа региона, а устойчивость дают региональные развёртывания и
+      репликация данных. Там же сказано, что паттерн не подходит, если состояние сессии или зависимости от данных
+      привязывают запросы к одному региону, и что существующим приложениям могут понадобиться изменения в
+      управлении состоянием и репликации данных. Отсюда наш вывод: запись из одного региона приходит в другой с
+      задержкой, и приложение должно либо терпеть эту задержку, либо разделять запись по регионам.
+
+      Руководство Well-Architected по целевым показателям надёжности различает два сценария нескольких регионов:
+      паттерн высокой доступности, где нагрузка распределяется по регионам и пользователи не привязаны к региону,
+      и паттерн «переборки», где клиенты закреплены за конкретными регионами. Это тот же выбор между записью в
+      нескольких регионах и домашним регионом. Там же советуют учитывать разную критичность потоков при расчёте
+      составных целей, поэтому RTO и RPO, которые определяет стратегия аварийного восстановления, тоже стоит
+      задавать по процессам: оформление заказа и аналитический отчёт стоят при простое по-разному. Без этих чисел
+      выбор сводится к вкусу, и обычно побеждает самый дорогой вариант. Сильный ответ архитектора называет, чего
+      не умеет каждый вариант: active-passive не даёт нулевого RPO при асинхронной репликации, а active-active не
+      даёт строгой согласованности параллельных записей без межрегиональной задержки.
+    linkTitles:
+      - "Паттерн Geode"
+      - "Стратегии архитектуры для определения целевых показателей надёжности"
+      - "Стратегии архитектуры для проектирования аварийного восстановления"
+  en:
+    title: How do you choose between active-passive and active-active when a service must survive a full region outage?
+    prompt: |
+      A service (an ASP.NET Core API, a relational database and a message queue) runs in one cloud region.
+      After a well-known outage at the cloud provider, the business demands that the service survive the loss
+      of a whole region. The team argues about what to build: an active-passive deployment with a standby region,
+      or active-active, where both regions serve traffic. How do you make the decision, which questions do you
+      ask the business, and what price do you name for each option?
+    hint: |
+      After a region is lost, what is harder to restore - compute or data, and how much recent data is the business willing to lose?
+    answer: |
+      1. **Turn "survive" into numbers.** Agree with the business on RTO (how long a flow may be unavailable)
+         and RPO (how much recent data may be lost) for each critical business flow, not one figure for the whole
+         system, plus the budget and data residency requirements. Check that the scenario really is a region
+         outage: availability zones cover the loss of one datacenter, at a much lower price.
+      2. **Classify the data.** Balances, stock and payments need a single writer and strong consistency.
+         Catalogs, settings and caches tolerate replication lag. User or tenant data can often be partitioned by a
+         home region. The data, not the stateless compute, decides the option.
+      3. **Estimate active-passive honestly.** The secondary region is a warm standby (or only infrastructure
+         ready to scale up), and the database is replicated asynchronously. RPO equals the replication lag at the
+         moment of failure. RTO is detection, the decision to fail over, promoting the replica, switching traffic
+         (DNS TTL, a global load balancer) and warm-up. Synchronous cross-region replication brings RPO close to
+         zero but adds the round trip between regions to every write. Risks: a failover that has never been
+         tested in a drill does not work; the standby drifts in configuration; it may lack capacity during a large
+         outage; and when the old primary comes back there can be two writers (split brain).
+      4. **Estimate active-active honestly.** Both regions serve traffic behind a global load balancer, and
+         losing a region is a routing change, so RTO for the stateless part is close to zero. For writes there are
+         three options, each with its price: multi-region writes with conflict resolution (last writer wins,
+         merge, conflict-free replicated data types) fit only data that tolerates concurrent changes; partitioning
+         writes by home region means that losing a region still requires a failover for its share of the data; a
+         globally consistent database makes every write pay cross-region latency. If the full load must be served
+         without degradation after losing a region, then with two equal regions each runs at no more than about
+         half capacity in normal operation.
+      5. **Decide per flow and often combine.** If hours of RTO and minutes of RPO are acceptable, an
+         active-passive warm standby is cheaper and simpler. If the business needs minutes of RTO and near-zero
+         RPO, and the data can be partitioned or merged, choose active-active. A common result is a hybrid:
+         stateless services and reads run in both regions, while critical data has a single writer with automated
+         failover.
+      6. **Make it actually work.** Automated failover with a runbook and regular drills, replication lag
+         monitored against the RPO target, idempotent operations so that retries during the switch do not
+         duplicate work, and every dependency (identity, secrets, queues, external providers) also available in
+         the second region. Deploy to all regions from one pipeline so that they do not drift apart.
+      7. **Name the price.** Active-active roughly doubles the infrastructure and noticeably increases
+         development and operations complexity. Present the options as the cost of downtime versus the cost of
+         resilience, and let the business choose using the numbers.
+    explanation: |
+      Surviving a region outage is above all a data problem. Stateless compute can be started anywhere, but data
+      written in one region reaches another only after replication. While the regions cannot see each other, the
+      system has to choose: keep accepting writes in both and resolve conflicts later, or refuse writes in one of
+      them and stay consistent. Active-passive chooses consistency and pays with downtime and lost recent writes.
+      Active-active chooses availability and pays with conflicts or with a write model designed around them.
+
+      That is why "active-active gives zero downtime" is only half true: it holds for requests that the surviving
+      region can serve without the data and services of the lost region. The Geode pattern in the Azure
+      Architecture Center describes such a deployment: regional deployments (geodes) let the workload keep serving
+      critical requests during a regional outage, and regional deployments and data replication provide that
+      resilience. The same page says the pattern does not fit when session state or data dependencies bind
+      requests to one region, and that existing applications may need changes to state management and data
+      replication. Our conclusion from this: a write made in one region reaches another with a delay, and the
+      application must either tolerate that delay or partition writes by region.
+
+      The Well-Architected guidance on reliability targets distinguishes two multiregion use cases: a high
+      availability pattern that distributes load across regions and does not restrict users to a region, and a
+      bulkhead pattern that restricts customers to specific regions. That is the same choice as multi-region
+      writes versus a home region. It also advises considering the different criticality of flows when building
+      composite targets, so RTO and RPO, which a disaster recovery strategy defines, are best set per flow as
+      well: checkout and an analytics report have different costs of downtime. Without these numbers the choice
+      comes down to taste, and the most expensive option usually wins. A strong architect's answer names what each
+      option cannot do: active-passive cannot give zero RPO with asynchronous replication, and active-active
+      cannot give strong consistency for concurrent writes without cross-region latency.
+    linkTitles:
+      - "Geode pattern"
+      - "Architecture strategies for defining reliability targets"
+      - "Architecture strategies for designing a disaster recovery strategy"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

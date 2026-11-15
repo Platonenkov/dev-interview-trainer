@@ -1,0 +1,121 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WQYGNZC5474ZQT0PX0
+slug: rate-limit-per-instance-scale-out
+stack: dotnet
+topic: system-design
+level: senior
+type: open
+grading: self
+tags: [rate-limiting, scale-out, aspnet-core, distributed-state]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/performance/rate-limit
+    lang: en
+    kind: docs
+  - url: https://github.com/dotnet/runtime/tree/main/src/libraries/System.Threading.RateLimiting
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/azure/api-management/rate-limit-by-key-policy
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какой лимит запросов получают клиенты, если API с rate limiting в ASP.NET Core масштабировали до 6 экземпляров?
+    prompt: |
+      Команда настроила встроенный middleware ограничения частоты запросов ASP.NET Core (появился в .NET 7,
+      поведение описано для .NET 10): 100 запросов в минуту на клиента. Затем API масштабировали до 6
+      экземпляров за балансировщиком нагрузки. Какой лимит на самом деле получают клиенты и как бы вы
+      обеспечили глобальный лимит 100 запросов в минуту?
+    hint: Что знает один процесс о запросах, которые обработали другие копии приложения?
+    answer: |
+      1. **Фактический лимит.** Каждый экземпляр считает запросы сам, в памяти своего процесса. При
+         равномерной балансировке (например, round-robin) клиент получает до 100 x 6 = 600 запросов в минуту.
+         Точное число зависит от того, как балансировщик раскладывает запросы: с привязкой сессий оно ближе к
+         100, при автомасштабировании меняется вместе с числом экземпляров, а перезапуск или деплой обнуляет
+         счётчики. Лимит перестаёт быть контрактом.
+      2. **Причина.** `AddRateLimiter` регистрирует лимитеры из `System.Threading.RateLimiting`. Для каждого
+         ключа партиции (`RateLimitPartition`) создаётся обычный объект в памяти процесса, например
+         `FixedWindowRateLimiter` или `TokenBucketRateLimiter`, и счётчик разрешений, границы окна и очередь
+         хранятся в его полях. Распределённого хранилища для этих лимитеров в ASP.NET Core нет, поэтому
+         экземпляры никак не согласуют счётчики между собой.
+      3. **Глобальный лимит - варианты.**
+         - **Ограничение на шлюзе** перед экземплярами (API gateway, например политика `rate-limit-by-key` в
+           Azure API Management, или обратный прокси): лимит считается в одном месте до балансировки. Если сам
+           шлюз масштабирован, нужно проверить, как он делит счётчики между своими узлами.
+         - **Общее хранилище счётчиков**, обычно Redis: атомарный инкремент с временем жизни ключа для
+           фиксированного окна или скрипт для скользящего окна и token bucket. Реализуется как собственный
+           `RateLimiter`/`PartitionedRateLimiter` или отдельный middleware. Цена - сетевой запрос на каждый
+           входящий запрос и новая зависимость: заранее решить, что делать при недоступности Redis (пропускать
+           запросы или отклонять).
+         - **Приближение без общего состояния:** делить лимит на число экземпляров (около 16-17 на экземпляр).
+           Дёшево, но неточно при неравномерной балансировке и автомасштабировании.
+      4. **Сопутствующее.** Ключ партиции - аутентифицированный клиент или API-ключ, а не IP за прокси.
+         Отвечать `429` (по умолчанию middleware отвечает `503`, это меняется через `RejectionStatusCode`).
+         Локальные лимитеры, например concurrency, полезно оставить как защиту каждого экземпляра от перегрузки.
+    explanation: |
+      Встроенный middleware задуман как защита отдельного процесса. Документация описывает лимитеры как
+      объекты внутри приложения: у лимитера, созданного напрямую, может быть свой таймер пополнения, а хелперы
+      вроде `AddTokenBucketLimiter` пополняют все свои лимитеры от одного общего таймера. Ни один из этих
+      механизмов не выходит за пределы процесса, поэтому лимит «на клиента» фактически превращается в лимит
+      «на клиента на экземпляр». Горизонтальное масштабирование незаметно умножает его, и это проявляется
+      только под нагрузкой или при злоупотреблении.
+
+      Глобальный лимит требует единой точки учёта: либо всё проходит через шлюз, который считает запросы, либо
+      экземпляры делят счётчики через общее хранилище. Оба варианта добавляют задержку и зависимость, поэтому
+      выбор определяется тем, насколько точным должен быть лимит: для биллинга и тарифных квот нужна точность,
+      для защиты от перегрузки часто хватает приближения на каждом экземпляре.
+    linkTitles:
+      - "Rate limiting middleware в ASP.NET Core"
+      - "Исходный код System.Threading.RateLimiting (dotnet/runtime)"
+      - "Политика rate-limit-by-key в Azure API Management"
+  en:
+    title: What limit do clients get when an API with ASP.NET Core rate limiting is scaled out to 6 instances?
+    prompt: |
+      A team configured the built-in ASP.NET Core rate limiting middleware (introduced in .NET 7, behaviour
+      described for .NET 10): 100 requests per minute per client. Then the API was scaled out to 6 instances
+      behind a load balancer. What limit do clients actually get, and how would you enforce a global limit of
+      100 requests per minute?
+    hint: What does a single process know about requests that were served by other copies of the app?
+    answer: |
+      1. **The actual limit.** Each instance counts requests on its own, in the memory of its process. With
+         even balancing (for example round-robin) a client gets up to 100 x 6 = 600 requests per minute. The
+         exact number depends on how the load balancer spreads requests: with session affinity it is closer to
+         100, with autoscaling it changes with the instance count, and a restart or deployment resets the
+         counters. The limit stops being a contract.
+      2. **The reason.** `AddRateLimiter` registers limiters from `System.Threading.RateLimiting`. For each
+         partition key (`RateLimitPartition`) an ordinary in-process object is created, for example a
+         `FixedWindowRateLimiter` or a `TokenBucketRateLimiter`, and the permit count, window boundaries and
+         queue live in its fields. ASP.NET Core has no distributed store for these limiters, so the instances
+         do not coordinate their counters in any way.
+      3. **Global limit options.**
+         - **Enforce at a gateway** in front of the instances (an API gateway, for example the `rate-limit-by-key`
+           policy in Azure API Management, or a reverse proxy): the limit is counted in one place before load
+           balancing. If the gateway itself is scaled out, check how it shares counters between its nodes.
+         - **A shared counter store**, usually Redis: an atomic increment with a key expiry for a fixed window,
+           or a script for a sliding window or token bucket. Implement it as a custom
+           `RateLimiter`/`PartitionedRateLimiter` or a separate middleware. The cost is a network call per
+           incoming request and a new dependency: decide up front what happens when Redis is unavailable (let
+           requests through or reject them).
+         - **An approximation without shared state:** divide the limit by the instance count (about 16-17 per
+           instance). Cheap, but inaccurate with uneven balancing and autoscaling.
+      4. **Related points.** Partition by the authenticated client or API key, not by IP behind a proxy.
+         Respond with `429` (by default the middleware responds with `503`, which `RejectionStatusCode`
+         changes). Keep local limiters, such as a concurrency limiter, to protect each instance from overload.
+    explanation: |
+      The built-in middleware is designed to protect a single process. The documentation describes limiters as
+      objects inside the app: a limiter constructed directly can have its own replenishment timer, while helpers
+      such as `AddTokenBucketLimiter` replenish all their limiters from one shared timer. None of these
+      mechanisms reaches beyond the process, so a limit "per client" effectively becomes a limit "per client
+      per instance". Scaling out silently multiplies it, and this shows up only under load or abuse.
+
+      A global limit needs a single point of accounting: either all traffic passes through a gateway that
+      counts requests, or the instances share counters through a common store. Both options add latency and a
+      dependency, so the choice depends on how precise the limit must be: billing and plan quotas need
+      precision, while protection from overload is often fine with an approximation on each instance.
+    linkTitles:
+      - "Rate limiting middleware in ASP.NET Core"
+      - "System.Threading.RateLimiting source code (dotnet/runtime)"
+      - "Azure API Management rate-limit-by-key policy"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"

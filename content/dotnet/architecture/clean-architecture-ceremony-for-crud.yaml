@@ -1,0 +1,157 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMPN86JAHXKPY77CPS
+slug: clean-architecture-ceremony-for-crud
+stack: dotnet
+topic: architecture
+level: lead
+type: situation
+grading: self
+tags: [clean-architecture, crud, mediator, service-template, adr]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/architecture/microservices/microservice-ddd-cqrs-patterns/ddd-oriented-microservice
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/architecture/modern-web-apps-azure/common-web-application-architectures
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Корпоративный шаблон чистой архитектуры превращает маленький CRUD-сервис в недели работы - что делать?
+    prompt: |
+      В компании есть обязательный шаблон для новых сервисов: четыре проекта (Domain, Application,
+      Infrastructure, Api) и отдельный обработчик медиатора на каждый эндпоинт, плюс команды, запросы,
+      валидаторы и маппинги для каждого из них. Ваша команда делает небольшой внутренний сервис: справочник
+      с десятком сущностей, операции создания, чтения, изменения и удаления, почти без бизнес-правил. Работа,
+      которая по оценке занимает несколько дней, растянулась на недели, и разработчики жалуются на шаблонный
+      код. Шаблон поддерживает команда платформы.
+
+      Вы - техлид. Какое решение вы примете для этого сервиса и как будете действовать в отношении владельцев
+      шаблона?
+    hint: |
+      Какие проблемы шаблон решает для всех сервисов, а какие - только для сервисов со сложной предметной
+      областью? Можно ли разделить эти две части?
+    answer: |
+      1. **Понять, откуда берутся недели.** Посмотреть, на что уходит время: сколько файлов и строк требует
+         один эндпоинт, сколько из них не содержит никакой логики. Выяснить у владельцев шаблона, зачем он
+         появился: единообразие, ввод новых людей, защита от бизнес-логики в контроллерах, общие сквозные
+         механизмы.
+      2. **Разделить шаблон на две части.** Платформенные требования - аутентификация, логирование,
+         трассировка и метрики, health checks, конфигурация и секреты, CI/CD, проверки безопасности - остаются
+         обязательными: они нужны любому сервису и дают единообразную эксплуатацию. Внутренняя структура -
+         число проектов, медиатор, слой Application - это выбор под сложность предметной области.
+      3. **Предложить для сервиса облегчённую структуру.** Один проект приложения (плюс проект тестов),
+         эндпоинты (minimal API или контроллеры) работают с `DbContext` напрямую или через тонкий сервис,
+         валидация на входе, код организован по функциональным папкам (vertical slices). Без обработчика
+         медиатора, который только пробрасывает вызов в базу.
+      4. **Заложить путь роста.** Записать в ADR признаки, при которых структуру усиливают: появляются
+         настоящие бизнес-инварианты, несколько точек входа (API, очередь, фоновые задачи), нужно заменить
+         инфраструктуру, растёт команда. Тогда логику выносят в отдельный проект Core с интерфейсами
+         репозиториев, а сквозные шаги - в pipeline. Функциональные папки делают такой переход локальным.
+      5. **Договориться, а не обойти молча.** Прийти к владельцам шаблона с данными (время и объём
+         шаблонного кода на эндпоинт), предложить этот сервис как пилот облегчённого профиля и записать
+         решение в ADR: контекст, решение, последствия, условия пересмотра. Цель - официальная развилка в
+         шаблоне (например, профили "простой CRUD" и "сложная предметная область" с понятными критериями
+         выбора), а не исключение, о котором знает одна команда.
+      6. **Если договориться не удалось.** Эскалировать до архитектурного совета или руководителя с той же
+         аргументацией и ценой каждого варианта. До решения совета правило такое: платформенная часть
+         соблюдается безусловно, а структуру сервиса команда строит по действующему шаблону и письменно
+         фиксирует риск по срокам. Облегчённую структуру до решения совета применяют, только если владельцы
+         шаблона одобрили её как временное исключение с ограниченным сроком и датой пересмотра.
+      7. **Проверить результат.** Через несколько месяцев сравнить скорость изменений, число дефектов и
+         удобство сопровождения; итоги вернуть владельцам шаблона как вклад в его развитие.
+    explanation: |
+      Слоистая и чистая архитектура окупаются, когда в приложении есть сложная бизнес-логика, которую нужно
+      изолировать от инфраструктуры и тестировать отдельно. Если сервис - тонкая обёртка над таблицами, слои и
+      обработчики медиатора добавляют косвенность без поведения: каждый новый столбец проходит через команду,
+      обработчик, DTO и маппинг, а защищать в Domain нечего.
+
+      Руководство Microsoft по проектированию микросервиса, ориентированного на DDD, говорит об этом прямо:
+      структура слоёв выбирается для каждого микросервиса отдельно, самые сложные микросервисы строят по
+      паттернам DDD, а более простые, ориентированные на данные (простой CRUD в одном слое), реализуют проще.
+      Обзор типовых архитектур веб-приложений описывает и вариант "всё в одном" - приложение из одного
+      проекта - как самую простую исходную структуру, а чистую архитектуру - как подход, который ставит в центр
+      бизнес-логику и модель приложения. Когда бизнес-логики почти нет, ставить в центр нечего.
+
+      Ценность корпоративного шаблона - прежде всего единообразная эксплуатация: одинаковые логи, метрики,
+      безопасность и конвейер поставки. Эту часть разумно держать обязательной. Единообразие внутренней
+      структуры ценно меньше, и навязывать её всем сервисам одинаково - значит платить за сложность там, где её
+      нет.
+
+      Задача техлида здесь не только техническая. Молчаливый обход шаблона подрывает доверие и создаёт
+      «особый» сервис, который потом никто не захочет сопровождать. Решение через ADR и пилот с владельцами
+      шаблона превращает частный конфликт в улучшение процесса, а явные условия пересмотра снимают главный
+      страх оппонентов - что сервис вырастет и превратится в бизнес-логику, размазанную по эндпоинтам.
+    linkTitles:
+      - "Проектирование микросервиса, ориентированного на DDD"
+      - "Типовые архитектуры веб-приложений"
+  en:
+    title: A company clean architecture template turns a small CRUD service into weeks of work - what do you do?
+    prompt: |
+      The company has a mandatory template for new services: four projects (Domain, Application,
+      Infrastructure, Api) and a separate mediator handler per endpoint, plus commands, queries, validators and
+      mappings for each one. Your team is building a small internal service: a reference-data catalog with a
+      dozen entities, create, read, update and delete operations, and almost no business rules. Work estimated
+      at a few days has stretched to weeks, and developers complain about boilerplate. The template is owned by
+      the platform team.
+
+      You are the tech lead. What do you decide for this service, and how do you deal with the template owners?
+    hint: |
+      Which problems does the template solve for every service, and which only for services with a complex
+      domain? Can those two parts be separated?
+    answer: |
+      1. **Find out where the weeks go.** Measure how many files and lines one endpoint needs and how many of
+         them contain no logic at all. Ask the template owners why it exists: consistency, onboarding,
+         keeping business logic out of controllers, shared cross-cutting mechanisms.
+      2. **Split the template into two parts.** Platform requirements - authentication, logging, tracing and
+         metrics, health checks, configuration and secrets, CI/CD, security checks - stay mandatory: every
+         service needs them and they give uniform operations. The internal structure - number of projects, the
+         mediator, the Application layer - is a choice that depends on domain complexity.
+      3. **Propose a lighter structure for this service.** One application project (plus a test project),
+         endpoints (minimal APIs or controllers) use the `DbContext` directly or through a thin service,
+         input validation at the edge, code organized in feature folders (vertical slices). No mediator
+         handler that only forwards a call to the database.
+      4. **Keep a path to grow.** Write down in an ADR the signals that call for more structure: real business
+         invariants appear, several entry points (API, queue, background jobs), infrastructure must be
+         swappable, the team grows. Then the logic moves into a separate Core project with repository
+         interfaces, and cross-cutting steps go into a pipeline. Feature folders keep that change local.
+      5. **Agree, do not bypass silently.** Go to the template owners with data (time and boilerplate per
+         endpoint), offer this service as a pilot of a lighter profile, and record the decision in an ADR:
+         context, decision, consequences, conditions for revisiting. The goal is an official branch in the
+         template (for example "simple CRUD" and "complex domain" profiles with clear selection criteria),
+         not an exception that only one team knows about.
+      6. **If there is no agreement.** Escalate to the architecture board or a manager with the same arguments
+         and the cost of each option. Until the board decides, the rule is: the platform part is followed
+         unconditionally, and the team builds the service structure according to the current template and
+         records the delivery risk in writing. The lighter structure is used before the board decides only if
+         the template owners approve it as a time-boxed exception with a review date.
+      7. **Check the outcome.** After a few months compare change speed, defect count and ease of maintenance,
+         and feed the results back to the template owners as input for evolving the template.
+    explanation: |
+      Layered and clean architecture pay off when the application has complex business logic that must be
+      isolated from infrastructure and tested on its own. When a service is a thin wrapper over tables, the
+      layers and mediator handlers add indirection without behaviour: every new column goes through a command,
+      a handler, a DTO and a mapping, while the Domain project has nothing to protect.
+
+      The Microsoft guide on designing a DDD-oriented microservice says this directly: the layer design is
+      chosen for each microservice independently, the most complex microservices follow DDD patterns, and
+      simpler data-driven microservices (simple CRUD in a single layer) are implemented in a simpler way. The
+      overview of common web application architectures also describes an "all-in-one" application with a
+      single project as the simplest starting structure, and clean architecture as an approach that puts the
+      business logic and application model at the center. When there is almost no business logic, there is
+      nothing to put at the center.
+
+      The main value of a company template is uniform operations: the same logs, metrics, security and delivery
+      pipeline. It is reasonable to keep that part mandatory. Uniform internal structure is worth less, and
+      imposing it on every service alike means paying for complexity where there is none.
+
+      The tech lead's task here is not only technical. Silently bypassing the template erodes trust and creates
+      a "special" service that nobody wants to maintain later. A decision made through an ADR and a pilot with
+      the template owners turns a local conflict into a process improvement, and explicit revisit conditions
+      address the opponents' main fear: that the service grows and business logic ends up scattered across
+      endpoints.
+    linkTitles:
+      - "Designing a DDD-oriented microservice"
+      - "Common web application architectures"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

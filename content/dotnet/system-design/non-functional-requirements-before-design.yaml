@@ -1,0 +1,162 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WQJYRFPC8QK1FQG73B
+slug: non-functional-requirements-before-design
+stack: dotnet
+topic: system-design
+level: lead
+type: open
+grading: self
+tags: [non-functional-requirements, slo, availability, latency, capacity-planning, well-architected]
+links:
+  - url: https://learn.microsoft.com/en-us/azure/well-architected/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/azure/well-architected/reliability/metrics
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какие нефункциональные требования тимлид должен выяснить до проектирования сервиса и почему?
+    prompt: |
+      Команда собирается проектировать сервис с нуля. Функциональные требования уже описаны: что сервис
+      делает и для кого. Какие нефункциональные требования вы обязательно выясните у заказчиков и
+      владельцев продукта до начала проектирования, почему именно их и как вы добьётесь, чтобы ответы были
+      пригодны для принятия решений?
+    hint: |
+      Представьте, что ответ на вопрос отличается в десять раз. Какие из решений в архитектуре от этого изменятся?
+    answer: |
+      **Что выяснить.** Каждое из этих требований меняет архитектуру, поэтому без него команда угадывает.
+
+      1. **Доступность и восстановление.** Целевой SLO (например, 99.9% или 99.99% в месяц), допустимое время
+         восстановления (RTO) и допустимая потеря данных (RPO), отдельно для критичных сценариев. От них
+         зависит, хватит ли одной зоны или нужны несколько зон или регионов, резервирование зависимостей,
+         асинхронная обработка. Каждая дополнительная «девятка» стоит кратно дороже.
+      2. **Задержка.** Цели в процентилях (p95, p99) при заданной нагрузке, а не «должно быть быстро». Они
+         определяют, что можно делать синхронно в запросе, нужен ли кэш и где размещать данные относительно
+         пользователей.
+      3. **Нагрузка и рост.** Средние и пиковые запросы в секунду, сезонность и всплески, объём данных и
+         прогноз роста на год-два. Это модель масштабирования, необходимость секционирования и запас одной базы.
+      4. **Соотношение чтения и записи и шаблоны доступа.** Сервис со ста чтениями на одну запись строится
+         вокруг кэшей и реплик, сервис с потоком записей - вокруг пропускной способности записи, очередей и
+         секционирования.
+      5. **Согласованность.** Где нужна строгая согласованность (деньги, складские остатки), а где допустимы
+         данные, устаревшие на секунды. Это решает, можно ли кэшировать и читать с реплик, нужны ли
+         транзакции через несколько хранилищ или хватит событий и итоговой согласованности.
+      6. **Данные и регуляторика.** Сроки хранения и удаления, персональные данные, требования к размещению
+         данных в стране или регионе, аудит, резервные копии. Влияет на выбор хранилища, региона,
+         архивирования и шифрования.
+      7. **Безопасность.** Кто пользователи и клиенты, модель аутентификации и авторизации, требования
+         к аудиту и отраслевые стандарты.
+      8. **Стоимость.** Бюджет на инфраструктуру и сопровождение. Он ограничивает все пункты выше и
+         заставляет выбирать между ними.
+      9. **Эксплуатация.** Допустимы ли окна обслуживания, частота релизов, требования к наблюдаемости и
+         навыки команды, которая будет поддерживать сервис.
+
+      **Как добиться пригодных ответов.**
+
+      - Переводить расплывчатое в измеримое: число, единица и условие («p99 до 300 мс при 2 000 запросов в
+        секунду», а не «быстро»).
+      - Показывать цену: предлагать варианты с оценкой стоимости и сложности (99.9% против 99.99%), чтобы
+        заказчик выбирал осознанно, а не просил «всегда и мгновенно».
+      - Разделять по сценариям: оплате и ночному отчёту нужны разные цели, и единое требование на весь
+        сервис переплачивает или недодаёт.
+      - Расставлять приоритеты: требования конфликтуют (согласованность, задержка, доступность, стоимость),
+        и владелец риска должен сказать, чем жертвуем.
+      - Фиксировать письменно (документ требований, ADR) с владельцем и датой пересмотра. Неизвестное
+        записывать как допущение и проверять прототипом или нагрузочным тестом.
+    explanation: |
+      Функциональные требования говорят, что делает система, и их выполнит почти любая архитектура.
+      Нефункциональные требования отбирают варианты: монолит на одной базе и мультирегиональная система на
+      событиях одинаково умеют «оформить заказ», но различаются доступностью, задержкой и стоимостью на
+      порядки.
+
+      Если не выяснить эти требования до проектирования, команда угадывает. Недооценка обходится дороже
+      всего: модель данных, границу согласованности и размещение по регионам трудно менять в работающей
+      системе под нагрузкой. Переоценка тоже стоит денег: команда строит и сопровождает мультирегиональную
+      систему, которая никому не была нужна.
+
+      Azure Well-Architected Framework группирует те же вопросы по пяти направлениям: надёжность,
+      безопасность, оптимизация затрат, операционное превосходство и эффективность производительности. Это
+      удобный чек-лист, чтобы ничего не пропустить.
+
+      Роль тимлида здесь не в том, чтобы молча выбрать цифры за бизнес. Это бизнес-решения с технической
+      ценой: задача - сделать компромисс видимым, получить решение от тех, кто владеет риском, и записать
+      его. Типичные ошибки - принять «должно работать всегда» без цены, спрашивать о средней задержке вместо
+      процентилей (среднее скрывает медленный хвост) и задавать одну цель на все сценарии сервиса.
+    linkTitles:
+      - "Microsoft Azure Well-Architected Framework"
+      - "Рекомендации по определению целей надёжности"
+  en:
+    title: Which non-functional requirements should a tech lead clarify before designing a service, and why?
+    prompt: |
+      Your team is about to design a service from scratch. The functional requirements are already written:
+      what the service does and for whom. Which non-functional requirements do you insist on clarifying with
+      stakeholders and product owners before design starts, why exactly those, and how do you make sure the
+      answers are usable for decisions?
+    hint: |
+      Imagine the answer to a question is ten times different. Which architecture decisions would change because of it?
+    answer: |
+      **What to clarify.** Each of these changes the architecture, so without it the team is guessing.
+
+      1. **Availability and recovery.** The SLO target (for example 99.9% or 99.99% per month), the
+         acceptable recovery time (RTO) and acceptable data loss (RPO), separately for critical flows. They
+         decide whether one zone is enough or several zones or regions are needed, redundancy of
+         dependencies, asynchronous processing. Each additional nine costs several times more.
+      2. **Latency.** Targets as percentiles (p95, p99) under a stated load, not "it must be fast". They
+         decide what can run synchronously in a request, whether a cache is needed and where data lives
+         relative to users.
+      3. **Load and growth.** Average and peak requests per second, seasonality and spikes, data volume and
+         the growth forecast for a year or two. This sets the scaling model, the need for partitioning and the
+         headroom of a single database.
+      4. **Read/write ratio and access patterns.** A service with a hundred reads per write is built around
+         caches and replicas, a write-heavy one around write throughput, queues and partitioning.
+      5. **Consistency.** Where strong consistency is required (money, stock levels) and where data that is
+         seconds out of date is acceptable. This decides whether you can cache and read from replicas, and
+         whether you need transactions across stores or events and eventual consistency are enough.
+      6. **Data and regulation.** Retention and deletion periods, personal data, data residency in a country
+         or region, audit, backups. It drives the choice of store, region, archiving and encryption.
+      7. **Security.** Who the users and clients are, the authentication and authorization model, audit
+         requirements and industry standards.
+      8. **Cost.** The budget for infrastructure and maintenance. It constrains every item above and forces
+         choices between them.
+      9. **Operations.** Whether maintenance windows are allowed, release frequency, observability
+         requirements and the skills of the team that will run the service.
+
+      **How to get usable answers.**
+
+      - Turn vague wishes into measurable targets: a number, a unit and a condition ("p99 under 300 ms at
+        2,000 requests per second", not "fast").
+      - Show the price: offer options with a cost and complexity estimate (99.9% versus 99.99%), so the
+        stakeholder chooses deliberately instead of asking for "always and instantly".
+      - Split by flow: payment and a nightly report need different targets, and one requirement for the whole
+        service either overpays or underdelivers.
+      - Prioritize: the requirements conflict (consistency, latency, availability, cost), and the risk owner
+        must say what is sacrificed.
+      - Write it down (a requirements document, an ADR) with an owner and a review date. Record unknowns as
+        assumptions and test them with a prototype or a load test.
+    explanation: |
+      Functional requirements say what the system does, and almost any architecture can meet them.
+      Non-functional requirements select between the options: a monolith on one database and a multi-region
+      event-driven system can both "place an order", but they differ by orders of magnitude in availability,
+      latency and cost.
+
+      If these requirements are not clarified before design, the team guesses. Underestimating is the most
+      expensive outcome: the data model, the consistency boundary and regional placement are hard to change in
+      a running system under load. Overestimating also costs money: the team builds and maintains a
+      multi-region system that nobody needed.
+
+      The Azure Well-Architected Framework groups the same questions into five pillars: reliability,
+      security, cost optimization, operational excellence and performance efficiency. It is a handy checklist
+      so that nothing is missed.
+
+      The lead's role is not to silently pick numbers on behalf of the business. These are business decisions
+      with a technical price: the job is to make the trade-off visible, get a decision from those who own the
+      risk, and record it. Typical mistakes are accepting "it must always work" without a price, asking for
+      average latency instead of percentiles (the average hides the slow tail), and setting one target for
+      every flow of the service.
+    linkTitles:
+      - "Microsoft Azure Well-Architected Framework"
+      - "Recommendations for defining reliability targets"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

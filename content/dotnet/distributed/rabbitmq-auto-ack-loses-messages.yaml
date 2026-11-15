@@ -1,0 +1,123 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNYSHFZEX3F79MWP14
+slug: rabbitmq-auto-ack-loses-messages
+stack: dotnet
+topic: distributed
+level: middle
+type: single
+grading: auto
+tags: [rabbitmq, acknowledgements, prefetch, message-loss]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+links:
+  - url: https://www.rabbitmq.com/docs/confirms
+    lang: en
+    kind: docs
+  - url: https://www.rabbitmq.com/docs/consumer-prefetch
+    lang: en
+    kind: docs
+  - url: https://www.rabbitmq.com/docs/dlx
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что происходит с сообщениями RabbitMQ, если потребитель с автоматическим подтверждением падает?
+    prompt: |
+      Сервис читает очередь RabbitMQ и подписан на неё с автоматическим подтверждением (`autoAck: true`).
+      Брокер уже передал клиенту несколько сообщений: одно обрабатывается, остальные ждут в буфере клиента.
+      На середине обработки процесс падает, и соединение с брокером рвётся.
+
+      Что произойдёт с сообщением, которое обрабатывалось, и с сообщениями из буфера клиента?
+    hint: Что брокер может знать о судьбе сообщения после отправки, если клиент ему ничего не отвечает?
+    options:
+      a: "Все эти сообщения потеряны: брокер счёл их доставленными в момент отправки и уже удалил из очереди."
+      b: "Брокер вернёт все эти сообщения в очередь и доставит их повторно с флагом `redelivered`."
+      c: "Потеряется только сообщение, которое обрабатывалось, а сообщения из буфера брокер вернёт в очередь, потому что их ещё не начали обрабатывать."
+      d: "Сообщения сохранятся, если очередь объявлена как durable, а сообщения опубликованы как persistent: после перезапуска потребитель получит их снова."
+      e: "Брокер перенаправит эти сообщения в dead-letter exchange, если он настроен для очереди."
+    optionExplanations:
+      b: "Так ведёт себя ручное подтверждение: при закрытии канала брокер возвращает в очередь неподтверждённые доставки. При автоматическом подтверждении неподтверждённых доставок нет - всё подтверждено в момент отправки."
+      c: "Брокер не знает, начал ли клиент обработку. Сообщения в буфере клиента для него такие же доставленные, как и обрабатываемое, поэтому теряются все."
+      d: "Durable-очередь и persistent-сообщения защищают от перезапуска брокера, пока сообщение лежит в очереди. Отправленное с автоматическим подтверждением сообщение из очереди уже удалено, и долговечность здесь не помогает."
+      e: "Dead-letter exchange получает сообщения, которые отклонены без возврата в очередь (`basic.reject` или `basic.nack` с `requeue=false`), истекли по TTL или отброшены из переполненной очереди с ограничением длины (политика переполнения `drop-head`). Сообщение, которое брокер считает успешно доставленным, туда не попадает."
+    answer: "Потеряны и обрабатываемое сообщение, и сообщения из буфера клиента: брокер считает их доставленными в момент отправки."
+    explanation: |
+      В режиме автоматического подтверждения RabbitMQ считает сообщение успешно доставленным сразу после
+      отправки в TCP-сокет. Брокер удаляет его из очереди и больше за него не отвечает. Если клиент упал до
+      завершения обработки, сообщение пропало, причём это касается и всех сообщений, которые уже лежат в
+      буфере клиента. Ограничение prefetch в этом режиме по определению не действует, поэтому в буфере, как
+      правило, может скопиться много сообщений (некоторые клиентские библиотеки лишь притормаживают чтение из
+      сокета через TCP back pressure), и при падении теряются все они.
+
+      Чтобы не терять сообщения, нужно ручное подтверждение. В клиенте RabbitMQ.Client 7.x это подписка через
+      `BasicConsumeAsync` с `autoAck: false`, вызов `BasicAckAsync` (протокольный метод `basic.ack`) только
+      после успешной обработки и ограничение числа неподтверждённых доставок через `BasicQosAsync`
+      (`basic.qos`, prefetch). В RabbitMQ.Client 6.x те же операции были синхронными методами `BasicConsume`,
+      `BasicAck` и `BasicQos` интерфейса `IModel`; в 7.x канал представлен интерфейсом `IChannel`. Когда канал
+      или соединение закрывается, брокер возвращает все неподтверждённые доставки в очередь и отдаёт их снова,
+      этому или другому потребителю, с флагом `redelivered`.
+
+      Цена ручного подтверждения - доставка at-least-once: сообщение, обработанное, но не подтверждённое до
+      падения, придёт повторно, поэтому обработчик должен быть идемпотентным. Автоматическое подтверждение
+      даёт большую пропускную способность ценой надёжности и подходит только там, где потерю сообщения можно
+      допустить.
+    linkTitles:
+      - "RabbitMQ: подтверждения потребителей и издателей"
+      - "RabbitMQ: prefetch потребителя"
+      - "RabbitMQ: dead letter exchanges"
+  en:
+    title: What happens to RabbitMQ messages when a consumer with automatic acknowledgement crashes?
+    prompt: |
+      A service reads a RabbitMQ queue and subscribes to it with automatic acknowledgement (`autoAck: true`).
+      The broker has already sent several messages to the client: one is being processed, the rest wait in
+      the client buffer. Halfway through processing the process crashes and the connection to the broker drops.
+
+      What happens to the message that was being processed and to the messages in the client buffer?
+    hint: What can the broker know about a message after sending it, if the client never answers?
+    options:
+      a: "All of these messages are lost: the broker treated them as delivered when it sent them and has already removed them from the queue."
+      b: "The broker puts all of these messages back into the queue and redelivers them with the `redelivered` flag."
+      c: "Only the message being processed is lost; the broker returns the buffered messages to the queue because their processing has not started."
+      d: "The messages survive if the queue is durable and the messages were published as persistent: after a restart the consumer receives them again."
+      e: "The broker routes these messages to the dead-letter exchange if one is configured for the queue."
+    optionExplanations:
+      b: "That is the behaviour of manual acknowledgement: when the channel closes, the broker requeues unacknowledged deliveries. With automatic acknowledgement there are no unacknowledged deliveries, everything was acknowledged when sent."
+      c: "The broker does not know whether the client started processing. Buffered messages are delivered from its point of view just like the one in progress, so all of them are lost."
+      d: "A durable queue and persistent messages protect against a broker restart while a message sits in the queue. A message sent with automatic acknowledgement is already removed from the queue, so durability does not help."
+      e: "The dead-letter exchange receives messages that are rejected without requeue (`basic.reject` or `basic.nack` with `requeue=false`), expire by TTL or are dropped from the head of a full queue with a length limit (the `drop-head` overflow behaviour). A message the broker considers successfully delivered never goes there."
+    answer: "Both the message being processed and the buffered messages are lost: the broker treats them as delivered when it sends them."
+    explanation: |
+      In automatic acknowledgement mode RabbitMQ considers a message successfully delivered right after it is
+      written to the TCP socket. The broker removes it from the queue and is no longer responsible for it. If
+      the client crashes before processing finishes, the message is gone, and so is every message already
+      sitting in the client buffer. The prefetch limit does not apply in this mode by definition, so the buffer
+      can typically hold many messages (some client libraries only slow down reading from the socket with TCP
+      back pressure), and a crash loses all of them.
+
+      To avoid losing messages, use manual acknowledgement. In RabbitMQ.Client 7.x that means subscribing with
+      `BasicConsumeAsync` and `autoAck: false`, calling `BasicAckAsync` (the `basic.ack` protocol method) only
+      after successful processing, and limiting the number of unacknowledged deliveries with `BasicQosAsync`
+      (`basic.qos`, prefetch). In RabbitMQ.Client 6.x the same operations were the synchronous `BasicConsume`,
+      `BasicAck` and `BasicQos` methods of `IModel`; in 7.x the channel is the `IChannel` interface. When the
+      channel or connection closes, the broker requeues every unacknowledged delivery and sends it again, to
+      this or another consumer, with the `redelivered` flag set.
+
+      The price of manual acknowledgement is at-least-once delivery: a message that was processed but not
+      acknowledged before the crash arrives again, so the handler must be idempotent. Automatic acknowledgement
+      gives higher throughput at the cost of safety and fits only where losing a message is acceptable.
+    linkTitles:
+      - "RabbitMQ: consumer acknowledgements and publisher confirms"
+      - "RabbitMQ: consumer prefetch"
+      - "RabbitMQ: dead letter exchanges"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

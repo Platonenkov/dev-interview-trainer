@@ -1,0 +1,140 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMC4ND01JVVED9WH1V
+slug: strangler-fig-legacy-monolith-migration
+stack: dotnet
+topic: architecture
+level: architect
+type: situation
+grading: self
+tags: [strangler-fig, anti-corruption-layer, legacy-migration, monolith]
+links:
+  - url: https://learn.microsoft.com/en-us/azure/architecture/patterns/strangler-fig
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/azure/architecture/patterns/anti-corruption-layer
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как перевести большой монолит на .NET Framework на современную архитектуру без заморозки фич и переписывания с нуля?
+    prompt: |
+      У компании большой монолит на ASP.NET и .NET Framework, которому десяток лет. Его нужно перевести на
+      ASP.NET Core на .NET 10 и разделить на модули или сервисы с понятными границами. Бизнес не согласен
+      останавливать разработку фич на время миграции, а предыдущая попытка переписать всё с нуля провалилась.
+      Опишите подход к миграции: с чего начнёте, как будете переносить функциональность и данные, как
+      поймёте, что старую часть можно удалять.
+    hint: |
+      Что должно стоять между пользователями и системой, чтобы части можно было заменять по одной?
+    answer: |
+      1. **Отказаться от переписывания целиком и выбрать постепенную миграцию по паттерну Strangler Fig.**
+         Старая и новая системы работают одновременно, функциональность переезжает по одной возможности за раз.
+      2. **Подготовить почву.** Составить карту бизнес-возможностей монолита и найти швы - кандидатов в
+         ограниченные контексты. Снять базовые метрики (ошибки, задержки, нагрузка по эндпоинтам) и покрыть
+         первую выбранную область характеризующими тестами, которые фиксируют текущее поведение.
+      3. **Поставить фасад перед монолитом.** Обратный прокси принимает весь трафик и сначала отправляет всё
+         в старую систему. Сразу решить сквозные вопросы: общая аутентификация, сессии, логирование и
+         трассировка через обе системы.
+      4. **Выбрать первый срез.** Возможность с понятной ценностью, слабой связанностью и умеренным риском, а
+         не самое ядро системы. Её реализуют в новой системе со своей моделью предметной области.
+      5. **Изолировать новую модель антикоррупционным слоем.** Всё общение с монолитом (его API, таблицы,
+         форматы) идёт через слой трансляции, который переводит понятия старой модели в новую и обратно.
+         Старые типы и схемы не протекают в новый код, а сам слой обычно выводят из эксплуатации вместе с
+         монолитом, если он не остаётся постоянной границей.
+      6. **Отдельно спланировать данные.** Это главный риск. Сначала новая часть может читать старую базу через
+         антикоррупционный слой, затем владение данными переходит к ней: своё хранилище, синхронизация через
+         события или захват изменений (CDC), и в каждый момент у каждого набора данных ровно один источник
+         записи. Двусторонняя запись из двух систем - путь к рассогласованию.
+      7. **Переключать трафик постепенно и обратимо.** Маршрут в фасаде под флагом: часть пользователей,
+         сравнение ответов старой и новой реализации, откат переключением маршрута.
+      8. **Удалять старое только после переезда трафика.** Когда метрики показывают, что к старому пути
+         больше нет обращений, удалить код, таблицы и маршрут. В конце фасад либо убирают, либо оставляют
+         как адаптер для старых клиентов или шлюз.
+      9. **Организовать процесс, чтобы не было заморозки.** Новые фичи в уже переносимой области делаются
+         только в новой системе, изменения в старом коде этой области сведены к исправлению ошибок. За каждым
+         срезом - команда-владелец, прогресс миграции измеряется долей трафика и удалённого кода, а бюджет
+         миграции закреплён в планах, чтобы она не остановилась на полпути.
+    explanation: |
+      Переписывание с нуля опасно тем, что новая система долго не приносит ценности и догоняет движущуюся
+      цель: старая продолжает меняться, а скрытые правила, накопленные за годы, обнаруживаются только при
+      запуске. Strangler Fig заменяет один рискованный момент переключения множеством маленьких обратимых
+      шагов, и каждый шаг уже работает в production.
+
+      Фасад нужен, чтобы клиенты не замечали, какая система обслуживает запрос, и чтобы переключение было
+      делом конфигурации, а не релиза клиентов. Антикоррупционный слой защищает от главной ловушки миграции -
+      перенести в новую систему старую модель вместе с её искажениями: тогда получится тот же монолит на
+      другом фреймворке.
+
+      У подхода есть цена, которую архитектор должен назвать заранее:
+
+      - фасад добавляет задержку и не должен стать единой точкой отказа или узким местом, его нужно
+        масштабировать и наблюдать;
+      - какое-то время команда сопровождает две системы и код трансляции;
+      - миграцию нужно довести до конца, иначе система навсегда останется гибридом с удвоенными затратами;
+      - паттерн плохо подходит, если запросы к системе нельзя перехватить или система настолько мала, что
+        проще заменить её целиком.
+    linkTitles:
+      - "Паттерн Strangler Fig"
+      - "Паттерн Anti-corruption Layer"
+  en:
+    title: How do you move a large .NET Framework monolith to a modern architecture without a feature freeze or a rewrite from scratch?
+    prompt: |
+      A company runs a large, ten-year-old monolith on ASP.NET and .NET Framework. It has to move to
+      ASP.NET Core on .NET 10 and be split into modules or services with clear boundaries. The business will
+      not stop feature development during the migration, and an earlier attempt to rewrite everything from
+      scratch failed. Outline your migration approach: where you start, how you move functionality and data,
+      and how you know that a legacy part can be deleted.
+    hint: |
+      What could sit between users and the system so that parts can be replaced one at a time?
+    answer: |
+      1. **Reject the full rewrite and migrate incrementally with the Strangler Fig pattern.** The legacy and
+         the replacement systems run side by side, and functionality moves one capability at a time.
+      2. **Prepare the ground.** Map the business capabilities of the monolith and find the seams, the
+         candidate bounded contexts. Capture baseline metrics (errors, latency, load per endpoint) and cover the
+         first chosen area with characterization tests that pin down the current behaviour.
+      3. **Put a facade in front of the monolith.** A reverse proxy receives all traffic and initially sends
+         everything to the legacy system. Solve the cross-cutting concerns early: shared authentication, session
+         state, logging and tracing across both systems.
+      4. **Pick the first slice.** A capability with clear value, low coupling and moderate risk, not the very
+         core of the system. It is built in the replacement system with its own domain model.
+      5. **Isolate the replacement model behind an anti-corruption layer.** All communication with the monolith
+         (its API, tables, formats) goes through a translation layer that maps legacy concepts to the replacement
+         model and back. Legacy types and schemas do not leak into the replacement code, and the layer is
+         typically retired together with the monolith, unless it stays as a permanent boundary.
+      6. **Plan the data separately.** It is the main risk. At first the extracted part may read the legacy
+         database through the anti-corruption layer, then ownership moves to it: its own store, synchronization
+         through events or change data capture (CDC), and at any moment exactly one writer for each data set.
+         Dual writes from two systems lead to inconsistency.
+      7. **Shift traffic gradually and reversibly.** The route in the facade sits behind a flag: a share of
+         users, comparison of legacy and replacement responses, rollback by switching the route back.
+      8. **Delete legacy parts only after traffic has moved.** When metrics show no more calls to the legacy
+         path, delete the code, the tables and the route. At the end the facade is either removed or kept as an
+         adapter for legacy clients or as a gateway.
+      9. **Organize the process so there is no freeze.** New features in an area being migrated are built only
+         in the replacement system, and changes to the legacy code of that area are limited to bug fixes. Each
+         slice has an owning team, progress is measured by the share of traffic moved and code deleted, and the
+         migration budget is part of the plans so that it does not stall halfway.
+    explanation: |
+      A rewrite from scratch is dangerous because the replacement delivers no value for a long time and chases
+      a moving target: the legacy system keeps changing, and hidden rules accumulated over years surface only at
+      cutover. Strangler Fig replaces one risky switch-over with many small reversible steps, and every step is
+      already running in production.
+
+      The facade lets clients stay unaware of which system serves a request and makes switching a matter of
+      configuration rather than a client release. The anti-corruption layer guards against the main migration
+      trap: carrying the legacy model with all its distortions into the replacement, which yields the same
+      monolith on a different framework.
+
+      The approach has costs that an architect should name up front:
+
+      - the facade adds latency and must not become a single point of failure or a bottleneck, so it must be
+        scaled and monitored;
+      - for a while the team maintains two systems and the translation code;
+      - the migration must be finished, otherwise the system stays a hybrid forever with doubled costs;
+      - the pattern fits poorly when requests to the system cannot be intercepted, or when the system is small
+        enough to replace in one go.
+    linkTitles:
+      - "Strangler Fig pattern"
+      - "Anti-corruption Layer pattern"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

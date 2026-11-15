@@ -1,0 +1,112 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WPF2DK5JPKMVV107MV
+slug: singleton-expression-bodied-new-instance
+stack: dotnet
+topic: patterns
+level: middle
+type: find-bug
+grading: auto
+tags: [singleton, expression-bodied-members, auto-properties, anti-patterns]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    Counter.Instance.Next();
+    Counter.Instance.Next();
+    Console.WriteLine(Counter.Instance.Next());
+
+    class Counter
+    {
+        private int _value;
+
+        private Counter() { }
+
+        public static Counter Instance => new Counter();
+
+        public int Next() => ++_value;
+    }
+bugLineSets: [[11]]
+fixedSource: |
+  Counter.Instance.Next();
+  Counter.Instance.Next();
+  Console.WriteLine(Counter.Instance.Next());
+
+  class Counter
+  {
+      private int _value;
+
+      private Counter() { }
+
+      public static Counter Instance { get; } = new Counter();
+
+      public int Next() => ++_value;
+  }
+fixedExpect: { kind: output, value: "3" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/lambda-operator#expression-body-definition
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/classes-and-structs/auto-implemented-properties
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/classes-and-structs/static-constructors
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строку, из-за которой Singleton создаёт новый объект при каждом обращении
+    prompt: |
+      Класс `Counter` задуман как Singleton: все обращения к `Counter.Instance` должны работать с одним объектом,
+      поэтому после трёх вызовов `Next()` программа должна вывести `3`. Вместо этого она выводит `1`.
+      Щёлкните по строке с дефектом.
+    hint: Сравните, сколько раз вычисляется каждый член класса `Counter`. Что определяет, как часто создаётся новый объект?
+    answer: Строка 11, объявление `public static Counter Instance => new Counter();`.
+    explanation: |
+      Запись `Instance => new Counter()` - это свойство с телом-выражением, то есть сокращённая форма геттера
+      `get { return new Counter(); }`. Выражение выполняется при каждом чтении свойства, поэтому каждый вызов
+      `Counter.Instance` создаёт новый объект с `_value`, равным `0`. Каждый `Next()` увеличивает счётчик своего
+      свежего объекта до `1`, и последняя строка выводит `1`.
+
+      Исправление - автосвойство с инициализатором: `public static Counter Instance { get; } = new Counter();`.
+      Инициализатор статического автосвойства записывает значение в скрытое статическое поле один раз, при
+      инициализации типа, а геттер дальше только возвращает это поле. Инициализация типа (статический
+      конструктор) выполняется средой не более одного раза и под блокировкой, привязанной к типу, поэтому такой
+      Singleton не требует ручных блокировок. Эквивалентный вариант - `private static readonly Counter _instance = new();`
+      и свойство, которое его возвращает.
+
+      Синтаксически варианты отличаются почти незаметно (`=>` против `{ get; } =`), поэтому эту ошибку легко
+      пропустить на code review.
+    linkTitles:
+      - "Оператор =>: определение тела выражения"
+      - "Автоматически реализуемые свойства"
+      - "Статические конструкторы"
+  en:
+    title: Find the line that makes a Singleton create a new object on every access
+    prompt: |
+      The `Counter` class is meant to be a Singleton: every access to `Counter.Instance` should work with one
+      object, so after three calls to `Next()` the program should print `3`. It prints `1` instead.
+      Click the line that contains the defect.
+    hint: Compare how many times each member of `Counter` is evaluated. What decides how often a new object is created?
+    answer: Line 11, the declaration `public static Counter Instance => new Counter();`.
+    explanation: |
+      `Instance => new Counter()` is an expression-bodied property, a short form of the getter
+      `get { return new Counter(); }`. The expression runs on every read of the property, so every call to
+      `Counter.Instance` creates a new object whose `_value` is `0`. Each `Next()` raises the counter of its own
+      fresh object to `1`, and the last line prints `1`.
+
+      The fix is an auto-implemented property with an initializer:
+      `public static Counter Instance { get; } = new Counter();`. The initializer of a static auto-property stores
+      the value in a hidden static field once, when the type is initialized, and the getter only returns that
+      field afterwards. Type initialization (the static constructor) is run by the runtime at most once and in a
+      region locked on the type, so this Singleton needs no hand-written locking. An equivalent form is
+      `private static readonly Counter _instance = new();` with a property that returns it.
+
+      The two forms differ by very little syntax (`=>` versus `{ get; } =`), which is why this bug easily slips
+      through code review.
+    linkTitles:
+      - "The => operator: expression body definition"
+      - "Auto-implemented properties"
+      - "Static constructors"
+meta:
+  authors: [platonenkov]
+  verified: 1970-01-01

@@ -1,0 +1,164 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WN8NXGK9YMGP4MAP77
+slug: outbox-relay-deletes-before-publish
+stack: dotnet
+topic: distributed
+level: senior
+type: find-bug
+grading: auto
+tags: [outbox, at-least-once, messaging, reliability]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    var outbox = new List<string> { "OrderCreated:42" };
+    var broker = new FakeBroker();
+
+    for (int pass = 1; pass <= 2; pass++)
+    {
+        try
+        {
+            while (outbox.Count > 0)
+            {
+                string message = outbox[0];
+                outbox.RemoveAt(0);
+                broker.Publish(message);
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            Console.WriteLine($"Pass {pass}: broker unavailable");
+        }
+    }
+
+    Console.WriteLine($"Published: {broker.Published.Count}");
+
+    class FakeBroker
+    {
+        private int _calls;
+        public List<string> Published { get; } = new();
+
+        public void Publish(string message)
+        {
+            _calls++;
+            if (_calls == 1)
+            {
+                // The first publish fails, as during a short broker outage.
+                throw new InvalidOperationException("Broker unavailable");
+            }
+            Published.Add(message);
+        }
+    }
+bugLineSets: [[11], [11, 12]]
+fixedSource: |
+  var outbox = new List<string> { "OrderCreated:42" };
+  var broker = new FakeBroker();
+
+  for (int pass = 1; pass <= 2; pass++)
+  {
+      try
+      {
+          while (outbox.Count > 0)
+          {
+              string message = outbox[0];
+              broker.Publish(message);
+              // Remove the row only after the broker accepted the message.
+              outbox.RemoveAt(0);
+          }
+      }
+      catch (InvalidOperationException)
+      {
+          Console.WriteLine($"Pass {pass}: broker unavailable");
+      }
+  }
+
+  Console.WriteLine($"Published: {broker.Published.Count}");
+
+  class FakeBroker
+  {
+      private int _calls;
+      public List<string> Published { get; } = new();
+
+      public void Publish(string message)
+      {
+          _calls++;
+          if (_calls == 1)
+          {
+              // The first publish fails, as during a short broker outage.
+              throw new InvalidOperationException("Broker unavailable");
+          }
+          Published.Add(message);
+      }
+  }
+fixedExpect: { kind: output, value: "Pass 1: broker unavailable\nPublished: 1" }
+links:
+  - url: https://microservices.io/patterns/data/transactional-outbox.html
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/azure/architecture/databases/guide/transactional-outbox-cosmos
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строку, из-за которой ретранслятор outbox теряет сообщение
+    prompt: |
+      Код моделирует ретранслятор (relay) паттерна Transactional Outbox: список `outbox` играет роль таблицы
+      исходящих сообщений, `FakeBroker` - брокера, первая публикация в который падает, как при кратком сбое.
+      Ретранслятор делает два прохода. Ожидается, что после восстановления брокера сообщение всё же будет
+      опубликовано и программа выведет `Published: 1`, но она выводит:
+
+      ```text
+      Pass 1: broker unavailable
+      Published: 0
+      ```
+
+      Щёлкните по строке с дефектом.
+    hint: Что остаётся в `outbox` к началу второго прохода, если публикация в первом проходе упала?
+    answer: Строка 11, `outbox.RemoveAt(0)` выполняется до `broker.Publish(message)`.
+    explanation: |
+      Ретранслятор удаляет строку из outbox до того, как брокер принял сообщение. Публикация падает, но
+      строки уже нет, поэтому второй проход видит пустой outbox и сообщение потеряно навсегда. В реальной
+      системе то же самое происходит, если сначала зафиксировать удаление (или пометку «отправлено») в базе, а
+      потом вызвать брокер: падение процесса или ошибка брокера между этими шагами теряет событие.
+
+      Исправление - удалять или помечать строку только после того, как брокер подтвердил публикацию. Тогда
+      неудачная попытка оставляет строку на месте, и следующий проход её повторит. Цена такого порядка -
+      доставка «как минимум один раз»: если процесс упадёт после подтверждения брокера, но до удаления
+      строки, сообщение будет опубликовано повторно. Это сознательный выбор: дубль можно отсечь идемпотентным
+      потребителем по идентификатору сообщения, а потерянное событие не восстановить.
+    linkTitles:
+      - "Паттерн Transactional Outbox (microservices.io)"
+      - "Паттерн Transactional Outbox с Azure Cosmos DB"
+  en:
+    title: Find the line that makes the outbox relay lose a message
+    prompt: |
+      The code simulates the relay of the Transactional Outbox pattern: the `outbox` list stands for the table
+      of outgoing messages, and `FakeBroker` is a broker whose first publish fails, as during a short outage.
+      The relay makes two passes. Once the broker recovers, the message should still be published and the
+      program should print `Published: 1`, but it prints:
+
+      ```text
+      Pass 1: broker unavailable
+      Published: 0
+      ```
+
+      Click the line that contains the defect.
+    hint: What is left in `outbox` at the start of the second pass if the publish in the first pass failed?
+    answer: Line 11, `outbox.RemoveAt(0)` runs before `broker.Publish(message)`.
+    explanation: |
+      The relay removes the row from the outbox before the broker has accepted the message. The publish fails,
+      but the row is already gone, so the second pass finds an empty outbox and the message is lost for good. In
+      a real system the same happens if you first commit the delete (or a "sent" mark) in the database and then
+      call the broker: a process crash or a broker error between the two steps loses the event.
+
+      The fix is to delete or mark the row only after the broker has confirmed the publish. A failed attempt then
+      leaves the row in place, and the next pass retries it. The price of this order is at-least-once delivery:
+      if the process crashes after the broker confirmed but before the row is deleted, the message is published
+      again. That is a deliberate choice: an idempotent consumer can drop the duplicate by message id, while a
+      lost event cannot be recovered.
+    linkTitles:
+      - "Transactional Outbox pattern (microservices.io)"
+      - "Transactional Outbox pattern with Azure Cosmos DB"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

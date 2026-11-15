@@ -1,0 +1,126 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WP950J8KFCZWANK09W
+slug: service-locator-hidden-dependencies
+stack: dotnet
+topic: patterns
+level: middle
+type: single
+grading: auto
+tags: [service-locator, dependency-injection, anti-patterns]
+code:
+  language: csharp
+  harness: none
+  source: |
+    public class OrderService
+    {
+        private readonly IServiceProvider _services;
+
+        public OrderService(IServiceProvider services) => _services = services;
+
+        public async Task PlaceAsync(Order order)
+        {
+            var repository = _services.GetRequiredService<IOrderRepository>();
+            var notifier = _services.GetRequiredService<INotifier>();
+
+            await repository.SaveAsync(order);
+            await notifier.SendAsync(order.CustomerId);
+        }
+    }
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/core/extensions/dependency-injection-guidelines
+    lang: en
+    kind: docs
+  - url: https://blog.ploeh.dk/2010/02/03/ServiceLocatorisanAnti-Pattern/
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Почему получение зависимостей из IServiceProvider внутри методов класса считается антипаттерном?
+    prompt: |
+      `OrderService` получает через конструктор `IServiceProvider` и достаёт из него нужные сервисы прямо в
+      методах (паттерн Service Locator). В чём главная причина считать такой подход антипаттерном?
+    hint: Что можно узнать о зависимостях класса, глядя только на его конструктор?
+    options:
+      a: "Вызов `GetRequiredService` намного медленнее внедрения через конструктор, поэтому в горячих методах он становится узким местом."
+      b: "Класс прячет реальные зависимости за универсальным локатором: конструктор больше не говорит, что классу нужно, а отсутствующая регистрация обнаружится только во время выполнения, когда вызовут метод."
+      c: "`IServiceProvider` нельзя внедрить в класс: контейнер не регистрирует его и выбрасывает исключение при создании `OrderService`."
+      d: "Сервисы, полученные через `IServiceProvider`, всегда создаются как синглтоны, независимо от зарегистрированного времени жизни."
+    optionExplanations:
+      a: "Стоимость разрешения - не главная проблема: внедрение через конструктор тоже идёт через тот же контейнер. Антипаттерн плох тем, что скрывает зависимости, а не скоростью."
+      c: "`IServiceProvider` доступен для внедрения в контейнере Microsoft.Extensions.DependencyInjection без явной регистрации, поэтому класс из примера создаётся без ошибок."
+      d: "Время жизни соблюдается так же, как при внедрении через конструктор: transient-сервис создаётся заново при каждом запросе, scoped - один раз на область. Проблема в другом."
+    answer: "Класс прячет реальные зависимости за универсальным локатором, и ошибки отсутствующих регистраций проявляются только во время выполнения."
+    explanation: |
+      Конструктор - это контракт класса: по нему видно, что классу нужно для работы. Когда в конструкторе
+      только `IServiceProvider`, класс формально зависит от всего контейнера, а настоящие зависимости
+      (`IOrderRepository`, `INotifier`) спрятаны в теле методов. Чтобы их узнать, нужно читать реализацию.
+
+      Отсюда следствия:
+
+      - если сервис не зарегистрирован, исключение возникнет не при старте, а при первом вызове `PlaceAsync`,
+        возможно уже в production; проверка контейнера при сборке (`ValidateOnBuild`) анализирует параметры
+        конструкторов и не видит вызовы внутри методов;
+      - в модульном тесте нужно собирать или подделывать `IServiceProvider` и угадывать, какие сервисы класс
+        запросит;
+      - разрастание зависимостей незаметно: при внедрении через конструктор длинный список параметров сразу
+        сигнализирует о нарушении принципа единственной ответственности.
+
+      Рекомендации Microsoft по DI прямо советуют не вызывать `GetService`, если можно использовать внедрение.
+      Исправление - принимать `IOrderRepository` и `INotifier` параметрами конструктора. Обращение к
+      `IServiceProvider` оправдано в инфраструктурном коде, например в фабрике или при создании области в
+      фоновом сервисе.
+    linkTitles:
+      - "Рекомендации по внедрению зависимостей"
+      - "Mark Seemann: Service Locator is an Anti-Pattern"
+  en:
+    title: Why is resolving dependencies from IServiceProvider inside class methods considered an anti-pattern?
+    prompt: |
+      `OrderService` receives an `IServiceProvider` through its constructor and pulls the services it needs
+      out of it inside its methods (the Service Locator pattern). What is the main reason this approach is
+      considered an anti-pattern?
+    hint: What can you learn about a class's dependencies by looking only at its constructor?
+    options:
+      a: "A `GetRequiredService` call is much slower than constructor injection, so it becomes a bottleneck in hot methods."
+      b: "The class hides its real dependencies behind a generic locator: the constructor no longer states what the class needs, and a missing registration is discovered only at run time, when the method is called."
+      c: "`IServiceProvider` cannot be injected into a class: the container does not register it and throws when it creates `OrderService`."
+      d: "Services obtained through `IServiceProvider` are always created as singletons, regardless of the registered lifetime."
+    optionExplanations:
+      a: "Resolution cost is not the main problem: constructor injection goes through the same container. The anti-pattern is bad because it hides dependencies, not because of speed."
+      c: "`IServiceProvider` can be injected by the Microsoft.Extensions.DependencyInjection container without an explicit registration, so the class in the example is created without errors."
+      d: "Lifetimes are honoured just as with constructor injection: a transient service is created on every request, a scoped one once per scope. The problem lies elsewhere."
+    answer: "The class hides its real dependencies behind a generic locator, and missing registrations surface only at run time."
+    explanation: |
+      The constructor is the class's contract: it shows what the class needs in order to work. When the
+      constructor takes only `IServiceProvider`, the class formally depends on the whole container, and the real
+      dependencies (`IOrderRepository`, `INotifier`) are hidden in the method bodies. To find them you have to
+      read the implementation.
+
+      This has consequences:
+
+      - if a service is not registered, the exception appears not at startup but on the first `PlaceAsync`
+        call, possibly in production; container validation at build time (`ValidateOnBuild`) inspects
+        constructor parameters and cannot see calls inside methods;
+      - a unit test has to build or fake an `IServiceProvider` and guess which services the class will request;
+      - dependency growth goes unnoticed: with constructor injection a long parameter list immediately signals a
+        violation of the single responsibility principle.
+
+      The Microsoft DI guidelines explicitly advise against calling `GetService` when you can use injection
+      instead. The fix is to take `IOrderRepository` and `INotifier` as constructor parameters. Using
+      `IServiceProvider` directly is justified in infrastructure code, for example in a factory or when creating
+      a scope in a background service.
+    linkTitles:
+      - "Dependency injection guidelines"
+      - "Mark Seemann: Service Locator is an Anti-Pattern"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  noRunReason: "Uses Microsoft.Extensions.DependencyInjection extension methods and undeclared application types; illustrative code, not executed."

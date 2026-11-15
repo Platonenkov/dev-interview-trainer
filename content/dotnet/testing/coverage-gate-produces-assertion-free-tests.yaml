@@ -1,0 +1,119 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WQJGVSHF4QD20EW41M
+slug: coverage-gate-produces-assertion-free-tests
+stack: dotnet
+topic: testing
+level: lead
+type: situation
+grading: self
+tags: [code-coverage, mutation-testing, test-quality, code-review]
+links:
+  - url: https://martinfowler.com/bliki/TestCoverage.html
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/dotnet/core/testing/unit-testing-code-coverage
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: После введения порога покрытия 80% в CI появились тесты без проверок. Что делать техлиду?
+    prompt: |
+      Полгода назад команда добавила в CI обязательный порог: pull request не сливается, если покрытие
+      строк ниже 80%. Цифра достигнута, но на code review всё чаще попадаются тесты, которые вызывают
+      методы и ничего не проверяют: нет `Assert`, или проверяется только `Assert.NotNull` на результат.
+      Вы техлид команды. Что вы будете делать и в каком порядке?
+    hint: Что на самом деле измеряет покрытие строк, и что происходит с метрикой, когда она становится целью?
+    answer: |
+      1. **Понять масштаб и причину.** Выборочно просмотреть тесты последних месяцев и оценить, какая доля
+         не проверяет поведение. Обсудить с командой без поиска виноватых, почему так пишут: давление сроков,
+         порог блокирует слияние, унаследованный код трудно тестировать.
+      2. **Сменить роль метрики.** Объяснить команде и менеджменту: покрытие показывает, какой код *не*
+         выполняется тестами, но не доказывает, что выполненный код проверен. Жёсткий порог превращает
+         диагностику в цель, и её начинают обходить. Заменить глобальный блокирующий порог на отчёт о покрытии
+         изменённого кода в pull request и, при желании, на правило «покрытие не падает», а не «покрытие не
+         ниже 80%». Не повышать цифру как ответ на проблему.
+      3. **Перенести качество в code review.** Договориться о критериях: тест проверяет наблюдаемое
+         поведение (результат, состояние, исходящий вызов), имя теста описывает это поведение, тест без
+         осмысленной проверки не принимается. Добавить правило статического анализа, которое находит тесты
+         без проверок, как подсказку ревьюеру, а не как новый порог.
+      4. **Измерять силу тестов там, где это важно.** На критичных модулях (деньги, права доступа, расчёты)
+         запустить мутационное тестирование, например Stryker.NET: выжившие мутанты показывают места, где
+         тесты выполняют код, но не замечают его поломку. Из-за длительности - по расписанию или на
+         отдельных модулях, а не в каждом pull request.
+      5. **Разобрать уже написанное.** Тесты-пустышки либо дописать до осмысленных проверок, либо удалить:
+         они дают ложную уверенность и замедляют сборку. Принять, что цифра покрытия при этом снизится.
+      6. **Закрепить и проверить результат.** Зафиксировать договорённости в гайде по тестам, через
+         несколько спринтов оценить по исходам (дефекты, найденные после релиза, откаты), а не по проценту.
+    explanation: |
+      Покрытие строк считает, какие строки были выполнены во время прогона тестов, а не какие были
+      проверены. Тест, который вызывает метод и ничего не утверждает, покрывает все его строки и
+      проходит, даже если метод возвращает неверный результат: упадёт он только на исключении. Поэтому
+      высокий процент легко получить тестами низкого качества.
+
+      Это частный случай закона Гудхарта: когда метрика становится целью, она перестаёт быть хорошей
+      метрикой. Мартин Фаулер называет покрытие полезным инструментом поиска непротестированного кода и
+      плохим числовым показателем качества. Порог в CI блокирует работу, и команда оптимизирует цифру, а не
+      защиту от регрессий. Отсюда тесты без проверок.
+
+      Решение техлида - не запретить и не поднять порог, а вернуть метрике роль диагностики и перенести
+      оценку качества туда, где её можно увидеть: в code review и в мутационное тестирование. Мутационное
+      тестирование вносит в код мелкие изменения (меняет `>` на `>=`, удаляет вызов) и проверяет, упадёт ли
+      хоть один тест. Оно прямо отвечает на вопрос «заметят ли тесты ошибку», но работает в разы дольше
+      обычного прогона, поэтому его применяют выборочно. Важная часть ответа на уровне lead - договорённость
+      с командой и менеджментом: иначе обходы просто сменят форму.
+    linkTitles:
+      - "Мартин Фаулер: TestCoverage"
+      - "Покрытие кода для модульных тестов в .NET"
+  en:
+    title: A team added an 80% coverage gate in CI and now writes tests without assertions. What does the tech lead do?
+    prompt: |
+      Six months ago the team added a mandatory CI gate: a pull request cannot be merged if line coverage
+      is below 80%. The number has been reached, but code reviews keep finding tests that call methods and
+      check nothing: there is no `Assert`, or only `Assert.NotNull` on the result.
+      You are the tech lead of the team. What do you do, and in what order?
+    hint: What does line coverage actually measure, and what happens to a metric once it becomes a target?
+    answer: |
+      1. **Understand the scale and the cause.** Sample the tests from recent months and estimate what share
+         does not verify behaviour. Discuss with the team, without blame, why they are written this way:
+         deadline pressure, a gate that blocks merging, legacy code that is hard to test.
+      2. **Change the role of the metric.** Explain to the team and to management: coverage shows which code
+         is *not* executed by tests, but it does not prove that executed code is verified. A hard gate turns a
+         diagnostic into a target, and people start gaming it. Replace the global blocking gate with a coverage
+         report for the changed code in the pull request and, if wanted, a "coverage does not drop" rule
+         instead of "coverage is at least 80%". Do not raise the number as the answer to the problem.
+      3. **Move quality into code review.** Agree on criteria: a test verifies observable behaviour (a result,
+         a state, an outgoing call), its name describes that behaviour, and a test without a meaningful check
+         is not accepted. Add a static analysis rule that flags tests without assertions as a hint for the
+         reviewer, not as a new gate.
+      4. **Measure test strength where it matters.** On critical modules (money, access rights, calculations)
+         run mutation testing, for example Stryker.NET: surviving mutants show places where tests execute the
+         code but do not notice when it breaks. Because it is slow, run it on a schedule or on selected
+         modules, not on every pull request.
+      5. **Deal with what is already written.** Either extend the empty tests with meaningful checks or delete
+         them: they give false confidence and slow the build. Accept that the coverage number drops.
+      6. **Lock it in and check the result.** Write the agreements into the team's testing guide and after a
+         few sprints judge by outcomes (defects found after release, rollbacks), not by the percentage.
+    explanation: |
+      Line coverage counts which lines were executed while the tests ran, not which were verified. A test
+      that calls a method and asserts nothing covers all of its lines and passes even if the method returns
+      a wrong result: it fails only on an exception. That is why a high percentage is easy to reach with
+      low quality tests.
+
+      This is a case of Goodhart's law: when a measure becomes a target, it stops being a good measure.
+      Martin Fowler calls coverage a useful tool for finding untested code and a poor numeric statement of
+      quality. A CI gate blocks work, so the team optimises the number instead of the protection against
+      regressions. Assertion-free tests are the result.
+
+      The tech lead's answer is neither to forbid nor to raise the gate, but to return the metric to its
+      diagnostic role and to move the judgement of quality to where it can be seen: code review and mutation
+      testing. Mutation testing makes small changes to the code (turns `>` into `>=`, removes a call) and
+      checks whether at least one test fails. It answers directly whether the tests would notice a bug, but
+      it runs many times longer than a normal test run, so it is applied selectively. An important part of a
+      lead-level answer is the agreement with the team and management: otherwise the gaming simply changes
+      its form.
+    linkTitles:
+      - "Martin Fowler: TestCoverage"
+      - "Use code coverage for unit testing in .NET"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

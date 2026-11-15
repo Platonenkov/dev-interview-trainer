@@ -1,0 +1,123 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMDRVAD5W6MPCSWFFD
+slug: cqrs-when-worth-the-cost
+stack: dotnet
+topic: architecture
+level: middle
+type: open
+grading: self
+tags: [cqrs, read-model, write-model, eventual-consistency]
+links:
+  - url: https://learn.microsoft.com/en-us/azure/architecture/patterns/cqrs
+    lang: en
+    kind: docs
+  - url: https://martinfowler.com/bliki/CQRS.html
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Когда разделение команд и запросов (CQRS) окупается, а когда это лишняя сложность?
+    prompt: |
+      Команда проектирует сервис, и кто-то предлагает сразу строить его по CQRS: отдельные модели (а возможно,
+      и отдельные хранилища) для команд, которые меняют состояние, и для запросов, которые его читают.
+      В каких случаях такое разделение окупается, а в каких это лишняя сложность? Чем приходится платить?
+    hint: |
+      Сравните, что нужно стороне записи и что нужно стороне чтения в типичном CRUD-сервисе и в сервисе со сложными правилами и тяжёлыми отчётами.
+    answer: |
+      - **Что такое CQRS.** Модель, которая меняет состояние (команды), отделена от модели, которая его читает
+        (запросы). Минимальный вариант - две модели в одном процессе над одной базой. Отдельное хранилище для
+        чтения, сообщения между сторонами и event sourcing - необязательные надстройки, и у каждой своя цена.
+      - **Окупается, когда потребности чтения и записи расходятся:**
+        - разная форма данных: запись идёт через агрегаты с инвариантами, а экранам и отчётам нужны плоские
+          денормализованные представления, собранные из многих сущностей;
+        - на стороне записи сложная предметная логика: проверки, бизнес-правила, пользовательский интерфейс,
+          ориентированный на задачи (команды вроде "Подтвердить заказ", а не "обновить строку");
+        - несимметричная нагрузка: чтений на порядки больше, чем записей, и сторону чтения нужно масштабировать,
+          кэшировать и индексировать независимо;
+        - стороны развивают разные команды или в разном темпе, много пользователей одновременно меняют одни и те
+          же данные и конкурируют за блокировки.
+      - **Лишняя сложность, когда** сервис - CRUD над одной моделью: форма показывает то, что хранится, правила
+        простые. Тогда получается вдвое больше классов (команда, обработчик, запрос, DTO на каждую операцию),
+        косвенность через медиатор, более сложная навигация по коду и никакого выигрыша.
+      - **Цена полного варианта.** С отдельным хранилищем для чтения чтение становится согласованным в конечном
+        счёте: пользователь может не сразу увидеть свою же запись. Нужен механизм синхронизации (события,
+        проекции), его мониторинг и возможность перестроить проекции.
+      - **Прагматичный подход.** Применять CQRS только к тем частям системы (ограниченным контекстам), где
+        потребности действительно расходятся, а не ко всей системе. Начинать с логического разделения в одной
+        базе: команды идут через модель предметной области, запросы - через проекции в DTO (например, `Select` в
+        DTO в EF Core, который ничего не отслеживает, или обычный SQL через Dapper); если путь чтения всё же
+        загружает сущности, добавить `AsNoTracking()`. Отдельное хранилище добавлять только тогда, когда
+        измерения показывают, что оно нужно.
+    explanation: |
+      Одна модель, которая обслуживает и запись, и чтение, становится компромиссом: в сущностях появляются
+      свойства, нужные только для отображения, а запросы загружают целые агрегаты лишь затем, чтобы отобразить их
+      в DTO. Разделение позволяет оптимизировать каждую сторону под её задачу. Но разделение само по себе - это
+      код, который нужно сопровождать, и выгода появляется только там, где стороны действительно расходятся.
+
+      Мартин Фаулер предупреждает, что для большинства систем CQRS добавляет рискованную сложность. Выгоду он
+      видит во многих задачах, особенно в сложных предметных областях, где одна концептуальная модель для команд
+      и запросов становится сложнее и плохо справляется с обеими ролями. Он также отмечает, что обе модели могут
+      работать с одной базой данных. Документация Microsoft называет традиционный подход с одной моделью данных
+      простым и подходящим для базовых CRUD-операций, а проблемы, ради которых нужен CQRS, связывает с ростом
+      приложения и расхождением требований чтения и записи: несовпадение представлений данных, конкуренция за
+      блокировки, производительность и безопасность.
+
+      Частые ошибки: считать, что CQRS обязательно означает event sourcing или отдельную базу для чтения, и
+      применять шаблон "обработчик через медиатор на каждый эндпоинт" к каждому CRUD-сервису без оглядки на
+      сложность предметной области.
+    linkTitles:
+      - "Паттерн CQRS"
+      - "Мартин Фаулер: CQRS"
+  en:
+    title: When does splitting commands and queries (CQRS) pay off, and when is it unnecessary complexity?
+    prompt: |
+      A team is designing a service, and someone suggests building it with CQRS from the start: separate models
+      (and maybe separate stores) for commands that change state and for queries that read it.
+      When does such a split pay off, and when is it unnecessary complexity? What does it cost?
+    hint: |
+      Compare what the write side and the read side need in a typical CRUD service and in a service with complex rules and heavy reports.
+    answer: |
+      - **What CQRS is.** The model that changes state (commands) is separated from the model that reads it
+        (queries). The minimal form is two models in one process over one database. A separate read store,
+        messaging between the sides and event sourcing are optional additions, and each has its own cost.
+      - **It pays off when read and write needs diverge:**
+        - the data shapes differ: writes go through aggregates with invariants, while screens and reports need
+          flat, denormalized views assembled from many entities;
+        - the write side has complex domain logic: validation, business rules, a task-based user interface
+          (commands such as "Approve order" rather than "update row");
+        - the load is asymmetric: reads outnumber writes by orders of magnitude, and the read side has to be
+          scaled, cached and indexed independently;
+        - different teams own the sides or they evolve at a different pace, or many users change the same data
+          concurrently and contend for locks.
+      - **It is unnecessary complexity when** the service is CRUD over one model: the form shows what is stored
+        and the rules are simple. Then you get twice as many classes (a command, a handler, a query and a DTO per
+        operation), indirection through a mediator, harder code navigation and no gain.
+      - **The cost of the full variant.** With a separate read store, reads become eventually consistent: a user
+        may not see their own write right away. You need a synchronization mechanism (events, projections), its
+        monitoring and a way to rebuild projections.
+      - **A pragmatic approach.** Apply CQRS only to the parts of the system (bounded contexts) where the needs
+        really diverge, not to the whole system. Start with a logical split over one database: commands go
+        through the domain model, queries go through projections into DTOs (for example a `Select` into a DTO in
+        EF Core, which tracks nothing, or plain SQL through Dapper); if a read path still loads entities, add
+        `AsNoTracking()`. Add a separate store only when measurements show that it is needed.
+    explanation: |
+      One model that serves both writes and reads becomes a compromise: entities gain properties needed only for
+      display, and queries load whole aggregates only to map them into DTOs. Splitting lets each side be
+      optimized for its job. But the split is itself code to maintain, and the benefit appears only where the
+      sides really diverge.
+
+      Martin Fowler warns that for most systems CQRS adds risky complexity. He sees the benefit in many problems,
+      particularly in more complicated domains, where one conceptual model for commands and queries becomes more
+      complex and does neither job well. He also notes that both models may share one database. The Microsoft
+      documentation calls the traditional single data model straightforward and suited for basic CRUD
+      operations, and ties the problems that CQRS addresses to applications that grow and to read and write
+      requirements that diverge: data mismatch, lock contention, performance and security challenges.
+
+      Common mistakes: assuming CQRS always means event sourcing or a separate read database, and applying a
+      "handler through a mediator per endpoint" template to every CRUD service regardless of domain complexity.
+    linkTitles:
+      - "CQRS pattern"
+      - "Martin Fowler: CQRS"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

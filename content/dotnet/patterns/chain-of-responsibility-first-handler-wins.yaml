@@ -1,0 +1,159 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WPRSHEQHMRJX301KWW
+slug: chain-of-responsibility-first-handler-wins
+stack: dotnet
+topic: patterns
+level: middle
+type: output
+grading: auto
+tags: [chain-of-responsibility, gof, design-patterns]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    var order = new Order(IsVip: false, Quantity: 12, IsHolidaySeason: true);
+
+    DiscountHandler chain =
+        new VipDiscount(
+            new BulkDiscount(
+                new SeasonalDiscount(null)));
+
+    Console.WriteLine(chain.Handle(order));
+
+    record Order(bool IsVip, int Quantity, bool IsHolidaySeason);
+
+    abstract class DiscountHandler
+    {
+        private readonly DiscountHandler _next;
+
+        protected DiscountHandler(DiscountHandler next) => _next = next;
+
+        public string Handle(Order order)
+        {
+            if (CanApply(order))
+            {
+                return Describe();
+            }
+
+            return _next is null ? "no discount" : _next.Handle(order);
+        }
+
+        protected abstract bool CanApply(Order order);
+        protected abstract string Describe();
+    }
+
+    class VipDiscount : DiscountHandler
+    {
+        public VipDiscount(DiscountHandler next) : base(next) { }
+        protected override bool CanApply(Order order) => order.IsVip;
+        protected override string Describe() => "VIP 20%";
+    }
+
+    class BulkDiscount : DiscountHandler
+    {
+        public BulkDiscount(DiscountHandler next) : base(next) { }
+        protected override bool CanApply(Order order) => order.Quantity >= 10;
+        protected override string Describe() => "Bulk 10%";
+    }
+
+    class SeasonalDiscount : DiscountHandler
+    {
+        public SeasonalDiscount(DiscountHandler next) : base(next) { }
+        protected override bool CanApply(Order order) => order.IsHolidaySeason;
+        protected override string Describe() => "Seasonal 5%";
+    }
+expect:
+  kind: output
+  value: "Bulk 10%"
+acceptedOutputs: ["Bulk 10%"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "Bulk 10%" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "Seasonal 5%" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "Bulk 10%, Seasonal 5%" }
+  - id: d
+    correct: false
+    expect: { kind: output, value: "no discount" }
+  - id: e
+    correct: false
+    expect: { kind: compile-error }
+links:
+  - url: https://refactoring.guru/design-patterns/chain-of-responsibility
+    lang: en
+    kind: article
+  - url: https://refactoring.guru/ru/design-patterns/chain-of-responsibility
+    lang: ru
+    kind: article
+locales:
+  ru:
+    title: Что выведет цепочка из трёх обработчиков скидок, если подходят сразу два?
+    prompt: |
+      Заказ проходит через цепочку обработчиков `VipDiscount -> BulkDiscount -> SeasonalDiscount`. Условиям
+      скидки соответствуют сразу два обработчика. Что выведет эта программа в консоль?
+    hint: Что делает метод `Handle`, когда условие текущего обработчика выполнилось, - вызывает ли он следующего?
+    options:
+      a: "Bulk 10%"
+      b: "Seasonal 5%"
+      c: "Bulk 10%, Seasonal 5%"
+      d: "no discount"
+      e: Ошибка компиляции
+    optionExplanations:
+      b: "`SeasonalDiscount` стоит в цепочке последним. Он выиграл бы, только если бы цепочка обходилась целиком и последний подходящий результат перезаписывал предыдущий, но `Handle` возвращает результат сразу."
+      c: "Скидки не накапливаются: обработчик, чьё условие выполнилось, возвращает свою строку и не вызывает `_next`, поэтому второй подходящий обработчик не запускается."
+      d: "`\"no discount\"` возвращается только в конце цепочки, когда не подошёл ни один обработчик. Здесь `Quantity` равно 12, и условие `BulkDiscount` выполняется."
+      e: Код корректен. Типы можно объявлять после инструкций верхнего уровня, а передать `null` в параметр ссылочного типа разрешено.
+    answer: "Bulk 10%"
+    explanation: |
+      `VipDiscount` проверяет `order.IsVip`, получает `false` и передаёт заказ дальше через `_next.Handle(order)`.
+      `BulkDiscount` видит `Quantity` 12, условие `>= 10` выполняется, и метод сразу возвращает `"Bulk 10%"`,
+      не обращаясь к `_next`. `SeasonalDiscount` тоже подошёл бы (`IsHolidaySeason` равно `true`), но до него
+      запрос не доходит.
+
+      В классическом варианте Chain of Responsibility обработчик либо обрабатывает запрос и останавливает
+      цепочку, либо передаёт его дальше. Поэтому порядок звеньев - это приоритет: если поставить
+      `SeasonalDiscount` перед `BulkDiscount`, программа выведет `Seasonal 5%`. В вариантах, где каждое звено
+      делает свою часть и почти всегда вызывает следующее (так устроено большинство middleware в ASP.NET Core),
+      поведение другое, и это нужно видеть по коду конкретной цепочки.
+    linkTitles:
+      - "Chain of Responsibility (Refactoring.Guru, английская версия)"
+      - "Цепочка обязанностей (Refactoring.Guru)"
+  en:
+    title: What does a chain of three discount handlers print when two of them match?
+    prompt: |
+      An order passes through the handler chain `VipDiscount -> BulkDiscount -> SeasonalDiscount`. Two of the
+      handlers match the order. What does this program print to the console?
+    hint: What does the `Handle` method do when the current handler's condition is met - does it call the next one?
+    options:
+      a: "Bulk 10%"
+      b: "Seasonal 5%"
+      c: "Bulk 10%, Seasonal 5%"
+      d: "no discount"
+      e: Compile error
+    optionExplanations:
+      b: "`SeasonalDiscount` is last in the chain. It would win only if the whole chain were walked and the last matching result overwrote earlier ones, but `Handle` returns the result immediately."
+      c: "Discounts do not accumulate: a handler whose condition is met returns its string and does not call `_next`, so the second matching handler never runs."
+      d: "`\"no discount\"` is returned only at the end of the chain when no handler matched. Here `Quantity` is 12, so the `BulkDiscount` condition holds."
+      e: The code is valid. Types may be declared after top-level statements, and passing `null` to a reference-type parameter is allowed.
+    answer: "Bulk 10%"
+    explanation: |
+      `VipDiscount` checks `order.IsVip`, gets `false` and passes the order on through `_next.Handle(order)`.
+      `BulkDiscount` sees `Quantity` 12, the `>= 10` condition holds, and the method returns `"Bulk 10%"`
+      immediately without touching `_next`. `SeasonalDiscount` would also match (`IsHolidaySeason` is `true`),
+      but the request never reaches it.
+
+      In the classic Chain of Responsibility a handler either processes the request and stops the chain, or
+      passes it on. So the order of the links is a priority: put `SeasonalDiscount` before `BulkDiscount` and
+      the program prints `Seasonal 5%`. Variants where each link does its part and nearly always calls the next
+      one (as most ASP.NET Core middleware does) behave differently, and you have to read the code of the
+      specific chain to know which variant you have.
+    linkTitles:
+      - "Chain of Responsibility (Refactoring.Guru)"
+      - "Chain of Responsibility (Refactoring.Guru, Russian version)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

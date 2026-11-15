@@ -1,0 +1,170 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WQ624MTFZD5G9PNVX2
+slug: global-read-spike-edge-caching
+stack: dotnet
+topic: system-design
+level: architect
+type: situation
+grading: self
+tags: [cdn, http-caching, cache-control, stale-while-revalidate, traffic-spike]
+links:
+  - url: https://www.rfc-editor.org/rfc/rfc9111
+    lang: en
+    kind: spec
+  - url: https://www.rfc-editor.org/rfc/rfc5861
+    lang: en
+    kind: spec
+  - url: https://learn.microsoft.com/en-us/azure/architecture/best-practices/cdn
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/performance/caching/output
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как спроектировать кэширование новостного сайта, чтобы origin пережил всплеск чтения в 100 раз?
+    prompt: |
+      Новостной сайт на ASP.NET Core читают по всему миру. Когда выходит срочная новость, трафик на чтение
+      за несколько минут вырастает в 100 раз, и почти все читатели открывают одни и те же несколько страниц.
+      Серверы приложения и база данных при таких всплесках уже падали. Как вы спроектируете кэширование,
+      чтобы origin выдерживал всплеск, а читатели при этом видели обновления новости без заметной задержки?
+    hint: |
+      Сколько запросов к origin должна порождать одна популярная страница, если её за минуту открывает полмиллиона человек?
+    answer: |
+      1. **Посчитать и поставить цель.** Оценить пиковый RPS, долю анонимных читателей и мощность origin.
+         Цель - чтобы подавляющее большинство чтений (95-99% и выше) обслуживал CDN, а нагрузка на origin
+         зависела от числа горячих страниц и их TTL, а не от числа читателей.
+      2. **Сделать страницы кэшируемыми.** Страница статьи для анонимного читателя одинакова для всех, поэтому
+         её можно хранить в общем кэше. Ответ не должен ставить `Set-Cookie` (многие CDN такие ответы по
+         умолчанию не кэшируют) и зависеть от cookie (`Vary: Cookie`). Персональные части (вход, рекомендации,
+         счётчики) загружаются отдельными запросами к API с `Cache-Control: private` или вообще не идут на origin
+         в режиме деградации. Ключ кэша нормализуется: метки вроде `utm_*` и лишние параметры строки запроса в
+         него не входят.
+      3. **Статику отдавать по версионированным URL.** Скрипты, стили и картинки получают в имени или URL хеш
+         содержимого и заголовок вида `Cache-Control: public, max-age=31536000, immutable`. Новая версия - новый
+         URL, поэтому инвалидировать ничего не нужно.
+      4. **Страницам дать короткий срок жизни в общем кэше.** Например
+         `Cache-Control: public, max-age=10, s-maxage=60, stale-while-revalidate=30, stale-if-error=600`.
+         `s-maxage` действует только в общих кэшах (CDN), браузер держит страницу недолго.
+         `stale-while-revalidate` позволяет edge отдать чуть устаревшую копию и обновить её в фоне, вместо того
+         чтобы все читатели ждали origin в момент истечения. `stale-if-error` продолжает отдавать копию, если
+         origin недоступен.
+      5. **Схлопнуть промахи.** Включить на CDN многоуровневое кэширование (origin shield) и объединение
+         одновременных запросов к одному объекту, если CDN это поддерживает. Тогда origin получает примерно один
+         запрос на объект за TTL, а не по запросу от каждой точки присутствия и тем более от каждого читателя.
+      6. **Управлять свежестью явно.** Главная и лента срочных новостей - самый короткий TTL, архивные статьи -
+         длинный. Исправления и правки статьи публикуются из CMS через очистку кэша по URL или, если CDN это
+         поддерживает, по тегу. Очищать весь кэш разом нельзя: это мгновенный шквал промахов на origin.
+      7. **Защитить сам origin.** Кэш ответов на стороне приложения (например, middleware output caching в
+         ASP.NET Core, .NET 7 и новее, с блокировкой от одновременного пересчёта одной и той же записи), кэш
+         данных перед базой, заранее подготовленные HTML-версии горячих статей. Для некэшируемых эндпоинтов
+         (поиск, комментарии) включается ограничение частоты запросов, а в режиме аварийной деградации их можно
+         отключить флагом.
+      8. **Проверить до следующего всплеска.** Нагрузочный тест через CDN, метрики доли попаданий в кэш, RPS на
+         origin и возраста отдаваемых копий, алерты на падение доли попаданий и runbook дежурного на случай
+         срочной новости.
+    explanation: |
+      Всплеск в 100 раз нельзя закрыть добавлением серверов: автомасштабирование не успевает за минутами, а
+      база данных масштабируется хуже всего. Работает другое свойство нагрузки - читатели запрашивают одно и то
+      же. Если ответ можно хранить в общем кэше, нагрузка на origin перестаёт расти вместе с аудиторией.
+      Например, при `s-maxage=60` и origin shield статья, которую за минуту открывают 500 тысяч человек,
+      порождает на origin порядка одного запроса в минуту.
+
+      Правила кэширования в HTTP описаны в RFC 9111: `max-age`, `s-maxage` для общих кэшей, `public` и
+      `private`, `Vary`. Директивы `stale-while-revalidate` и `stale-if-error` определены отдельно, в RFC 5861,
+      и их поддержку конкретным CDN нужно проверить. Многоуровневое кэширование, объединение запросов и очистка
+      по тегам - это возможности конкретных CDN, а не стандарта HTTP. Отказ кэшировать ответы с `Set-Cookie` -
+      тоже практика CDN: сам RFC 9111 такие ответы хранить не запрещает, но выдать одну сессионную cookie всем
+      читателям опасно.
+
+      Главные компромиссы, которые архитектор должен назвать:
+
+      - TTL - это прямой обмен свежести на нагрузку. Несколько десятков секунд задержки обновления для новостей
+        обычно приемлемы, а срочные правки закрывает очистка кэша;
+      - персонализация убивает кэшируемость, поэтому её выносят из HTML в отдельные запросы;
+      - одна cookie или лишний параметр в ключе кэша незаметно превращают каждое чтение в промах, поэтому
+        доля попаданий - ключевая метрика;
+      - массовая очистка кэша или одновременное истечение многих объектов создают тот самый всплеск на origin,
+        от которого кэш защищал;
+      - CDN становится критической зависимостью: при его отказе origin должен хотя бы выжить в режиме
+        деградации, а для крупных сайтов рассматривают несколько CDN.
+    linkTitles:
+      - "RFC 9111: кэширование в HTTP"
+      - "RFC 5861: расширения Cache-Control для устаревшего содержимого"
+      - "Рекомендации по использованию CDN"
+      - "Middleware кэширования вывода в ASP.NET Core"
+  en:
+    title: How do you design caching for a news site so the origin survives when reads grow 100 times?
+    prompt: |
+      A news site built on ASP.NET Core has readers worldwide. When breaking news is published, read traffic
+      grows 100 times within minutes, and almost all readers open the same few pages. The application servers
+      and the database have already gone down during such spikes. How do you design caching so that the origin
+      survives the spike while readers still see updates to the story without a noticeable delay?
+    hint: |
+      How many requests to the origin should one popular page cause if half a million people open it in a minute?
+    answer: |
+      1. **Quantify and set a target.** Estimate peak RPS, the share of anonymous readers and the origin
+         capacity. The goal is for the CDN to serve the vast majority of reads (95-99% or more), so that origin
+         load depends on the number of hot pages and their TTL, not on the number of readers.
+      2. **Make pages cacheable.** An article page for an anonymous reader is the same for everyone, so it can
+         live in a shared cache. The response must not set `Set-Cookie` (many CDNs do not cache such responses
+         by default) or vary on cookies (`Vary: Cookie`). Personal parts (sign-in state, recommendations,
+         counters) load through separate API requests with `Cache-Control: private`, or are switched off in
+         degraded mode. The cache key is normalized: tracking parameters such as `utm_*` and other irrelevant
+         query string parameters are excluded.
+      3. **Serve static assets from versioned URLs.** Scripts, styles and images carry a content hash in their
+         name or URL and a header such as `Cache-Control: public, max-age=31536000, immutable`. A new version
+         is a new URL, so nothing needs invalidating.
+      4. **Give pages a short shared-cache lifetime.** For example
+         `Cache-Control: public, max-age=10, s-maxage=60, stale-while-revalidate=30, stale-if-error=600`.
+         `s-maxage` applies only to shared caches (the CDN), while the browser keeps the page briefly.
+         `stale-while-revalidate` lets the edge serve a slightly stale copy and refresh it in the background
+         instead of making every reader wait for the origin at expiry. `stale-if-error` keeps serving the copy
+         when the origin is unavailable.
+      5. **Collapse misses.** Enable tiered caching (an origin shield) on the CDN and collapsing of concurrent
+         requests for the same object, if the CDN supports it. The origin then receives roughly one request per
+         object per TTL, not one per point of presence, let alone one per reader.
+      6. **Manage freshness explicitly.** The home page and the breaking news feed get the shortest TTL, archive
+         articles a long one. Corrections and edits are published from the CMS by purging the cache by URL or,
+         if the CDN supports it, by tag. Never purge the whole cache at once: that is an instant flood of misses
+         on the origin.
+      7. **Protect the origin itself.** A response cache in the application (for example the output caching
+         middleware in ASP.NET Core, .NET 7 and later, with locking against concurrent regeneration of the same
+         entry), a data cache in front of the database, and prerendered HTML for hot articles. Uncacheable
+         endpoints (search, comments) get request rate limits, and in emergency degraded mode they can be
+         switched off by a flag.
+      8. **Verify before the next spike.** A load test through the CDN, metrics for cache hit ratio, origin RPS
+         and the age of served copies, alerts on a falling hit ratio, and an on-call runbook for breaking news.
+    explanation: |
+      A spike where reads grow 100 times cannot be absorbed by adding servers: autoscaling does not react within
+      minutes, and the database scales worst of all. A different property of the load helps: readers request the
+      same things. If a response can be stored in a shared cache, origin load stops growing with the audience.
+      For example, with `s-maxage=60` and an origin shield, an article opened by 500 thousand people in a minute
+      causes on the order of one origin request per minute.
+
+      The HTTP caching rules are defined in RFC 9111: `max-age`, `s-maxage` for shared caches, `public` and
+      `private`, `Vary`. The `stale-while-revalidate` and `stale-if-error` directives are defined separately, in
+      RFC 5861, and support for them in a given CDN must be checked. Tiered caching, request collapsing and
+      purging by tag are features of specific CDNs, not part of the HTTP standard. Refusing to cache responses
+      with `Set-Cookie` is also a CDN practice: RFC 9111 itself does not forbid storing them, but handing one
+      session cookie to every reader is dangerous.
+
+      The main trade-offs an architect should name:
+
+      - the TTL directly trades freshness for load. A delay of a few dozen seconds is usually acceptable for
+        news, and urgent corrections are handled by purging;
+      - personalization kills cacheability, so it moves out of the HTML into separate requests;
+      - a single cookie or an extra parameter in the cache key silently turns every read into a miss, so the
+        hit ratio is the key metric;
+      - a mass purge or many objects expiring at the same moment create exactly the origin spike the cache was
+        meant to prevent;
+      - the CDN becomes a critical dependency: if it fails, the origin must at least survive in degraded mode,
+        and large sites consider several CDNs.
+    linkTitles:
+      - "RFC 9111: HTTP Caching"
+      - "RFC 5861: HTTP Cache-Control Extensions for Stale Content"
+      - "CDN guidance"
+      - "Output caching middleware in ASP.NET Core"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

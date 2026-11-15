@@ -1,0 +1,148 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNXQZ1AYM81M4YS9TF
+slug: saga-orchestration-vs-choreography
+stack: dotnet
+topic: distributed
+level: architect
+type: open
+grading: self
+tags: [saga, orchestration, choreography, microservices, distributed-transactions]
+links:
+  - url: https://learn.microsoft.com/en-us/azure/architecture/patterns/saga
+    lang: en
+    kind: docs
+  - url: https://microservices.io/patterns/data/saga.html
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Когда координировать сагу заказа хореографией через события, а когда центральным оркестратором?
+    prompt: |
+      Оформление заказа проходит через четыре сервиса: платежи (списание средств), склад (резервирование
+      товара), доставка (создание отправления) и программа лояльности (начисление баллов). У каждого сервиса
+      своя база данных, распределённой транзакции между ними нет, поэтому процесс реализуют как сагу.
+
+      В каких случаях вы бы координировали такую сагу хореографией через события, а в каких - центральным
+      оркестратором? Что выберете для этого процесса и чем придётся заплатить за выбор?
+    hint: |
+      Где в каждом из подходов хранится знание о том, какой шаг идёт следующим и что откатывать при отказе, и что происходит с этим знанием, когда шагов становится больше?
+    answer: |
+      1. **Хореография.** Центрального координатора нет: каждый сервис выполняет свою локальную транзакцию,
+         публикует событие (`PaymentCompleted`, `StockReserved`) и реагирует на события других сервисов.
+         Подходит, когда шагов немного (два-три), процесс линейный, компенсации простые, а участники
+         принадлежат разным командам и должны оставаться независимыми. Нового подписчика, которому нужно
+         только узнать о факте, можно добавить без изменения остальных сервисов.
+      2. **Цена хореографии растёт с числом шагов.** Процесс нигде не описан целиком: он размазан по
+         подпискам нескольких сервисов. Трудно ответить, на каком шаге сейчас конкретный заказ и почему он
+         застрял. Компенсации тоже разбросаны: каждый сервис сам должен знать, на какие события об отказе
+         реагировать. Появляется риск циклических зависимостей между сервисами через события, а сквозное
+         тестирование и изменение порядка шагов требуют согласованных правок в нескольких сервисах.
+      3. **Оркестрация.** Оркестратор - конечный автомат саги с сохраняемым состоянием - отправляет
+         участникам команды, получает ответы, решает, какой шаг следующий, и при отказе запускает компенсации
+         в обратном порядке. Процесс, ветвления, таймауты и компенсации описаны в одном месте, состояние
+         каждого экземпляра саги видно, участники не зависят друг от друга. Подходит для длинных процессов
+         с ветвлениями, сроками и нетривиальными компенсациями.
+      4. **Цена оркестрации.** Появляется центральный компонент, который знает всех участников и их
+         контракты. Его нужно делать надёжным: хранить состояние, переживать перезапуск, обрабатывать
+         повторы и таймауты, иначе это новая точка отказа. Есть риск, что в оркестратор утечёт бизнес-логика
+         участников и он превратится в «божественный» сервис: оркестратор решает, *что* делать дальше, а *как*
+         выполнить шаг, решает участник.
+      5. **Выбор для этого процесса - гибрид.** Платёж, резерв и доставка зависят друг от друга по порядку и
+         требуют компенсаций (возврат денег, снятие резерва, отмена отправления), поэтому их координирует
+         оркестратор саги заказа, которым владеет команда заказов. Начисление баллов не влияет на успех
+         заказа и не требует его отката: сервис лояльности подписывается на событие `OrderCompleted` и
+         повторяет обработку до успеха, то есть остаётся в хореографии.
+      6. **Общее для обоих стилей.** Надёжная публикация сообщений (transactional outbox), идемпотентные
+         обработчики, идентификатор корреляции саги во всех сообщениях и в распределённой трассировке,
+         таймауты шагов. Шаги упорядочены так, чтобы до точки невозврата (pivot-транзакции) шли
+         компенсируемые шаги, а после неё - только те, которые можно повторять до успеха.
+      7. **Критерии пересмотра.** Число участников и ветвлений, сложность компенсаций, требование видеть
+         статус процесса, частота изменений процесса и границы ответственности команд. Хореографию из
+         двух-трёх шагов разумно переводить на оркестратор, когда процесс начинает расти, а не тогда, когда
+         его уже никто не может восстановить по логам.
+    explanation: |
+      Оба стиля решают одну задачу: согласовать локальные транзакции нескольких сервисов без общей ACID-транзакции.
+      Разница в том, где живёт знание о процессе. В хореографии оно распределено по участникам и существует
+      неявно, как сумма подписок. В оркестрации оно собрано в одном явном компоненте, который можно прочитать,
+      протестировать и наблюдать.
+
+      Слабая связанность хореографии тоже не бесплатна: сервисы зависят от схем событий друг друга, и
+      изменение порядка шагов затрагивает нескольких владельцев. Оркестратор, наоборот, связан со всеми
+      участниками, но участники связаны только с его командами и не знают друг о друге. Поэтому вопрос не в
+      том, какой стиль «правильный», а в том, какую связанность и какую непрозрачность процесса вы готовы
+      принять для конкретного процесса.
+
+      Сильный ответ архитектора выбирает стиль для каждого процесса отдельно, а не один на всю систему, и
+      называет операционную цену оркестратора: сохраняемое состояние, высокая доступность и выбор движка -
+      собственный конечный автомат, библиотека вроде MassTransit или NServiceBus либо движок рабочих процессов
+      вроде Durable Functions или Temporal.
+    linkTitles:
+      - "Паттерн Saga (Azure Architecture Center)"
+      - "Паттерн Saga (microservices.io)"
+  en:
+    title: When do you coordinate an order saga with choreography through events and when with a central orchestrator?
+    prompt: |
+      Placing an order goes through four services: payments (charging the customer), inventory (reserving
+      stock), shipping (creating a shipment) and loyalty (awarding points). Each service has its own database,
+      there is no distributed transaction between them, so the process is implemented as a saga.
+
+      In which cases would you coordinate such a saga with choreography through events, and in which with a
+      central orchestrator? What do you choose for this process, and what do you pay for that choice?
+    hint: |
+      In each approach, where does the knowledge of which step comes next and what to undo on failure live, and what happens to that knowledge as the number of steps grows?
+    answer: |
+      1. **Choreography.** There is no central coordinator: each service runs its local transaction, publishes
+         an event (`PaymentCompleted`, `StockReserved`) and reacts to the events of other services. It fits
+         when there are few steps (two or three), the flow is linear, compensations are simple, and the
+         participants belong to different teams and must stay independent. A new subscriber that only needs to
+         learn about a fact can be added without changing the other services.
+      2. **The cost of choreography grows with the number of steps.** The flow is not described anywhere as a
+         whole: it is spread over the subscriptions of several services. It is hard to tell which step a given
+         order is on and why it is stuck. Compensations are scattered too: every service has to know which
+         failure events to react to. Cyclic dependencies between services through events become a risk, and
+         end-to-end testing or reordering steps needs coordinated changes in several services.
+      3. **Orchestration.** The orchestrator, a saga state machine with persisted state, sends commands to the
+         participants, receives their replies, decides the next step and, on failure, runs compensations in
+         reverse order. The flow, branches, timeouts and compensations are described in one place, the state of
+         every saga instance is visible, and the participants do not depend on each other. It fits long
+         processes with branches, deadlines and non-trivial compensations.
+      4. **The cost of orchestration.** It adds a central component that knows every participant and its
+         contract. It has to be reliable: persist its state, survive restarts, handle retries and timeouts,
+         otherwise it is a new point of failure. There is a risk that participant business logic leaks into the
+         orchestrator and it becomes a "god" service: the orchestrator decides *what* happens next, while the
+         participant decides *how* a step is carried out.
+      5. **The choice for this process is a hybrid.** Payment, reservation and shipping depend on each other's
+         order and need compensations (refund, release the reservation, cancel the shipment), so they are
+         coordinated by an order saga orchestrator owned by the orders team. Awarding points does not affect
+         whether the order succeeds and does not require rolling the order back: the loyalty service subscribes
+         to the `OrderCompleted` event and retries until it succeeds, so it stays in choreography.
+      6. **Common to both styles.** Reliable message publishing (transactional outbox), idempotent handlers, a
+         saga correlation id in every message and in distributed tracing, and step timeouts. Steps are ordered
+         so that compensable steps come before the point of no return (the pivot transaction) and only steps
+         that can be retried until they succeed come after it.
+      7. **Criteria for revisiting the choice.** The number of participants and branches, the complexity of
+         compensations, the need to see the status of the process, how often the process changes and the
+         boundaries of team ownership. A two- or three-step choreography is worth moving to an orchestrator
+         when the process starts to grow, not when nobody can reconstruct it from the logs anymore.
+    explanation: |
+      Both styles solve the same problem: coordinating the local transactions of several services without a
+      shared ACID transaction. The difference is where the knowledge of the process lives. In choreography it
+      is distributed over the participants and exists only implicitly, as the sum of their subscriptions. In
+      orchestration it is collected in one explicit component that can be read, tested and observed.
+
+      The loose coupling of choreography is not free either: services depend on each other's event schemas,
+      and reordering steps affects several owners. The orchestrator, in turn, is coupled to every participant,
+      but the participants are coupled only to its commands and know nothing about each other. So the question
+      is not which style is "right", but which coupling and which opacity of the flow you accept for a given
+      process.
+
+      A strong architect's answer picks the style per process rather than one style for the whole system, and
+      names the operational cost of an orchestrator: persisted state, high availability and the choice of an
+      engine - a hand-written state machine, a library such as MassTransit or NServiceBus, or a workflow engine
+      such as Durable Functions or Temporal.
+    linkTitles:
+      - "Saga pattern (Azure Architecture Center)"
+      - "Saga pattern (microservices.io)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

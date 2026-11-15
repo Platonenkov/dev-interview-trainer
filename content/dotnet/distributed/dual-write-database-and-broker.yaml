@@ -1,0 +1,148 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNFGQ5G0RZWV00YCQ8
+slug: dual-write-database-and-broker
+stack: dotnet
+topic: distributed
+level: senior
+type: open
+grading: self
+tags: [outbox, dual-write, at-least-once, idempotency, ef-core]
+code:
+  language: csharp
+  harness: none
+  source: |
+    public async Task Handle(CreateOrder command, CancellationToken ct)
+    {
+        var order = Order.Create(command.CustomerId, command.Items);
+        _db.Orders.Add(order);
+        await _db.SaveChangesAsync(ct);
+
+        await _publisher.PublishAsync(new OrderCreated(order.Id, order.Total), ct);
+    }
+links:
+  - url: https://microservices.io/patterns/data/transactional-outbox.html
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/dotnet/architecture/microservices/multi-container-microservice-net-applications/subscribe-events
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Что может пойти не так, если сохранить заказ в базе и сразу опубликовать событие в брокер, и как это исправляет transactional outbox?"
+    prompt: |
+      Обработчик команды в коде сохраняет заказ через EF Core, а затем публикует событие `OrderCreated`
+      в брокер сообщений. Что может пойти не так в этой последовательности? Поможет ли поменять вызовы
+      местами? Как проблему решает паттерн transactional outbox и какие новые обязательства он накладывает
+      на систему?
+    hint: "Что произойдёт, если процесс упадёт ровно между двумя вызовами, и есть ли транзакция, которая охватывает и базу, и брокер?"
+    answer: |
+      1. **Общей транзакции нет.** `SaveChangesAsync` фиксирует локальную транзакцию в базе, а публикация -
+         отдельная операция в другой системе. Атомарности между ними нет, поэтому каждая запись может пройти
+         без другой.
+      2. **Заказ сохранён, событие потеряно.** Брокер недоступен, истёк таймаут, процесс упал или его
+         перезапустили между двумя вызовами. Заказ существует, но оплата, склад и уведомления о нём не узнают,
+         и повторно отправить событие некому.
+      3. **Исход публикации неизвестен.** При таймауте непонятно, принял ли брокер сообщение: повтор может
+         дать дубликат, отказ от повтора - потерю.
+      4. **Перестановка не помогает.** Если публиковать до `SaveChangesAsync` или внутри открытой транзакции
+         до коммита, получается обратная ситуация: событие ушло, а коммит не прошёл (нарушение ограничения,
+         конфликт параллелизма, падение). Подписчики реагируют на заказ, которого нет, а иногда получают
+         событие раньше, чем данные стали видны в базе.
+      5. **Распределённая транзакция - не выход.** Двухфазная фиксация между базой и брокером обычно
+         недоступна (популярные брокеры, например Kafka и RabbitMQ, не участвуют в XA-транзакциях), а там, где
+         возможна, связывает доступность сервиса с доступностью брокера и добавляет задержку.
+      6. **Transactional outbox.** В том же `DbContext` и в том же вызове `SaveChangesAsync` вместе с заказом
+         добавляется строка в таблицу outbox: идентификатор сообщения, тип, сериализованное тело, время
+         создания. Обе записи фиксируются одной локальной транзакцией: либо есть и заказ, и событие, либо
+         ничего.
+      7. **Ретранслятор (relay).** Отдельный процесс, например `BackgroundService`, читает неотправленные
+         строки по порядку, публикует их и только после подтверждения брокера помечает строку отправленной
+         или удаляет. Альтернатива опросу таблицы - чтение журнала транзакций базы (CDC).
+      8. **Новые обязательства.**
+         - Доставка at-least-once: падение между публикацией и отметкой строки даёт повторную отправку,
+           поэтому у события стабильный идентификатор, а потребители идемпотентны.
+         - Если ретрансляторов несколько, строки нужно захватывать с блокировкой (`FOR UPDATE SKIP LOCKED`
+           в PostgreSQL, `UPDLOCK, READPAST` в SQL Server) и следить за порядком событий одного агрегата.
+         - Очистка старых строк, метрика и алерт на возраст самой старой неотправленной записи, задержка
+           доставки на интервал опроса.
+         - Готовые реализации есть, например, в MassTransit и NServiceBus.
+    explanation: |
+      Корень проблемы в том, что транзакция локальна для одного ресурса. `SaveChangesAsync` даёт атомарность
+      только внутри базы (по умолчанию EF Core выполняет все изменения одного вызова в транзакции, если
+      провайдер их поддерживает), а брокер - второй, независимый ресурс. В каком бы порядке ни шли вызовы,
+      есть момент, когда одна запись уже сделана, а другая ещё нет, и падение, таймаут или сетевой сбой в этот
+      момент оставляют системы рассогласованными без механизма, который это исправит.
+
+      Outbox превращает две записи в одну: событие становится данными в той же базе и разделяет судьбу заказа.
+      Доставка становится отдельным шагом, который можно повторять сколько угодно раз из надёжного источника.
+      Руководство Microsoft по микросервисам на .NET описывает тот же подход: журнал интеграционных событий
+      в той же базе, который пишется в одной транзакции с бизнес-данными.
+
+      Цена в том, что публикация ровно один раз невозможна: ретранслятор может отправить сообщение и упасть
+      до отметки строки. Поэтому гарантия - at-least-once, а дубликаты отсекает идемпотентный потребитель.
+      Кроме того, доставка асинхронна: событие отстаёт от коммита на интервал опроса, а если ретранслятор
+      остановился, события копятся в таблице, и об этом нужно узнать по алерту, а не от пользователей.
+    linkTitles:
+      - "Паттерн Transactional outbox"
+      - "Подписка на события и атомарная публикация интеграционных событий"
+  en:
+    title: "What can go wrong when you save an order and then publish an event to the broker, and how does the transactional outbox fix it?"
+    prompt: |
+      The command handler in the code saves an order with EF Core and then publishes an `OrderCreated` event
+      to the message broker. What can go wrong in this sequence? Does swapping the two calls help? How does
+      the transactional outbox pattern fix the problem, and what new obligations does it put on the system?
+    hint: "What happens if the process crashes exactly between the two calls, and is there a transaction that covers both the database and the broker?"
+    answer: |
+      1. **There is no shared transaction.** `SaveChangesAsync` commits a local database transaction, while
+         publishing is a separate operation in another system. There is no atomicity between them, so each
+         write can succeed without the other.
+      2. **The order is saved, the event is lost.** The broker is down, a timeout expires, the process crashes
+         or is restarted between the two calls. The order exists, but payment, inventory and notifications
+         never learn about it, and nothing will ever send the event again.
+      3. **The publish outcome is unknown.** After a timeout you cannot tell whether the broker accepted the
+         message: retrying may create a duplicate, not retrying may lose it.
+      4. **Swapping the calls does not help.** If you publish before `SaveChangesAsync`, or inside an open
+         transaction before the commit, you get the opposite case: the event is out, but the commit fails
+         (a constraint violation, a concurrency conflict, a crash). Subscribers react to an order that does not
+         exist, and sometimes receive the event before the data is visible in the database.
+      5. **A distributed transaction is not the answer.** Two-phase commit across the database and the broker
+         is usually unavailable (popular brokers such as Kafka and RabbitMQ do not take part in XA
+         transactions), and where it is possible it ties the availability of the service to the broker and
+         adds latency.
+      6. **Transactional outbox.** In the same `DbContext` and the same `SaveChangesAsync` call, a row is added
+         to an outbox table together with the order: message id, type, serialized body, creation time. Both
+         writes are committed by one local transaction: either the order and the event both exist, or neither.
+      7. **A relay.** A separate process, for example a `BackgroundService`, reads unsent rows in order,
+         publishes them and only after the broker confirms marks the row as sent or deletes it. An alternative
+         to polling the table is reading the database transaction log (CDC).
+      8. **New obligations.**
+         - Delivery is at-least-once: a crash between publishing and marking the row causes a resend, so the
+           event has a stable id and consumers are idempotent.
+         - With several relay instances, rows must be claimed with locking (`FOR UPDATE SKIP LOCKED` in
+           PostgreSQL, `UPDLOCK, READPAST` in SQL Server) and the order of events of one aggregate preserved.
+         - Cleanup of old rows, a metric and an alert on the age of the oldest unsent row, and delivery delayed
+           by the polling interval.
+         - Ready implementations exist, for example in MassTransit and NServiceBus.
+    explanation: |
+      The root cause is that a transaction is local to one resource. `SaveChangesAsync` gives atomicity only
+      inside the database (by default EF Core applies all changes of one call in a transaction if the provider
+      supports it), and the broker is a second, independent resource. Whatever the order of the calls, there
+      is a moment when one write is done and the other is not, and a crash, a timeout or a network failure at
+      that moment leaves the systems inconsistent with no mechanism to repair it.
+
+      The outbox turns two writes into one: the event becomes data in the same database and shares the fate of
+      the order. Delivery becomes a separate step that can be retried as many times as needed from a durable
+      source. The Microsoft guide to .NET microservices describes the same approach: an integration event log
+      in the same database, written in one transaction with the business data.
+
+      The price is that publishing exactly once is impossible: the relay can send the message and crash before
+      marking the row. So the guarantee is at-least-once, and an idempotent consumer filters out duplicates.
+      Delivery is also asynchronous: the event lags behind the commit by the polling interval, and if the relay
+      stops, events pile up in the table, which you should learn from an alert rather than from users.
+    linkTitles:
+      - "Transactional outbox pattern"
+      - "Subscribing to events and publishing integration events atomically"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  noRunReason: "Uses an EF Core DbContext and a message broker client, which are not available in the sandbox."

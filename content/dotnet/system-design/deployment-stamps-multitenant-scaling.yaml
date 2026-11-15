@@ -1,0 +1,144 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WQM5TV7C7YQ0W4VZ33
+slug: deployment-stamps-multitenant-scaling
+stack: dotnet
+topic: system-design
+level: architect
+type: open
+grading: self
+tags: [deployment-stamps, multitenancy, scaling, blast-radius, data-residency]
+links:
+  - url: https://learn.microsoft.com/en-us/azure/architecture/patterns/deployment-stamp
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/azure/architecture/guide/multitenant/overview
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Когда мультитенантный SaaS стоит масштабировать независимыми копиями всего стека (deployment stamps), а не одним общим развёртыванием?
+    prompt: |
+      Мультитенантный SaaS-продукт работает как одно общее развёртывание: все тенанты (tenants) обслуживаются
+      одним набором экземпляров приложения, одной базой данных, общими очередями и кэшем. Число тенантов растёт.
+      В каких случаях вы бы перешли к паттерну Deployment Stamps - разворачивали бы независимые копии всего
+      стека, каждая из которых обслуживает часть тенантов, - вместо того чтобы и дальше наращивать общее
+      развёртывание? Что этот выбор даёт и чего стоит?
+    hint: |
+      Подумайте, что именно ограничивает рост одного общего развёртывания и что при сбое ломается сразу у всех
+      тенантов. А затем - какие операции становятся сложнее, когда копий стека несколько.
+    answer: |
+      1. **Что такое штамп.** Полная независимая копия стека (вычисления, хранилище данных, очереди, кэш),
+         которая обслуживает подмножество тенантов и имеет заранее измеренную ёмкость: например, N тенантов
+         или M запросов в секунду. Перед штампами стоит глобальный слой маршрутизации, который по каталогу
+         тенантов определяет, в какой штамп отправить запрос.
+      2. **Когда штампы оправданы.**
+         - Общее развёртывание упирается в жёсткие пределы: размер или пропускная способность базы, лимиты
+           облачных сервисов и квот подписки, и дальнейшее вертикальное масштабирование уже невозможно или
+           неэкономично.
+         - Нужно ограничить радиус поражения (blast radius): сбой, неудачный релиз или шумный сосед затрагивает
+           только тенантов одного штампа, а не всех клиентов.
+         - Есть требования к размещению данных (data residency) и задержкам: штамп в нужном регионе, данные
+           тенанта не покидают его.
+         - Нужны уровни изоляции: отдельный штамп для крупного или регулируемого клиента, общие штампы для
+           остальных.
+         - Нужен поэтапный выпуск: обновление раскатывается по штампам волнами, и проблема видна на одном
+           штампе раньше, чем на всех.
+      3. **Цена.**
+         - Маршрутизация и каталог тенантов становятся критичным общим компонентом: они должны быть
+           высокодоступными, кэшироваться и не превращаться в новую единую точку отказа.
+         - Развёртывания и миграции схемы выполняются по всему парку штампов: без инфраструктуры как кода и
+           автоматизированных конвейеров штампы расходятся по версиям и конфигурации.
+         - Операции поперёк штампов усложняются: сквозная отчётность, аналитика, глобальный поиск, биллинг
+           требуют агрегации данных из всех штампов.
+         - Перенос тенанта между штампами (перебалансировка, смена региона) - это миграция данных, которую
+           нужно спроектировать заранее.
+         - У каждого штампа есть фиксированные накладные расходы, а запас ёмкости в каждом из них хуже
+           утилизируется, чем в одном общем пуле.
+         - Наблюдаемость должна сводить метрики и логи всех штампов в одну картину.
+      4. **Когда не стоит.** Тенантов немного, общее развёртывание далеко от пределов, один регион и нет
+         требований к изоляции; тенанты активно взаимодействуют между собой и разделяют данные; у команды нет
+         зрелой автоматизации развёртывания. Сначала стоит исчерпать более дешёвые шаги: горизонтально
+         масштабировать stateless-слой и разделить данные по тенантам внутри одного развёртывания.
+      5. **Как принять решение и подготовиться.** Определить ёмкость штампа нагрузочным тестом, задать порог
+         заполнения, при котором открывается следующий штамп, и с первого дня хранить идентификатор тенанта во
+         всех данных, чтобы тенанта можно было перенести.
+    explanation: |
+      В общем развёртывании рост ограничен самым слабым общим компонентом, обычно базой данных, а любой
+      инцидент глобален: он задевает всех клиентов сразу. Штампы превращают масштабирование в повторяемую
+      операцию "добавить ещё одну проверенную единицу известной ёмкости" вместо бесконечной настройки каждого
+      компонента по отдельности.
+
+      Отличие от шардирования в том, что шардирование делит только слой данных, а штамп делит весь стек вместе
+      с вычислениями и зависимостями. Поэтому изоляция полнее, но и цена выше: сложность переезжает в
+      маршрутизацию, автоматизацию развёртывания и операции, которым нужны данные всех тенантов.
+
+      Решение окупается, когда общее развёртывание действительно упирается в пределы масштаба или когда есть
+      требования к изоляции и размещению данных. Без автоматизации N штампов превращаются в N уникальных
+      окружений, каждое из которых сопровождается вручную, и выигрыш теряется.
+    linkTitles:
+      - "Паттерн Deployment Stamps"
+      - "Архитектура мультитенантных решений в Azure"
+  en:
+    title: When should a multitenant SaaS scale with independent copies of the whole stack (deployment stamps) instead of one shared deployment?
+    prompt: |
+      A multitenant SaaS product runs as one shared deployment: all tenants are served by one set of application
+      instances, one database, shared queues and a shared cache. The number of tenants keeps growing. In which
+      cases would you move to the Deployment Stamps pattern - deploying independent copies of the whole stack,
+      each serving a subset of tenants - instead of continuing to grow the shared deployment? What does this
+      choice give you and what does it cost?
+    hint: |
+      Think about what exactly limits the growth of one shared deployment and what breaks for every tenant at
+      once when it fails. Then think about which operations get harder once there are several copies of the stack.
+    answer: |
+      1. **What a stamp is.** A complete independent copy of the stack (compute, data store, queues, cache) that
+         serves a subset of tenants and has a capacity measured in advance: for example N tenants or M requests
+         per second. In front of the stamps sits a global routing layer that uses a tenant catalog to decide
+         which stamp receives a request.
+      2. **When stamps are justified.**
+         - The shared deployment hits hard limits: database size or throughput, limits of cloud services and
+           subscription quotas, and further scaling up is impossible or uneconomical.
+         - You need to cap the blast radius: an outage, a bad release or a noisy neighbour affects only the
+           tenants of one stamp, not every customer.
+         - There are data residency and latency requirements: a stamp in the required region, and the tenant's
+           data never leaves it.
+         - You need isolation tiers: a dedicated stamp for a large or regulated customer, shared stamps for the
+           rest.
+         - You need staged rollout: an update goes out to stamps in waves, and a problem shows up on one stamp
+           before it reaches all of them.
+      3. **The cost.**
+         - Routing and the tenant catalog become a critical shared component: they must be highly available,
+           cached, and must not turn into a new single point of failure.
+         - Deployments and schema migrations run across the whole fleet of stamps: without infrastructure as
+           code and automated pipelines the stamps drift apart in version and configuration.
+         - Cross-stamp operations get harder: global reporting, analytics, search and billing need data
+           aggregated from every stamp.
+         - Moving a tenant between stamps (rebalancing, changing region) is a data migration that must be
+           designed up front.
+         - Each stamp has a fixed overhead, and spare capacity spread over many stamps is used less efficiently
+           than in one shared pool.
+         - Observability must combine the metrics and logs of all stamps into one picture.
+      4. **When not to.** There are few tenants, the shared deployment is far from its limits, there is one
+         region and no isolation requirement; tenants interact heavily and share data; the team lacks mature
+         deployment automation. Exhaust cheaper steps first: scale out the stateless tier and partition data by
+         tenant inside one deployment.
+      5. **How to decide and prepare.** Determine the capacity of a stamp with a load test, set a fill threshold
+         at which the next stamp is opened, and store the tenant id in all data from day one so that a tenant can
+         be moved.
+    explanation: |
+      In a shared deployment growth is limited by the weakest shared component, usually the database, and every
+      incident is global: it hits all customers at once. Stamps turn scaling into a repeatable operation, "add
+      one more tested unit of known capacity", instead of endless tuning of each component separately.
+
+      The difference from sharding is that sharding splits only the data tier, while a stamp splits the whole
+      stack, including compute and dependencies. Isolation is therefore more complete, but the price is higher:
+      complexity moves into routing, deployment automation and the operations that need data from all tenants.
+
+      The decision pays off when the shared deployment really hits scale limits or when there are isolation and
+      data residency requirements. Without automation, N stamps become N unique environments, each maintained by
+      hand, and the benefit is lost.
+    linkTitles:
+      - "Deployment Stamps pattern"
+      - "Architect multitenant solutions on Azure"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

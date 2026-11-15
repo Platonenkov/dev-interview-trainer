@@ -1,0 +1,159 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNYJ9QTDZ3HZQAG6RX
+slug: poison-message-blocks-queue
+stack: dotnet
+topic: distributed
+level: senior
+type: situation
+grading: self
+tags: [poison-message, dead-letter-queue, retries, queues]
+links:
+  - url: https://learn.microsoft.com/en-us/azure/service-bus-messaging/service-bus-dead-letter-queues
+    lang: en
+    kind: docs
+  - url: https://www.rabbitmq.com/docs/dlx
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Одно некорректное сообщение бесконечно доставляется заново, и очередь растёт: что делать?"
+    prompt: |
+      Сервис обрабатывает заказы из очереди брокера сообщений. После релиза у соседней команды в очередь попало
+      сообщение с некорректным телом: обработчик выбрасывает исключение при каждой его доставке. Брокер
+      возвращает сообщение в очередь, оно тут же доставляется снова, логи заполнены одним и тем же стектрейсом,
+      а число сообщений в очереди растёт, хотя все остальные сообщения корректны.
+
+      Что вы сделаете прямо сейчас и что измените, чтобы ситуация не повторилась?
+    hint: |
+      Имеет ли смысл повторять обработку, если ошибка не временная, и что должно происходить с сообщением, которое не обработается никогда?
+    answer: |
+      **Сейчас**
+
+      1. **Найти сообщение.** По логам определить его идентификатор (`MessageId`, correlation id) и убедиться,
+         что падает именно оно, а не все сообщения подряд.
+      2. **Убрать его из основного потока, не теряя.** Переместить в очередь недоставленных сообщений
+         (dead-letter queue, DLQ). В Azure Service Bus - явным переводом в DLQ (`DeadLetterMessageAsync` с
+         причиной и описанием ошибки). В RabbitMQ - отклонением (`basic.reject` или `basic.nack`) с
+         `requeue=false`, если на очереди настроен dead-letter exchange и к нему привязана очередь для
+         недоставленных сообщений: без DLX или без привязанной к нему очереди отклонённое сообщение просто
+         пропадёт. Не очищать очередь целиком и не удалять сообщение: оно понадобится для анализа и, возможно,
+         для повторной обработки.
+      3. **Проверить, что очередь разбирается.** Убедиться, что отставание сокращается, и оценить, каких клиентов
+         задела задержка.
+
+      **Что изменить**
+
+      4. **Ограничить число доставок и сделать лимит осознанным.** В Service Bus это `MaxDeliveryCount`
+         (по умолчанию 10, проверьте, что его не подняли): после превышения сообщение уходит в DLQ с причиной
+         `MaxDeliveryCountExceeded`. В RabbitMQ у quorum-очередей есть ограничение числа доставок
+         (`delivery-limit`): при превышении сообщение уходит в dead-letter exchange с причиной `delivery_limit`,
+         но только если DLX настроен, иначе сообщение удаляется. У classic-очередей такого лимита нет, и
+         ограничивать повторы приходится в потребителе, например переопубликовывая сообщение со счётчиком
+         попыток в заголовке.
+      5. **Разделять типы ошибок.** Постоянные ошибки (невалидный формат, ошибка десериализации, нарушение
+         контракта) отправлять в DLQ сразу, без повторов. Временные (таймаут базы, недоступность соседнего
+         сервиса) повторять с растущей паузой и ограниченным числом попыток.
+      6. **Сохранять контекст ошибки.** В Service Bus причина и текст ошибки едут вместе с сообщением:
+         `DeadLetterReason` и `DeadLetterErrorDescription`. В RabbitMQ заголовок `x-death` фиксирует только
+         причину и очередь (например `rejected` или `delivery_limit`), но не текст исключения, поэтому текст
+         ошибки пишите в лог вместе с идентификатором сообщения или добавляйте заголовок с ошибкой при ручной
+         публикации в DLQ. В логе также нужен номер попытки, чтобы одну проблему было видно как одну.
+      7. **Настроить наблюдаемость.** Алерт на ненулевую или растущую глубину DLQ, на отставание основной очереди
+         и возраст самого старого сообщения. У DLQ должен быть владелец: сама она не очищается.
+      8. **Исправить причину.** Валидация входящего контракта, договорённость с отправителем о схеме сообщений,
+         тест на такой payload.
+      9. **Переобработать осознанно.** После исправления вернуть сообщения из DLQ в основную очередь отдельной
+         контролируемой операцией, сначала одно, потом остальные. Обработчик должен быть идемпотентным: сообщение
+         могло частично выполниться до падения. Для устаревших сообщений нужно решение бизнеса, а не автоматика.
+    explanation: |
+      Бесконечная повторная доставка - следствие того, что брокер не отличает временную ошибку от постоянной:
+      без ограничения числа доставок он просто возвращает неподтверждённое сообщение в очередь. Для сообщения,
+      которое никогда не обработается, повторы бесполезны: они тратят ресурсы потребителя, засоряют логи и при
+      упорядоченной обработке (сессии, один потребитель с маленьким prefetch) блокируют все сообщения за ним.
+      Отсюда и растущая очередь при корректных остальных сообщениях.
+
+      DLQ решает обе задачи сразу: основной поток снова движется, а проблемное сообщение сохранено. Но брокеры
+      сохраняют разный объём контекста: Service Bus хранит причину и описание, заданные приложением, а RabbitMQ
+      записывает в `x-death` только системную причину, очередь и счётчик. Поэтому текст ошибки нужно сохранять
+      самому. DLQ без алерта превращается в тихую потерю данных: сообщения копятся, и о них никто не знает,
+      поэтому важны мониторинг глубины DLQ и процесс разбора.
+
+      Повторная обработка из DLQ - отдельное решение, а не автоматический цикл: если вернуть сообщения до
+      исправления ошибки, всё повторится. Идемпотентность обработчика защищает от двойного эффекта, если
+      часть работы уже была выполнена до исключения.
+    linkTitles:
+      - "Очереди недоставленных сообщений в Azure Service Bus"
+      - "Dead letter exchanges в RabbitMQ"
+  en:
+    title: "One malformed message is redelivered endlessly and the queue keeps growing: what do you do?"
+    prompt: |
+      A service processes orders from a message broker queue. After a release by a neighbouring team, a message
+      with a malformed body got into the queue: the handler throws an exception on every delivery of it. The
+      broker returns the message to the queue, it is delivered again right away, the logs are full of the same
+      stack trace, and the number of messages in the queue keeps growing, although all the other messages are
+      valid.
+
+      What do you do right now, and what do you change so that this does not happen again?
+    hint: |
+      Does retrying make sense when the error is not transient, and what should happen to a message that can never succeed?
+    answer: |
+      **Right now**
+
+      1. **Find the message.** Use the logs to get its identifier (`MessageId`, correlation id) and confirm that
+         it is this message that fails, not every message.
+      2. **Take it out of the main flow without losing it.** Move it to a dead-letter queue (DLQ). In Azure
+         Service Bus, dead-letter it explicitly (`DeadLetterMessageAsync` with a reason and an error description).
+         In RabbitMQ, reject it (`basic.reject` or `basic.nack`) with `requeue=false` when the queue has a
+         dead-letter exchange configured and a dead-letter queue bound to it: without a DLX, or without a queue
+         bound to it, the rejected message is simply dropped. Do not purge the queue and do not delete the
+         message: you need it for analysis and possibly for reprocessing.
+      3. **Check that the queue drains.** Confirm that the backlog shrinks and estimate which customers the delay
+         affected.
+
+      **What to change**
+
+      4. **Cap the number of deliveries and make the limit deliberate.** In Service Bus this is
+         `MaxDeliveryCount` (10 by default, check that it was not raised): once it is exceeded the message moves
+         to the DLQ with the reason `MaxDeliveryCountExceeded`. In RabbitMQ, quorum queues have a delivery limit
+         (`delivery-limit`): when it is exceeded the message goes to the dead-letter exchange with the reason
+         `delivery_limit`, but only if a DLX is configured, otherwise the message is dropped. Classic queues have
+         no such limit, so the consumer has to bound retries itself, for example by republishing the message with
+         an attempt counter in a header.
+      5. **Separate error types.** Send permanent errors (invalid format, deserialization failure, contract
+         violation) to the DLQ immediately, without retries. Retry transient ones (database timeout, a neighbouring
+         service being down) with a growing delay and a bounded number of attempts.
+      6. **Keep the error context.** In Service Bus the reason and the error text travel with the message:
+         `DeadLetterReason` and `DeadLetterErrorDescription`. In RabbitMQ the `x-death` header records only why
+         and from which queue the message was dead-lettered (for example `rejected` or `delivery_limit`), not the
+         exception text, so log the exception text with the message id, or add an error header when you republish
+         to the dead-letter queue yourself. Logs also carry the attempt number, so one problem shows up as one
+         problem.
+      7. **Add observability.** Alert on a non-zero or growing DLQ depth, on the main queue backlog and on the age
+         of the oldest message. The DLQ needs an owner: it does not clean itself up.
+      8. **Fix the cause.** Validation of the incoming contract, an agreement with the sender about the message
+         schema, a test with that payload.
+      9. **Reprocess deliberately.** After the fix, move messages from the DLQ back to the main queue as a separate,
+         controlled operation, one message first and then the rest. The handler must be idempotent: the message
+         may have partly executed before it failed. Stale messages need a business decision, not automation.
+    explanation: |
+      Endless redelivery happens because the broker cannot tell a transient error from a permanent one: without a
+      delivery limit it just returns an unacknowledged message to the queue. For a message that will never
+      succeed, retries are useless: they burn consumer capacity, flood the logs and, with ordered processing
+      (sessions, a single consumer with a small prefetch), block every message behind it. That is why the queue
+      grows even though the other messages are valid.
+
+      A DLQ solves both problems at once: the main flow moves again, and the failing message is kept. But brokers
+      keep different amounts of context: Service Bus stores the reason and description set by the application,
+      while RabbitMQ records in `x-death` only a system reason, the queue and a count. So the error text has to be
+      saved by you. A DLQ without an alert becomes silent data loss: messages pile up and nobody knows, which is
+      why DLQ depth monitoring and a triage process matter.
+
+      Reprocessing from the DLQ is a separate decision, not an automatic loop: if you return the messages before
+      the bug is fixed, everything repeats. An idempotent handler protects against a double effect if part of
+      the work had already been done before the exception.
+    linkTitles:
+      - "Azure Service Bus dead-letter queues"
+      - "RabbitMQ dead letter exchanges"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

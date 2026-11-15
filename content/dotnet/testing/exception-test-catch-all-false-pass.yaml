@@ -1,0 +1,139 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WQC6DM1BJFKB8QVDVY
+slug: exception-test-catch-all-false-pass
+stack: dotnet
+topic: testing
+level: middle
+type: find-bug
+grading: auto
+tags: [test-design, exceptions, false-positive]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    // Test: PortParser.Parse("") must throw ArgumentException.
+    try
+    {
+        PortParser.Parse("");
+        Console.WriteLine("FAIL: no exception");
+    }
+    catch (Exception)
+    {
+        Console.WriteLine("PASS");
+    }
+
+    static class PortParser
+    {
+        static readonly Dictionary<string, string> Aliases = new() { ["http"] = "80" };
+
+        public static int Parse(string text)
+        {
+            Aliases.TryGetValue(text, out string alias);
+            string value = alias.Length > 0 ? alias : text;
+            if (value.Length == 0)
+            {
+                throw new ArgumentException("Port must not be empty.", nameof(text));
+            }
+            return int.Parse(value);
+        }
+    }
+bugLineSets: [[7]]
+fixedSource: |
+  // Test: PortParser.Parse("") must throw ArgumentException.
+  try
+  {
+      PortParser.Parse("");
+      Console.WriteLine("FAIL: no exception");
+  }
+  catch (ArgumentException)
+  {
+      Console.WriteLine("PASS");
+  }
+
+  static class PortParser
+  {
+      static readonly Dictionary<string, string> Aliases = new() { ["http"] = "80" };
+
+      public static int Parse(string text)
+      {
+          Aliases.TryGetValue(text, out string alias);
+          string value = alias.Length > 0 ? alias : text;
+          if (value.Length == 0)
+          {
+              throw new ArgumentException("Port must not be empty.", nameof(text));
+          }
+          return int.Parse(value);
+      }
+  }
+fixedExpect: { kind: exception, value: System.NullReferenceException }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/core/testing/unit-testing-best-practices
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/statements/exception-handling-statements
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему тест на исключение печатает PASS, хотя парсер сломан?
+    prompt: |
+      Самописный консольный тест проверяет, что `PortParser.Parse("")` выбрасывает `ArgumentException`.
+      В парсере есть ошибка: на пустой строке он падает с `NullReferenceException`, но тест всё равно
+      печатает `PASS`. Щёлкните по строке самого теста (не парсера), из-за которой ошибка остаётся незамеченной.
+    hint: |
+      Посмотрите, какие именно исключения тест засчитывает как успешное прохождение.
+    answer: |
+      Строка 7, `catch (Exception)`: тест засчитывает как успех любое исключение, включая `NullReferenceException`
+      из ошибки в парсере.
+    explanation: |
+      `TryGetValue("")` не находит ключ и записывает в `alias` значение `null`, поэтому `alias.Length` в строке 19
+      выбрасывает `NullReferenceException` ещё до проверки на пустую строку. Среда выполнения ищет совместимый
+      блок `catch`, а `catch (Exception)` совместим с любым исключением, поэтому тест печатает `PASS`. Такой тест
+      проверяет только «что-то упало», а не «упало так, как задумано», и настоящая ошибка выглядит как успех.
+
+      Рекомендации Microsoft называют одним из свойств хорошего модульного теста самопроверку: тест сам, без
+      участия человека, определяет, прошёл он или упал. Здесь вердикт выносится автоматически, но по неверному
+      признаку. Тест исключения должен проверять конкретный ожидаемый тип и проваливаться, если исключения нет или
+      оно другого типа. В исправленном коде перехватывается только `ArgumentException`, а `NullReferenceException`
+      выходит наружу, и тест падает, то есть наконец сообщает о дефекте. После этого исправляют сам парсер,
+      например `string value = alias ?? text;`, и тест печатает `PASS` по правильной причине.
+
+      В тестовых фреймворках для этого есть готовые проверки, например `Assert.Throws<ArgumentException>` в xUnit:
+      тест падает, если исключение не выброшено или его тип не совпадает с `ArgumentException` в точности (для
+      производных типов есть `Assert.ThrowsAny<T>`).
+    linkTitles:
+      - "Рекомендации по модульному тестированию в .NET"
+      - "Операторы обработки исключений в C#"
+  en:
+    title: Why does an exception test print PASS even though the parser is broken?
+    prompt: |
+      A hand-written console test checks that `PortParser.Parse("")` throws `ArgumentException`.
+      The parser has a bug: on an empty string it fails with `NullReferenceException`, yet the test still
+      prints `PASS`. Click the line of the test itself (not the parser) that lets the bug go unnoticed.
+    hint: |
+      Look at which exceptions exactly the test treats as a successful pass.
+    answer: |
+      Line 7, `catch (Exception)`: the test counts any exception as success, including the
+      `NullReferenceException` caused by the bug in the parser.
+    explanation: |
+      `TryGetValue("")` does not find the key and sets `alias` to `null`, so `alias.Length` on line 19 throws
+      `NullReferenceException` before the empty-string check is reached. The runtime looks for a compatible
+      `catch` block, and `catch (Exception)` matches any exception, so the test prints `PASS`. Such a test only
+      checks that "something failed", not that "it failed as intended", so a real bug looks like success.
+
+      Microsoft's guidance lists self-checking among the traits of a good unit test: the test decides on its own,
+      without human interaction, whether it passed or failed. Here the verdict is automatic, but it is based on the
+      wrong signal. An exception test must check the specific expected type and fail when no exception or a
+      different one is thrown. The corrected code catches only `ArgumentException`, so `NullReferenceException`
+      escapes and the test fails, which finally reports the defect. Then the parser itself is fixed, for example
+      with `string value = alias ?? text;`, and the test prints `PASS` for the right reason.
+
+      Test frameworks provide ready-made checks for this, for example `Assert.Throws<ArgumentException>` in xUnit:
+      the test fails if no exception is thrown or if its type is not exactly `ArgumentException` (for derived types
+      there is `Assert.ThrowsAny<T>`).
+    linkTitles:
+      - "Unit testing best practices for .NET"
+      - "Exception-handling statements in C#"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

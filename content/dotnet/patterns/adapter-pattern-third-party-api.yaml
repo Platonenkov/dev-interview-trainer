@@ -1,0 +1,131 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNYF1PQDVJVD8BBWHQ
+slug: adapter-pattern-third-party-api
+stack: dotnet
+topic: patterns
+level: junior
+type: open
+grading: self
+tags: [adapter, gof, design-patterns, third-party-integration]
+code:
+  language: csharp
+  harness: none
+  source: |
+    // Your application code depends on this interface.
+    public interface INotificationSender
+    {
+        Task SendAsync(string recipient, string message, CancellationToken cancellationToken);
+    }
+
+    // Type from a third-party SMS SDK: you cannot change it.
+    public sealed class VendorSmsClient
+    {
+        public VendorSmsClient(string apiKey) { /* ... */ }
+
+        // Returns a provider status code, 0 means success.
+        public int Send(string phoneNumber, string text) { /* ... */ return 0; }
+    }
+links:
+  - url: https://refactoring.guru/design-patterns/adapter
+    lang: en
+    kind: article
+  - url: https://refactoring.guru/ru/design-patterns/adapter
+    lang: ru
+    kind: article
+locales:
+  ru:
+    title: Какую задачу решает паттерн Adapter и как подключить с его помощью сторонний SMS-клиент?
+    prompt: |
+      Какую проблему решает паттерн Adapter (адаптер)? В приложении есть свой интерфейс `INotificationSender`,
+      а отправлять уведомления нужно через сторонний SDK с классом `VendorSmsClient` (код выше). Как вы
+      подключите этот клиент так, чтобы остальной код приложения о нём не знал?
+    hint: Как заставить чужой класс выглядеть как реализация вашего интерфейса, не меняя ни класс, ни интерфейс?
+    answer: |
+      - **Проблема.** Есть готовый класс с нужным поведением, но его интерфейс несовместим с тем, который ожидает
+        ваш код: другие имена методов, параметры, типы результатов, способ сообщать об ошибках. Изменить этот
+        класс нельзя или не стоит (сторонняя библиотека, legacy-код, сгенерированный клиент). Adapter - это
+        класс, который реализует ожидаемый интерфейс и переводит вызовы в API несовместимого класса.
+      - **Решение для SMS.** Написать класс `SmsNotificationSender : INotificationSender`, который получает
+        `VendorSmsClient` через конструктор и хранит его в поле (композиция). В `SendAsync` он проверяет
+        `cancellationToken`, вызывает `client.Send(recipient, message)`, превращает ненулевой код статуса и
+        исключения SDK в собственное исключение приложения (например, `NotificationFailedException`) и
+        возвращает задачу.
+      - **Подключение.** В DI-контейнере `SmsNotificationSender` регистрируется как реализация
+        `INotificationSender`. Сервисы приложения принимают в конструкторе только `INotificationSender`.
+      - **Что это даёт.** Типы стороннего SDK (клиент, коды статуса, его исключения) живут в одном классе. Смена
+        провайдера или добавление email - это ещё один адаптер, а не правка всего кода. В модульных тестах
+        вместо отправки SMS подставляется фейковая реализация `INotificationSender`.
+      - **Граница ответственности.** Адаптер только переводит вызовы и данные, бизнес-логики в нём нет.
+    explanation: |
+      Главная идея - направление зависимостей. Если сервисы приложения напрямую создают `VendorSmsClient` и
+      проверяют его коды статуса, сторонний тип расползается по всему коду: его трудно заменить и неудобно
+      подменять в тестах. Адаптер разворачивает зависимость: код приложения зависит от своей абстракции, а от
+      SDK зависит только адаптер. Это та же мысль, что и в принципе инверсии зависимостей.
+
+      В GoF описаны два вида адаптера: адаптер объекта (оборачивает экземпляр через композицию) и адаптер
+      класса (наследуется от адаптируемого класса). В C# у класса может быть только один базовый класс, а
+      сторонние классы часто запечатаны, как `VendorSmsClient` здесь, поэтому на практике почти всегда
+      используют адаптер объекта.
+
+      Адаптер легко спутать с соседними паттернами:
+
+      - Decorator сохраняет тот же интерфейс и добавляет поведение;
+      - Facade даёт упрощённый интерфейс к целой подсистеме;
+      - Adapter переводит один интерфейс в другой, уже ожидаемый клиентом.
+
+      Если в SDK есть асинхронный метод отправки, адаптер должен вызывать его, а не блокировать поток
+      синхронным `Send`.
+    linkTitles:
+      - "Adapter (Refactoring.Guru, английская версия)"
+      - "Адаптер (Refactoring.Guru)"
+  en:
+    title: What problem does the Adapter pattern solve, and how do you use it to plug in a third-party SMS client?
+    prompt: |
+      What problem does the Adapter pattern solve? The application has its own `INotificationSender`
+      interface, but notifications have to be sent through a third-party SDK with the `VendorSmsClient` class
+      (code above). How do you plug in this client so that the rest of the application does not know about it?
+    hint: How do you make someone else's class look like an implementation of your interface without changing either the class or the interface?
+    answer: |
+      - **The problem.** A ready-made class has the behaviour you need, but its interface is incompatible with
+        the one your code expects: different method names, parameters, result types, a different way to report
+        errors. You cannot or should not change that class (a third-party library, legacy code, a generated
+        client). An Adapter is a class that implements the expected interface and translates calls into the API
+        of the incompatible class.
+      - **The SMS solution.** Write a class `SmsNotificationSender : INotificationSender` that receives
+        `VendorSmsClient` through its constructor and keeps it in a field (composition). In `SendAsync` it checks
+        `cancellationToken`, calls `client.Send(recipient, message)`, turns a non-zero status code and SDK
+        exceptions into the application's own exception (for example `NotificationFailedException`) and returns
+        a task.
+      - **Wiring.** In the DI container `SmsNotificationSender` is registered as the implementation of
+        `INotificationSender`. Application services take only `INotificationSender` in their constructors.
+      - **What you gain.** The third-party SDK types (the client, its status codes, its exceptions) live in one
+        class. Switching the provider or adding email is one more adapter, not an edit across the codebase. Unit
+        tests substitute a fake `INotificationSender` instead of sending SMS.
+      - **Responsibility boundary.** The adapter only translates calls and data; it holds no business logic.
+    explanation: |
+      The key idea is the direction of dependencies. If application services create `VendorSmsClient`
+      directly and check its status codes, the third-party type spreads through the whole codebase: it is hard
+      to replace and awkward to substitute in tests. The adapter inverts the dependency: application code
+      depends on its own abstraction, and only the adapter depends on the SDK. This is the same idea as the
+      dependency inversion principle.
+
+      GoF describes two kinds of adapter: an object adapter (wraps an instance through composition) and a
+      class adapter (inherits from the adapted class). In C# a class can have only one base class, and
+      third-party classes are often sealed, like `VendorSmsClient` here, so in practice the object adapter is
+      used almost always.
+
+      The adapter is easy to confuse with neighbouring patterns:
+
+      - Decorator keeps the same interface and adds behaviour;
+      - Facade gives a simplified interface to a whole subsystem;
+      - Adapter translates one interface into another one that the client already expects.
+
+      If the SDK offers an asynchronous send method, the adapter should call it instead of blocking a thread
+      with the synchronous `Send`.
+    linkTitles:
+      - "Adapter (Refactoring.Guru)"
+      - "Adapter (Refactoring.Guru, Russian version)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  noRunReason: "Illustrative fragment: VendorSmsClient is a fictional third-party SDK type with stub bodies, and the code has no entry point."

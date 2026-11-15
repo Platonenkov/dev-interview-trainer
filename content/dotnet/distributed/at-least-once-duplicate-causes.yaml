@@ -1,0 +1,116 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WN9541M5M7E7GSPVKQ
+slug: at-least-once-duplicate-causes
+stack: dotnet
+topic: distributed
+level: middle
+type: multi
+grading: auto
+tags: [at-least-once, idempotency, rabbitmq, kafka, publisher-confirms]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: true
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+  - id: f
+    correct: false
+links:
+  - url: https://www.rabbitmq.com/docs/reliability
+    lang: en
+    kind: docs
+  - url: https://www.rabbitmq.com/docs/confirms
+    lang: en
+    kind: docs
+  - url: https://kafka.apache.org/39/javadoc/org/apache/kafka/clients/consumer/KafkaConsumer.html
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Из-за чего потребитель получает дубликаты сообщений при доставке at-least-once?
+    prompt: |
+      Система обмена сообщениями работает с гарантией доставки at-least-once. Выберите все ситуации, после
+      которых потребитель может получить одно и то же сообщение дважды.
+    hint: В каждой ситуации спросите себя, что знает отправитель или брокер о том, что работа уже сделана.
+    options:
+      a: "Потребитель RabbitMQ зафиксировал транзакцию в базе данных и упал до отправки `ack`."
+      b: "Издатель не получил publisher confirm из-за обрыва соединения и опубликовал сообщение повторно, хотя брокер уже сохранил первую копию."
+      c: "Потребитель Kafka обработал пачку записей, но до фиксации смещения (offset commit) группа прошла ребалансировку, и партиция досталась другому потребителю."
+      d: "Брокер записал persistent-сообщение на диск, прежде чем подтвердить его издателю."
+      e: "Сообщение пролежало в очереди дольше своего TTL, и речь о потребителе исходной очереди."
+      f: "Потребитель отправил `ack` сразу при получении, до обработки, и упал посреди обработки."
+    optionExplanations:
+      d: "Запись на диск делает сообщение долговечным, но не создаёт второй копии. Это защита от потери при перезапуске брокера, а не причина дубликатов."
+      e: "Сообщение с истёкшим TTL удаляется из очереди или уходит в dead-letter exchange. Потребитель исходной очереди не получает его ни разу, а не дважды."
+      f: "Это обратная ошибка: брокер уже удалил подтверждённое сообщение и не доставит его снова, поэтому сообщение теряется (at-most-once), а не дублируется."
+    answer: "Падение после фиксации в базе до `ack`, повторная публикация после потерянного publisher confirm и ребалансировка Kafka до фиксации смещения."
+    explanation: |
+      Дубликаты возникают по одной схеме: работа уже сделана (сообщение обработано или сохранено брокером), но
+      подтверждение этого потерялось. Сторона, которая отвечает за доставку, не видит подтверждения и
+      повторяет доставку. Руководство RabbitMQ по надёжности прямо говорит, что подтверждения дают именно
+      доставку at-least-once, а сообщения, которые были в пути при обрыве соединения, приходится отправлять
+      заново.
+
+      - Потребитель RabbitMQ упал до `ack`: когда канал закрывается, брокер возвращает неподтверждённые
+        доставки в очередь и доставляет их снова, хотя изменения в базе уже зафиксированы.
+      - Издатель не получил publisher confirm: он не может отличить потерю сообщения от потери подтверждения,
+        поэтому повторно публикует неподтверждённое сообщение, и в очереди оказываются две копии.
+      - Kafka хранит позицию группы как зафиксированное смещение (committed offset). При ребалансировке
+        партиция переходит к другому потребителю группы, и он продолжает чтение с последнего зафиксированного
+        смещения, поэтому записи, обработанные после последней фиксации, обрабатываются снова.
+
+      Брокер не может сделать эти ситуации невозможными без потери сообщений, поэтому при at-least-once
+      потребитель должен быть идемпотентным: например, сохранять идентификатор обработанного сообщения в той
+      же транзакции, что и результат, и пропускать повторы.
+    linkTitles:
+      - "RabbitMQ: руководство по надёжности"
+      - "RabbitMQ: подтверждения потребителей и издателей"
+      - "Apache Kafka: класс KafkaConsumer"
+  en:
+    title: What makes a consumer receive duplicate messages under at-least-once delivery?
+    prompt: |
+      A messaging system provides at-least-once delivery. Select every situation after which a consumer can
+      receive the same message twice.
+    hint: In each situation, ask what the sender or the broker knows about whether the work has already been done.
+    options:
+      a: "A RabbitMQ consumer committed its database transaction and crashed before sending the `ack`."
+      b: "A publisher did not receive a publisher confirm because the connection dropped and published the message again, although the broker had already stored the first copy."
+      c: "A Kafka consumer processed a batch of records, but before the offset commit the group rebalanced and the partition moved to another consumer."
+      d: "The broker wrote a persistent message to disk before confirming it to the publisher."
+      e: "A message stayed in the queue longer than its TTL, and the question is about the consumer of the original queue."
+      f: "A consumer sent the `ack` as soon as it received the message, before processing, and crashed in the middle of processing."
+    optionExplanations:
+      d: "Writing to disk makes the message durable but does not create a second copy. It protects against loss on a broker restart, it does not cause duplicates."
+      e: "A message whose TTL expired is removed from the queue or sent to a dead-letter exchange. The consumer of the original queue receives it zero times, not twice."
+      f: "This is the opposite mistake: the broker has already removed the acknowledged message and will not deliver it again, so the message is lost (at-most-once), not duplicated."
+    answer: "A crash after the database commit but before the `ack`, a republish after a lost publisher confirm, and a Kafka rebalance before the offset commit."
+    explanation: |
+      Duplicates follow one pattern: the work is already done (the message was processed or stored by the
+      broker), but the confirmation of it was lost. The party responsible for delivery does not see the
+      confirmation and repeats the delivery. The RabbitMQ reliability guide states that acknowledgements give
+      exactly at-least-once delivery, and that messages in transit during a connection failure have to be
+      retransmitted.
+
+      - A RabbitMQ consumer crashed before the `ack`: when the channel closes, the broker requeues the
+        unacknowledged deliveries and delivers them again, although the database changes are already committed.
+      - A publisher did not receive a publisher confirm: it cannot tell a lost message from a lost confirmation,
+        so it republishes the unconfirmed message and the queue ends up with two copies.
+      - Kafka keeps the position of a group as the committed offset. On a rebalance the partition moves to
+        another consumer of the group, which continues from the last committed offset, so records processed
+        after the last commit are processed again.
+
+      The broker cannot rule these situations out without losing messages, so under at-least-once the consumer
+      must be idempotent: for example, store the id of a processed message in the same transaction as the
+      result and skip repeats.
+    linkTitles:
+      - "RabbitMQ: reliability guide"
+      - "RabbitMQ: consumer acknowledgements and publisher confirms"
+      - "Apache Kafka: KafkaConsumer class"
+meta:
+  authors: [platonenkov]
+  verified: 1970-01-01

@@ -1,0 +1,144 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WPANZ2WWHVKD69HX95
+slug: visitor-vs-switch-pattern-matching
+stack: dotnet
+topic: patterns
+level: senior
+type: open
+grading: self
+tags: [visitor, pattern-matching, switch-expression, expression-trees]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.linq.expressions.expressionvisitor
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/functional/pattern-matching
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/switch-expression
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Когда в C# Visitor всё ещё выгоднее, чем switch-выражение с шаблонами типов?
+    prompt: |
+      Начиная с C# 8 операцию над иерархией классов можно записать как switch-выражение с шаблонами типов,
+      без классического паттерна Visitor. При этом в BCL по-прежнему есть `ExpressionVisitor`, а в Roslyn -
+      `CSharpSyntaxVisitor` и `CSharpSyntaxRewriter`. В каких случаях Visitor всё ещё окупается, а когда лучше
+      выбрать switch-выражение? Назовите компромиссы обоих подходов для C# 14 (.NET 10).
+    hint: |
+      Сравните три вещи: что дешевле добавить (новую операцию или новый тип узла), кто заметит забытый тип узла и где живёт код обхода дочерних узлов.
+    answer: |
+      **Visitor окупается, когда:**
+
+      - операций много, а набор типов узлов стабилен (синтаксические деревья, деревья выражений, AST своего DSL).
+        Каждая операция - отдельный класс, классы узлов при этом не меняются;
+      - нужен переиспользуемый обход. Базовый посетитель сам обходит дочерние узлы и пересобирает узел, только
+        если изменился кто-то из детей. Наследнику `ExpressionVisitor` достаточно переопределить `VisitParameter`
+        или `VisitBinary`, чтобы переписать всё дерево: подменить параметр, объединить предикаты, перевести запрос;
+      - нужна проверка полноты на этапе компиляции в открытой иерархии. Если методы `Visit` в базовом посетителе
+        абстрактные, новый тип узла добавляет новый абстрактный метод, и сборка ломается во всех посетителях, пока
+        каждый его не обработает. `ExpressionVisitor` устроен иначе: его методы виртуальные и по умолчанию просто
+        обходят детей;
+      - иерархия живёт в библиотеке, и потребители добавляют свои операции, не трогая узлы: двойная
+        диспетчеризация через `Accept` обходится без приведений типов.
+
+      **switch-выражение лучше, когда:**
+
+      - иерархия маленькая и стабильная, операций одна-две, логика локальна: нет шаблонного кода `Accept` и `Visit`;
+      - решение зависит не только от типа узла: шаблоны свойств, позиционные и вложенные шаблоны, сопоставление
+        кортежа из нескольких значений. Visitor диспетчеризует только по типу одного узла;
+      - узлы - записи с деконструкцией, а операция короткая, например упрощение выражения по нескольким правилам.
+
+      **Ограничения switch-выражения:**
+
+      - в C# 14 нет закрытых иерархий: для switch по типам компилятор не может доказать, что перечислены все
+        наследники, выдаёт предупреждение CS8509, и в коде появляется ветка `_ =>`. После этого новый тип узла
+        молча попадает в неё, а без неё во время выполнения будет `SwitchExpressionException`;
+      - каждая операция сама рекурсивно спускается к детям: код обхода копируется из операции в операцию, и
+        пропустить ветку легко.
+
+      **На практике подходы сочетают:** Visitor отвечает за обход, а внутри переопределённого метода `Visit...`
+      локальное решение принимает switch-выражение.
+    explanation: |
+      Оба подхода стоят на одной стороне «проблемы выражений» (expression problem): добавить операцию дёшево, а
+      добавить тип узла дорого. Виртуальные методы в самих узлах дают обратное соотношение. Разница между Visitor и
+      switch-выражением в том, как проявляется цена нового типа. Абстрактный посетитель превращает её в ошибки
+      компиляции во всех операциях, а switch-выражение над открытой иерархией - в ветку по умолчанию или в
+      исключение во время выполнения.
+
+      Вторая разница - обход. Для деревьев он часто сложнее самой операции: нужно пройти все дочерние узлы,
+      сохранить неизменённые поддеревья и пересобрать только изменённые. `ExpressionVisitor` реализует это один раз
+      (метод `Update` узла возвращает тот же объект, если дети не изменились), и наследник описывает только
+      отличие. В подходе со switch-выражением эту работу повторяет каждая операция.
+
+      Поэтому для маленькой стабильной иерархии с парой операций Visitor - лишняя церемония, а для компилятора,
+      ORM или анализатора, где десятки операций обходят одно и то же дерево, он по-прежнему окупается.
+    linkTitles:
+      - "Класс ExpressionVisitor"
+      - "Сопоставление с образцом"
+      - "Выражение switch"
+  en:
+    title: When does a Visitor still pay off in C# compared with a switch expression over types?
+    prompt: |
+      Since C# 8, an operation over a class hierarchy can be written as a switch expression with type patterns
+      instead of a classic Visitor. Yet the BCL still has `ExpressionVisitor`, and Roslyn has `CSharpSyntaxVisitor`
+      and `CSharpSyntaxRewriter`. When does a Visitor still pay off, and when is a switch expression the better
+      choice? Name the trade-offs of both approaches in C# 14 (.NET 10).
+    hint: |
+      Compare three things: what is cheaper to add (a new operation or a new node type), who notices a forgotten node type, and where the code that walks child nodes lives.
+    answer: |
+      **Visitor pays off when:**
+
+      - there are many operations over a stable set of node types (syntax trees, expression trees, the AST of your
+        own DSL). Each operation is a separate class, and the node classes do not change;
+      - you need reusable traversal. The base visitor walks the child nodes itself and rebuilds a node only if one
+        of its children changed. A subclass of `ExpressionVisitor` only has to override `VisitParameter` or
+        `VisitBinary` to rewrite a whole tree: replace a parameter, combine predicates, translate a query;
+      - you need a compile-time completeness check on an open hierarchy. If the `Visit` methods of the base visitor
+        are abstract, a new node type adds a new abstract method, and the build breaks in every visitor until each
+        one handles it. `ExpressionVisitor` works differently: its methods are virtual and by default just walk
+        the children;
+      - the hierarchy lives in a library and consumers add their own operations without touching the nodes:
+        double dispatch through `Accept` needs no type casts.
+
+      **A switch expression is better when:**
+
+      - the hierarchy is small and stable, there are one or two operations, and the logic is local: no `Accept`
+        and `Visit` boilerplate;
+      - the decision depends on more than the node type: property, positional and nested patterns, or matching a
+        tuple of several values. A Visitor dispatches only on the type of one node;
+      - the nodes are records with deconstruction and the operation is short, for example simplifying an
+        expression with a few rules.
+
+      **Limits of a switch expression:**
+
+      - C# 14 has no closed hierarchies: for a switch over types the compiler cannot prove that every subtype is
+        listed, it reports warning CS8509, and the code gains a `_ =>` arm. From then on a new node type silently
+        falls into that arm, and without it the result is a `SwitchExpressionException` at run time;
+      - every operation recurses into the children on its own: the traversal code is copied from operation to
+        operation, and missing a branch is easy.
+
+      **In practice the approaches are combined:** the Visitor owns the traversal, and inside an overridden
+      `Visit...` method a switch expression makes the local decision.
+    explanation: |
+      Both approaches sit on the same side of the expression problem: adding an operation is cheap and adding a
+      node type is expensive. Virtual methods on the nodes themselves give the opposite balance. The difference
+      between a Visitor and a switch expression is how the cost of a new type shows up. An abstract visitor turns
+      it into compile errors in every operation, while a switch expression over an open hierarchy turns it into a
+      default arm or a run-time exception.
+
+      The second difference is traversal. For trees it is often harder than the operation itself: you must visit
+      every child, keep unchanged subtrees and rebuild only the changed ones. `ExpressionVisitor` implements this
+      once (a node's `Update` method returns the same object if the children did not change), and a subclass
+      describes only the difference. With switch expressions every operation repeats that work.
+
+      That is why for a small stable hierarchy with a couple of operations a Visitor is needless ceremony, while
+      for a compiler, an ORM or an analyzer, where dozens of operations walk the same tree, it still pays off.
+    linkTitles:
+      - "ExpressionVisitor class"
+      - "Pattern matching"
+      - "switch expression"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

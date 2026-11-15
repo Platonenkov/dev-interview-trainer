@@ -1,0 +1,105 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WM4ARBXGBFE00SCMT1
+slug: aggregate-consistency-boundary-transaction
+stack: dotnet
+topic: architecture
+level: senior
+type: open
+grading: self
+tags: [ddd, aggregates, transactions, eventual-consistency]
+links:
+  - url: https://martinfowler.com/bliki/DDD_Aggregate.html
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/azure/architecture/microservices/model/tactical-ddd
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему в одной транзакции меняют только один агрегат и ссылаются на другие агрегаты по идентификатору?
+    prompt: |
+      В DDD часто советуют изменять в одной транзакции только один агрегат, а на другие агрегаты ссылаться по
+      идентификатору, а не через навигационные свойства. Объясните, зачем нужны эти правила и как тогда
+      выполнять бизнес-правила, которые затрагивают несколько агрегатов.
+    hint: Что агрегат обязан гарантировать сразу после каждой операции, а что может подождать?
+    answer: |
+      - **Агрегат - граница согласованности.** Это кластер объектов с одним корнем, через который идут все
+        изменения. Корень проверяет инварианты агрегата, а сам агрегат загружается и сохраняется целиком. Поэтому
+        граница транзакции совпадает с границей агрегата: внутри неё инварианты истинны после каждой операции.
+      - **Одна транзакция - один агрегат.** Транзакция, которая меняет несколько агрегатов, держит блокировки или
+        проверяет версии сразу у нескольких объектов. Растёт число конкурирующих запросов, конфликтов оптимистичной
+        блокировки и deadlock, а такую транзакцию трудно разнести по разным хранилищам или сервисам.
+      - **Ссылки по идентификатору.** Поле `CustomerId` вместо навигационного свойства `Customer` не даёт
+        случайно изменить чужой агрегат в той же транзакции, не тянет при загрузке большой граф объектов и
+        позволяет хранить агрегаты в разных базах.
+      - **Правила между агрегатами выполняются с согласованностью в конечном счёте.** Агрегат публикует доменное
+        событие, обработчик в отдельной транзакции меняет другой агрегат. Для многошаговых процессов используют
+        сагу или менеджер процесса с компенсирующими действиями. Обработчики должны быть идемпотентными, а
+        доставка событий надёжной (например, через outbox).
+      - **Если правило обязано выполняться атомарно,** это сигнал пересмотреть границы: возможно, эти данные
+        должны жить в одном агрегате. Допустимую длительность рассогласования и реакцию на нарушение решают
+        вместе с бизнесом.
+    explanation: |
+      Инвариант вида «сумма заказа равна сумме его позиций» должен быть истинен всегда, поэтому `Order` и его
+      `OrderLine` образуют один агрегат и сохраняются в одной транзакции. Правило «сумма открытых заказов не
+      превышает кредитный лимит клиента» затрагивает агрегаты `Order` и `Customer`. Если проверять его
+      атомарно, каждая операция с любым заказом клиента будет конкурировать за одну и ту же запись, а агрегат
+      клиента придётся загружать вместе со всеми заказами.
+
+      Обычно бизнес допускает короткое окно рассогласования: заказ принимается, событие `OrderPlaced` резервирует
+      кредит, а при нехватке лимита заказ отклоняется компенсирующим действием. Транзакции остаются маленькими,
+      конфликты редкими, а агрегаты можно масштабировать и даже вынести в разные сервисы.
+
+      Это эвристика, а не догма. Многие реализации обрабатывают доменные события до фиксации и меняют несколько
+      агрегатов в одной транзакции: это проще, но возвращает ту же конкуренцию и связанность, поэтому такое
+      отступление должно быть осознанным. Признак неудачных границ - агрегат, который постоянно растёт, или
+      правило, которое никак не удаётся сделать согласованным в конечном счёте.
+    linkTitles:
+      - "Агрегат в DDD (Martin Fowler)"
+      - "Тактическое проектирование DDD для микросервисов"
+  en:
+    title: Why change only one aggregate per transaction and reference other aggregates by identity?
+    prompt: |
+      In DDD it is often recommended to modify only one aggregate per transaction and to reference other
+      aggregates by identity rather than through navigation properties. Explain why these rules exist and how
+      you then enforce business rules that span several aggregates.
+    hint: What must an aggregate guarantee immediately after every operation, and what can wait?
+    answer: |
+      - **An aggregate is a consistency boundary.** It is a cluster of objects with a single root through which
+        all changes go. The root enforces the aggregate's invariants, and the aggregate is loaded and saved as a
+        whole. So the transaction boundary matches the aggregate boundary: inside it the invariants hold after
+        every operation.
+      - **One transaction, one aggregate.** A transaction that changes several aggregates holds locks or checks
+        versions on several objects at once. Contention grows, optimistic concurrency conflicts and deadlocks
+        become more frequent, and such a transaction is hard to split across stores or services.
+      - **References by identity.** A `CustomerId` field instead of a `Customer` navigation property prevents
+        accidental changes to another aggregate in the same transaction, avoids loading a large object graph and
+        lets aggregates live in different databases.
+      - **Rules across aggregates are eventually consistent.** An aggregate publishes a domain event, and a handler
+        changes another aggregate in a separate transaction. Multi-step processes use a saga or a process manager
+        with compensating actions. Handlers must be idempotent and event delivery reliable (for example through an
+        outbox).
+      - **If a rule truly must be atomic,** that is a signal to revisit the boundaries: perhaps the data belongs in
+        one aggregate. How long an inconsistency may last and what happens on a violation is decided together with
+        the business.
+    explanation: |
+      An invariant such as "the order total equals the sum of its lines" must always hold, so `Order` and its
+      `OrderLine` items form one aggregate and are saved in one transaction. A rule such as "open orders must not
+      exceed the customer's credit limit" spans the `Order` and `Customer` aggregates. Enforcing it atomically
+      makes every operation on any of the customer's orders compete for the same record, and the customer
+      aggregate would have to be loaded with all its orders.
+
+      The business usually accepts a short window of inconsistency: the order is accepted, an `OrderPlaced` event
+      reserves credit, and if the limit is exceeded the order is rejected by a compensating action. Transactions
+      stay small, conflicts stay rare, and aggregates can be scaled or even moved to different services.
+
+      This is a heuristic, not dogma. Many implementations dispatch domain events before commit and change several
+      aggregates in one transaction: it is simpler, but it brings back the same contention and coupling, so the
+      deviation should be deliberate. A sign of poor boundaries is an aggregate that keeps growing, or a rule that
+      cannot be made eventually consistent.
+    linkTitles:
+      - "DDD Aggregate (Martin Fowler)"
+      - "Using tactical DDD to design microservices"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

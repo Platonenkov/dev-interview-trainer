@@ -1,0 +1,124 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMWBJM91ZKRC5AKTM7
+slug: bounded-context-term-different-meanings
+stack: dotnet
+topic: architecture
+level: senior
+type: open
+grading: self
+tags: [ddd, bounded-context, ubiquitous-language, context-mapping]
+links:
+  - url: https://martinfowler.com/bliki/BoundedContext.html
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/azure/architecture/patterns/anti-corruption-layer
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Нужна ли одна общая модель Customer, если продажи, поддержка и биллинг понимают «клиента» по-разному?
+    prompt: |
+      В системе три области: продажи (Sales), поддержка (Support) и биллинг (Billing). Все говорят «клиент»
+      (Customer), но имеют в виду разное. Для продаж это потенциальный покупатель с менеджером, этапом сделки и
+      скидками. Для поддержки - контактные лица, обращения и уровень обслуживания (SLA). Для биллинга -
+      юридическое лицо с ИНН, способом оплаты и кредитным лимитом. Архитектор предлагает одну общую модель
+      `Customer` в общей библиотеке и одну таблицу, которой пользуются все три области.
+
+      Стоит ли так делать? Если нет, какую альтернативу вы предложите и как области будут обмениваться данными
+      о клиенте?
+    hint: Чей язык описывает «клиента» в каждой области и кто будет согласовывать каждое изменение общей модели?
+    answer: |
+      1. **Одна общая модель здесь вредна.** Слово одно, а понятия разные. Общий `Customer` превращается в
+         объединение всех полей и правил: половина полей пустые в каждом сценарии, правила противоречат друг
+         другу, а любое изменение для одной области требует согласования и релиза всех трёх.
+      2. **Каждый ограниченный контекст владеет своей моделью клиента** на собственном едином языке
+         (ubiquitous language) этого контекста. В модели только то, что нужно этому контексту, и даже название
+         может отличаться: в биллинге это может быть `Payer` или `Account`.
+      3. **Модели связаны идентичностью.** Общий стабильный идентификатор клиента (`CustomerId`), а не общий
+         объект. Явно решено, какой контекст создаёт клиента и какой является источником истины для каких данных.
+      4. **На границах - перевод.** Связи описаны картой контекстов: контекст-владелец публикует интеграционные
+         события (например, `CustomerRegistered`) или открытый API с контрактом в виде DTO, а потребитель
+         переводит их в свою модель, при необходимости через антикоррупционный слой. Нужные данные контекст
+         хранит у себя как локальную копию, обновляемую по событиям.
+      5. **Данные раздельно.** Свои таблицы или схема у каждого контекста, никаких общих таблиц и соединений
+         между контекстами.
+      6. **Shared kernel - только для малого и стабильного.** Общими можно сделать, например, тип
+         идентификатора и контракты событий под совместным владением, но не всю сущность.
+      7. **Назвать цену.** Часть атрибутов дублируется, копии согласуются в конечном счёте, нужен код
+         трансляции и дисциплина контрактов. Это оправдано, когда значения действительно расходятся; в маленьком
+         приложении одной команды одна модель может быть нормальным выбором.
+    explanation: |
+      Ограниченный контекст - это граница, внутри которой у терминов единое и непротиворечивое значение. Фаулер
+      отмечает, что путаница чаще всего возникает именно вокруг центральных понятий вроде «Customer» и «Product»,
+      и приводит слова Эванса: полное объединение модели большой системы неосуществимо и невыгодно. Разные группы
+      людей используют одни и те же слова по-разному, и попытка свести их к одному смыслу даёт либо размытую
+      модель, либо постоянные споры. Поэтому разные контексты могут иметь совершенно разные модели общих
+      понятий, а для интеграции между ними нужны механизмы сопоставления.
+
+      Каноническая модель на всю компанию связывает все контексты: схема и библиотека становятся общей точкой
+      изменений, команды больше не могут менять свои правила независимо, а модель со временем обрастает
+      исключениями и противоречиями. Раздельные модели с общей идентичностью и явной трансляцией на границах
+      делают зависимости видимыми и управляемыми: меняется только контракт между контекстами, а внутренняя
+      модель каждого свободна. Антикоррупционный слой - один из таких механизмов: фасад или адаптер между
+      подсистемами с разной семантикой, который не даёт чужой модели протечь в модель контекста.
+
+      Сильный ответ показывает и обратную сторону: дублирование, согласованность в конечном счёте и
+      необходимость решить, кто владеет какими данными, а также признаёт, что разделение нужно там, где
+      расходятся смыслы, а не ради самого разделения.
+    linkTitles:
+      - "Bounded Context (Мартин Фаулер)"
+      - "Паттерн Anti-corruption Layer"
+  en:
+    title: Do you need one shared Customer model when sales, support and billing understand "customer" differently?
+    prompt: |
+      A system has three areas: Sales, Support and Billing. All of them say "customer", but they mean different
+      things. For Sales it is a prospective buyer with an account manager, a deal stage and discounts. For Support it
+      is contact persons, tickets and a service level (SLA). For Billing it is a legal entity with a tax id, a payment
+      method and a credit limit. An architect proposes one shared `Customer` model in a common library and one table
+      used by all three areas.
+
+      Should you do that? If not, what alternative do you propose, and how do the areas exchange customer data?
+    hint: Whose language describes the "customer" in each area, and who will coordinate every change to the shared model?
+    answer: |
+      1. **One shared model is harmful here.** The word is the same, but the concepts differ. A shared `Customer`
+         becomes the union of all fields and rules: half of the fields are empty in each scenario, the rules
+         contradict each other, and any change for one area requires coordination and a release of all three.
+      2. **Each bounded context owns its own customer model** in that context's own ubiquitous language. The model
+         holds only what that context needs, and even the name may differ: in Billing it may be `Payer` or `Account`.
+      3. **The models are linked by identity.** A shared, stable customer identifier (`CustomerId`), not a shared
+         object. It is decided explicitly which context creates the customer and which is the source of truth for
+         which data.
+      4. **Translation at the boundaries.** The relationships are described by a context map: the owning context
+         publishes integration events (for example `CustomerRegistered`) or an open API with a DTO contract, and the
+         consumer translates them into its own model, through an anti-corruption layer where needed. A context keeps
+         the data it needs as a local copy updated from events.
+      5. **Separate data.** Each context has its own tables or schema, with no shared tables and no joins across
+         contexts.
+      6. **Shared kernel only for something small and stable.** For example, the identifier type and the event
+         contracts can be shared under joint ownership, but not the whole entity.
+      7. **Name the cost.** Some attributes are duplicated, the copies are eventually consistent, and you need
+         translation code and contract discipline. This is justified when the meanings really diverge; in a small
+         application owned by one team a single model can be a reasonable choice.
+    explanation: |
+      A bounded context is a boundary inside which terms have one consistent meaning. Fowler notes that the
+      confusion usually centres on core concepts such as "Customer" and "Product", and he quotes Evans: total
+      unification of the domain model of a large system is neither feasible nor cost-effective. Different groups of
+      people use the same words differently, and forcing one meaning yields either a vague model or endless
+      arguments. So different contexts may have completely different models of common concepts, with mechanisms to
+      map between them for integration.
+
+      A company-wide canonical model couples all contexts: the schema and the library become a shared point of
+      change, teams can no longer change their rules independently, and over time the model accumulates exceptions
+      and contradictions. Separate models with a shared identity and explicit translation at the boundaries make the
+      dependencies visible and manageable: only the contract between contexts changes together, while the internal
+      model of each context stays free. An anti-corruption layer is one such mechanism: a facade or adapter between
+      subsystems with different semantics that keeps a foreign model from leaking into the context's own model.
+
+      A strong answer also shows the other side: duplication, eventual consistency and the need to decide who owns
+      which data, and it admits that the split is needed where meanings diverge, not for its own sake.
+    linkTitles:
+      - "Bounded Context (Martin Fowler)"
+      - "Anti-corruption Layer pattern"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

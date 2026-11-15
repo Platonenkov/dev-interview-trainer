@@ -1,0 +1,98 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WQBPBQ7Z62HX2T44X7
+slug: webapplicationfactory-in-memory-host
+stack: dotnet
+topic: testing
+level: middle
+type: single
+grading: auto
+tags: [integration-tests, aspnet-core, webapplicationfactory, testserver]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/test/integration-tests
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/microsoft.aspnetcore.mvc.testing.webapplicationfactory-1
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что делает WebApplicationFactory<TEntryPoint> в интеграционном тесте ASP.NET Core?
+    prompt: |
+      Какое утверждение верно описывает, что делает `WebApplicationFactory<TEntryPoint>` в интеграционном
+      тесте приложения ASP.NET Core?
+    hint: |
+      Подумайте, через что проходит запрос от `HttpClient` фабрики и нужен ли для этого сетевой сокет.
+    options:
+      a: "Запускает настоящую точку входа приложения на `TestServer` в памяти: запросы от `HttpClient`, полученного через `CreateClient()`, проходят весь конвейер middleware без открытия сетевого порта, а сервисы можно подменить через `ConfigureTestServices`."
+      b: "По умолчанию запускает приложение на Kestrel со случайным свободным портом, и `HttpClient` отправляет запросы по настоящим TCP-соединениям на localhost."
+      c: "Собирает только DI-контейнер приложения без конвейера middleware, чтобы тест получал из него контроллеры и вызывал методы действий напрямую."
+      d: "Заменяет каждый зарегистрированный сервис автоматически созданным моком, поэтому тест никогда не обращается к реальным зависимостям приложения."
+    optionExplanations:
+      b: "По умолчанию фабрика использует `TestServer`: обработчик `HttpClient` передаёт запрос серверу прямо в памяти процесса, порт не открывается и TCP-соединений нет."
+      c: "Фабрика запускает приложение целиком, включая конвейер middleware, маршрутизацию, фильтры и привязку моделей. Прямой вызов методов контроллера - это уже модульный тест, а не интеграционный."
+      d: "Фабрика использует настоящие регистрации из `Program`. Сервисы подменяются только явно, например через `ConfigureTestServices`, и только те, которые тест решил заменить."
+    answer: |
+      Фабрика запускает настоящую точку входа приложения на `TestServer` в памяти. Запросы от её `HttpClient`
+      проходят весь конвейер middleware без сетевого порта, а сервисы можно подменить через `ConfigureTestServices`.
+    explanation: |
+      `WebApplicationFactory<TEntryPoint>` из пакета `Microsoft.AspNetCore.Mvc.Testing` использует сборку типа
+      `TEntryPoint` (обычно `Program`), чтобы выполнить ту же настройку хоста, что и в боевом запуске: те же
+      регистрации DI, конфигурацию и конвейер middleware. Вместо Kestrel по умолчанию используется `TestServer`.
+
+      `CreateClient()` возвращает `HttpClient`, чей обработчик передаёт запрос серверу напрямую в памяти. Поэтому
+      запрос проходит маршрутизацию, аутентификацию, фильтры и сериализацию, как в реальном приложении, но без
+      сокетов и конфликтов портов, и тесты работают быстро.
+
+      Чтобы заменить внешнюю зависимость, например базу данных или HTTP-клиент стороннего сервиса, вызывают
+      `WithWebHostBuilder` и внутри него `ConfigureTestServices`. Этот обратный вызов выполняется после регистраций
+      приложения, поэтому тестовая регистрация перекрывает исходную.
+    linkTitles:
+      - "Интеграционные тесты в ASP.NET Core"
+      - "Класс WebApplicationFactory<TEntryPoint>"
+  en:
+    title: What does WebApplicationFactory<TEntryPoint> do in an ASP.NET Core integration test?
+    prompt: |
+      Which statement correctly describes what `WebApplicationFactory<TEntryPoint>` does in an integration test
+      of an ASP.NET Core application?
+    hint: |
+      Think about what a request from the factory's `HttpClient` passes through, and whether that needs a network socket.
+    options:
+      a: "It starts the application's real entry point on an in-memory `TestServer`: requests from the `HttpClient` returned by `CreateClient()` go through the whole middleware pipeline without opening a network port, and services can be replaced with `ConfigureTestServices`."
+      b: "By default it starts the application on Kestrel with a random free port, and the `HttpClient` sends requests to it over real TCP connections on localhost."
+      c: "It builds only the application's DI container without the middleware pipeline, so a test resolves controllers from it and calls action methods directly."
+      d: "It replaces every registered service with an automatically generated mock, so the test never touches the application's real dependencies."
+    optionExplanations:
+      b: "By default the factory uses `TestServer`: the `HttpClient` handler passes the request to the server directly in process memory, no port is opened and there are no TCP connections."
+      c: "The factory starts the whole application, including the middleware pipeline, routing, filters and model binding. Calling controller methods directly is a unit test, not an integration test."
+      d: "The factory uses the real registrations from `Program`. Services are replaced only explicitly, for example with `ConfigureTestServices`, and only the ones the test chooses to replace."
+    answer: |
+      The factory starts the application's real entry point on an in-memory `TestServer`. Requests from its
+      `HttpClient` go through the whole middleware pipeline without a network port, and services can be replaced
+      with `ConfigureTestServices`.
+    explanation: |
+      `WebApplicationFactory<TEntryPoint>` from the `Microsoft.AspNetCore.Mvc.Testing` package uses the assembly of
+      `TEntryPoint` (usually `Program`) to run the same host setup as a production start: the same DI registrations,
+      configuration and middleware pipeline. Instead of Kestrel it uses `TestServer` by default.
+
+      `CreateClient()` returns an `HttpClient` whose handler passes the request to the server directly in memory.
+      So the request goes through routing, authentication, filters and serialization as in the real application,
+      but without sockets or port conflicts, and the tests run fast.
+
+      To replace an external dependency, such as a database or an HTTP client for a third-party service, call
+      `WithWebHostBuilder` and `ConfigureTestServices` inside it. That callback runs after the application's own
+      registrations, so the test registration overrides the original one.
+    linkTitles:
+      - "Integration tests in ASP.NET Core"
+      - "WebApplicationFactory<TEntryPoint> class"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

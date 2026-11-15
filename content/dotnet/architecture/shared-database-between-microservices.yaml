@@ -1,0 +1,115 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WM45VFEMP4GNYWG6N0
+slug: shared-database-between-microservices
+stack: dotnet
+topic: architecture
+level: architect
+type: single
+grading: auto
+tags: [microservices, data-ownership, database-per-service, coupling]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/architecture/microservices/architect-microservice-container-applications/data-sovereignty-per-microservice
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/azure/architecture/microservices/design/data-considerations
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: В чём главная архитектурная цена общей базы данных у двух микросервисов?
+    prompt: |
+      Два микросервиса, которые разрабатывают и выкатывают разные команды, читают и пишут одни и те же
+      таблицы в одной базе данных. Какова главная архитектурная цена такого решения?
+    hint: Кто решает, когда и как может измениться структура общей таблицы?
+    options:
+      a: "Каждый сервис держит свой пул подключений, поэтому общая база быстро исчерпает лимит подключений."
+      b: "Схема таблиц становится неявным контрактом между сервисами: ни один не может менять свою модель данных и выкатываться независимо."
+      c: "Между сервисами становятся невозможны ACID-транзакции, и данные неизбежно рассогласуются."
+      d: "Данные хранятся в двух копиях, которые приходится постоянно синхронизировать."
+      e: "Сервисам придётся использовать одну общую библиотеку классов сущностей и одну версию EF Core, иначе они не смогут читать строки друг друга."
+    optionExplanations:
+      a: "Пул подключений есть у каждого сервиса при любой схеме хранения, в том числе когда у сервисов отдельные базы на одном сервере. Лимит подключений - вопрос настройки и ёмкости, а не следствие общих таблиц."
+      c: "Наоборот: общая база как раз позволяет обновлять данные обоих сервисов в одной ACID-транзакции, поэтому такое решение и соблазнительно. Отказ от ACID-транзакций между сервисами - цена отдельных баз, а не общей."
+      d: "При общих таблицах копия данных одна. Дублирование и синхронизация через события появляются, когда у каждого сервиса своя база."
+      e: "Строки таблицы - это данные, их может читать любой клиент: другой язык, другая ORM или обычный SQL. Сервисы связывает сама схема таблиц, а не общая библиотека или стек."
+    answer: "Схема таблиц становится неявным контрактом между сервисами: ни один не может менять свою модель данных и выкатываться независимо."
+    explanation: |
+      Руководство Microsoft по микросервисам формулирует принцип суверенитета данных: данные, которыми владеет
+      микросервис, принадлежат только ему, и другие получают их лишь через его API (REST, gRPC) или через
+      сообщения. Если к одним и тем же данным обращаются несколько сервисов, любое изменение схемы требует
+      согласованного обновления всех этих сервисов, и автономность их жизненного цикла теряется.
+
+      Структура общих таблиц становится публичным контрактом, но неявным: его нет в описании API, и его никто
+      не версионирует. Переименовать столбец, разделить таблицу или поменять смысл поля одна команда может
+      только по согласованию с другой и с одновременным релизом обоих сервисов. Независимое развёртывание,
+      ради которого и выбирают микросервисы, пропадает: по сути это распределённый монолит. Кроме того, оба
+      сервиса пишут в таблицу, поэтому инварианты данных приходится соблюдать в двух местах, а единого
+      владельца у данных нет.
+
+      Альтернатива - своя база у каждого сервиса и доступ к чужим данным только через API владельца или через
+      интеграционные события с локальной копией нужной части данных. То же руководство называет цену такого
+      решения: одна ACID-транзакция через несколько микросервисов невозможна, бизнес-процессы, которые
+      затрагивают несколько сервисов, становятся согласованными в конечном счёте, а соединения и ограничения
+      целостности между разными базами недоступны. Взамен каждый сервис может выбрать подходящий ему тип
+      хранилища: в примере Drone Delivery из Azure Architecture Center сервис доставок использует Azure Managed
+      Redis, сервис посылок - документную базу, а сервис истории доставок - Data Lake Storage и Azure Cosmos DB.
+      Архитектор принимает эту цену сознательно, если сервисам действительно нужна независимость.
+    linkTitles:
+      - "Суверенитет данных для каждого микросервиса"
+      - "Работа с данными в микросервисах"
+  en:
+    title: What is the main architectural cost of two microservices sharing one database?
+    prompt: |
+      Two microservices, built and deployed by different teams, read and write the same tables in one
+      database. What is the main architectural cost of this arrangement?
+    hint: Who decides when and how the structure of a shared table may change?
+    options:
+      a: "Each service keeps its own connection pool, so the shared database quickly runs out of connections."
+      b: "The table schema becomes an implicit contract between the services: neither can change its data model or deploy independently."
+      c: "ACID transactions between the services become impossible, so the data inevitably becomes inconsistent."
+      d: "The data is stored in two copies that must be constantly synchronized."
+      e: "The services must share one library of entity classes and one EF Core version, otherwise they cannot read each other's rows."
+    optionExplanations:
+      a: "Every service has a connection pool under any storage layout, including separate databases on one server. The connection limit is a matter of configuration and capacity, not a consequence of sharing tables."
+      c: "The opposite is true: a shared database lets you update the data of both services in one ACID transaction, which is why the arrangement is tempting. Giving up ACID transactions across services is the cost of separate databases, not of a shared one."
+      d: "With shared tables there is a single copy of the data. Duplication and synchronization through events appear when each service has its own database."
+      e: "Table rows are data that any client can read: another language, another ORM or plain SQL. The services are coupled by the table schema itself, not by a shared library or stack."
+    answer: "The table schema becomes an implicit contract between the services: neither can change its data model or deploy independently."
+    explanation: |
+      The Microsoft microservices guide states the principle of data sovereignty: the data owned by a
+      microservice is private to it, and others access it only through its API (REST, gRPC) or through
+      messaging. If several services access the same data, every schema update requires coordinated updates
+      to all of those services, and the autonomy of their lifecycle is lost.
+
+      The structure of shared tables becomes a public contract, but an implicit one: it is not in any API
+      description and nobody versions it. One team can rename a column, split a table or change the meaning
+      of a field only in agreement with the other team and with a simultaneous release of both services.
+      Independent deployment, the very reason to choose microservices, disappears: in effect this is a
+      distributed monolith. Both services also write to the table, so the data invariants have to be enforced
+      in two places, and the data has no single owner.
+
+      The alternative is a database per service, with access to another service's data only through the
+      owner's API or through integration events that keep a local copy of the needed part. The same guide names
+      the price: a single ACID transaction across microservices is impossible, business processes that span
+      several services become eventually consistent, and joins and integrity constraints across separate
+      databases are not available. In return each service can choose the kind of store that suits it: in the
+      Drone Delivery example from the Azure Architecture Center the delivery service uses Azure Managed Redis,
+      the package service a document database, and the delivery history service Data Lake Storage and Azure
+      Cosmos DB. An architect accepts this cost deliberately when the services really need independence.
+    linkTitles:
+      - "Data sovereignty per microservice"
+      - "Data considerations for microservices"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

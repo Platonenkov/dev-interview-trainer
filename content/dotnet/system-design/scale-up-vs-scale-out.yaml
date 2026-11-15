@@ -1,0 +1,138 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WQGD0KA1VE6HGVD3Y8
+slug: scale-up-vs-scale-out
+stack: dotnet
+topic: system-design
+level: middle
+type: open
+grading: self
+tags: [scaling, horizontal-scaling, vertical-scaling, load-balancing, stateless]
+links:
+  - url: https://learn.microsoft.com/en-us/azure/architecture/guide/design-principles/scale-out
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/web-farm
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Когда вертикальное масштабирование сервиса лучше горизонтального?
+    prompt: |
+      Чем вертикальное масштабирование (scale up) отличается от горизонтального (scale out)? В каких случаях
+      вертикальное масштабирование - лучший выбор, и что должно быть заложено в дизайн сервиса, чтобы его можно
+      было масштабировать горизонтально?
+    hint: |
+      Что случится, если единственный большой сервер выйдет из строя? И что нужно, чтобы любой запрос мог обработать любой из одинаковых экземпляров?
+    answer: |
+      **Вертикальное масштабирование (scale up)** - та же машина, но мощнее: больше ядер, памяти, быстрее диски.
+
+      - Плюсы: код и архитектура не меняются, нет проблем распределённой системы, данные и транзакции остаются
+        в одном месте.
+      - Минусы: есть потолок - самая большая доступная машина; цена растёт быстрее мощности; смена размера часто
+        требует перезапуска; сервер остаётся единой точкой отказа.
+
+      **Горизонтальное масштабирование (scale out)** - больше одинаковых экземпляров за балансировщиком нагрузки.
+
+      - Плюсы: пропускная способность растёт почти линейно с числом экземпляров, отказ одного экземпляра не
+        останавливает сервис, экземпляры можно добавлять и убирать автоматически по нагрузке.
+      - Минусы: дизайн должен это допускать, а система становится распределённой.
+
+      **Когда вертикальное лучше:**
+
+      - нагрузка умеренная и предсказуемая, и до потолка железа далеко;
+      - компонент трудно разделить: например, реляционную базу с транзакциями и соединениями таблиц обычно
+        сначала масштабируют вертикально и репликами для чтения;
+      - проблему нужно снять быстро, а переделка под несколько экземпляров займёт месяцы (состояние в памяти,
+        локальные файлы);
+      - требования к доступности допускают единую точку отказа, или резервирование решено иначе, например
+        резервным узлом с автоматическим переключением.
+
+      **Что горизонтальное масштабирование требует от дизайна:**
+
+      - экземпляры без состояния: сессии, кэш, который служит источником истины, загруженные файлы и ключи
+        шифрования вынесены в общие хранилища, и любой экземпляр может обработать любой запрос; привязка клиента
+        к экземпляру (sticky sessions) ухудшает балансировку и теряет состояние при отказе экземпляра;
+      - балансировщик с проверками работоспособности (health checks), который выводит больные экземпляры из ротации;
+      - работа делится на независимые части: фоновые задачи не запускаются заново в каждом экземпляре (очередь с
+        конкурирующими потребителями, распределённая блокировка), обработчики идемпотентны на случай повторов;
+      - общие зависимости тоже масштабируются: если все экземпляры упираются в одну базу, узкое место просто
+        переезжает туда, и для данных нужны партиционирование, реплики или кэш;
+      - экземпляры быстро стартуют и корректно останавливаются (graceful shutdown), иначе автомасштабирование и
+        релизы обрывают запросы.
+    explanation: |
+      Вертикальное масштабирование увеличивает один узел, поэтому упирается в его предел и не добавляет
+      надёжности: машина по-прежнему одна. Зато оно не меняет модель программы, и это делает его самым дешёвым
+      первым шагом.
+
+      Горизонтальное масштабирование складывает мощность экземпляров, но только пока они независимы. Любое общее
+      состояние или координация между экземплярами (общий счётчик, блокировка, одна база) становится пределом
+      роста. Поэтому требования к дизайну сводятся к одному: убрать из экземпляра всё, что делает его особенным,
+      чтобы экземпляры были взаимозаменяемы.
+
+      На практике подходы сочетают: веб-слой без состояния масштабируют горизонтально, а базу данных - сначала
+      вертикально. Выбор определяют требования к доступности и прогноз роста: если сервис должен переживать отказ
+      узла или нагрузка растёт быстрее, чем доступное железо, нужен scale out.
+    linkTitles:
+      - "Принцип проектирования: масштабирование горизонтально"
+      - "ASP.NET Core в веб-ферме"
+  en:
+    title: When is scaling a service up better than scaling it out?
+    prompt: |
+      How does vertical scaling (scale up) differ from horizontal scaling (scale out)? When is vertical scaling
+      the better choice, and what must the design of a service provide so that it can be scaled horizontally?
+    hint: |
+      What happens if the single big server fails? And what is needed so that any of several identical instances can handle any request?
+    answer: |
+      **Vertical scaling (scale up)** - the same machine, but bigger: more cores, more memory, faster disks.
+
+      - Pros: the code and the architecture do not change, there are no distributed-system problems, data and
+        transactions stay in one place.
+      - Cons: there is a ceiling, the largest machine available; the price grows faster than the capacity;
+        resizing often needs a restart; the server remains a single point of failure.
+
+      **Horizontal scaling (scale out)** - more identical instances behind a load balancer.
+
+      - Pros: throughput grows almost linearly with the number of instances, the failure of one instance does not
+        stop the service, instances can be added and removed automatically with the load.
+      - Cons: the design must allow it, and the system becomes distributed.
+
+      **When vertical is better:**
+
+      - the load is moderate and predictable, and the hardware ceiling is far away;
+      - the component is hard to split: for example, a relational database with transactions and joins is usually
+        scaled up first, plus read replicas;
+      - the problem must be relieved quickly, while reworking the service for several instances would take months
+        (state in memory, local files);
+      - the availability requirements tolerate a single point of failure, or redundancy is solved another way,
+        for example by a standby node with automatic failover.
+
+      **What horizontal scaling requires from the design:**
+
+      - stateless instances: sessions, a cache that serves as the source of truth, uploaded files and encryption
+        keys are moved to shared stores, and any instance can handle any request; pinning a client to an instance
+        (sticky sessions) hurts balancing and loses state when that instance fails;
+      - a load balancer with health checks that takes unhealthy instances out of rotation;
+      - work split into independent pieces: background jobs do not run again in every instance (a queue with
+        competing consumers, a distributed lock), and handlers are idempotent in case of retries;
+      - shared dependencies scale too: if every instance hits one database, the bottleneck just moves there, and
+        the data needs partitioning, replicas or a cache;
+      - instances start fast and stop gracefully (graceful shutdown), otherwise autoscaling and releases cut off
+        requests.
+    explanation: |
+      Vertical scaling grows one node, so it hits that node's limit and adds no reliability: there is still one
+      machine. In return it does not change the program's model, which makes it the cheapest first step.
+
+      Horizontal scaling adds up the capacity of the instances, but only while they are independent. Any shared
+      state or coordination between instances (a shared counter, a lock, one database) becomes the limit of growth.
+      So the design requirements boil down to one rule: remove from an instance everything that makes it special,
+      so that instances are interchangeable.
+
+      In practice the approaches are combined: a stateless web tier is scaled out, while the database is scaled up
+      first. The choice is driven by availability requirements and the growth forecast: if the service must survive
+      a node failure, or the load grows faster than the available hardware, you need scale out.
+    linkTitles:
+      - "Design principle: design to scale out"
+      - "Host ASP.NET Core in a web farm"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

@@ -1,0 +1,118 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WN0MW796S5248779K3
+slug: retry-backoff-jitter-practices
+stack: dotnet
+topic: distributed
+level: senior
+type: multi
+grading: auto
+tags: [retry, exponential-backoff, jitter, transient-faults, resilience]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: true
+  - id: c
+    correct: true
+  - id: d
+    correct: true
+  - id: e
+    correct: false
+  - id: f
+    correct: false
+  - id: g
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/azure/architecture/patterns/retry
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/azure/architecture/best-practices/transient-faults
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какие практики повторных попыток правильны при вызове нижестоящего сервиса из потребителя сообщений?
+    prompt: |
+      Потребитель сообщений при обработке каждого сообщения вызывает нижестоящий HTTP-сервис, и иногда вызов
+      завершается ошибкой. Выберите все правильные практики повторных попыток для такого вызова.
+    hint: "Представьте, что сервис уже перегружен и сотни экземпляров потребителя получили ошибку в одну и ту же секунду. Что каждая практика сделает с нагрузкой на него?"
+    options:
+      a: "Увеличивать паузу между попытками экспоненциально (например, 1 с, 2 с, 4 с) с верхней границей задержки."
+      b: "Добавлять к каждой паузе случайный разброс (jitter)."
+      c: "Ограничивать число попыток и общее время повторов для сообщения, а исчерпав лимит, прекращать повторы и отправлять сообщение в очередь недоставленных сообщений (DLQ), чтобы оно не потерялось."
+      d: "Повторять только временные ошибки (таймаут, разрыв соединения, `503` или `429` с учётом `Retry-After`) и сразу прекращать при `400` или ошибке валидации."
+      e: "Повторять вызов сразу, в цикле без паузы, пока он не пройдёт."
+      f: "Настроить независимые повторы на каждом уровне цепочки: в обработчике `HttpClient`, в клиенте сервиса, в обработчике сообщения и в повторной доставке брокера."
+      g: "Игнорировать заголовок `Retry-After` в ответах `429` и `503` и использовать только своё фиксированное расписание."
+    optionExplanations:
+      e: "Повторы без паузы бьют по сервису, который и так не справляется, и не дают ему восстановиться. Временный сбой почти никогда не исчезает за миллисекунды, а бесконечный цикл ещё и держит сообщение и поток потребителя."
+      f: "Повторы на разных уровнях перемножаются: по 3 попытки на каждом из четырёх перечисленных уровней дают до 3 × 3 × 3 × 3 = 81 вызова на одно сообщение. Повторы должны жить на одном уровне, остальные уровни передают ошибку наверх, а встроенные механизмы повторов на других уровнях отключают или ограничивают."
+      g: "`Retry-After` - прямое указание сервиса, когда он готов принять запрос, и оно важнее собственного расчёта задержки. Повтор раньше этого срока почти наверняка снова получит отказ и добавит нагрузку."
+    answer: "Экспоненциальная задержка, случайный разброс, ограниченное число попыток и время с последующей отправкой в DLQ и повтор только временных ошибок."
+    explanation: |
+      Нижестоящий сервис чаще всего отказывает из-за перегрузки или короткого сбоя. Повтор помогает пережить
+      временную ошибку, но каждая попытка - дополнительная нагрузка на тот же сервис. Отсюда правила:
+
+      - задержка растёт экспоненциально, чтобы у сервиса было время восстановиться;
+      - случайный разброс распределяет попытки многих потребителей во времени: без него экземпляры, получившие
+        ошибку одновременно, повторяют одновременно, и нагрузка приходит синхронными волнами;
+      - число попыток и общее время повторов ограничены; исчерпав лимит, обработчик прекращает повторы и
+        отправляет сообщение в DLQ, чтобы оно не потерялось и не держало потребителя. При длительном отказе
+        вызовы останавливает circuit breaker, а бюджет повторов на весь процесс (например, не больше N повторов в
+        минуту к одной зависимости) не даёт множеству запросов вместе перегрузить сервис;
+      - повторяются только временные ошибки: `400` или ошибка валидации повторится при каждой попытке. Даже
+        `503` может означать, что сервис отказал надолго, поэтому его повторяют только в рамках ограниченного
+        числа попыток, с учётом `Retry-After` и под защитой circuit breaker.
+
+      Повтор безопасен, только если операция идемпотентна или передаёт ключ идемпотентности: после таймаута
+      неизвестно, выполнился ли первый вызов. В .NET эти настройки есть, например, в `RetryStrategyOptions`
+      библиотеки Polly v8: `MaxRetryAttempts`, `BackoffType = DelayBackoffType.Exponential`, `UseJitter` и
+      `ShouldHandle`.
+    linkTitles:
+      - "Паттерн Retry"
+      - "Обработка временных сбоев"
+  en:
+    title: Which retry practices are sound when a message consumer calls a downstream service?
+    prompt: |
+      While processing each message, a message consumer calls a downstream HTTP service, and the call
+      sometimes fails. Select all sound retry practices for this call.
+    hint: "Imagine the service is already overloaded and hundreds of consumer instances got an error in the same second. What does each practice do to the load on it?"
+    options:
+      a: "Grow the delay between attempts exponentially (for example 1 s, 2 s, 4 s) with an upper bound on the delay."
+      b: "Add a random spread (jitter) to every delay."
+      c: "Bound the number of attempts and the total retry time for a message, and once the limit is reached, stop retrying and send the message to a dead-letter queue (DLQ) so that it is not lost."
+      d: "Retry only transient errors (a timeout, a dropped connection, `503` or `429` honouring `Retry-After`) and stop at once on `400` or a validation error."
+      e: "Retry immediately, in a loop with no delay, until the call succeeds."
+      f: "Configure independent retries at every layer of the chain: in the `HttpClient` handler, in the service client, in the message handler and in the broker redelivery."
+      g: "Ignore the `Retry-After` header of `429` and `503` responses and use only your own fixed schedule."
+    optionExplanations:
+      e: "Retries with no delay hammer a service that is already struggling and do not let it recover. A transient fault almost never clears within milliseconds, and an endless loop also holds the message and the consumer thread."
+      f: "Retries at different layers multiply: 3 attempts at each of the four listed layers give up to 3 × 3 × 3 × 3 = 81 calls per message. Retries should live at one layer, the other layers pass the error up, and built-in retry mechanisms at other layers are turned off or limited."
+      g: "`Retry-After` is the service telling you when it is ready to accept the request, and it takes precedence over your own delay calculation. Retrying earlier will almost certainly be rejected again and only adds load."
+    answer: "Exponential backoff, random jitter, bounded attempts and time followed by a DLQ, and retrying only transient errors."
+    explanation: |
+      A downstream service usually fails because of overload or a short outage. A retry helps to get past a
+      transient fault, but every attempt is extra load on the same service. Hence the rules:
+
+      - the delay grows exponentially so that the service has time to recover;
+      - jitter spreads the attempts of many consumers over time: without it, instances that failed at the same
+        moment retry at the same moment, and the load arrives in synchronized waves;
+      - the number of attempts and the total retry time are bounded; once the limit is reached, the handler stops
+        retrying and sends the message to a DLQ, so it is not lost and does not hold the consumer. During a long
+        outage a circuit breaker stops the calls, and a retry budget for the whole process (for example, no more
+        than N retries per minute against one dependency) keeps many requests from overwhelming the service
+        together;
+      - only transient errors are retried: a `400` or a validation error repeats on every attempt. Even a `503`
+        can mean that the service has failed for a long time, so it is retried only within the bounded number of
+        attempts, honouring `Retry-After` and behind a circuit breaker.
+
+      A retry is safe only if the operation is idempotent or carries an idempotency key: after a timeout you do
+      not know whether the first call took effect. In .NET these settings exist, for example, in the
+      `RetryStrategyOptions` of Polly v8: `MaxRetryAttempts`, `BackoffType = DelayBackoffType.Exponential`,
+      `UseJitter` and `ShouldHandle`.
+    linkTitles:
+      - "Retry pattern"
+      - "Transient fault handling"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

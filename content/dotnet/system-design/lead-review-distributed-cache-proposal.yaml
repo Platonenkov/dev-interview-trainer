@@ -1,0 +1,129 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WQDTZFW5GRNXZTR4T5
+slug: lead-review-distributed-cache-proposal
+stack: dotnet
+topic: system-design
+level: lead
+type: situation
+grading: self
+tags: [caching, redis, trade-offs, technical-leadership, release-risk]
+links:
+  - url: https://learn.microsoft.com/en-us/azure/architecture/best-practices/caching
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/performance/caching/distributed
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "За две недели до релиза разработчик предлагает добавить Redis, чтобы ускорить медленный эндпоинт. Как техлиду принять решение?"
+    prompt: |
+      Один из эндпоинтов сервиса отвечает медленно, и пользователи жалуются. За две недели до релиза разработчик
+      приносит pull request: перед запросами к базе добавлен распределённый кэш на Redis, локальный замер
+      показывает ускорение в несколько раз. Redis в вашей инфраструктуре пока не используется.
+      Вы техлид команды. Как вы решите, принимать ли это изменение, какие вопросы зададите и на каких условиях
+      согласитесь?
+    hint: |
+      Что именно делает эндпоинт медленным, и что кэш добавляет в систему, кроме скорости?
+    answer: |
+      1. **Начать с проблемы, а не с решения.** Договориться, какое время ответа считается целевым, и измерить,
+         куда уходит время: трассировка запроса, логи SQL, план запроса, профилирование. Часто причина - проблема
+         N+1, отсутствующий индекс, лишняя сериализация или последовательные вызовы других сервисов. Исправить
+         причину дешевле и надёжнее, чем спрятать её за кэшем.
+      2. **Проверить, что данные вообще подходят для кэширования.** Каково соотношение чтений и записей, как часто
+         меняются данные, общие ли они для всех пользователей или персональные (от этого зависит доля попаданий),
+         сколько ключей и какого размера. Отдельно согласовать с продуктом допустимую устарелость: секунды, минуты
+         или ноль. Если устаревшие данные недопустимы, кэш почти не помогает.
+      3. **Сравнить с более дешёвыми вариантами.** Исправление запроса, кэш в памяти процесса (`IMemoryCache`),
+         HTTP-кэширование ответа, заранее подготовленная модель для чтения. Redis - это новая зависимость в
+         production: развёртывание, сеть и доступ, секреты, стоимость, обновления, дежурства.
+      4. **Если кэш нужен, принять его только с контрактом.** Должны быть определены:
+         - кто и как инвалидирует записи: TTL плюс удаление при изменении данных во всех местах, где они пишутся;
+         - схема ключей и версионирование формата, чтобы новая версия сервиса не читала старые записи как новые;
+         - поведение при недоступности Redis: короткие тайм-ауты, переход на чтение из базы, а не ошибка
+           эндпоинта, и защита базы от лавины запросов при холодном или упавшем кэше;
+         - мониторинг: доля попаданий, задержка Redis, использование памяти, вытеснения, алерты и инструкция для
+           дежурного;
+         - владелец этой инфраструктуры в команде или у эксплуатации.
+      5. **Учесть сроки.** За две недели до релиза новая инфраструктурная зависимость - заметный риск. Варианты:
+         выпустить сейчас точечное исправление найденной причины, а кэш перенести в следующий релиз; или выпустить
+         кэш за флагом, выключенным по умолчанию, с нагрузочным тестом в обоих режимах и понятным планом отката.
+         Решение зависит от того, блокирует ли медленный эндпоинт цель релиза.
+      6. **Зафиксировать и объяснить решение.** Короткая запись архитектурного решения (ADR) с цифрами замеров,
+         принятыми рисками и условиями. Разработчику важно услышать не «нет», а критерии, при которых ответ будет
+         «да», и участвовать в их проверке.
+    explanation: |
+      Кэш выглядит как чистое ускорение, но меняет свойства системы. Появляется вторая копия данных, которая
+      может расходиться с базой, поэтому каждый путь записи теперь обязан помнить об инвалидации. Появляется новая
+      зависимость: если не продумать отказ, падение Redis превращается в падение эндпоинта, а холодный кэш после
+      перезапуска бьёт по базе всей накопленной нагрузкой. Руководство Microsoft по кэшированию прямо советует
+      не считать кэш авторитетным хранилищем и проектировать приложение так, чтобы оно продолжало работать с
+      основным хранилищем, когда кэш недоступен.
+
+      Кроме того, кэш может скрыть настоящую причину: медленный запрос остаётся медленным при каждом промахе и
+      после каждой инвалидации, а локальный замер на прогретом кэше ничего не говорит о поведении под реальной
+      нагрузкой.
+
+      Роль техлида здесь - не наложить вето и не одобрить по доверию, а сделать компромисс явным: измеренная
+      выгода против стоимости сопровождения и риска перед релизом. Явные критерии решения заодно учат команду
+      задавать эти вопросы самостоятельно.
+    linkTitles:
+      - "Рекомендации по кэшированию"
+      - "Распределённое кэширование в ASP.NET Core"
+  en:
+    title: "Two weeks before a release a developer proposes adding Redis to fix a slow endpoint. How does a tech lead decide?"
+    prompt: |
+      One endpoint of the service responds slowly, and users complain. Two weeks before a release a developer
+      opens a pull request: a distributed Redis cache is placed in front of the database queries, and a local
+      measurement shows a speedup of several times. Redis is not used anywhere in your infrastructure yet.
+      You are the team's tech lead. How do you decide whether to accept this change, what questions do you ask,
+      and on what conditions do you agree?
+    hint: |
+      What exactly makes the endpoint slow, and what does a cache add to the system besides speed?
+    answer: |
+      1. **Start from the problem, not the solution.** Agree on the target response time and measure where the
+         time goes: request tracing, SQL logs, the query plan, profiling. Often the cause is an N+1 problem, a
+         missing index, extra serialization or sequential calls to other services. Fixing the cause is cheaper
+         and more reliable than hiding it behind a cache.
+      2. **Check that the data suits caching at all.** What is the read/write ratio, how often does the data
+         change, is it shared by all users or personal (this drives the hit rate), how many keys and how large.
+         Separately agree with the product owner on acceptable staleness: seconds, minutes or none. If stale data
+         is unacceptable, a cache barely helps.
+      3. **Compare with cheaper options.** Fixing the query, an in-process cache (`IMemoryCache`), HTTP caching of
+         the response, a precomputed read model. Redis is a new production dependency: provisioning, network and
+         access, secrets, cost, upgrades, on-call duty.
+      4. **If a cache is needed, accept it only with a contract.** The following must be defined:
+         - who invalidates entries and how: a TTL plus removal on change in every place the data is written;
+         - the key scheme and format versioning, so that a new service version does not read old entries as new;
+         - behaviour when Redis is down: short timeouts, falling back to the database instead of failing the
+           endpoint, and protecting the database from a flood of requests when the cache is cold or gone;
+         - monitoring: hit rate, Redis latency, memory use, evictions, alerts and a runbook for the on-call
+           engineer;
+         - an owner of this infrastructure in the team or in operations.
+      5. **Account for the timing.** Two weeks before a release a new infrastructure dependency is a real risk.
+         Options: ship a targeted fix for the measured cause now and move the cache to the next release; or ship
+         the cache behind a flag that is off by default, with a load test in both modes and a clear rollback plan.
+         The choice depends on whether the slow endpoint blocks the goal of the release.
+      6. **Record and explain the decision.** A short architecture decision record (ADR) with the measured
+         numbers, the accepted risks and the conditions. The developer needs to hear not "no" but the criteria
+         under which the answer becomes "yes", and to take part in checking them.
+    explanation: |
+      A cache looks like pure speed, but it changes the properties of the system. It adds a second copy of the
+      data that can diverge from the database, so every write path now has to remember invalidation. It adds a
+      new dependency: without a planned failure mode, a Redis outage becomes an endpoint outage, and a cold cache
+      after a restart hits the database with the full accumulated load. Microsoft's caching guidance explicitly
+      advises against treating the cache as the authoritative store and recommends designing the application to
+      keep working against the original data store when the cache is unavailable.
+
+      A cache can also hide the real cause: the slow query stays slow on every miss and after every
+      invalidation, and a local measurement on a warm cache says nothing about behaviour under real load.
+
+      The tech lead's job here is neither to veto nor to approve on trust, but to make the trade-off explicit:
+      measured benefit against maintenance cost and pre-release risk. Explicit decision criteria also teach the
+      team to ask these questions on their own.
+    linkTitles:
+      - "Caching guidance"
+      - "Distributed caching in ASP.NET Core"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

@@ -1,0 +1,93 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WQ8JF525TM7N3YPH49
+slug: cache-aside-invalidate-on-write
+stack: dotnet
+topic: system-design
+level: middle
+type: single
+grading: auto
+tags: [caching, cache-aside, cache-invalidation, consistency]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/azure/architecture/patterns/cache-aside
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/azure/architecture/best-practices/caching
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что делать с записью в кэше при обновлении данных в паттерне cache-aside?
+    prompt: |
+      Сервис читает товары по паттерну cache-aside: сначала ищет товар в распределённом кэше, а при промахе
+      загружает его из базы данных и кладёт в кэш со сроком жизни. Теперь сервис меняет цену товара в базе.
+      Какой порядок действий с кэшем правильный?
+    hint: Что может произойти между двумя шагами, если в это же время другие запросы читают или меняют тот же товар?
+    options:
+      a: "Сначала обновить запись в базе, затем удалить её из кэша"
+      b: "Сначала обновить запись в базе, затем записать в кэш новое значение"
+      c: "Сначала удалить запись из кэша, затем обновить запись в базе"
+      d: "Ничего не делать с кэшем: запись обновится сама, когда истечёт её срок жизни"
+    optionExplanations:
+      b: "Два параллельных обновления могут записать значения в кэш не в том порядке, в котором зафиксировали их в базе. Тогда в кэше останется более старая цена, и её будут читать до истечения срока жизни. Кроме того, код записи дублирует логику, которая формирует закэшированное значение."
+      c: "Между удалением и обновлением базы другой запрос может получить промах, прочитать из базы ещё старую цену и снова положить её в кэш. Последующее обновление базы кэш уже не затронет, и устаревшее значение проживёт до конца срока жизни."
+      d: "До истечения срока жизни все читатели, включая пользователя, который только что сменил цену, будут видеть старое значение. Срок жизни - страховка от редких рассогласований, а не способ согласовать кэш при записи."
+    answer: Сначала обновить запись в базе, затем удалить её из кэша.
+    explanation: |
+      В cache-aside источник истины - база данных, а кэш хранит лишь копию, которую загружает код чтения.
+      Поэтому при записи кэш не пересчитывают, а инвалидируют: удаляют запись после того, как изменение
+      зафиксировано в базе. Следующее чтение получит промах и загрузит свежие данные тем же путём, что и всегда.
+
+      Порядок важен. Если удалить запись до обновления базы, в окне между шагами читатель успеет вернуть в кэш
+      старое значение. Если обновить базу и записать в кэш новое значение, параллельные записи соревнуются за
+      то, чьё значение окажется в кэше последним, и победить может более старое.
+
+      Удаление после записи не убирает гонки полностью: читатель, который прочитал старую строку до обновления,
+      может положить её в кэш уже после удаления. Это окно узкое, и его ограничивает срок жизни записи, поэтому
+      в cache-aside срок жизни задают всегда.
+    linkTitles:
+      - "Паттерн Cache-Aside"
+      - "Рекомендации по кэшированию"
+  en:
+    title: What should a service do with the cached entry when it updates data in the cache-aside pattern?
+    prompt: |
+      A service reads products with the cache-aside pattern: it first looks for the product in a distributed
+      cache, and on a miss it loads it from the database and puts it in the cache with an expiration. Now the
+      service changes the price of a product in the database. Which order of cache actions is correct?
+    hint: What can happen between the two steps if other requests read or change the same product at the same time?
+    options:
+      a: "Update the record in the database first, then remove it from the cache"
+      b: "Update the record in the database first, then write the new value into the cache"
+      c: "Remove the record from the cache first, then update it in the database"
+      d: "Do nothing with the cache: the entry refreshes itself when its expiration passes"
+    optionExplanations:
+      b: "Two concurrent updates can write their values into the cache in a different order than they committed them to the database. The cache then keeps the older price, and readers get it until the entry expires. The write path also duplicates the logic that builds the cached value."
+      c: "Between the removal and the database update another request can miss, read the still old price from the database and put it back into the cache. The later database update does not touch the cache, so the stale value lives until the entry expires."
+      d: "Until the entry expires every reader, including the user who has just changed the price, sees the old value. Expiration is a safety net for rare inconsistencies, not a way to keep the cache consistent on writes."
+    answer: Update the record in the database first, then remove it from the cache.
+    explanation: |
+      In cache-aside the database is the source of truth, and the cache only holds a copy loaded by the read
+      path. So a write does not recompute the cache, it invalidates it: it removes the entry after the change is
+      committed to the database. The next read misses and loads fresh data the same way it always does.
+
+      The order matters. If you remove the entry before updating the database, a reader can put the old value
+      back into the cache in the window between the steps. If you update the database and write the new value
+      into the cache, concurrent writes race to be the last one to set the cache, and the older value can win.
+
+      Removing after the write does not remove every race: a reader that read the old row before the update
+      can put it into the cache after the removal. That window is narrow, and the entry expiration bounds it,
+      which is why cache-aside entries always get an expiration.
+    linkTitles:
+      - "Cache-Aside pattern"
+      - "Caching guidance"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

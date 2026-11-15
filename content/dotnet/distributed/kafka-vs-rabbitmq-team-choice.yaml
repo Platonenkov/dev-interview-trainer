@@ -1,0 +1,175 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNEX6BRWDPXMRA62D2
+slug: kafka-vs-rabbitmq-team-choice
+stack: dotnet
+topic: distributed
+level: lead
+type: open
+grading: self
+tags: [kafka, rabbitmq, message-broker, event-streaming, architecture-decision]
+links:
+  - url: https://kafka.apache.org/intro
+    lang: en
+    kind: docs
+  - url: https://www.rabbitmq.com/tutorials/amqp-concepts
+    lang: en
+    kind: docs
+  - url: https://www.rabbitmq.com/docs/streams
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как выбрать между Kafka и RabbitMQ для платформы, которой нужны и очереди задач, и поток событий?
+    prompt: |
+      Команда создаёт платформу с нуля и должна выбрать один брокер сообщений. Платформе нужны очереди фоновых
+      задач (отправка писем, генерация отчётов, вызовы медленных внешних API) и поток доменных событий, который
+      будут читать в своих сервисах другие команды. Как вы будете выбирать между Apache Kafka и RabbitMQ и какие
+      риски взвесите до и после решения?
+    hint: |
+      Что происходит с сообщением после того, как потребитель его обработал, и кто решает, сколько оно хранится?
+    answer: |
+      1. **Начать с моделей, а не с бенчмарков.**
+         - **Kafka**: топик состоит из партиций, каждая - журнал, в который только дописывают. Сообщения хранятся
+           заданный срок хранения (retention) или, при log compaction, как последнее значение по ключу - независимо
+           от того, прочитал ли их кто-то. Каждая группа потребителей хранит свой offset в каждой партиции, поэтому
+           любая команда может читать с начала, переиграть события после ошибки или подключиться позже. Порядок
+           гарантирован внутри партиции, а параллелизм группы ограничен числом партиций.
+         - **RabbitMQ**: продюсер публикует в exchange, привязки (bindings) маршрутизируют сообщение в очереди
+           (exchange типов direct, topic, fanout, headers), потребитель подтверждает каждое сообщение отдельно, и
+           после подтверждения брокер удаляет его из очереди. Подтверждение по сообщению, повторная доставка,
+           prefetch, dead-letter exchange и TTL - готовые строительные блоки для очереди задач с конкурирующими
+           потребителями.
+      2. **Наложить обе нагрузки на модели.**
+         - Задачам нужны повтор и dead-lettering отдельного сообщения, отложенные повторы, разное время обработки
+           и масштабирование воркеров независимо от партиций. В RabbitMQ повтор и dead-lettering отдельного
+           сообщения встроены, а отложенные повторы собираются из TTL и dead-letter exchange (или отдельного
+           плагина). В классической группе потребителей Kafka медленное или падающее сообщение задерживает свою
+           партицию для группы, а повторы, задержки и dead-letter топики приходится строить в приложении. Share
+           groups из Kafka 4.x (KIP-932) дают похожий на очередь режим с подтверждением отдельных записей, но этот
+           режим ещё созревает: перед тем как на него опираться, проверьте его статус в выбранной версии Kafka.
+         - Потоку событий нужны повторное чтение, независимые читатели, долгое хранение и порядок по ключу. В Kafka
+           это базовая модель. В обычных очередях RabbitMQ каждой команде нужна своя очередь, привязанная к
+           exchange, команда, подключившаяся позже, прошлых событий не увидит, а прочитанное сообщение не
+           переиграть. RabbitMQ Streams сокращают этот разрыв: это журнал, в который только дописывают, его
+           чтение не удаляет сообщения, а потребитель может начать с выбранного смещения. Их стоит оценить.
+      3. **Найти доминирующее требование и проговорить его явно.** Нужны ли другим командам история и replay
+         (пересобрать read-модель, подключить сервис через год, восстановиться после бага потребителя)? Какие
+         объёмы и срок хранения? Нужны ли задачам задержки, приоритеты, повторы по сообщению? Если событийный поток
+         с повторным чтением - долгосрочный контракт платформы, основой обычно становится Kafka, а очереди задач
+         строятся поверх неё с retry и dead-letter топиками и достаточным числом партиций. Если основная нагрузка -
+         задачи, а события - уведомления без replay, проще RabbitMQ. Если в одном брокере обе нагрузки не
+         укладываются без большого объёма своего кода, об этой цене нужно сообщить тем, кто поставил ограничение
+         «один брокер», и пересмотреть его.
+      4. **Взвесить эксплуатацию наравне с возможностями.** Кто будет поддерживать кластер ночью: для Kafka -
+         партиции, репликация, ребалансировки, диск под retention, мониторинг отставания потребителей (consumer
+         lag); для RabbitMQ - quorum-очереди, длина очередей, алармы по памяти и диску. Управляемый сервис
+         (например, Amazon MSK, Confluent Cloud, Azure Event Hubs с Kafka-совместимым endpoint, Amazon MQ для
+         RabbitMQ) меняет расчёт. Учитываются опыт команды и клиенты для .NET (`Confluent.Kafka`,
+         `RabbitMQ.Client`).
+      5. **Назвать риски.**
+         - Поток событий становится публичным контрактом: схемы, версионирование, владельцы топиков.
+         - Retention - это хранение данных: персональные данные и запросы на удаление.
+         - Неудачные число партиций и ключ партиционирования потом дорого менять.
+         - Привязка к специфичным возможностям брокера.
+         - Для потребителей с внешними побочными эффектами (запись в базу, HTTP-вызовы) доставка в обоих брокерах
+           на практике не реже одного раза (at least once): транзакции Kafka дают exactly-once только внутри самой
+           Kafka. Поэтому такие потребители должны быть идемпотентными при любом выборе.
+      6. **Сделать решение проверяемым и обратимым.** Прототип обоих критичных сценариев на реалистичной нагрузке
+         с отказами (убить потребителя, узел брокера). Решение - в ADR с критериями и условиями пересмотра. Код,
+         зависящий от брокера, - за тонким слоем обмена сообщениями и outbox, чтобы API клиента не расползался
+         по всему приложению.
+    explanation: |
+      Главное различие - что происходит с сообщением после обработки. В RabbitMQ подтверждённое сообщение
+      удаляется из очереди: брокер маршрутизирует и раздаёт работу. В Kafka сообщение остаётся в журнале, а
+      потребитель лишь сдвигает свой offset: брокер хранит историю. Из этого следует всё остальное: replay и
+      независимые читатели естественны для Kafka, а повтор отдельного сообщения, гибкая маршрутизация и
+      конкурирующие воркеры без привязки к партициям - для RabbitMQ.
+
+      Для уровня lead важно, что выбор брокера живёт годами и определяет, что придётся писать и поддерживать
+      самим. Типичные ошибки: взять Kafka, потому что она «быстрее» и популярна, и затем самодельно и с ошибками
+      реализовывать семантику очереди задач; или взять RabbitMQ, а позже обнаружить, что другим командам нужна
+      история, и строить для неё отдельное хранилище. Сильный ответ связывает выбор с требованиями к replay и
+      fan-out, с семантикой задач и с тем, сможет ли команда эксплуатировать брокер, и делает решение
+      проверяемым прототипом и записанным ADR.
+    linkTitles:
+      - "Введение в Apache Kafka"
+      - "Модель AMQP 0-9-1 в RabbitMQ"
+      - "Streams в RabbitMQ"
+  en:
+    title: How do you choose between Kafka and RabbitMQ for a platform that needs both job queues and an event stream?
+    prompt: |
+      Your team is building a platform from scratch and must pick one message broker. The platform needs
+      background job queues (sending emails, generating reports, calling slow external APIs) and a stream of
+      domain events that other teams will read in their own services. How do you decide between Apache Kafka and
+      RabbitMQ, and what risks do you weigh before and after the decision?
+    hint: |
+      What happens to a message after a consumer has processed it, and who decides how long it stays?
+    answer: |
+      1. **Start from the models, not from benchmarks.**
+         - **Kafka**: a topic consists of partitions, each an append-only log. Messages are kept for the configured
+           retention period or, with log compaction, as the latest value per key, whether or not anyone has read
+           them. Each consumer group stores its own offset per partition, so any team can read from the beginning,
+           replay events after a bug or connect later. Order is guaranteed within a partition, and the parallelism
+           of a group is capped by the number of partitions.
+         - **RabbitMQ**: a producer publishes to an exchange, bindings route the message to queues (direct, topic,
+           fanout and headers exchanges), a consumer acknowledges each message separately, and after the
+           acknowledgement the broker deletes it from the queue. Per-message acknowledgement, redelivery,
+           prefetch, dead-letter exchanges and TTL are ready building blocks for a task queue with competing
+           consumers.
+      2. **Map both workloads onto the models.**
+         - Jobs need retry and dead-lettering of a single message, delayed retries, uneven processing times and
+           scaling workers independently of partitions. In RabbitMQ per-message retry and dead-lettering are built
+           in, and delayed retries are assembled from TTL and dead-letter exchanges (or a separate plugin). In a
+           classic Kafka consumer group a slow or failing message holds up its partition for the group, and
+           retries, delays and dead-letter topics have to be built in the application. Share groups in Kafka 4.x
+           (KIP-932) offer a queue-like mode with per-record acknowledgement, but it is still maturing: check its
+           status in the Kafka version you choose before relying on it.
+         - The event stream needs replay, independent readers, long retention and ordering per key. In Kafka this
+           is the basic model. With ordinary RabbitMQ queues each team needs its own queue bound to the exchange, a
+           team that binds later never sees past events, and a consumed message cannot be replayed. RabbitMQ
+           Streams narrow this gap: a stream is an append-only log, reading it does not remove messages, and a
+           consumer can start from a chosen offset. They are worth evaluating.
+      3. **Find the dominant requirement and state it explicitly.** Do other teams need history and replay
+         (rebuild a read model, onboard a service a year later, recover from a consumer bug)? What volume and
+         retention? Do jobs need delays, priorities, per-message retries? If a replayable event stream is the
+         long-term contract of the platform, Kafka is usually the base, and job queues are built on top of it with
+         retry and dead-letter topics and enough partitions. If the main load is jobs and events are notifications
+         without replay, RabbitMQ is simpler. If both workloads do not fit one broker without a lot of custom code,
+         report that cost to whoever set the "one broker" constraint and revisit it.
+      4. **Weigh operations as heavily as features.** Who runs the cluster at night: for Kafka, partitions,
+         replication, rebalancing, disk for retention and consumer lag monitoring; for RabbitMQ, quorum queues,
+         queue length and memory and disk alarms. A managed service (for example Amazon MSK, Confluent Cloud,
+         Azure Event Hubs with its Kafka-compatible endpoint, Amazon MQ for RabbitMQ) changes the calculation.
+         Team experience and the .NET clients (`Confluent.Kafka`, `RabbitMQ.Client`) count too.
+      5. **Name the risks.**
+         - The event stream becomes a public contract: schemas, versioning, topic ownership.
+         - Retention means stored data: personal data and deletion requests.
+         - A poor partition count or partition key is expensive to change later.
+         - Lock-in to broker-specific features.
+         - For consumers with external side effects (database writes, HTTP calls), delivery is in practice at least
+           once with either broker: Kafka transactions give exactly-once only within Kafka itself. So such
+           consumers must be idempotent whatever you choose.
+      6. **Make the decision verifiable and reversible.** Prototype both critical scenarios under realistic load
+         with failures (kill a consumer, a broker node). Record the decision in an ADR with the criteria and the
+         conditions for revisiting it. Keep broker-specific code behind a thin messaging layer and an outbox, so
+         the client API does not spread across the whole application.
+    explanation: |
+      The core difference is what happens to a message after processing. In RabbitMQ an acknowledged message is
+      removed from the queue: the broker routes and distributes work. In Kafka the message stays in the log and
+      the consumer only moves its offset: the broker keeps history. Everything else follows from that: replay and
+      independent readers are natural for Kafka, while retrying a single message, flexible routing and competing
+      workers not tied to partitions are natural for RabbitMQ.
+
+      At lead level it matters that a broker choice lives for years and determines what the team has to write and
+      operate itself. Typical mistakes: picking Kafka because it is "faster" and popular, then hand-building job
+      queue semantics with bugs; or picking RabbitMQ and later discovering that other teams need history, then
+      building a separate store for it. A strong answer ties the choice to replay and fan-out needs, to task-queue
+      semantics and to whether the team can operate the broker, and makes the decision verifiable with a
+      prototype and a recorded ADR.
+    linkTitles:
+      - "Apache Kafka introduction"
+      - "AMQP 0-9-1 model explained"
+      - "Streams in RabbitMQ"
+meta:
+  authors: [platonenkov]
+  verified: 1970-01-01

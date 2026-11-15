@@ -1,0 +1,113 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNM4XE2BTKXQ5GERXG
+slug: saga-compensation-semantics
+stack: dotnet
+topic: distributed
+level: architect
+type: multi
+grading: auto
+tags: [saga, compensating-transaction, eventual-consistency, isolation]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+  - id: e
+    correct: true
+links:
+  - url: https://learn.microsoft.com/en-us/azure/architecture/patterns/compensating-transaction
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/azure/architecture/patterns/saga
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какие утверждения о компенсирующих действиях в саге верны?
+    prompt: |
+      Оформление заказа реализовано сагой из нескольких сервисов: платёж, резервирование товара на складе,
+      доставка. Каждый сервис меняет свою базу в собственной локальной транзакции. Если шаг доставки
+      завершается ошибкой, уже выполненные шаги компенсируются.
+
+      Выберите все верные утверждения о компенсациях и о семантике такой саги.
+    hint: Что происходит с локальной транзакцией сервиса после того, как его шаг саги завершён, и кто может увидеть её результат?
+    options:
+      a: "Компенсация - это новое бизнес-действие (возврат платежа, снятие резерва), которое фиксируется отдельной локальной транзакцией, а не откат исходной транзакции базы данных."
+      b: "Если сагой управляет центральный оркестратор, она получает изоляцию как у ACID-транзакции: другие запросы не видят данные незавершённой саги, пока не зафиксирован последний шаг."
+      c: "Компенсирующие шаги должны быть идемпотентными и допускать повторный запуск, потому что сама компенсация может упасть на полпути и её придётся повторить."
+      d: "Успешная компенсация гарантированно возвращает систему ровно в то состояние, в котором она была до начала саги."
+      e: "Пока сага не завершена, другие транзакции могут увидеть её промежуточное состояние и принять на его основе решения, поэтому нужны контрмеры вроде семантической блокировки (например, статуса заказа Pending)."
+    optionExplanations:
+      b: "Оркестратор лишь решает, какой шаг выполнять следующим. Каждый шаг фиксирует свою локальную транзакцию и сразу освобождает блокировки, поэтому изоляции между сагами и другими запросами нет независимо от способа координации."
+      d: "Между шагом и его компенсацией данные могли изменить другие транзакции, а часть эффектов необратима (отправленное письмо, списанная комиссия, изменившийся курс). Компенсация восстанавливает согласованное с точки зрения бизнеса состояние, но не точную копию прежнего."
+    answer: "Верны утверждения a, c и e."
+    explanation: |
+      Сага - это последовательность локальных транзакций, каждая из которых фиксируется сразу. Распределённой
+      транзакции, охватывающей все сервисы, нет, поэтому откатить уже зафиксированный шаг средствами базы
+      данных нельзя. Отменить его можно только новым действием с обратным бизнес-смыслом: вернуть деньги,
+      снять резерв, отменить отправку. Это семантическая отмена, а не `ROLLBACK`.
+
+      Из того же факта следует отсутствие изоляции. Результат каждого шага виден всем сразу после его
+      фиксации, поэтому возможны аномалии: потерянные обновления, «грязные» и неповторяющиеся чтения между
+      сагами. Их сдерживают на уровне проектирования: семантическая блокировка (статус «в обработке»),
+      коммутативные обновления, повторное чтение значений перед изменением, порядок шагов, при котором
+      рискованные действия идут последними.
+
+      Компенсация выполняется по сети и тоже может завершиться ошибкой, поэтому её повторяют до успеха.
+      Значит, каждый компенсирующий шаг должен быть идемпотентным: повторный возврат того же платежа не должен
+      вернуть деньги дважды. Обычно для этого используют стабильный идентификатор саги или операции.
+
+      Наконец, компенсация не обязана и часто не может восстановить точное прежнее состояние: между шагом и его
+      отменой данные могли измениться, а некоторые эффекты необратимы. Цель - согласованное состояние, приемлемое
+      для бизнеса, иногда с дополнительными действиями вроде уведомления клиента или ручного разбора.
+    linkTitles:
+      - "Паттерн Compensating Transaction"
+      - "Паттерн Saga"
+  en:
+    title: Which statements about compensating actions in a saga are true?
+    prompt: |
+      Order checkout is implemented as a saga across several services: payment, stock reservation in the
+      warehouse, and shipping. Each service changes its own database in its own local transaction. If the
+      shipping step fails, the steps already completed are compensated.
+
+      Select every true statement about compensations and the semantics of such a saga.
+    hint: What happens to a service's local transaction once its saga step has finished, and who can see its result?
+    options:
+      a: "A compensation is a new business action (a payment refund, a reservation release) committed in its own local transaction, not a rollback of the original database transaction."
+      b: "If the saga is driven by a central orchestrator, it gets ACID-style isolation: other requests do not see the data of an unfinished saga until the last step commits."
+      c: "Compensating steps must be idempotent and safe to run again, because a compensation itself can fail halfway and has to be retried."
+      d: "A successful compensation is guaranteed to return the system to exactly the state it was in before the saga started."
+      e: "While the saga is unfinished, other transactions can see its intermediate state and act on it, so countermeasures such as a semantic lock (for example an order status of Pending) are needed."
+    optionExplanations:
+      b: "The orchestrator only decides which step runs next. Each step commits its local transaction and releases its locks right away, so there is no isolation between sagas and other requests, whatever the coordination style."
+      d: "Between a step and its compensation other transactions may have changed the data, and some effects are irreversible (a sent email, a charged fee, a changed exchange rate). A compensation restores a state that is consistent for the business, not an exact copy of the previous one."
+    answer: "Statements a, c and e are true."
+    explanation: |
+      A saga is a sequence of local transactions, each committed immediately. There is no distributed
+      transaction spanning all services, so a committed step cannot be undone by the database. It can only be
+      reversed by a new action with the opposite business meaning: refund the money, release the reservation,
+      cancel the shipment. This is a semantic undo, not a `ROLLBACK`.
+
+      The same fact explains the lack of isolation. The result of each step is visible to everyone as soon as
+      it commits, so anomalies are possible: lost updates, dirty reads and non-repeatable reads between sagas.
+      They are contained by design: a semantic lock (an in-progress status), commutative updates, rereading
+      values before changing them, and ordering the steps so that risky actions come last.
+
+      A compensation runs over the network and can fail too, so it is retried until it succeeds. Each
+      compensating step must therefore be idempotent: refunding the same payment again must not return the
+      money twice. A stable saga or operation identifier is the usual way to achieve that.
+
+      Finally, a compensation does not have to, and often cannot, restore the exact previous state: the data
+      may have changed between the step and its undo, and some effects are irreversible. The goal is a
+      consistent state the business accepts, sometimes with extra actions such as notifying the customer or
+      a manual review.
+    linkTitles:
+      - "Compensating Transaction pattern"
+      - "Saga pattern"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

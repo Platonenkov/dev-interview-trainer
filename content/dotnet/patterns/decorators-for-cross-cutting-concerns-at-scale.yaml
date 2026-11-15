@@ -1,0 +1,166 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WPKT8G7B3DWR8S98DY
+slug: decorators-for-cross-cutting-concerns-at-scale
+stack: dotnet
+topic: patterns
+level: architect
+type: open
+grading: self
+tags: [decorator, cross-cutting-concerns, delegating-handler, middleware, resilience]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.net.http.delegatinghandler
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/resilience/http-resilience
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/middleware/
+    lang: en
+    kind: docs
+  - url: https://refactoring.guru/design-patterns/decorator
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: "Декораторы или общий конвейер: как реализовать сквозную функциональность в десятках сервисов?"
+    prompt: |
+      В компании несколько десятков .NET-сервисов, которые разные команды сопровождают годами. Логирование,
+      кэширование и повторные попытки сейчас сделаны декораторами вокруг почти каждого интерфейса
+      (`IOrderRepository`, `IPaymentClient` и так далее), зарегистрированными в DI. Предлагают перейти на общий
+      конвейер: цепочки `DelegatingHandler` для исходящих HTTP-вызовов и middleware для входящих запросов.
+
+      Какие компромиссы у каждого подхода в таком масштабе и на протяжении многих лет? Как вы решите, какую
+      сквозную функциональность куда отнести?
+    hint: |
+      Сравните, сколько разных контрактов оборачивает каждый подход, и спросите себя, насколько одинаково
+      должна вести себя каждая сквозная функция во всех сервисах.
+    answer: |
+      **Декораторы вокруг каждого интерфейса.**
+
+      - Плюсы: точный контроль на уровне операции предметной области (что является ключом кэша, какие методы
+        безопасно повторять), декоратор тестируется изолированно с фейком внутреннего объекта, бизнес-код не
+        знает о сквозной логике.
+      - Минусы: шаблонный код умножается на число интерфейсов и сервисов; каждый новый метод интерфейса требует
+        правки всех его декораторов; порядок выполнения (повтор внутри или снаружи кэша, логируется ли каждая
+        попытка) задаётся порядком регистрации в DI и не виден из кода вызова; реализации в разных командах
+        постепенно расходятся; легко нарушить контракт - повторить неидемпотентную операцию или закэшировать
+        ответ с данными конкретного пользователя.
+
+      **Общий конвейер (`DelegatingHandler`, middleware).**
+
+      - Плюсы: политика и порядок описаны в одном месте и одинаковы во всех сервисах; конвейер поставляется
+        общим пакетом или шаблоном сервиса, и изменение политики - это обновление версии пакета, а не правка
+        сотен классов. Обработчик видит HTTP-метод, код состояния и заголовки, поэтому может решать о повторе по
+        идемпотентности метода и по ответам вроде 5xx и 429.
+      - Минусы: грубая гранулярность - конвейер видит запрос, а не операцию предметной области, поэтому доменный
+        кэш или особые правила на нём не выразить; единая политика подходит не всем, нужны точки расширения и
+        исключения; ошибка в общем пакете попадает сразу во все сервисы.
+
+      **Решение - по степени однородности функции.**
+
+      1. Логирование, трассировка и метрики однородны: их место в конвейере (middleware, логирование
+         `HttpClient`, OpenTelemetry), а не в декораторе на каждый интерфейс.
+      2. Повторные попытки и таймауты относятся к границе транспорта: ровно один уровень повторов в цепочке
+         обработчиков `HttpClient` (например, через `Microsoft.Extensions.Http.Resilience`) и запрет повторов на
+         других уровнях, иначе попытки перемножаются.
+      3. Кэширование зависит от предметной области (ключ, время жизни, инвалидация): декоратор или явный код
+         только там, где выигрыш измерен.
+      4. Управление в масштабе: общий пакет с настройками конвейера по умолчанию и командой-владельцем,
+         декораторы как обоснованное исключение, порядок обёрток зафиксирован в одном методе расширения и
+         проверен тестом, правило против дублирующих повторов закреплено в архитектурных тестах или в code review.
+    explanation: |
+      Конвейер - это тоже цепочка декораторов: `DelegatingHandler` оборачивает внутренний `HttpMessageHandler`,
+      а middleware оборачивает следующий `RequestDelegate`. Разница не в паттерне, а в том, что именно
+      оборачивается. Конвейер строится вокруг одного универсального контракта, поэтому одна реализация
+      обслуживает все вызовы всех сервисов. Декораторы вокруг доменных интерфейсов пишутся заново для каждого
+      из N контрактов, и в масштабе десятков сервисов их цена складывается: код, ревью, расхождения версий.
+
+      Самый опасный эффект - скрытый порядок. Если повторы есть и в декораторе, и в обработчике `HttpClient`,
+      три попытки снаружи и три внутри дают до девяти вызовов нижестоящего сервиса, и во время инцидента
+      повторы усиливают нагрузку на уже перегруженную систему. Увидеть это можно только прочитав регистрацию в
+      DI, а не код вызова.
+
+      При этом конвейер не заменяет декоратор там, где нужна семантика операции: обработчик HTTP не знает, что
+      результат `GetPrices(region)` можно кэшировать на минуту, а `GetBalance(userId)` нельзя. Поэтому разумная
+      архитектура разделяет функции: однородные - централизованно в конвейере, доменные - точечно в
+      декораторах или явном коде. Промежуточный вариант - динамические прокси (`DispatchProxy` и аналоги)
+      дают один перехватчик для любого интерфейса, но добавляют рефлексию, сложную обработку асинхронных
+      результатов и неявное поведение, которое трудно отлаживать.
+    linkTitles:
+      - "Класс DelegatingHandler"
+      - "Устойчивость HTTP-приложений"
+      - "Middleware в ASP.NET Core"
+      - "Паттерн Decorator"
+  en:
+    title: Decorators or a shared pipeline for cross-cutting concerns across dozens of services?
+    prompt: |
+      A company runs several dozen .NET services that different teams maintain for years. Logging, caching
+      and retries are currently implemented as decorators around almost every interface (`IOrderRepository`,
+      `IPaymentClient` and so on), registered in DI. There is a proposal to move to a shared pipeline:
+      `DelegatingHandler` chains for outgoing HTTP calls and middleware for incoming requests.
+
+      What are the trade-offs of each approach at this scale and over many years? How do you decide which
+      cross-cutting concern goes where?
+    hint: |
+      Compare how many different contracts each approach wraps, and ask yourself how uniformly each
+      cross-cutting concern has to behave across all services.
+    answer: |
+      **Decorators around every interface.**
+
+      - Pros: precise control at the level of a domain operation (what the cache key is, which methods are safe
+        to retry), each decorator is tested in isolation with a fake inner object, and business code knows
+        nothing about the cross-cutting logic.
+      - Cons: boilerplate multiplies by the number of interfaces and services; every new interface method needs
+        changes in all its decorators; the execution order (retry inside or outside the cache, is every attempt
+        logged) is defined by the DI registration order and is invisible at the call site; implementations
+        drift apart between teams; it is easy to break the contract by retrying a non-idempotent operation or
+        caching a response that holds one user's data.
+
+      **A shared pipeline (`DelegatingHandler`, middleware).**
+
+      - Pros: policy and order are described in one place and are the same in every service; the pipeline ships
+        as a shared package or service template, and a policy change is a package version bump rather than edits
+        to hundreds of classes. A handler sees the HTTP method, status code and headers, so it can decide on
+        retries by method idempotency and by responses such as 5xx and 429.
+      - Cons: coarse granularity, because the pipeline sees a request, not a domain operation, so a domain cache
+        or special rules cannot be expressed there; one policy does not fit everyone, so extension points and
+        exceptions are needed; a bug in the shared package reaches every service at once.
+
+      **Decide by how uniform the concern is.**
+
+      1. Logging, tracing and metrics are uniform: they belong in the pipeline (middleware, `HttpClient`
+         logging, OpenTelemetry), not in a decorator per interface.
+      2. Retries and timeouts belong to the transport boundary: exactly one retry layer in the `HttpClient`
+         handler chain (for example through `Microsoft.Extensions.Http.Resilience`) and no retries at other
+         layers, otherwise attempts multiply.
+      3. Caching depends on the domain (key, lifetime, invalidation): a decorator or explicit code only where
+         the gain has been measured.
+      4. Governance at scale: a shared package with pipeline defaults and an owning team, decorators as a
+         justified exception, the wrapping order fixed in a single extension method and covered by a test, and
+         a rule against duplicate retries enforced by architecture tests or in code review.
+    explanation: |
+      A pipeline is also a chain of decorators: a `DelegatingHandler` wraps an inner `HttpMessageHandler`, and
+      middleware wraps the next `RequestDelegate`. The difference is not the pattern but what gets wrapped. A
+      pipeline is built around one universal contract, so a single implementation serves every call of every
+      service. Decorators around domain interfaces are written again for each of N contracts, and across dozens
+      of services their cost adds up: code, reviews, diverging versions.
+
+      The most dangerous effect is hidden order. If retries exist both in a decorator and in an `HttpClient`
+      handler, three attempts outside and three inside give up to nine calls to the downstream service, and
+      during an incident the retries add load to a system that is already overloaded. You can only see this by
+      reading the DI registration, not the calling code.
+
+      At the same time a pipeline does not replace a decorator where the semantics of the operation matter: an
+      HTTP handler does not know that the result of `GetPrices(region)` may be cached for a minute while
+      `GetBalance(userId)` may not. So a sound architecture splits the concerns: uniform ones centrally in the
+      pipeline, domain-specific ones selectively in decorators or explicit code. A middle ground is dynamic
+      proxies (`DispatchProxy` and similar tools), which give one interceptor for any interface but add
+      reflection, awkward handling of asynchronous results and implicit behaviour that is hard to debug.
+    linkTitles:
+      - "DelegatingHandler class"
+      - "Build resilient HTTP apps"
+      - "ASP.NET Core middleware"
+      - "Decorator pattern"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

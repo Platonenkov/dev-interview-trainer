@@ -1,0 +1,108 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WQYA39QY29WB59FHXH
+slug: flaky-tests-pass-locally-fail-in-ci
+stack: dotnet
+topic: testing
+level: senior
+type: situation
+grading: self
+tags: [flaky-tests, ci, test-isolation, nondeterminism]
+links:
+  - url: https://martinfowler.com/articles/nonDeterminism.html
+    lang: en
+    kind: article
+  - url: https://xunit.net/docs/running-tests-in-parallel
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Около 5% прогонов CI падают на разных тестах, которые локально всегда проходят
+    prompt: |
+      Примерно каждый двадцатый прогон CI падает. Каждый раз падает другой тест, а локально у разработчиков все
+      тесты стабильно зелёные. Команда предлагает включить автоматический повтор упавших тестов. Что вы будете
+      делать и в каком порядке?
+    hint: Чем окружение и режим запуска тестов на агенте CI отличаются от локального запуска?
+    answer: |
+      1. **Не прятать проблему за повторами.** Автоповтор делает сборку зелёной, но дефект остаётся, а команда
+         перестаёт доверять красным сборкам. Повтор допустим разве что как временная мера с учётом каждого срабатывания.
+      2. **Собрать данные.** История падений: какие тесты, на каких агентах, в какое время, в каком порядке шли тесты,
+         полные логи и сообщения ассертов. Отделить сбои инфраструктуры (нет места, сеть) от недетерминизма в тестах.
+      3. **Изолировать нестабильные тесты.** Вынести их из блокирующего набора в карантин (отдельная категория или
+         trait) с задачей, ответственным и сроком, но продолжать запускать и отслеживать. Основной набор снова
+         становится надёжным сигналом.
+      4. **Воспроизвести.** Запускать подозрительные тесты сотни раз подряд, в случайном порядке, в полном наборе с
+         параллельностью, в контейнере с настройками CI (часовой пояс UTC, культура, конфигурация Release, мало ядер).
+      5. **Найти источник недетерминизма.** Типичные причины:
+         - реальные часы: `DateTime.Now`, полночь, смена дня, часовой пояс агента;
+         - ожидание по времени: `Task.Delay` или `Thread.Sleep` вместо ожидания события;
+         - зависимость от порядка: статическое состояние, общие синглтоны, данные, оставленные прошлым тестом;
+         - параллельные коллекции тестов, которые делят одну базу, файл, порт или очередь;
+         - асинхронная работа без `await`: `async void`, fire-and-forget, тест заканчивается раньше кода;
+         - порядок неупорядоченных коллекций, случайные данные без фиксированного seed, внешние сервисы.
+      6. **Исправить причину.** Внедрить `TimeProvider` и управлять временем в тесте, ждать завершения задач, давать
+         каждому тесту свои данные или транзакцию, объединять в одну коллекцию xUnit (`[Collection]`) только те
+         классы, которые действительно делят ресурс. Вернуть тест из карантина после серии стабильных прогонов.
+      7. **Закрепить процесс.** Отслеживать долю нестабильных прогонов, правило «новый нестабильный тест сразу в
+         карантин с владельцем», запрет на глобальный автоповтор.
+    explanation: |
+      Падение разных тестов с низкой частотой - признак недетерминизма, а не одного сломанного теста. Локально он не
+      проявляется, потому что там другие условия: быстрее машина, другой часовой пояс, тесты запускаются по одному
+      или в другом порядке, нет конкуренции за общие ресурсы.
+
+      Повтор лишь снижает видимость: настоящая ошибка в коде (например, состояние гонки) может прятаться за тем же
+      «нестабильным» тестом. Карантин сохраняет доверие к сборке и одновременно не даёт забыть о тесте.
+
+      В xUnit по умолчанию каждый тестовый класс - отдельная коллекция, и коллекции выполняются параллельно, а тесты
+      внутри одной коллекции - последовательно. Поэтому два класса, которые пишут в одну базу, на CI могут мешать друг
+      другу, хотя при запуске одного класса в IDE всё проходит. Отключать параллельность для всего набора - крайняя
+      мера: лучше изолировать данные или сгруппировать только конфликтующие классы.
+    linkTitles:
+      - "Мартин Фаулер: устранение недетерминизма в тестах"
+      - "xUnit: параллельный запуск тестов"
+  en:
+    title: About 5% of CI runs fail on different tests that always pass locally
+    prompt: |
+      Roughly one CI run in twenty fails. A different test fails each time, while on developer machines every test
+      is reliably green. The team suggests turning on automatic retries of failed tests. What do you do, and in
+      what order?
+    hint: How do the environment and the way tests are run on a CI agent differ from a local run?
+    answer: |
+      1. **Do not hide the problem behind retries.** Auto-retry turns the build green, but the defect stays and the
+         team stops trusting red builds. A retry is acceptable at most as a temporary measure with every retry recorded.
+      2. **Collect data.** Failure history: which tests, on which agents, at what time, in what test order, full logs
+         and assertion messages. Separate infrastructure failures (disk space, network) from nondeterminism in tests.
+      3. **Quarantine the flaky tests.** Move them out of the gating suite into quarantine (a separate category or
+         trait) with a ticket, an owner and a deadline, but keep running and tracking them. The main suite becomes a
+         reliable signal again.
+      4. **Reproduce.** Run the suspect tests hundreds of times in a row, in random order, in the full suite with
+         parallelism, in a container with CI settings (UTC time zone, culture, Release configuration, few cores).
+      5. **Find the source of nondeterminism.** Typical causes:
+         - the wall clock: `DateTime.Now`, midnight, a date change, the agent's time zone;
+         - waiting by time: `Task.Delay` or `Thread.Sleep` instead of waiting for an event;
+         - order dependence: static state, shared singletons, data left by a previous test;
+         - parallel test collections that share one database, file, port or queue;
+         - async work without `await`: `async void`, fire-and-forget, the test ends before the code does;
+         - ordering of unordered collections, random data without a fixed seed, external services.
+      6. **Fix the cause.** Inject `TimeProvider` and control time in the test, wait for tasks to complete, give
+         each test its own data or transaction, put into one xUnit collection (`[Collection]`) only the classes that
+         really share a resource. Bring a test back from quarantine after a series of stable runs.
+      7. **Lock in the process.** Track the flaky run rate, adopt the rule "a new flaky test goes to quarantine with
+         an owner at once", and do not allow blanket auto-retry.
+    explanation: |
+      Different tests failing at a low rate is a sign of nondeterminism, not of one broken test. It does not show up
+      locally because conditions differ there: a faster machine, another time zone, tests run one at a time or in a
+      different order, no contention for shared resources.
+
+      A retry only lowers visibility: a real defect in the code (a race condition, for example) can hide behind the
+      same "flaky" test. Quarantine keeps the build trustworthy while making sure the test is not forgotten.
+
+      In xUnit each test class is its own collection by default, and collections run in parallel, while tests inside
+      one collection run sequentially. So two classes that write to the same database can interfere on CI even though
+      everything passes when one class is run from the IDE. Turning off parallelism for the whole suite is a last
+      resort: isolating the data or grouping only the conflicting classes is better.
+    linkTitles:
+      - "Martin Fowler: Eradicating non-determinism in tests"
+      - "xUnit: Running tests in parallel"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

@@ -1,0 +1,129 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WP1HHKA2RWVF0WG26C
+slug: prototype-memberwiseclone-shallow-copy
+stack: dotnet
+topic: patterns
+level: middle
+type: output
+grading: auto
+tags: [prototype, memberwiseclone, shallow-copy, gof]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    var original = new Report { Version = 1 };
+    original.Tags.Add("draft");
+
+    var copy = original.Clone();
+    copy.Version = 2;
+    copy.Tags.Add("copy");
+
+    Console.Write($"{original.Version} {original.Tags.Count} {copy.Version} {copy.Tags.Count}");
+
+    class Report
+    {
+        public int Version;
+        public List<string> Tags = new();
+
+        public Report Clone() => (Report)MemberwiseClone();
+    }
+expect:
+  kind: output
+  value: "1 2 2 2"
+acceptedOutputs: ["1 2 2 2"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "1 2 2 2" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "1 1 2 2" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "2 2 2 2" }
+  - id: d
+    correct: false
+    expect: { kind: output, value: "1 1 2 1" }
+  - id: e
+    correct: false
+    expect: { kind: compile-error }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.object.memberwiseclone
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.icloneable
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что выведет программа после клонирования прототипа через MemberwiseClone?
+    prompt: |
+      Класс `Report` играет роль прототипа: новые объекты получают клонированием через `MemberwiseClone`.
+      Клон меняет своё поле `int` и добавляет элемент в своё поле `List<string>`. Что выведет программа в консоль?
+    hint: Что именно копирует `MemberwiseClone` из поля ссылочного типа - сам объект или ссылку на него?
+    options:
+      a: "1 2 2 2"
+      b: "1 1 2 2"
+      c: "2 2 2 2"
+      d: "1 1 2 1"
+      e: Ошибка компиляции
+    optionExplanations:
+      b: Такой результат дало бы глубокое копирование. `MemberwiseClone` копирует только ссылку на список, поэтому оригинал видит элемент, добавленный через клон.
+      c: Клон - это отдельный объект, и поле `Version` типа `int` скопировано по значению. Присваивание `copy.Version = 2` не меняет `original.Version`.
+      d: "`MemberwiseClone` не вызывает конструктор и не выполняет инициализаторы полей, поэтому у клона нет собственного нового списка: поле `Tags` указывает на тот же список, что и у оригинала."
+      e: "`MemberwiseClone` - защищённый метод `object`, но здесь он вызывается внутри самого класса `Report`, что разрешено. Результат типа `object` явно приведён к `Report`."
+    answer: "1 2 2 2"
+    explanation: |
+      `MemberwiseClone` создаёт поверхностную копию: новый объект того же типа, в который поля исходного объекта
+      копируются побитово. Для поля типа значения (`Version`) копируется само значение, поэтому `copy.Version = 2`
+      меняет только клон, и у оригинала остаётся `1`.
+
+      Для поля ссылочного типа (`Tags`) копируется ссылка, а не список. Оригинал и клон указывают на один и тот же
+      объект `List<string>`, поэтому после `copy.Tags.Add("copy")` в нём два элемента, и оба объекта видят `Count`,
+      равный `2`.
+
+      Это главная ловушка паттерна Prototype в .NET: если прототип содержит изменяемые ссылочные поля, метод
+      клонирования должен копировать их сам (например, `clone.Tags = new List<string>(Tags)`), иначе клоны
+      незаметно делят общее состояние. Интерфейс `ICloneable` при этом не говорит, глубокая копия или поверхностная,
+      поэтому в публичных API его обычно не рекомендуют.
+    linkTitles:
+      - "Метод Object.MemberwiseClone"
+      - "Интерфейс ICloneable"
+  en:
+    title: What does a program print after a prototype is cloned with MemberwiseClone?
+    prompt: |
+      The `Report` class acts as a prototype: new objects are created by cloning it with `MemberwiseClone`.
+      The clone changes its `int` field and adds an item to its `List<string>` field. What does the program print
+      to the console?
+    hint: What exactly does `MemberwiseClone` copy from a reference-type field - the object or the reference to it?
+    options:
+      a: "1 2 2 2"
+      b: "1 1 2 2"
+      c: "2 2 2 2"
+      d: "1 1 2 1"
+      e: Compile error
+    optionExplanations:
+      b: This would be the result of a deep copy. `MemberwiseClone` copies only the reference to the list, so the original sees the item added through the clone.
+      c: The clone is a separate object, and the `int` field `Version` is copied by value. Assigning `copy.Version = 2` does not change `original.Version`.
+      d: "`MemberwiseClone` does not call a constructor and does not run field initializers, so the clone gets no new list of its own: its `Tags` field points to the same list as the original."
+      e: "`MemberwiseClone` is a protected member of `object`, but here it is called inside the `Report` class itself, which is allowed. The `object` result is explicitly cast to `Report`."
+    answer: "1 2 2 2"
+    explanation: |
+      `MemberwiseClone` creates a shallow copy: a new object of the same type into which the fields of the source
+      object are copied bit by bit. For a value-type field (`Version`) the value itself is copied, so
+      `copy.Version = 2` changes only the clone, and the original keeps `1`.
+
+      For a reference-type field (`Tags`) the reference is copied, not the list. The original and the clone point
+      to the same `List<string>` object, so after `copy.Tags.Add("copy")` it holds two items, and both objects see
+      a `Count` of `2`.
+
+      This is the main trap of the Prototype pattern in .NET: if the prototype holds mutable reference fields, the
+      clone method must copy them itself (for example `clone.Tags = new List<string>(Tags)`), otherwise the clones
+      silently share state. The `ICloneable` interface does not say whether a copy is deep or shallow, which is why
+      it is usually not recommended in public APIs.
+    linkTitles:
+      - "Object.MemberwiseClone method"
+      - "ICloneable interface"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

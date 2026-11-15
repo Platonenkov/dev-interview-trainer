@@ -1,0 +1,151 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WM0ERXCCZ26HR222PQ
+slug: entity-equality-transient-default-id
+stack: dotnet
+topic: architecture
+level: senior
+type: find-bug
+grading: auto
+tags: [ddd, entity, equality, gethashcode, hashset]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    var customers = new HashSet<Customer>
+    {
+        new Customer("Alice"),
+        new Customer("Bob"),
+        new Customer("Carol")
+    };
+    Console.WriteLine(customers.Count);
+
+    public abstract class Entity
+    {
+        public int Id { get; protected set; }
+
+        public override bool Equals(object obj)
+        {
+            if (obj is not Entity other || GetType() != other.GetType())
+                return false;
+            return Id == other.Id;
+        }
+
+        public override int GetHashCode() => Id.GetHashCode();
+    }
+
+    public class Customer : Entity
+    {
+        public Customer(string name) => Name = name;
+        public string Name { get; }
+    }
+bugLineSets: [[17]]
+fixedSource: |
+  var customers = new HashSet<Customer>
+  {
+      new Customer("Alice"),
+      new Customer("Bob"),
+      new Customer("Carol")
+  };
+  Console.WriteLine(customers.Count);
+
+  public abstract class Entity
+  {
+      public int Id { get; protected set; }
+
+      public bool IsTransient() => Id == default;
+
+      public override bool Equals(object obj)
+      {
+          if (obj is not Entity other || GetType() != other.GetType())
+              return false;
+          if (ReferenceEquals(this, other))
+              return true;
+          // An entity without an identity is equal only to itself.
+          if (IsTransient() || other.IsTransient())
+              return false;
+          return Id == other.Id;
+      }
+
+      public override int GetHashCode() =>
+          IsTransient() ? base.GetHashCode() : Id.GetHashCode();
+  }
+
+  public class Customer : Entity
+  {
+      public Customer(string name) => Name = name;
+      public string Name { get; }
+  }
+fixedExpect: { kind: output, value: "3" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/architecture/microservices/microservice-ddd-cqrs-patterns/seedwork-domain-model-base-classes-interfaces
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.object.gethashcode
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему три новых сущности в HashSet превращаются в одну?
+    prompt: |
+      Базовый класс `Entity` сравнивает сущности по `Id`. Программа создаёт трёх новых, ещё не сохранённых
+      клиентов (у всех `Id` равен `0`) и добавляет их в `HashSet<Customer>`. Ожидается вывод `3`, но программа
+      выводит `1`. Щёлкните по строке с дефектом.
+    hint: |
+      Подумайте, что должен вернуть `Equals` для двух объектов, которым ещё не назначили идентификатор.
+    answer: |
+      Строка 17, `return Id == other.Id;`: две несохранённые сущности с `Id`, равным `0`, считаются равными, хотя
+      идентичности у них ещё нет.
+    explanation: |
+      `HashSet<T>` сначала вызывает `GetHashCode`: у всех трёх клиентов он равен хешу нуля, и они попадают в одну
+      корзину. Затем `Equals` сравнивает `0 == 0` и возвращает `true`, поэтому второй и третий клиенты считаются
+      дубликатами первого, `Add` возвращает `false`, и в множестве остаётся один элемент.
+
+      Сущность в DDD равна другой сущности по идентичности, а не по значениям полей. Но у переходной (transient)
+      сущности идентичности ещё нет: `Id` по умолчанию означает "не назначен", а не "идентификатор 0". Поэтому
+      сравнение по `Id` допустимо только для сущностей, у которых он уже есть. Переходная сущность равна только
+      самой себе, то есть сравнивается по ссылке. Так же поступает базовый класс `Entity` в руководстве Microsoft
+      по микросервисам: метод `IsTransient()` и возврат `false` при сравнении переходных сущностей.
+
+      Дефект только в строке 17. `GetHashCode` в строке 20 сам по себе корректен: одинаковые хеши у неравных
+      объектов разрешены, это лишь значит, что все новые сущности попадут в одну корзину. В исправленном коде
+      для переходной сущности берётся хеш ссылки (`base.GetHashCode()`), чтобы хеши распределялись лучше и
+      оставались согласованными с `Equals`. У решения есть цена: хеш меняется в момент, когда сущности
+      назначают `Id`, поэтому переходную сущность нельзя держать в `HashSet` или ключом словаря через сохранение.
+      Это ограничение исчезает, если идентификатор назначается при создании, например `Guid` в конструкторе.
+    linkTitles:
+      - "Базовые классы и интерфейсы модели предметной области (seedwork)"
+      - "Метод Object.GetHashCode"
+  en:
+    title: Why do three new entities in a HashSet collapse into one?
+    prompt: |
+      The `Entity` base class compares entities by `Id`. The program creates three new, unsaved customers (all
+      with `Id` equal to `0`) and adds them to a `HashSet<Customer>`. The expected output is `3`, but the program
+      prints `1`. Click the line that contains the defect.
+    hint: |
+      Think about what `Equals` should say about two objects that have not received their identifier yet.
+    answer: |
+      Line 17, `return Id == other.Id;`: two unsaved entities with `Id` equal to `0` are treated as equal, although
+      they have no identity yet.
+    explanation: |
+      `HashSet<T>` first calls `GetHashCode`: for all three customers it is the hash of zero, so they land in the
+      same bucket. Then `Equals` compares `0 == 0` and returns `true`, so the second and third customers are
+      treated as duplicates of the first, `Add` returns `false`, and the set keeps a single element.
+
+      In DDD an entity equals another entity by identity, not by field values. But a transient entity has no
+      identity yet: the default `Id` means "not assigned", not "identifier 0". So comparing by `Id` is valid only
+      for entities that already have one. A transient entity is equal only to itself, that is, it is compared by
+      reference. The `Entity` base class in the Microsoft microservices guide does the same: an `IsTransient()`
+      method and `false` when transient entities are compared.
+
+      The defect is on line 17 only. `GetHashCode` on line 20 is correct on its own: unequal objects may share a
+      hash code, which only means that all new entities land in one bucket. The fixed code uses the reference
+      hash (`base.GetHashCode()`) for a transient entity so that hashes spread better and stay consistent with
+      `Equals`. The solution has a cost: the hash changes when the entity is assigned an `Id`, so a transient
+      entity must not stay in a `HashSet` or as a dictionary key across saving. The limitation disappears if the
+      identifier is assigned at creation, for example a `Guid` in the constructor.
+    linkTitles:
+      - "Seedwork: domain model base classes and interfaces"
+      - "Object.GetHashCode method"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

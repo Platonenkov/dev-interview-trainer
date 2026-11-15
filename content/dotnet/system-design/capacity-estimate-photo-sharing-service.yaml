@@ -1,0 +1,162 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WQVJW4G9033F7VW4HP
+slug: capacity-estimate-photo-sharing-service
+stack: dotnet
+topic: system-design
+level: senior
+type: situation
+grading: self
+tags: [capacity-planning, back-of-the-envelope, cdn, caching, scalability]
+links:
+  - url: https://learn.microsoft.com/en-us/azure/well-architected/performance-efficiency/capacity-planning
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/azure/architecture/best-practices/cdn
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как оценить нагрузку, объём хранилища и трафик сервиса фотографий на 10 млн пользователей в день?
+    prompt: |
+      На собеседовании по проектированию систем вас просят спроектировать сервис обмена фотографиями.
+      Исходные данные: 10 млн активных пользователей в день, каждый загружает в среднем 2 фотографии и
+      просматривает 50. Прежде чем выбирать базы данных, кэши и хранилища, нужно прикинуть масштаб.
+      Как вы оцените число запросов в секунду, объём хранилища и пропускную способность сети и какие
+      выводы для архитектуры сделаете из этих чисел?
+    hint: |
+      Начните с суточных объёмов. Как перевести их в запросы, байты и биты в секунду и какие допущения при
+      этом придётся назвать вслух?
+    answer: |
+      1. **Назвать допущения.** Исходная фотография, которую загружает клиент, - около 2 МБ. На сервере к ней
+         добавляются уменьшенные копии, и всего на одну фотографию хранится около 2,5 МБ. При просмотре в ленте
+         отдаётся уменьшенная копия около 500 КБ, метаданные одной фотографии - около 1 КБ, фотографии
+         хранятся бессрочно, пик выше среднего примерно в 3 раза. Единицы десятичные: 1 ТБ = 10^12 байт.
+         Результаты расчётов округлены. Все допущения проговорить и записать, их потом проверяют.
+      2. **Перевести суточные объёмы в запросы в секунду.** В сутках 86 400 секунд, для устного счёта
+         удобно округлять до 100 000.
+
+         | Величина | Расчёт | Результат |
+         |---|---|---|
+         | Загрузки в сутки | 10 млн * 2 | 20 млн |
+         | Просмотры в сутки | 10 млн * 50 | 500 млн |
+         | Запись, среднее | 20 млн / 86 400 | ≈ 230 RPS |
+         | Запись, пик | 230 * 3 | ≈ 690 RPS |
+         | Чтение, среднее | 500 млн / 86 400 | ≈ 5 800 RPS |
+         | Чтение, пик | 5 800 * 3 | ≈ 17 400 RPS |
+
+         Соотношение чтения и записи - 500 млн / 20 млн = 25:1.
+      3. **Оценить хранилище.** Файлы: 20 млн * 2,5 МБ = 50 ТБ в сутки, около 18 ПБ в год без учёта
+         избыточности; при трёх копиях сырая ёмкость около 55 ПБ в год. Метаданные: 20 млн * 1 КБ = 20 ГБ
+         в сутки, около 7,3 ТБ в год плюс индексы.
+      4. **Оценить пропускную способность.** Входящий трафик считается по исходным файлам, без уменьшенных
+         копий, которые создаёт сервер: 20 млн * 2 МБ = 40 ТБ в сутки, 40 ТБ / 86 400 ≈ 460 МБ/с ≈ 3,7 Гбит/с
+         в среднем и около 11 Гбит/с в пик. Исходящий: 500 млн * 500 КБ = 250 ТБ в сутки ≈ 2,9 ГБ/с ≈
+         23 Гбит/с в среднем и около 70 Гбит/с в пик. Не путать байты и биты.
+      5. **Сделать выводы для архитектуры.**
+         - Файлы хранить в объектном хранилище, а не в базе; в базе только метаданные. Около 700 записей в
+           секунду в пик выдержит одна реляционная база, но рост метаданных на несколько терабайт в год
+           заставит заранее продумать партиционирование.
+         - Чтения в 25 раз больше записи, и почти весь исходящий трафик - это картинки. Их отдаёт CDN по
+           неизменяемым версионированным URL. При доле попаданий 95% до источника доходит около 5%:
+           порядка 870 RPS и 3-4 Гбит/с вместо 17 400 RPS и 70 Гбит/с. Ленты и метаданные кэшируются
+           отдельно.
+         - Загрузки идут напрямую в объектное хранилище по короткоживущей подписанной ссылке, уменьшенные
+           копии создаются асинхронно через очередь.
+         - Главная статья затрат - хранилище: уровни хранения по возрасту фотографий (горячий, холодный,
+           архивный) и политика хранения обсуждаются с бизнесом.
+      6. **Заложить запас и проверить.** Добавить запас на рост аудитории, проверить допущения нагрузочным
+         тестом и реальной телеметрией и пересматривать оценку по мере роста.
+    explanation: |
+      Цель такой оценки - не точность, а порядок величин: понять, какое измерение доминирует, до выбора
+      компонентов. Здесь число запросов в секунду скромное, а доминируют объём хранилища и исходящий
+      трафик. Именно они определяют архитектуру: объектное хранилище с уровнями хранения и CDN перед ним.
+      Без расчёта легко потратить усилия на масштабирование базы, которая не будет узким местом.
+
+      Считать нужно пик, а не среднее: суточный трафик распределён неравномерно, и система, рассчитанная на
+      среднее, ляжет в вечерний час пик. Коэффициент пика - тоже допущение, его лучше взять из телеметрии
+      похожего продукта, а не придумывать.
+
+      Соотношение 25:1 - главный аргумент за кэширование и CDN: один раз записанный объект читается много
+      раз и не меняется, поэтому кэшируется почти идеально. Это же соотношение говорит, что путь записи
+      можно сделать проще и асинхроннее.
+
+      Типичные ошибки: путать байты и биты, считать входящий трафик по объёму хранения вместе с копиями,
+      которые создаёт сервер, забыть про уменьшенные копии и репликацию в хранилище, считать по среднему,
+      не назвать допущения и не предусмотреть рост. Планирование ёмкости - не разовое действие: прогноз
+      сверяют с фактической нагрузкой и пересматривают.
+    linkTitles:
+      - "Планирование ёмкости (Azure Well-Architected Framework)"
+      - "Рекомендации по использованию CDN"
+  en:
+    title: How do you estimate request rates, storage and bandwidth for a photo-sharing service with 10 million daily users?
+    prompt: |
+      In a system design interview you are asked to design a photo-sharing service. The input: 10 million
+      daily active users, each uploading 2 photos and viewing 50 photos per day on average. Before choosing
+      databases, caches and storage you need a sense of scale. How do you estimate requests per second,
+      storage and network bandwidth, and what conclusions for the architecture do you draw from the numbers?
+    hint: |
+      Start from the daily volumes. How do you turn them into requests, bytes and bits per second, and which
+      assumptions do you have to state out loud along the way?
+    answer: |
+      1. **State the assumptions.** The original photo a client uploads is about 2 MB. The server adds resized
+         copies to it, so about 2.5 MB is stored per photo in total. A feed view serves a resized copy of about
+         500 KB, metadata per photo is about 1 KB, photos are kept forever, and the peak is about 3 times the
+         average. Units are decimal: 1 TB = 10^12 bytes. Calculated results are rounded. Say every assumption
+         out loud and write it down, because it will be checked later.
+      2. **Turn daily volumes into requests per second.** A day has 86,400 seconds; for mental math it is
+         convenient to round to 100,000.
+
+         | Quantity | Calculation | Result |
+         |---|---|---|
+         | Uploads per day | 10 million * 2 | 20 million |
+         | Views per day | 10 million * 50 | 500 million |
+         | Writes, average | 20 million / 86,400 | ≈ 230 RPS |
+         | Writes, peak | 230 * 3 | ≈ 690 RPS |
+         | Reads, average | 500 million / 86,400 | ≈ 5,800 RPS |
+         | Reads, peak | 5,800 * 3 | ≈ 17,400 RPS |
+
+         The read/write ratio is 500 million / 20 million = 25:1.
+      3. **Estimate storage.** Files: 20 million * 2.5 MB = 50 TB per day, about 18 PB per year before
+         redundancy; with three copies the raw capacity is about 55 PB per year. Metadata: 20 million * 1 KB =
+         20 GB per day, about 7.3 TB per year plus indexes.
+      4. **Estimate bandwidth.** Ingress is computed from the original files, without the resized copies the
+         server creates: 20 million * 2 MB = 40 TB per day, 40 TB / 86,400 ≈ 460 MB/s ≈ 3.7 Gbit/s on average
+         and about 11 Gbit/s at peak. Egress: 500 million * 500 KB = 250 TB per day ≈ 2.9 GB/s ≈ 23 Gbit/s on
+         average and about 70 Gbit/s at peak. Do not mix up bytes and bits.
+      5. **Draw conclusions for the architecture.**
+         - Keep files in object storage, not in the database; the database holds only metadata. About 700
+           writes per second at peak fit one relational database, but metadata growth of several terabytes per
+           year means partitioning has to be planned ahead.
+         - Reads outnumber writes 25 times, and almost all egress is images. A CDN serves them from immutable
+           versioned URLs. With a 95% hit ratio about 5% reaches the origin: around 870 RPS and 3-4 Gbit/s
+           instead of 17,400 RPS and 70 Gbit/s. Feeds and metadata are cached separately.
+         - Uploads go directly to object storage through a short-lived signed URL, and resized copies are
+           produced asynchronously through a queue.
+         - Storage is the main cost: storage tiers by photo age (hot, cool, archive) and the retention policy
+           are discussed with the business.
+      6. **Add headroom and verify.** Add headroom for audience growth, check the assumptions with a load test
+         and real telemetry, and revisit the estimate as the service grows.
+    explanation: |
+      The goal of the estimate is not precision but orders of magnitude: finding out which dimension dominates
+      before choosing components. Here the request rate is modest, while storage volume and egress dominate.
+      They shape the architecture: object storage with storage tiers and a CDN in front of it. Without the
+      numbers it is easy to spend effort scaling a database that will never be the bottleneck.
+
+      Size for the peak, not the average: daily traffic is uneven, and a system sized for the average falls
+      over in the evening rush. The peak factor is an assumption too, and it is better taken from the
+      telemetry of a similar product than invented.
+
+      The 25:1 ratio is the main argument for caching and a CDN: an object written once is read many times and
+      never changes, so it caches almost perfectly. The same ratio says the write path can be simpler and more
+      asynchronous.
+
+      Common mistakes: mixing up bytes and bits, computing ingress from the stored size including the copies
+      the server creates, forgetting resized copies and replication in storage, sizing for the average, not
+      stating assumptions and not planning for growth. Capacity planning is not a one-off task: the forecast is
+      compared with the real load and revised.
+    linkTitles:
+      - "Capacity planning (Azure Well-Architected Framework)"
+      - "Best practices for using content delivery networks"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-15

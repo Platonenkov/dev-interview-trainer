@@ -1,0 +1,112 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7GX5Q3ZN1BAK69EQDXHXPXK
+slug: diverged-migrations-parallel-branches
+stack: dotnet
+topic: ef-core
+level: lead
+type: situation
+grading: self
+tags: [ef-core, migrations, model-snapshot, team-process]
+links:
+  - url: https://learn.microsoft.com/en-us/ef/core/managing-schemas/migrations/teams
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/ef/core/managing-schemas/migrations/managing
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Два разработчика добавили миграции EF Core в параллельных ветках - как их слить
+    prompt: |
+      Проект на EF Core 10. Разработчики A и B одновременно работали в своих ветках, и каждый добавил миграцию.
+      Ветку A уже влили в `main`. B вливает `main` в свою ветку, Git не сообщает ни о каких конфликтах, сборка
+      зелёная. Обе миграции пока применялись только к локальным базам разработчиков. Вы - тимлид. Что вы
+      скажете B сделать до вливания и что поменяете в процессе команды?
+    hint: Что, кроме операций `Up` и `Down`, хранит миграция, и отражает ли метаданные миграции B изменения из ветки A?
+    answer: |
+      1. **Не вливать как есть.** Миграции образуют упорядоченную последовательность, и метаданные каждой (файл
+         `.Designer.cs`) описывают модель на своём шаге. Миграция B создана без изменений из ветки A, то есть
+         деревья миграций разошлись. EF Core 10 не записывает идентификатор последней миграции в снимок модели,
+         поэтому Git может слить снимок без конфликта - отсутствие конфликта ничего не доказывает.
+      2. **Пересоздать миграцию B по шагам документации.** Отменить слияние и вернуться к состоянию до него; удалить
+         сгенерированные файлы миграции B средствами системы контроля версий, восстановив снимок до этой миграции и
+         сохранив изменения модели; влить `main`; заново выполнить `dotnet ef migrations add`. Новая миграция
+         строится на снимке, где уже есть изменения A.
+      3. **Чего не делать.** Не исправлять порядок переименованием или сортировкой файлов миграций: метаданные
+         поздней миграции всё равно не содержат изменений другой ветки. Не запускать `dotnet ef migrations remove`
+         после того, как миграции уже слиты в неверную последовательность: команда восстановит модель из метаданных
+         предыдущей миграции, где может не быть изменений другой ветки.
+      4. **Локальная база B.** Если B применил свою миграцию к локальной базе, которую не жалко, до шага 2 откатить
+         её командой `dotnet ef database update <PreviousMigration>`.
+      5. **Процесс.** Договариваться о миграциях заранее и не вести их одновременно в нескольких ветках. Добавить в
+         CI `dotnet ef migrations has-pending-model-changes` (EF Core 8 и новее), чтобы ловить забытые миграции, и
+         генерацию скрипта `dotnet ef migrations script --idempotent` для ревью SQL перед выкладкой. Зафиксировать
+         правило: миграцию, уже применённую к общей базе, не удаляют, а исправляют новой корректирующей миграцией.
+    explanation: |
+      Миграция в EF Core - это не только SQL. При `migrations add` создаются файл с `Up` и `Down`, файл метаданных
+      `.Designer.cs` и обновлённый снимок модели, по которому EF Core определяет изменения для следующей миграции.
+      Документация описывает именно этот сценарий: если A и B добавили миграции в параллельных ветках, у миграции B
+      будет снимок контекста без изменений A, и это может привести к повреждению последующих миграций.
+
+      Ключевое для EF Core 10: такое расхождение Git не обязательно покажет. По документации запись идентификатора
+      последней миграции в снимок появляется в EF Core 11, и тогда параллельные миграции дают конфликт в файле
+      снимка. Без этого сигнала ответственность лежит на процессе команды, поэтому в ответе важна не только
+      починка, но и правило, которое не даст ситуации повториться.
+
+      `has-pending-model-changes` проверяет только, что изменения модели не забыли оформить миграцией, а
+      расхождение веток не диагностирует; его стоит упоминать как отдельную защиту, а не как решение этой проблемы.
+      Удаление миграций допустимо, пока они не применены к общим базам; после применения к общей, тестовой или
+      боевой базе миграцию оставляют и добавляют корректирующую.
+    linkTitles:
+      - "Миграции в командной разработке"
+      - "Управление миграциями"
+  en:
+    title: Two developers added EF Core migrations on parallel branches - how do you merge them
+    prompt: |
+      The project uses EF Core 10. Developers A and B worked on their own branches at the same time, and each added
+      a migration. Branch A is already merged into `main`. B merges `main` into their branch, Git reports no
+      conflicts, and the build is green. Both migrations have only been applied to the developers' local databases.
+      You are the team lead. What do you tell B to do before merging, and what do you change in the team's process?
+    hint: Apart from the `Up` and `Down` operations, what does a migration store, and do B's migration metadata reflect the changes from branch A?
+    answer: |
+      1. **Do not merge as is.** Migrations form an ordered sequence, and the metadata of each one (the
+         `.Designer.cs` file) describes the model at its step. B's migration was created without the changes from
+         branch A, so the migration trees have diverged. EF Core 10 does not record the latest migration ID in the
+         model snapshot, so Git can merge the snapshot without a conflict - the absence of a conflict proves nothing.
+      2. **Re-create B's migration following the documented steps.** Abort the merge and return to the pre-merge
+         state; remove B's generated migration files with source control, restoring the pre-migration snapshot and
+         keeping the model changes; merge `main`; run `dotnet ef migrations add` again. The new migration is built on
+         a snapshot that already contains A's changes.
+      3. **What not to do.** Do not fix the order by renaming or sorting the migration files: the later migration's
+         metadata still lacks the other branch's changes. Do not run `dotnet ef migrations remove` after the
+         migrations are already merged into an invalid sequence: the command restores the model from the preceding
+         migration's metadata, which may not contain the other branch's changes.
+      4. **B's local database.** If B applied their migration to a disposable local database, roll it back before step 2
+         with `dotnet ef database update <PreviousMigration>`.
+      5. **Process.** Coordinate migrations in advance and avoid working on them in several branches at once. Add
+         `dotnet ef migrations has-pending-model-changes` (EF Core 8 and later) to CI to catch forgotten migrations,
+         and generate `dotnet ef migrations script --idempotent` so the SQL is reviewed before deployment. Make it a
+         rule that a migration already applied to a shared database is never removed, but corrected with a new
+         migration.
+    explanation: |
+      An EF Core migration is not only SQL. `migrations add` creates a file with `Up` and `Down`, a `.Designer.cs`
+      metadata file, and an updated model snapshot that EF Core uses to determine the changes for the next migration.
+      The documentation describes exactly this scenario: if A and B add migrations on parallel branches, B's migration
+      has a context snapshot without A's changes, which can cause various forms of corruption in later migrations.
+
+      The key point for EF Core 10 is that Git does not necessarily show this divergence. According to the
+      documentation, recording the latest migration ID in the snapshot arrives in EF Core 11, and then parallel
+      migrations produce a conflict in the snapshot file. Without that signal the team's process carries the
+      responsibility, so a strong answer covers both the repair and a rule that keeps the situation from recurring.
+
+      `has-pending-model-changes` only checks that model changes were not left without a migration; it does not
+      detect diverged branches, so mention it as a separate safeguard, not as the fix for this problem. Removing
+      migrations is fine while they are not applied to shared databases; once a migration is applied to a shared,
+      test or production database, it stays and a corrective migration is added.
+    linkTitles:
+      - "Migrations in team environments"
+      - "Managing migrations"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-15
+  dotnetVersion: "10"

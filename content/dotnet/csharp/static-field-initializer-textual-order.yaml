@@ -1,0 +1,129 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7GX5XG1PY05M6BKKMM98RQY
+slug: static-field-initializer-textual-order
+stack: dotnet
+topic: csharp
+level: senior
+type: find-bug
+grading: auto
+tags: [static-fields, type-initializer, initialization-order]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    Console.WriteLine(Currency.FromCode("EUR").Name);
+
+    sealed class Currency
+    {
+        public static readonly Currency Usd = new("USD", "US dollar");
+        public static readonly Currency Eur = new("EUR", "Euro");
+
+        private static readonly Dictionary<string, Currency> ByCode = new();
+
+        private Currency(string code, string name)
+        {
+            Code = code;
+            Name = name;
+            ByCode.Add(code, this);
+        }
+
+        public string Code { get; }
+        public string Name { get; }
+
+        public static Currency FromCode(string code) => ByCode[code];
+    }
+expect: { kind: exception, value: System.TypeInitializationException }
+bugLineSets: [[8], [5, 6]]
+fixedSource: |
+  Console.WriteLine(Currency.FromCode("EUR").Name);
+
+  sealed class Currency
+  {
+      private static readonly Dictionary<string, Currency> ByCode = new();
+
+      public static readonly Currency Usd = new("USD", "US dollar");
+      public static readonly Currency Eur = new("EUR", "Euro");
+
+      private Currency(string code, string name)
+      {
+          Code = code;
+          Name = name;
+          ByCode.Add(code, this);
+      }
+
+      public string Code { get; }
+      public string Name { get; }
+
+      public static Currency FromCode(string code) => ByCode[code];
+  }
+fixedExpect: { kind: output, value: "Euro" }
+links:
+  - url: https://github.com/dotnet/csharpstandard/blob/draft-v8/standard/classes.md
+    lang: en
+    kind: spec
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.typeinitializationexception
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строку, из-за которой класс-справочник валют не инициализируется
+    prompt: |
+      Класс `Currency` хранит известные валюты в статических полях и регистрирует каждую из них в словаре,
+      чтобы `FromCode` находил валюту по коду. Программа должна вывести `Euro`, но завершается с необработанным
+      `System.TypeInitializationException`. Щёлкните по строке (или строкам) с дефектом.
+    hint: В каком порядке выполняются инициализаторы статических полей и какое значение у поля, до инициализатора которого дело ещё не дошло?
+    answer: |
+      Строка 8: словарь `ByCode` объявлен после полей `Usd` и `Eur` (строки 5 и 6), а инициализаторы статических полей
+      выполняются в порядке их следования в тексте класса. Конструктор для `Usd` обращается к `ByCode`, когда поле ещё `null`.
+    explanation: |
+      По спецификации C# при инициализации класса все статические поля сначала получают значения по умолчанию, а
+      затем их инициализаторы выполняются в текстовом порядке объявления. Поэтому первым выполняется `new("USD", ...)`
+      на строке 5. Конструктор вызывает `ByCode.Add`, но инициализатор `ByCode` на строке 8 ещё не выполнялся, поле
+      равно `null`, и возникает `NullReferenceException`.
+
+      Если явного статического конструктора нет, компилятор создаёт его сам и помещает туда инициализаторы
+      статических полей. Исключение из инициализатора типа среда выполнения оборачивает в
+      `TypeInitializationException`, а исходное `NullReferenceException` доступно через `InnerException`. Наружу
+      выходит исключение в месте первого обращения к типу (`Currency.FromCode`), а не на строке с ошибкой, поэтому
+      причину приходится искать во вложенном исключении.
+
+      Исправление - объявить словарь до полей, которые используют его при создании (как в исправленном коде), либо
+      перенести `Usd` и `Eur` ниже словаря: принимаются оба выбора строк. Компилятор такую зависимость от порядка не
+      обнаруживает, и последующая перестановка членов класса может снова её сломать, поэтому полезен тест, который
+      обращается к типу. Поведение проверено на .NET 10.
+    linkTitles:
+      - "Спецификация C#: классы, инициализация статических полей (15.5.6)"
+      - "Класс TypeInitializationException"
+  en:
+    title: Find the line that keeps a currency lookup class from initializing
+    prompt: |
+      The `Currency` class keeps the known currencies in static fields and registers each one in a dictionary,
+      so that `FromCode` can find a currency by its code. The program should print `Euro`, but it ends with an
+      unhandled `System.TypeInitializationException`. Click the line (or lines) that contain the defect.
+    hint: In what order do static field initializers run, and what value does a field hold before its initializer has run?
+    answer: |
+      Line 8: the `ByCode` dictionary is declared after the `Usd` and `Eur` fields (lines 5 and 6), and static field
+      initializers run in the textual order of the class. The constructor call for `Usd` uses `ByCode` while the field is still `null`.
+    explanation: |
+      According to the C# specification, when a class is initialized all static fields first get their default
+      values, and then their initializers run in the textual order of declaration. So `new("USD", ...)` on line 5
+      runs first. The constructor calls `ByCode.Add`, but the initializer of `ByCode` on line 8 has not run yet, the
+      field is `null`, and a `NullReferenceException` is thrown.
+
+      When there is no explicit static constructor, the compiler generates one and puts the static field initializers
+      into it. The runtime wraps an exception from a type initializer in a `TypeInitializationException`, and the
+      original `NullReferenceException` is available through `InnerException`. The exception surfaces where the type
+      is first used (`Currency.FromCode`), not at the line with the mistake, so the cause has to be read from the
+      inner exception.
+
+      The fix is to declare the dictionary before the fields that use it during construction (as in the corrected
+      code), or to move `Usd` and `Eur` below the dictionary: both line selections are accepted. The compiler does not
+      detect this ordering dependency, and reordering the members of the class later can break it again, so a test
+      that touches the type is useful. The behaviour is verified on .NET 10.
+    linkTitles:
+      - "C# specification: classes, static field initialization (15.5.6)"
+      - "TypeInitializationException class"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-15
+  dotnetVersion: "10"

@@ -1,0 +1,117 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNEJQ3ZYF0MA4TPBGT
+slug: concurrentqueue-enumeration-snapshot
+stack: dotnet
+topic: concurrency
+level: middle
+type: output
+grading: auto
+tags: [concurrentqueue, concurrent-collections, enumeration, snapshot]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    using System.Collections.Concurrent;
+
+    ConcurrentQueue<int> queue = new();
+    queue.Enqueue(1);
+    queue.Enqueue(2);
+    queue.Enqueue(3);
+
+    foreach (int item in queue)
+    {
+        if (item == 1)
+        {
+            queue.Enqueue(4);
+        }
+        Console.Write($"{item} ");
+    }
+
+    Console.Write($"count={queue.Count}");
+expect:
+  kind: output
+  value: "1 2 3 count=4"
+acceptedOutputs: ["1 2 3 count=4"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "1 2 3 count=4" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "1 2 3 4 count=4" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "1 2 3 count=3" }
+  - id: d
+    correct: false
+    expect: { kind: exception, value: System.InvalidOperationException }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.collections.concurrent.concurrentqueue-1.getenumerator
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.collections.concurrent.concurrentqueue-1
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что выведет foreach по ConcurrentQueue<T>, если добавить элемент во время перебора?
+    prompt: |
+      Что выведет эта программа в консоль в .NET 10?
+    hint: Что именно перебирает перечислитель `ConcurrentQueue<T>`: живую очередь или её состояние на момент вызова `GetEnumerator`?
+    options:
+      a: "1 2 3 count=4"
+      b: "1 2 3 4 count=4"
+      c: "1 2 3 count=3"
+      d: Исключение `InvalidOperationException`
+    optionExplanations:
+      b: Перечислитель `ConcurrentQueue<T>` не видит изменений, сделанных после вызова `GetEnumerator`, поэтому добавленная во время цикла `4` в перебор не попадает.
+      c: Снимок касается только перечисления. Сам вызов `Enqueue(4)` выполняется сразу, и после цикла в очереди четыре элемента.
+      d: Так ведёт себя `List<T>`, у которого перечислитель проверяет версию коллекции. Перечислитель `ConcurrentQueue<T>` рассчитан на работу параллельно с записью и исключения не выбрасывает.
+    answer: "1 2 3 count=4"
+    explanation: |
+      Документация `ConcurrentQueue<T>.GetEnumerator` говорит, что перечисление - это снимок содержимого очереди
+      на момент вызова `GetEnumerator`: оно не отражает последующих изменений, и им можно пользоваться одновременно
+      с чтением и записью в очередь. `foreach` вызывает `GetEnumerator` до первой итерации, когда в очереди `1`, `2` и `3`.
+      Поэтому `Enqueue(4)` внутри цикла не ломает перебор и не продлевает его: выводятся `1 2 3`.
+
+      При этом `Enqueue` - обычная запись в очередь, а не отложенная операция, поэтому после цикла `Count` равен 4.
+
+      Это отличается от `List<T>`, где изменение коллекции во время `foreach` приводит к `InvalidOperationException`,
+      и от `ConcurrentDictionary<TKey, TValue>`, чей перечислитель тоже безопасен при параллельной записи, но снимком
+      не является и может увидеть изменения. Поведение проверено для .NET 10.
+    linkTitles:
+      - Метод ConcurrentQueue<T>.GetEnumerator
+      - Класс ConcurrentQueue<T>
+  en:
+    title: What does a foreach over ConcurrentQueue<T> print when an item is enqueued during the loop?
+    prompt: |
+      What does this program print to the console in .NET 10?
+    hint: What exactly does the `ConcurrentQueue<T>` enumerator walk over - the live queue, or its state at the moment `GetEnumerator` was called?
+    options:
+      a: "1 2 3 count=4"
+      b: "1 2 3 4 count=4"
+      c: "1 2 3 count=3"
+      d: "`InvalidOperationException`"
+    optionExplanations:
+      b: The `ConcurrentQueue<T>` enumerator does not see changes made after `GetEnumerator` was called, so the `4` enqueued during the loop is not part of the enumeration.
+      c: The snapshot applies only to the enumeration. The `Enqueue(4)` call itself takes effect immediately, so after the loop the queue holds four items.
+      d: That is how `List<T>` behaves, because its enumerator checks the collection version. The `ConcurrentQueue<T>` enumerator is designed to run alongside writes and does not throw.
+    answer: "1 2 3 count=4"
+    explanation: |
+      The documentation of `ConcurrentQueue<T>.GetEnumerator` says the enumeration is a moment-in-time snapshot of the
+      queue taken when `GetEnumerator` is called: it does not reflect later updates, and it is safe to use concurrently
+      with reads from and writes to the queue. `foreach` calls `GetEnumerator` before the first iteration, when the queue
+      holds `1`, `2` and `3`. So `Enqueue(4)` inside the loop neither breaks the enumeration nor extends it: `1 2 3` is printed.
+
+      `Enqueue` is still an ordinary write to the queue, not a deferred one, so after the loop `Count` is 4.
+
+      This differs from `List<T>`, where modifying the collection during `foreach` causes `InvalidOperationException`,
+      and from `ConcurrentDictionary<TKey, TValue>`, whose enumerator is also safe during concurrent writes but is not
+      a snapshot and may observe changes. The behaviour was checked for .NET 10.
+    linkTitles:
+      - ConcurrentQueue<T>.GetEnumerator method
+      - ConcurrentQueue<T> class
+meta:
+  authors: [platonenkov]
+  verified: 1970-01-01
+  dotnetVersion: "10"

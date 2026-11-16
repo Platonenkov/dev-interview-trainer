@@ -1,0 +1,22 @@
+{
+  "verdicts": [
+    {
+      "stubId": "ef-core-17",
+      "verdict": "pass",
+      "issues": []
+    },
+    {
+      "stubId": "ef-core-19",
+      "verdict": "fix",
+      "issues": [
+        {
+          "severity": "major",
+          "field": "locales.en.answer step 3, Release 3 / Release 4 (and locales.ru.answer equivalent)",
+          "claim": "Release 3: ... the column stays in the EF Core model ... the class property is replaced by a nullable shadow property \u0060Property\u003Cstring\u003E(\u0022Name\u0022)\u0060 that nobody sets. ... Release 4 (contract): ... the shadow property is removed from the model, the migration with \u0060DropColumn\u0060 is scaffolded ... Each migration is applied as a separate pipeline step before the code rollout",
+          "problem": "EF Core selects and inserts every mapped property, shadow properties included. Release 3 code that still maps \u0060Name\u0060 as a shadow property will keep querying the \u0060Name\u0060 column. The release 4 \u0060DropColumn\u0060 is applied before the release 4 code rolls out, so release 3 instances still running during that rolling update fail with a \u0022column not found\u0022 error. This is the same failure the answer set out to avoid, and it breaks the rule stated in step 3 that each migration works with both the new and the previous app version. The \u0022code no longer reads or writes Name\u0022 wording hides that EF still reads the column. The second variant (delete the property, scaffold the migration, empty its Up, hand-write DropColumn in release 4) is safe, because release 3 code no longer maps the column.",
+          "suggestedFix": "Make the empty-Up variant the main path. Release 3: delete the property from the model, scaffold the migration, empty its \u0060Up\u0060, and commit the snapshot without \u0060Name\u0060. The column stays in the database as a nullable column that nobody touches. Release 4: after the rollback window, apply a hand-written \u0060DropColumn\u0060 migration, which is safe because no deployed version maps \u0060Name\u0060. If you keep the shadow-property variant, add a release that removes the shadow property from the model (with an emptied-Up migration) and only the following release drops the column. State explicitly that a mapped shadow property is still selected, so it cannot stay in the model when the column is dropped. Apply the same change to the RU text and to the explanation paragraph about the release 3 step."
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,186 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNR6964FKD6R01J9F1
+slug: rolling-deploy-breaking-schema-change
+stack: dotnet
+topic: ef-core
+level: lead
+type: situation
+grading: self
+tags: [ef-core, migrations, zero-downtime, rolling-deployment, expand-contract]
+links:
+  - url: https://learn.microsoft.com/en-us/ef/core/managing-schemas/migrations/applying
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/ef/core/managing-schemas/migrations/managing
+    lang: en
+    kind: docs
+  - url: https://martinfowler.com/bliki/ParallelChange.html
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Как переименовать столбец без простоя, если сервис обновляется через rolling update?
+    prompt: |
+      Сервис заказов на EF Core 10 работает в нескольких экземплярах и обновляется через rolling update: новые
+      экземпляры поднимаются по одному, а старые в это время продолжают обслуживать запросы к той же базе. Нужно
+      переименовать столбец `Customers.Name` в `FullName`. Разработчик подготовил одну миграцию с `RenameColumn`
+      и предлагает выкатить её вместе с новым кодом в одном релизе.
+
+      Вы тимлид. Как вы спланируете миграции и релизы, чтобы ничего не сломалось ни во время выкатки, ни при
+      откате, и какие правила закрепите в команде?
+    hint: Какие версии приложения одновременно работают с базой во время выкатки и после отката, и какую схему ожидает каждая из них?
+    answer: |
+      1. **Проверить, нужно ли вообще менять схему.** Если новое имя важно только в коде, достаточно переименовать
+         свойство и оставить старый столбец через `HasColumnName("Name")`: миграции нет, риска нет.
+      2. **Отказаться от переименования за один шаг.** Пока идёт выкатка, старые экземпляры обращаются к `Name`.
+         После `RenameColumn` их запросы падают с ошибкой «столбец не найден», а откат кода на прошлую версию
+         без обратной миграции тоже ломается.
+      3. **Разбить изменение на обратно совместимые шаги (expand/contract).** Каждая миграция применяется
+         отдельным шагом конвейера до выкатки кода и совместима и с новой, и с предыдущей версией приложения:
+         - **Релиз 1 (expand):** миграция добавляет nullable-столбец `FullName`. Код пишет в оба столбца, а
+           читает по-прежнему `Name`.
+         - **Перенос данных:** когда релиз 1 выкачен на все экземпляры, пакетами скопировать `Name` в `FullName`
+           для строк, где `FullName` равен `NULL` или отличается от `Name` (во время выкатки старые экземпляры
+           могли обновить только `Name`). Скрипт идемпотентный, его можно безопасно перезапустить.
+         - **Релиз 2:** код читает `FullName` и всё ещё пишет в оба столбца, чтобы при откате на релиз 1 данные
+           в `Name` оставались актуальными. Миграция при необходимости делает `FullName` обязательным, а `Name` -
+           nullable, чтобы следующий релиз мог перестать его заполнять.
+         - **Релиз 3:** код больше не читает и не пишет `Name`, но столбец остаётся в модели EF Core, чтобы модель
+           и снимок модели не расходились. Например, свойство класса заменяют nullable теневым свойством
+           `Property<string>("Name")`, которое никто не заполняет. Миграции для `Name` в этом релизе нет.
+           Ловушка: если просто удалить свойство, модель отличается от снимка, любая следующая
+           `migrations add` сгенерирует `DropColumn` прямо в этот релиз, а начиная с EF Core 9 `Migrate()` и
+           инструменты, которые его вызывают, падают с `PendingModelChangesWarning`. Альтернатива - удалить
+           свойство, сгенерировать миграцию и вручную очистить её `Up`: снимок уже без `Name`, а настоящий
+           `DropColumn` в релизе 4 пишут вручную.
+         - **Релиз 4 (contract):** когда окно отката для релиза 3 прошло, теневое свойство удаляют из модели,
+           генерируют миграцию с `DropColumn` (или пишут её вручную во втором варианте) и проверяют её на ревью.
+      4. **Применять миграции контролируемо.** Отдельным шагом конвейера под отдельной учётной записью с правами
+         на изменение схемы: идемпотентный SQL-скрипт (`dotnet ef migrations script --idempotent`), если SQL
+         нужно проверить или передать DBA, или пакет миграций (bundle) для автоматической выкатки; у пакета на
+         ревью проверяют код миграции в pull request. Не `Database.Migrate()` при старте каждого экземпляра.
+      5. **Закрепить правила в команде.** Правило «схема версии N работает с кодом версии N-1», пункт чек-листа
+         code review для миграций (включая сверку модели и снимка), проверка в CI, которая запускает тесты
+         предыдущей версии на новой схеме, задачи на шаги очистки в бэклоге с владельцем, чтобы старый столбец
+         не остался навсегда, и оценка стоимости DDL и переноса данных на больших таблицах до релиза.
+    explanation: |
+      При rolling update старая и новая версии приложения какое-то время работают с одной и той же базой. То же
+      происходит после отката: код возвращается к версии N-1, а схема остаётся версии N. Поэтому любая миграция
+      должна быть совместима сразу с двумя версиями кода. Переименование и удаление столбца этому условию не
+      удовлетворяют, а добавление nullable-столбца удовлетворяет: EF Core перечисляет в `SELECT` и `INSERT` только
+      столбцы из своей модели, поэтому старый код просто не замечает новый столбец.
+
+      Отсюда схема expand/contract (parallel change): сначала расширить схему так, чтобы подходили обе версии,
+      затем перевести код, и только потом сузить схему. Документация EF Core описывает тот же порядок для замены
+      столбцов внутри одной миграции: добавить новый столбец как nullable, заполнить его, при необходимости сделать
+      обязательным и только потом удалить исходный. При rolling update эти шаги разносят по релизам. Двойная
+      запись в коде - рекомендация из практики, а не из документации: она держит оба столбца согласованными, пока
+      хоть одна работающая или возможная при откате версия читает старый столбец. Иногда вместо неё используют
+      триггер в базе, но это скрытая логика, о которой легко забыть.
+
+      Шаг релиза 3 нужен потому, что EF Core сравнивает модель со снимком: удалённое свойство без миграции
+      оставляет незафиксированное изменение модели, а миграция, сгенерированная «как есть», удалила бы столбец
+      раньше, чем закончится окно отката.
+
+      Документация EF Core 10 рекомендует пакеты миграций для автоматической выкатки и SQL-скрипты, когда SQL
+      нужно проверить до применения, а миграцию при старте относит к стратегии для приложений, которые
+      принимают её компромиссы. С EF Core 9 миграции берут блокировку, поэтому экземпляры больше не гонятся за
+      применение одной миграции, но остальные проблемы остаются: учётной записи приложения нужны права на
+      изменение схемы (документация советует отдельную учётную запись для развёртывания), SQL никто не
+      проверяет, а сбой миграции или долгий DDL происходят при старте экземпляров посреди выкатки и задерживают
+      или роняют их. Отдельный шаг конвейера даёт явный момент применения и точку отказа до запуска нового кода.
+
+      Цена подхода - несколько релизов и временно усложнённый код. Решение лида - осознанно выбрать между ней и
+      окном обслуживания с простоем: для небольшого внутреннего сервиса простой может быть приемлем, для сервиса
+      с SLA обычно нет. Главный организационный риск - незавершённая очистка, поэтому шаги contract планируют
+      сразу, а не «когда-нибудь».
+    linkTitles:
+      - "Применение миграций"
+      - "Управление миграциями"
+      - "Мартин Фаулер: ParallelChange"
+  en:
+    title: How do you rename a column without downtime when the service is deployed with rolling updates?
+    prompt: |
+      The order service on EF Core 10 runs as several instances and is deployed with rolling updates: new
+      instances start one by one while old ones keep serving requests against the same database. The column
+      `Customers.Name` must be renamed to `FullName`. A developer prepared a single migration with `RenameColumn`
+      and proposes to ship it together with the new code in one release.
+
+      You are the team lead. How do you plan the migrations and releases so that nothing breaks during the
+      rollout or on a rollback, and which rules do you establish in the team?
+    hint: Which application versions talk to the database during the rollout and after a rollback, and what schema does each of them expect?
+    answer: |
+      1. **Check whether the schema must change at all.** If the new name only matters in code, rename the
+         property and keep the old column with `HasColumnName("Name")`: no migration, no risk.
+      2. **Reject the one-step rename.** During the rollout old instances still query `Name`. After
+         `RenameColumn` their queries fail with a "column not found" error, and rolling the code back to the
+         previous version also breaks without a down migration.
+      3. **Split the change into backward-compatible steps (expand/contract).** Each migration is applied as a
+         separate pipeline step before the code rollout and works with both the new and the previous app version:
+         - **Release 1 (expand):** the migration adds a nullable `FullName` column. The code writes to both
+           columns and still reads `Name`.
+         - **Backfill:** once release 1 runs on every instance, copy `Name` to `FullName` in batches for rows
+           where `FullName` is `NULL` or differs from `Name` (during the rollout old instances could update only
+           `Name`). The script is idempotent, so it can be rerun safely.
+         - **Release 2:** the code reads `FullName` and still writes both columns, so a rollback to release 1
+           sees current data in `Name`. If needed, the migration makes `FullName` required and `Name` nullable,
+           so that the next release can stop filling it.
+         - **Release 3:** the code no longer reads or writes `Name`, but the column stays in the EF Core model so
+           that the model and the model snapshot do not diverge. For example, the class property is replaced by a
+           nullable shadow property `Property<string>("Name")` that nobody sets. There is no migration for `Name`
+           in this release. The trap: if you just delete the property, the model differs from the snapshot, any
+           later `migrations add` scaffolds a `DropColumn` right into this release, and starting with EF Core 9
+           `Migrate()` and the tools that call it fail with `PendingModelChangesWarning`. The alternative is to
+           delete the property, scaffold the migration and empty its `Up` by hand: the snapshot no longer has
+           `Name`, and the real `DropColumn` is written by hand in release 4.
+         - **Release 4 (contract):** once the rollback window for release 3 has passed, the shadow property is
+           removed from the model, the migration with `DropColumn` is scaffolded (or written by hand in the
+           second variant) and reviewed.
+      4. **Apply migrations in a controlled way.** As a separate pipeline step under a separate identity with
+         schema-change permissions: an idempotent SQL script (`dotnet ef migrations script --idempotent`) when
+         the SQL must be reviewed or handed to a DBA, or a migration bundle for automated deployment; for a bundle
+         the migration code is reviewed in the pull request. Not `Database.Migrate()` at the startup of every
+         instance.
+      5. **Make it a team rule.** "Schema version N works with code version N-1", a code review checklist item
+         for migrations (including the model and snapshot check), a CI check that runs the previous version's
+         tests against the new schema, backlog items with an owner for the cleanup steps so the old column does
+         not stay forever, and an estimate of the DDL and backfill cost on large tables before the release.
+    explanation: |
+      During a rolling update the old and the new versions of the application work against the same database
+      for a while. The same happens after a rollback: the code goes back to version N-1 while the schema stays at
+      version N. So every migration must be compatible with two code versions at once. Renaming or dropping a
+      column fails this test, while adding a nullable column passes it: EF Core lists only the columns of its
+      model in `SELECT` and `INSERT`, so old code simply does not notice the new column.
+
+      This leads to expand/contract (parallel change): first widen the schema so both versions fit, then move
+      the code, and only then narrow the schema. The EF Core documentation describes the same order for
+      replacing columns inside one migration: add the new column as nullable, populate it, make it required if
+      appropriate, and only then drop the source column. With rolling updates these steps are spread across
+      releases. Dual writes in code are a practice recommendation, not documentation: they keep both columns
+      consistent while any running version, or a version you might roll back to, still reads the old column. A
+      database trigger is sometimes used instead, but it is hidden logic that is easy to forget.
+
+      The release 3 step exists because EF Core compares the model with the snapshot: a property removed without
+      a migration leaves a pending model change, while a migration scaffolded as is would drop the column before
+      the rollback window ends.
+
+      The EF Core 10 documentation recommends migration bundles for automated deployment and SQL scripts when the
+      SQL must be reviewed before it runs, and describes runtime migration as a strategy for applications that
+      accept its trade-offs. Since EF Core 9 migrations take a lock, so instances no longer race to apply the
+      same migration, but the other problems remain: the application's identity needs schema-change permissions
+      (the documentation suggests a separate deployment identity), nobody reviews the SQL, and a failed migration
+      or long DDL happens at instance startup in the middle of the rollout and delays or crashes instances. A
+      separate pipeline step gives an explicit moment of application and a failure point before new code starts.
+
+      The cost is several releases and temporarily more complex code. The lead's decision is to weigh it
+      deliberately against a maintenance window with downtime: for a small internal service downtime may be
+      acceptable, for a service with an SLA it usually is not. The main organisational risk is an unfinished
+      cleanup, so the contract steps are planned up front, not "some day".
+    linkTitles:
+      - "Applying migrations"
+      - "Managing migrations"
+      - "Martin Fowler: ParallelChange"
+meta:
+  authors: [platonenkov]
+  verified: 1970-01-01
+  dotnetVersion: "10"

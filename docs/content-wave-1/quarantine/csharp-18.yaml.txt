@@ -1,0 +1,107 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNSFY8V4XQJ9PRKC7G
+slug: static-lambda-capture-compile-error
+stack: dotnet
+topic: csharp
+level: senior
+type: output
+grading: auto
+tags: [lambda, static-lambda, closures, csharp-9]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    int factor = 10;
+    Func<int, int> multiply = static x => x * factor;
+    Console.Write(multiply(2));
+expect:
+  kind: compile-error
+options:
+  - id: a
+    correct: false
+    expect: { kind: output, value: "20" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "0" }
+  - id: c
+    correct: true
+    expect: { kind: compile-error }
+  - id: d
+    correct: false
+    expect: { kind: exception, value: System.InvalidOperationException }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/lambda-expressions
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/proposals/csharp-9.0/static-anonymous-functions
+    lang: en
+    kind: spec
+locales:
+  ru:
+    title: Что произойдёт, если статическая лямбда (static) читает локальную переменную метода?
+    prompt: |
+      Что выведет эта программа в консоль? Обратите внимание на модификатор `static` перед лямбдой.
+    hint: Что именно модификатор `static` запрещает делать лямбде и на каком этапе это проверяется?
+    options:
+      a: "20"
+      b: "0"
+      c: Ошибка компиляции
+      d: Исключение `InvalidOperationException` во время выполнения
+    optionExplanations:
+      a: Так было бы без модификатора `static`: обычная лямбда захватила бы `factor`. Статической лямбде захват локальных переменных запрещён, поэтому программа вообще не компилируется.
+      b: Статическая лямбда не получает значение по умолчанию вместо недоступной переменной. Компилятор не подставляет `0`, а отклоняет само обращение к `factor`.
+      d: Запрет на захват проверяет компилятор, а не среда выполнения. До запуска дело не доходит, поэтому исключения во время выполнения быть не может.
+    answer: Ошибка компиляции.
+    explanation: |
+      Модификатор `static` у лямбды (и у анонимного метода) появился в C# 9. Он означает, что функция не может
+      захватывать состояние окружающего контекста: локальные переменные, параметры, `this` и `base`. Здесь
+      лямбда обращается к локальной переменной `factor`, и компилятор сообщает об ошибке: статическая анонимная
+      функция не может ссылаться на захваченную переменную.
+
+      Без `static` компилятор перенёс бы `factor` в поле сгенерированного класса замыкания, создал бы его
+      экземпляр и делегат над ним, и программа вывела бы `20`. Смысл `static` как раз в том, чтобы такой
+      захват не произошёл случайно: на горячем пути незаметное замыкание означает лишние аллокации при
+      каждом выполнении кода. Со `static` намерение «без захвата» проверяет компилятор, а не code review.
+
+      Статическая лямбда при этом может обращаться к константам и статическим членам. Если объявить
+      `const int factor = 10;`, код скомпилируется и выведет `20`, потому что константа подставляется как
+      значение и не захватывается. Поведение проверено на .NET 10.
+    linkTitles:
+      - Лямбда-выражения
+      - Спецификация C# 9, статические анонимные функции
+  en:
+    title: What happens when a static lambda reads a local variable of the enclosing method?
+    prompt: |
+      What does this program print to the console? Note the `static` modifier in front of the lambda.
+    hint: What exactly does the `static` modifier forbid a lambda to do, and at which stage is that checked?
+    options:
+      a: "20"
+      b: "0"
+      c: Compile error
+      d: "`InvalidOperationException` at run time"
+    optionExplanations:
+      a: That would be the result without the `static` modifier, where an ordinary lambda captures `factor`. A static lambda is not allowed to capture locals, so the program does not compile at all.
+      b: A static lambda does not get a default value in place of the unavailable variable. The compiler does not substitute `0`, it rejects the reference to `factor` itself.
+      d: The ban on capturing is enforced by the compiler, not by the runtime. The program never runs, so there can be no run-time exception.
+    answer: Compile error.
+    explanation: |
+      The `static` modifier on a lambda (and on an anonymous method) was introduced in C# 9. It means the
+      function cannot capture state from the enclosing context: local variables, parameters, `this` and `base`.
+      Here the lambda reads the local variable `factor`, so the compiler reports an error: a static anonymous
+      function cannot contain a reference to a captured variable.
+
+      Without `static` the compiler would hoist `factor` into a field of a generated closure class, create an
+      instance of it and a delegate over it, and the program would print `20`. The point of `static` is to stop
+      such a capture from happening by accident: on a hot path a hidden closure means extra allocations every
+      time the code runs. With `static` the "no capture" intent is checked by the compiler instead of code review.
+
+      A static lambda may still use constants and static members. If you declare `const int factor = 10;`,
+      the code compiles and prints `20`, because a constant is substituted as a value and is not captured.
+      The behaviour is verified on .NET 10.
+    linkTitles:
+      - Lambda expressions
+      - C# 9 specification, static anonymous functions
+meta:
+  authors: [platonenkov]
+  verified: 1970-01-01
+  dotnetVersion: "10"

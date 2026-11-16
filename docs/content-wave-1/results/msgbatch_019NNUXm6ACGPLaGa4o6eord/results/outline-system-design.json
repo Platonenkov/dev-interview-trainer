@@ -1,0 +1,165 @@
+{
+  "topic": "system-design",
+  "stubs": [
+    {
+      "slug": "cache-aside-invalidate-on-write",
+      "level": "middle",
+      "type": "single",
+      "subtopic": "caching",
+      "angle": "In the cache-aside pattern, what should the service do with the cached entry when it updates the record in the database?",
+      "answerHinge": "Write to the database first and then remove the cache entry, so the next read reloads fresh data; writing the new value into the cache instead races with concurrent readers and can leave a stale value.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/azure/architecture/patterns/cache-aside"
+      ]
+    },
+    {
+      "slug": "scale-out-state-to-externalize",
+      "level": "middle",
+      "type": "multi",
+      "subtopic": "scaling",
+      "angle": "Before running an ASP.NET Core app as several instances behind a load balancer, which kinds of state must be moved out of the process or local machine?",
+      "answerHinge": "Anything one instance writes and another must read: the Data Protection key ring, session data in an in-memory store, authoritative values held only in IMemoryCache and files saved to local disk; stateless singletons and read-only configuration need no change.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/web-farm",
+        "https://learn.microsoft.com/en-us/aspnet/core/performance/caching/distributed"
+      ]
+    },
+    {
+      "slug": "scale-up-vs-scale-out",
+      "level": "middle",
+      "type": "open",
+      "subtopic": "scaling",
+      "angle": "When is scaling a service vertically a better choice than scaling it horizontally, and what does horizontal scaling require from the design?",
+      "answerHinge": "Scaling up is simpler and needs no design changes but hits a hardware ceiling and keeps a single point of failure; scaling out needs stateless, partitionable work and a load balancer but grows almost linearly and adds redundancy.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/azure/architecture/guide/design-principles/scale-out"
+      ]
+    },
+    {
+      "slug": "cache-stampede-hot-key-expiry",
+      "level": "senior",
+      "type": "situation",
+      "subtopic": "caching",
+      "angle": "Every few minutes the database CPU spikes to 100% at the moment a popular cached product list expires; what do you do?",
+      "answerHinge": "Many concurrent misses on one hot key all hit the database at once, so the fix is to coalesce requests per key (for example HybridCache stampede protection in .NET 9), refresh before expiry and add jitter to expiration times.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/aspnet/core/performance/caching/hybrid",
+        "https://learn.microsoft.com/en-us/azure/architecture/best-practices/caching"
+      ]
+    },
+    {
+      "slug": "monotonic-shard-key-hot-partition",
+      "level": "senior",
+      "type": "single",
+      "subtopic": "scaling",
+      "angle": "Why is an auto-incrementing order id or a creation timestamp a poor key for range-based sharding of a write-heavy orders table?",
+      "answerHinge": "Monotonic keys send every new write to the last range, so one shard takes all inserts while the others idle; a key with even distribution, such as a hash, spreads the writes.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/azure/architecture/patterns/sharding"
+      ]
+    },
+    {
+      "slug": "rate-limit-per-instance-scale-out",
+      "level": "senior",
+      "type": "open",
+      "subtopic": "scaling",
+      "angle": "A team configures the ASP.NET Core rate limiting middleware (.NET 7 and later) at 100 requests per minute per client and then scales the API to 6 instances; what limit do clients actually get and how would you enforce a global one?",
+      "answerHinge": "The built-in limiters keep counters in each process, so the effective limit grows with the instance count (up to 600 per minute); a global limit needs a shared counter store or enforcement at a gateway in front of the instances.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/aspnet/core/performance/rate-limit",
+        "https://learn.microsoft.com/en-us/azure/architecture/patterns/rate-limiting-pattern"
+      ]
+    },
+    {
+      "slug": "capacity-estimate-photo-sharing-service",
+      "level": "senior",
+      "type": "situation",
+      "subtopic": "designing services end to end",
+      "angle": "You are asked to size a photo-sharing service with 10 million daily users, each uploading 2 photos and viewing 50 per day; how do you estimate request rates, storage and bandwidth before choosing components?",
+      "answerHinge": "Convert daily volumes to average and peak requests per second (daily count / 86400 times a peak factor), multiply writes by object size and retention for storage, and use the 25:1 read/write ratio to justify caching and a CDN for reads.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/azure/well-architected/performance-efficiency/capacity-planning"
+      ]
+    },
+    {
+      "slug": "lead-review-distributed-cache-proposal",
+      "level": "lead",
+      "type": "situation",
+      "subtopic": "weighing trade-offs",
+      "angle": "Two weeks before a release a developer proposes adding a Redis cache to fix a slow endpoint; as the tech lead, how do you decide whether to accept it?",
+      "answerHinge": "A cache adds a second source of truth and a new production dependency, so accept it only after measuring where the time goes, confirming the read/write ratio and acceptable staleness, and agreeing who owns invalidation, monitoring and the failure mode when the cache is down.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/azure/architecture/best-practices/caching"
+      ]
+    },
+    {
+      "slug": "non-functional-requirements-before-design",
+      "level": "lead",
+      "type": "open",
+      "subtopic": "designing services end to end",
+      "angle": "Before your team starts designing a new service, which non-functional requirements do you insist on clarifying with stakeholders and why?",
+      "answerHinge": "Availability and latency targets, expected load and growth, read/write ratio, data consistency and retention needs and cost limits each change the architecture, so designing without them means guessing and redesigning later.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/azure/well-architected/"
+      ]
+    },
+    {
+      "slug": "single-database-bottleneck-roadmap",
+      "level": "architect",
+      "type": "situation",
+      "subtopic": "scaling",
+      "angle": "Traffic is expected to grow fivefold over two years and the single relational database is already the bottleneck; what sequence of steps do you plan?",
+      "answerHinge": "Exhaust cheaper reversible options first (query and index tuning, read replicas, caching, functional partitioning by bounded data sets) and shard only when writes outgrow one server, because sharding moves joins and transactions into the application and is hard to undo.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/azure/architecture/best-practices/data-partitioning"
+      ]
+    },
+    {
+      "slug": "multi-region-active-active-vs-passive",
+      "level": "architect",
+      "type": "situation",
+      "subtopic": "weighing trade-offs",
+      "angle": "The business asks for the service to survive a full region outage; how do you choose between active-passive and active-active multi-region deployment?",
+      "answerHinge": "Active-passive is simpler but its recovery time and data loss depend on failover and replication lag, while active-active gives near-zero recovery time only if the data model tolerates concurrent writes in several regions or partitions writes by region; RTO, RPO and consistency needs decide.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/azure/architecture/patterns/geodes",
+        "https://learn.microsoft.com/en-us/azure/well-architected/reliability/metrics"
+      ]
+    },
+    {
+      "slug": "deployment-stamps-multitenant-scaling",
+      "level": "architect",
+      "type": "open",
+      "subtopic": "scaling",
+      "angle": "For a multi-tenant SaaS product, when would you scale by deploying independent stamps of the whole stack instead of growing one shared deployment?",
+      "answerHinge": "Stamps cap the blast radius, give a known scale unit and allow data residency per region, at the cost of tenant routing, fleet-wide deployments and cross-stamp operations, so they pay off when one shared deployment hits scale limits or isolation requirements.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/azure/architecture/patterns/deployment-stamp",
+        "https://learn.microsoft.com/en-us/azure/architecture/guide/multitenant/overview"
+      ]
+    },
+    {
+      "slug": "global-read-spike-edge-caching",
+      "level": "architect",
+      "type": "situation",
+      "subtopic": "caching",
+      "angle": "A news site with readers worldwide sees read traffic jump 100 times during breaking news; how do you design caching so the origin survives?",
+      "answerHinge": "Serve most reads from the CDN edge using HTTP caching rules: long-lived versioned URLs for static assets, short shared-cache lifetimes with stale-while-revalidate for pages, so the origin sees roughly one request per object per TTL instead of one per reader.",
+      "sources": [
+        "https://www.rfc-editor.org/rfc/rfc9111",
+        "https://learn.microsoft.com/en-us/azure/architecture/best-practices/cdn"
+      ]
+    },
+    {
+      "slug": "composite-availability-serial-dependencies",
+      "level": "architect",
+      "type": "situation",
+      "subtopic": "weighing trade-offs",
+      "angle": "Product demands 99.99% availability for a checkout flow that synchronously calls five dependencies, each offering 99.9%; what do you tell them and what do you change?",
+      "answerHinge": "Availability of serial dependencies multiplies, so the flow tops out near 99.5%; reaching the target needs redundancy for critical dependencies, removing non-essential calls from the synchronous path with graceful degradation, or renegotiating the target.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/azure/well-architected/reliability/metrics"
+      ]
+    }
+  ]
+}

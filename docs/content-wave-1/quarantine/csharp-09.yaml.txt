@@ -1,0 +1,104 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WN2ZT4PBW7H92M5D0C
+slug: null-forgiving-operator-hides-null
+stack: dotnet
+topic: csharp
+level: junior
+type: find-bug
+grading: auto
+tags: [nullable-reference-types, null-forgiving, null-reference-exception]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    #nullable enable
+    Dictionary<int, string> users = new() { [1] = "Alice", [2] = "Bob" };
+
+    string? FindUserName(int id)
+    {
+        return users.TryGetValue(id, out string? found) ? found : null;
+    }
+
+    string? name = FindUserName(3);
+    int length = name!.Length;
+    Console.WriteLine($"Length: {length}");
+bugLineSets: [[10]]
+fixedSource: |
+  #nullable enable
+  Dictionary<int, string> users = new() { [1] = "Alice", [2] = "Bob" };
+
+  string? FindUserName(int id)
+  {
+      return users.TryGetValue(id, out string? found) ? found : null;
+  }
+
+  string? name = FindUserName(3);
+  if (name is null)
+  {
+      Console.WriteLine("User not found");
+  }
+  else
+  {
+      Console.WriteLine($"Length: {name.Length}");
+  }
+fixedExpect: { kind: output, value: "User not found" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/null-forgiving
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/nullable-references
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строку, где оператор ! не спасает от NullReferenceException
+    prompt: |
+      Программа ищет имя пользователя по идентификатору и выводит длину имени. Компилятор предупреждал о
+      разыменовании возможно пустой ссылки, и разработчик убрал предупреждение, добавив оператор `!`.
+      Сборка проходит без предупреждений, но при запуске программа завершается с необработанным исключением
+      `NullReferenceException`. Щёлкните по строке с дефектом.
+    hint: Подумайте, что вернёт `FindUserName(3)` и меняет ли `!` что-нибудь в скомпилированной программе.
+    answer: Строка 10, `name!.Length`: оператор `!` скрыл предупреждение, но `name` равно `null`, и обращение к `Length` выбрасывает `NullReferenceException`.
+    explanation: |
+      В словаре нет ключа `3`, поэтому `FindUserName(3)` возвращает `null`. Тип `string?` честно сообщает
+      об этом, и при включённом анализе nullable (`#nullable enable`, ссылочные типы, допускающие null,
+      появились в C# 8) компилятор предупреждает о разыменовании возможно пустой ссылки в `name.Length`.
+
+      Оператор `!` (null-forgiving, «прощающий null») влияет только на статический анализ компилятора:
+      он говорит «я уверен, что здесь не `null`», и предупреждение исчезает. Во время выполнения этот
+      оператор ничего не делает: никакой проверки он не добавляет. Поэтому обращение к `Length` у `null`
+      по-прежнему выбрасывает `NullReferenceException` в строке 10.
+
+      Исправление - не заглушать предупреждение, а обработать случай `null`: проверить `name is null`,
+      использовать `name?.Length ?? 0` или выбросить осмысленное исключение. Оператор `!` уместен только
+      тогда, когда вы действительно знаете больше компилятора, а здесь `null` - ожидаемый результат поиска.
+    linkTitles:
+      - "Оператор ! (null-forgiving)"
+      - "Ссылочные типы, допускающие значение null"
+  en:
+    title: Find the line where the ! operator does not prevent a NullReferenceException
+    prompt: |
+      The program looks up a user name by id and prints the length of the name. The compiler warned about
+      dereferencing a possibly null reference, and the developer removed the warning by adding the `!` operator.
+      The build has no warnings, but at run time the program ends with an unhandled
+      `NullReferenceException`. Click the line that contains the defect.
+    hint: Think about what `FindUserName(3)` returns and whether `!` changes anything in the compiled program.
+    answer: Line 10, `name!.Length`: the `!` operator hid the warning, but `name` is `null`, and accessing `Length` throws `NullReferenceException`.
+    explanation: |
+      The dictionary has no key `3`, so `FindUserName(3)` returns `null`. The `string?` type states this
+      honestly, and with nullable analysis enabled (`#nullable enable`, nullable reference types arrived in
+      C# 8) the compiler warns about dereferencing a possibly null reference in `name.Length`.
+
+      The `!` (null-forgiving) operator affects only the compiler's static analysis: it says "I am sure this
+      is not `null`", and the warning disappears. At run time the operator does nothing: it adds no check.
+      So accessing `Length` on `null` still throws `NullReferenceException` on line 10.
+
+      The fix is to handle the `null` case instead of silencing the warning: check `name is null`, use
+      `name?.Length ?? 0`, or throw a meaningful exception. The `!` operator is appropriate only when you
+      really know more than the compiler, and here `null` is an expected result of the lookup.
+    linkTitles:
+      - "! (null-forgiving) operator"
+      - "Nullable reference types"
+meta:
+  authors: [platonenkov]
+  verified: 1970-01-01

@@ -1,0 +1,245 @@
+{
+  "topic": "concurrency",
+  "source": "msgbatch_019NNUXm6ACGPLaGa4o6eord",
+  "stubs": [
+    {
+      "slug": "thread-pool-vs-dedicated-thread",
+      "level": "junior",
+      "type": "open",
+      "subtopic": "Threads and the thread pool",
+      "angle": "Asks what the managed thread pool is, why short work items are queued to it instead of creating a new Thread each time, and when a dedicated Thread is still the better choice.",
+      "answerHinge": "The pool reuses a small set of threads, so short work items avoid the cost of creating and destroying a thread each time. A dedicated thread suits long-running or blocking loops that would otherwise hold a pool thread indefinitely.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/standard/threading/the-managed-thread-pool"
+      ],
+      "stubId": "concurrency-01"
+    },
+    {
+      "slug": "foreground-thread-keeps-process-alive",
+      "level": "junior",
+      "type": "single",
+      "subtopic": "Threads",
+      "angle": "Asks which kind of thread keeps the process running after Main returns: a new Thread with default settings, a thread with IsBackground set to true, a thread pool work item, or a Task.Run task.",
+      "answerHinge": "Only foreground threads keep the process alive. A new Thread is foreground by default, while thread pool threads, and therefore Task.Run work, are background threads.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/standard/threading/foreground-and-background-threads"
+      ],
+      "stubId": "concurrency-02"
+    },
+    {
+      "slug": "nested-lock-same-thread-reentrant",
+      "level": "junior",
+      "type": "output",
+      "subtopic": "Locks",
+      "angle": "Shows a snippet that takes lock(gate) and then takes lock(gate) again on the same thread before printing, and asks what is printed: the text, a hang, or an exception.",
+      "answerHinge": "Monitor, which the lock statement uses on a plain object, is reentrant: the owning thread can enter the same lock again without blocking, so the snippet prints normally.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/api/system.threading.monitor",
+        "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/statements/lock"
+      ],
+      "stubId": "concurrency-03"
+    },
+    {
+      "slug": "shared-counter-increment-race",
+      "level": "junior",
+      "type": "find-bug",
+      "subtopic": "Race conditions",
+      "angle": "Shows four threads that each run counter++ on a shared int one million times, then join and print the total, which comes out below 4000000. The reader must find the defective line.",
+      "answerHinge": "counter++ is a non-atomic read-modify-write, so concurrent increments overwrite each other. Interlocked.Increment or a lock around the increment fixes it.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/api/system.threading.interlocked.increment",
+        "https://learn.microsoft.com/en-us/dotnet/standard/threading/managed-threading-best-practices"
+      ],
+      "stubId": "concurrency-04"
+    },
+    {
+      "slug": "interlocked-compareexchange-returns-original",
+      "level": "middle",
+      "type": "output",
+      "subtopic": "Interlocked",
+      "angle": "Shows int x = 5, then r = Interlocked.CompareExchange(ref x, 10, 3), then prints r and x, and asks what is printed.",
+      "answerHinge": "CompareExchange always returns the original value. It writes the new value only when the current value equals the comparand, so with comparand 3 nothing changes and the output is \"5 5\".",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/api/system.threading.interlocked.compareexchange"
+      ],
+      "stubId": "concurrency-05"
+    },
+    {
+      "slug": "bounded-channel-drop-oldest-output",
+      "level": "middle",
+      "type": "output",
+      "subtopic": "Channels",
+      "angle": "Shows a bounded channel with capacity 2 and FullMode DropOldest. The snippet calls TryWrite with 1, 2 and 3, then drains the channel with TryRead and prints the items, and the question asks what is printed.",
+      "answerHinge": "With DropOldest a write to a full channel succeeds and evicts the oldest buffered item, so the reader gets 2 and 3.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/api/system.threading.channels.boundedchannelfullmode",
+        "https://learn.microsoft.com/en-us/dotnet/core/extensions/channels"
+      ],
+      "stubId": "concurrency-06"
+    },
+    {
+      "slug": "concurrentqueue-enumeration-snapshot",
+      "level": "middle",
+      "type": "output",
+      "subtopic": "Concurrent collections",
+      "angle": "Shows a foreach over a ConcurrentQueue<int> holding 1, 2 and 3 that enqueues 4 during the loop and prints each item and then the Count, and asks what is printed.",
+      "answerHinge": "The ConcurrentQueue<T> enumerator is a moment-in-time snapshot: changes after GetEnumerator do not appear in the loop and do not throw. The loop prints 1, 2 and 3, and Count is then 4.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/api/system.collections.concurrent.concurrentqueue-1.getenumerator"
+      ],
+      "stubId": "concurrency-07"
+    },
+    {
+      "slug": "monitor-enter-boxed-int",
+      "level": "middle",
+      "type": "find-bug",
+      "subtopic": "Locks",
+      "angle": "Shows code that guards a section with Monitor.Enter(count) and Monitor.Exit(count), where count is an int field, and that fails with SynchronizationLockException. The reader must find the defect.",
+      "answerHinge": "Each call boxes the int into a new object, so Exit is called on an object the thread never locked. The fix is to lock on a dedicated private reference-type object.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/api/system.threading.monitor.exit",
+        "https://learn.microsoft.com/en-us/dotnet/api/system.threading.monitor"
+      ],
+      "stubId": "concurrency-08"
+    },
+    {
+      "slug": "lock-statement-on-system-threading-lock",
+      "level": "middle",
+      "type": "single",
+      "subtopic": "Locks",
+      "angle": "Asks what the C# 13 compiler emits for a lock statement whose target is statically typed as System.Threading.Lock in .NET 9 and later.",
+      "answerHinge": "When the target's static type is System.Threading.Lock, the compiler calls Lock.EnterScope() and disposes the returned scope instead of calling Monitor.Enter and Monitor.Exit.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/statements/lock",
+        "https://learn.microsoft.com/en-us/dotnet/api/system.threading.lock"
+      ],
+      "stubId": "concurrency-09"
+    },
+    {
+      "slug": "concurrentdictionary-getoradd-factory-multiple-calls",
+      "level": "middle",
+      "type": "single",
+      "subtopic": "Concurrent collections",
+      "angle": "Asks what is guaranteed when several threads call ConcurrentDictionary.GetOrAdd with a valueFactory for the same missing key at the same time.",
+      "answerHinge": "The valueFactory runs outside the dictionary's locks and may be invoked more than once. Only one value is stored and returned to every caller, so a factory with side effects needs Lazy<T> or another guard.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/api/system.collections.concurrent.concurrentdictionary-2.getoradd"
+      ],
+      "stubId": "concurrency-10"
+    },
+    {
+      "slug": "cross-process-synchronization-primitives",
+      "level": "middle",
+      "type": "multi",
+      "subtopic": "Locks",
+      "angle": "Asks which of these primitives can synchronize two separate processes on Windows in .NET 10: a named Mutex, a named Semaphore, a named EventWaitHandle, SemaphoreSlim, the lock statement, and ReaderWriterLockSlim.",
+      "answerHinge": "Only named WaitHandle types that wrap operating system objects (Mutex, Semaphore, EventWaitHandle) work across processes. Monitor and the Slim primitives exist only inside one process.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/standard/threading/overview-of-synchronization-primitives"
+      ],
+      "stubId": "concurrency-11"
+    },
+    {
+      "slug": "bounded-channel-backpressure",
+      "level": "middle",
+      "type": "open",
+      "subtopic": "Channels",
+      "angle": "Asks how a bounded Channel<T> with FullMode Wait differs from an unbounded one in a producer-consumer pipeline where producers are faster than consumers, and why that matters.",
+      "answerHinge": "A bounded channel in Wait mode makes WriteAsync wait without blocking a thread until space frees up, which slows producers to the consumers' pace. An unbounded channel lets the buffer and memory grow without limit.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/core/extensions/channels",
+        "https://learn.microsoft.com/en-us/dotnet/api/system.threading.channels.boundedchannelfullmode"
+      ],
+      "stubId": "concurrency-12"
+    },
+    {
+      "slug": "threadstatic-field-initializer-other-thread",
+      "level": "senior",
+      "type": "output",
+      "subtopic": "Threads",
+      "angle": "Shows a program with a [ThreadStatic] static int field initialized to 5. The program prints the field on the main thread and then on a new thread that it joins, and the question asks what is printed.",
+      "answerHinge": "The initializer runs once in the static constructor on the thread that triggers it. Every other thread sees the default value, so the output is \"5 0\".",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/api/system.threadstaticattribute"
+      ],
+      "stubId": "concurrency-13"
+    },
+    {
+      "slug": "semaphoreslim-release-without-acquire",
+      "level": "senior",
+      "type": "find-bug",
+      "subtopic": "Locks",
+      "angle": "Shows code using SemaphoreSlim(1, 1) where a method calls Wait(0) and releases in finally even when the wait returned false. A nested call then makes the outer Release throw SemaphoreFullException, and the reader must find the defect.",
+      "answerHinge": "Release must run only when the wait succeeded. Releasing after a failed Wait pushes the count above maxCount, which throws SemaphoreFullException; without a max count it would silently admit extra holders.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/api/system.threading.semaphoreslim.release",
+        "https://learn.microsoft.com/en-us/dotnet/api/system.threading.semaphoreslim"
+      ],
+      "stubId": "concurrency-14"
+    },
+    {
+      "slug": "volatile-field-guarantees",
+      "level": "senior",
+      "type": "single",
+      "subtopic": "Race conditions",
+      "angle": "Asks what marking a field volatile actually guarantees. The options are atomic compound operations, mutual exclusion, acquire and release ordering of reads and writes, or an immediate flush to every CPU core.",
+      "answerHinge": "volatile gives a read acquire semantics and a write release semantics, which prevents some reorderings. It does not make operations such as ++ atomic and does not provide mutual exclusion.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/volatile",
+        "https://learn.microsoft.com/en-us/dotnet/api/system.threading.volatile"
+      ],
+      "stubId": "concurrency-15"
+    },
+    {
+      "slug": "atomic-reads-writes-without-locks",
+      "level": "senior",
+      "type": "multi",
+      "subtopic": "Race conditions",
+      "angle": "Asks which of these operations the C# specification guarantees to be atomic without synchronization: writing an int, assigning a reference, writing a bool, writing a long, writing a decimal, and x++ on an int.",
+      "answerHinge": "The specification guarantees atomic reads and writes only for bool, char, the integral types up to 32 bits, float and references. Reads and writes of long, double and decimal need not be atomic, and ++ is never atomic.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/language-specification/variables"
+      ],
+      "stubId": "concurrency-16"
+    },
+    {
+      "slug": "concurrentbag-when-it-fits",
+      "level": "senior",
+      "type": "open",
+      "subtopic": "Concurrent collections",
+      "angle": "Asks when ConcurrentBag<T> is the right thread-safe collection and when ConcurrentQueue<T> or a Channel<T> is better, based on how the bag is implemented.",
+      "answerHinge": "ConcurrentBag keeps a local list per thread and is optimized for workloads where the same thread both adds and takes items. In a pipeline where producers and consumers are different threads it falls back to stealing, so a queue or channel fits better.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/api/system.collections.concurrent.concurrentbag-1",
+        "https://learn.microsoft.com/en-us/dotnet/standard/collections/thread-safe/when-to-use-a-thread-safe-collection"
+      ],
+      "stubId": "concurrency-17"
+    },
+    {
+      "slug": "global-lock-proposal-for-shared-state-races",
+      "level": "lead",
+      "type": "situation",
+      "subtopic": "Race conditions",
+      "angle": "An in-memory pricing cache intermittently returns corrupted data under load, and a developer proposes wrapping every access in one global lock before the release. Asks what the lead decides and how the team prevents a repeat.",
+      "answerHinge": "A global lock hides the race at the cost of throughput and new deadlock risk. The lead should find the shared mutable state, replace it with immutable snapshots swapped atomically or with concurrent collections, and back the fix with stress tests and review rules for shared state.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/standard/threading/managed-threading-best-practices",
+        "https://learn.microsoft.com/en-us/dotnet/api/system.threading.interlocked.exchange"
+      ],
+      "stubId": "concurrency-18"
+    },
+    {
+      "slug": "in-process-locks-after-scale-out",
+      "level": "architect",
+      "type": "open",
+      "subtopic": "Locks",
+      "angle": "Asks which concurrency guarantees break when a service that serializes per-account updates with in-process locks and channels is scaled out to many instances, and how to redesign it without a distributed lock on every request.",
+      "answerHinge": "lock, SemaphoreSlim and Channel<T> only coordinate threads inside one process. Across instances, correctness has to come from routing each key to a single owner (partitioned single-writer) or from optimistic concurrency in the shared store.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/standard/threading/overview-of-synchronization-primitives",
+        "https://learn.microsoft.com/en-us/dotnet/core/extensions/channels"
+      ],
+      "stubId": "concurrency-19"
+    }
+  ]
+}

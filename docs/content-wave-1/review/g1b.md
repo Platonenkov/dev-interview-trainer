@@ -1,0 +1,69 @@
+# Wave 1 review sheet: g1b
+
+Questions shipped: 52; rows below: 25 flagged by risk plus a seeded 10% sample (3) of the other 27.
+
+| path | level | type | risk | verified | executed | actual_result | links | verdict_rounds | warnings | owner_read |
+|---|---|---|---|---|---|---|---|---|---|---|
+| content/dotnet/collections-linq/repository-exposes-iqueryable-decision.yaml | lead | situation | lead/architect, situation, repaired | 2026-11-14 | no |  | ok: EntityFrameworkQueryableExtensions.ToQueryString(IQueryable) Method (Microsoft.EntityFrameworkCore) \| Microsoft Learn; ok: Implement Reads/Queries in a CQRS Microservice - .NET \| Microsoft Learn; ok: Designing the infrastructure persistence layer - .NET \| Microsoft Learn; ok: Simple logging - EF Core \| Microsoft Learn; ok: Client vs. Server Evaluation - EF Core \| Microsoft Learn | r1 fix, r2 pass |  |  |
+| content/dotnet/clr-gc/native-aot-adoption-decision.yaml | lead | open | lead/architect, repaired | 2026-11-14 | no |  | ok: ASP.NET Core support for Native AOT \| Microsoft Learn; ok: Native AOT deployment overview - .NET \| Microsoft Learn; ok: ReadyToRun deployment overview - .NET \| Microsoft Learn | r1 fix, r2 pass |  |  |
+| content/dotnet/exceptions/log-exceptions-once-at-boundary.yaml | lead | open | lead/architect | 2026-11-13 | no |  | ok: Logging in C# - .NET \| Microsoft Learn; ok: Best practices for exceptions - .NET \| Microsoft Learn | r1 pass |  |  |
+| content/dotnet/clr-gc/gen2-heap-grows-steadily-in-production.yaml | senior | situation | situation, repaired | 2026-11-14 | no |  | ok: Debug a memory leak tutorial - .NET \| Microsoft Learn; ok: dotnet-counters diagnostic tool - .NET CLI - .NET \| Microsoft Learn; ok: dotnet-gcdump diagnostic tool - .NET CLI - .NET \| Microsoft Learn | r1 fix, r2 pass |  |  |
+| content/dotnet/clr-gc/finalizable-object-survives-extra-collection.yaml | senior | single | owner-review, repaired | UNVERIFIED (accepted: Owner decision 2026-11-13: remaining minor or unsure issues are re-verified from signed-in user feedback after launch; PR merge is the owner's acceptance.) | no |  | ok: Object.Finalize Method (System) \| Microsoft Learn; ok: Fundamentals of garbage collection - .NET \| Microsoft Learn; ok: Implement a Dispose method - .NET \| Microsoft Learn; ok: Large object heap (LOH) on Windows - .NET \| Microsoft Learn | r1 fix, r2 fix |  |  |
+| content/dotnet/clr-gc/gc-does-not-call-dispose.yaml | junior | single | owner-review, repaired | UNVERIFIED (accepted: Owner decision 2026-11-13: remaining minor or unsure issues are re-verified from signed-in user feedback after launch; PR merge is the owner's acceptance.) | no |  | ok: Object.Finalize Method (System) \| Microsoft Learn; ok: Implement a Dispose method - .NET \| Microsoft Learn; ok: Using objects that implement IDisposable - .NET \| Microsoft Learn | r1 fix, r2 fix |  |  |
+| content/dotnet/clr-gc/using-declarations-dispose-reverse-order.yaml | junior | output | owner-review, repaired | UNVERIFIED (accepted: Owner decision 2026-11-13: remaining minor or unsure issues are re-verified from signed-in user feedback after launch; PR merge is the owner's acceptance.) | yes | output: body B A end | ok: csharplang/proposals/csharp-8.0/using.md at main · dotnet/csharplang · GitHub; ok: using statement - ensure the correct use of disposable objects - C# reference \| Microsoft Learn; ok: Using objects that implement IDisposable - .NET \| Microsoft Learn | r1 fix, r2 fix |  |  |
+| content/dotnet/clr-gc/workstation-vs-server-gc-tradeoffs.yaml | senior | open | owner-review, repaired | UNVERIFIED (accepted: Owner decision 2026-11-13: remaining minor or unsure issues are re-verified from signed-in user feedback after launch; PR merge is the owner's acceptance.) | no |  | ok: Garbage collector config settings - .NET \| Microsoft Learn; ok: Dynamic adaptation to application sizes (DATAS) - .NET \| Microsoft Learn; ok: Workstation vs. server garbage collection (GC) - .NET \| Microsoft Learn | r1 fix, r2 fix |  |  |
+| content/dotnet/exceptions/exception-filter-runs-before-inner-finally.yaml | senior | output | owner-review, repaired | UNVERIFIED (accepted: Owner decision 2026-11-13: remaining minor or unsure issues are re-verified from signed-in user feedback after launch; PR merge is the owner's acceptance.) | yes | output: filter finally catch | ok: runtime/docs/design/coreclr/botr/exceptions.md at main · dotnet/runtime · GitHub; ok: Exception-handling statements - throw and try, catch, finally - C# reference \| Microsoft Learn; ok: ECMA-335 - Ecma International | r1 fix, r2 fix |  |  |
+| content/dotnet/clr-gc/assembly-contents-il-metadata-manifest.yaml | junior | single | repaired | 2026-11-14 | no |  | ok: ReadyToRun deployment overview - .NET \| Microsoft Learn; ok: Assemblies in .NET - .NET \| Microsoft Learn; ok: Assembly contents - .NET \| Microsoft Learn; ok: Assembly manifest - .NET \| Microsoft Learn | r1 fix, r2 pass |  |  |
+| content/dotnet/clr-gc/gc-roots-that-keep-objects-alive.yaml | middle | multi | repaired | 2026-11-14 | no |  | ok: GCHandleType Enum (System.Runtime.InteropServices) \| Microsoft Learn; ok: Fundamentals of garbage collection - .NET \| Microsoft Learn; ok: Weak References - .NET \| Microsoft Learn | r1 fix, r2 pass |  |  |
+| content/dotnet/clr-gc/streamwriter-not-flushed-memorystream-empty.yaml | middle | find-bug | repaired | 2026-11-14 | yes | output: 5 | ok: StreamWriter.AutoFlush Property (System.IO) \| Microsoft Learn; ok: using statement - ensure the correct use of disposable objects - C# reference \| Microsoft Learn; ok: Using objects that implement IDisposable - .NET \| Microsoft Learn | r1 fix, r2 pass |  |  |
+| content/dotnet/clr-gc/string-type-lives-in-system-private-corelib.yaml | middle | output | repaired | 2026-11-14 | yes | output: System.Private.CoreLib | ok: runtime/docs/design/coreclr/botr/corelib.md at main · dotnet/runtime · GitHub; ok: Type.Assembly Property (System) \| Microsoft Learn; ok: Assemblies in .NET - .NET \| Microsoft Learn; ok: Type forwarding in the common language runtime - .NET \| Microsoft Learn | r1 fix, r2 pass |  |  |
+| content/dotnet/clr-gc/tiered-compilation-and-readytorun-facts.yaml | senior | multi | repaired | 2026-11-14 | no |  | ok: ReadyToRun deployment overview - .NET \| Microsoft Learn; ok: Compilation config settings - .NET \| Microsoft Learn; ok: What's new in .NET 8 runtime \| Microsoft Learn | r1 fix, r2 pass |  |  |
+| content/dotnet/collections-linq/collections-with-constant-time-lookup.yaml | junior | multi | repaired | 2026-11-14 | no |  | ok: Dictionary<TKey,TValue>.ContainsKey(TKey) Method (System.Collections.Generic) \| Microsoft Learn; ok: HashSet<T>.Contains(T) Method (System.Collections.Generic) \| Microsoft Learn; ok: LinkedList<T>.Contains(T) Method (System.Collections.Generic) \| Microsoft Learn; ok: List<T>.Contains(T) Method (System.Collections.Generic) \| Microsoft Learn; ok: SortedDictionary<TKey,TValue> Class (System.Collections.Generic) \| Microsoft Learn | r1 fix, r2 pass |  |  |
+| content/dotnet/collections-linq/first-on-empty-sequence.yaml | junior | output | repaired | 2026-11-14 | yes | exception: System.InvalidOperationException | ok: Enumerable.First Method (System.Linq) \| Microsoft Learn; ok: Enumerable.FirstOrDefault Method (System.Linq) \| Microsoft Learn | r1 pass, r2 pass |  |  |
+| content/dotnet/collections-linq/hashset-mutated-key-not-found.yaml | middle | output | repaired | 2026-11-14 | yes | output: False 1 | ok: HashSet<T> Class (System.Collections.Generic) \| Microsoft Learn; ok: Object.GetHashCode Method (System) \| Microsoft Learn | r1 fix, r2 pass |  |  |
+| content/dotnet/collections-linq/list-insert-at-start-complexity.yaml | junior | single | repaired | 2026-11-14 | no |  | ok: LinkedList<T>.AddFirst Method (System.Collections.Generic) \| Microsoft Learn; ok: List<T>.Insert(Int32, T) Method (System.Collections.Generic) \| Microsoft Learn | r1 fix, r2 pass |  |  |
+| content/dotnet/collections-linq/orderby-twice-instead-of-thenby.yaml | middle | output | repaired | 2026-11-14 | yes | output: Anna:25, Anna:40, Bob:20, Bob:30 | ok: Enumerable.OrderBy Method (System.Linq) \| Microsoft Learn; ok: Enumerable.ThenBy Method (System.Linq) \| Microsoft Learn | r1 fix, r2 pass |  |  |
+| content/dotnet/exceptions/catch-base-before-derived-compile-error.yaml | junior | output | repaired | 2026-11-14 | yes | compile-error: CS0160 | ok: Statements - C# language specification \| Microsoft Learn; ok: Exception-handling statements - throw and try, catch, finally - C# reference \| Microsoft Learn | r1 fix, r2 pass |  |  |
+| content/dotnet/exceptions/dump-hung-process-in-production.yaml | senior | open | repaired | 2026-11-14 | no |  | ok: Collect Dumps on Crash - .NET \| Microsoft Learn; ok: dotnet-dump diagnostic tool - .NET CLI - .NET \| Microsoft Learn; ok: dotnet-stack diagnostic tool - .NET CLI - .NET \| Microsoft Learn | r1 fix, r2 pass |  |  |
+| content/dotnet/exceptions/exception-in-finally-replaces-original.yaml | middle | output | repaired | 2026-11-14 | yes | output: B True | ok: Statements - C# language specification \| Microsoft Learn; ok: Exception-handling statements - throw and try, catch, finally - C# reference \| Microsoft Learn | r2 pass |  |  |
+| content/dotnet/exceptions/finally-change-after-return-value-captured.yaml | middle | output | repaired | 2026-11-14 | yes | output: 1 | ok: Statements - C# language specification \| Microsoft Learn; ok: Exception-handling statements - throw and try, catch, finally - C# reference \| Microsoft Learn | r1 fix, r2 pass |  |  |
+| content/dotnet/exceptions/process-terminating-exceptions.yaml | senior | multi | repaired | 2026-11-14 | no |  | ok: AppDomain.UnhandledException Event (System) \| Microsoft Learn; ok: RuntimeHelpers.EnsureSufficientExecutionStack Method (System.Runtime.CompilerServices) \| Microsoft Learn; ok: StackOverflowException Class (System) \| Microsoft Learn; ok: TaskScheduler.UnobservedTaskException Event (System.Threading.Tasks) \| Microsoft Learn; ok: Exceptions in Managed Threads - .NET \| Microsoft Learn | r1 pass, r2 pass |  |  |
+| content/dotnet/collections-linq/func-predicate-on-iqueryable-runs-in-memory.yaml | middle | single | not executed | 2026-11-13 | no |  | ok: IQueryable Interface (System.Linq) \| Microsoft Learn; ok: Expression Trees - C# \| Microsoft Learn; ok: Client vs. Server Evaluation - EF Core \| Microsoft Learn | r1 pass |  |  |
+| content/dotnet/clr-gc/loh-not-compacted-by-default.yaml | middle | single |  | 2026-11-13 | no |  | ok: GCSettings.LargeObjectHeapCompactionMode Property (System.Runtime) \| Microsoft Learn; ok: Large object heap (LOH) on Windows - .NET \| Microsoft Learn | r1 pass |  |  |
+| content/dotnet/collections-linq/ienumerable-icollection-ilist-differences.yaml | junior | open |  | 2026-11-13 | no |  | ok: ICollection<T> Interface (System.Collections.Generic) \| Microsoft Learn; ok: IEnumerable<T> Interface (System.Collections.Generic) \| Microsoft Learn; ok: IList<T> Interface (System.Collections.Generic) \| Microsoft Learn | r1 pass |  |  |
+| content/dotnet/exceptions/wrapping-exception-drops-inner.yaml | middle | find-bug |  | 2026-11-13 | yes | output: Import failed: Bad quantity '12x' | ok: Exception.InnerException Property (System) \| Microsoft Learn; ok: Best practices for exceptions - .NET \| Microsoft Learn | r1 pass |  |  |
+
+## Totals by topic and level (shipped + seeds / target)
+
+| topic | junior | middle | senior | lead | architect |
+|---|---|---|---|---|---|
+| collections-linq | 8/8 | 7/7 | 4/4 | 1/1 | 0/0 |
+| clr-gc | 4/4 | 7/7 | 6/6 | 1/1 | 0/0 |
+| exceptions | 6/6 | 4/4 | 3/3 | 1/1 | 0/0 |
+
+## Types (this group; whole wave + seeds vs the wave target)
+
+| type | group | wave | target |
+|---|---|---|---|
+| open | 8 | 100 | 100 +-5 |
+| single | 9 | 80 | 80 +-5 |
+| multi | 5 | 49 | 50 +-5 |
+| output | 21 | 70 | 70 +-5 |
+| find-bug | 7 | 45 | 45 +-5 |
+| situation | 2 | 54 | 55 +-5 |
+
+## Not fact-check verified (owner-review, meta.verified 1970-01-01)
+
+- content/dotnet/clr-gc/gc-does-not-call-dispose.yaml: accepted at the final gate: Owner decision 2026-11-13: remaining minor or unsure issues are re-verified from signed-in user feedback after launch; PR merge is the owner's acceptance.
+- content/dotnet/clr-gc/using-declarations-dispose-reverse-order.yaml: accepted at the final gate: Owner decision 2026-11-13: remaining minor or unsure issues are re-verified from signed-in user feedback after launch; PR merge is the owner's acceptance.
+- content/dotnet/clr-gc/finalizable-object-survives-extra-collection.yaml: accepted at the final gate: Owner decision 2026-11-13: remaining minor or unsure issues are re-verified from signed-in user feedback after launch; PR merge is the owner's acceptance.
+- content/dotnet/clr-gc/workstation-vs-server-gc-tradeoffs.yaml: accepted at the final gate: Owner decision 2026-11-13: remaining minor or unsure issues are re-verified from signed-in user feedback after launch; PR merge is the owner's acceptance.
+- content/dotnet/exceptions/exception-filter-runs-before-inner-finally.yaml: accepted at the final gate: Owner decision 2026-11-13: remaining minor or unsure issues are re-verified from signed-in user feedback after launch; PR merge is the owner's acceptance.
+
+## Shortfall
+
+- none
+
+## Rejected
+
+- none

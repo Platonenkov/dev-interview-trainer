@@ -1,0 +1,91 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNW8VYXZG9N9KP70SK
+slug: read-committed-possible-anomalies
+stack: dotnet
+topic: databases
+level: middle
+type: multi
+grading: auto
+tags: [isolation-levels, read-committed, transactions, sql-server, postgresql]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/sql/t-sql/statements/set-transaction-isolation-level-transact-sql
+    lang: en
+    kind: docs
+  - url: https://www.postgresql.org/docs/current/transaction-iso.html
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какие аномалии возможны на уровне изоляции READ COMMITTED?
+    prompt: |
+      Транзакция работает на уровне изоляции `READ COMMITTED` (уровень по умолчанию в SQL Server и PostgreSQL).
+      Выберите все аномалии, которые на этом уровне всё ещё могут произойти.
+    hint: Как долго при `READ COMMITTED` действует гарантия чтения: всю транзакцию или только один запрос? Что может случиться между двумя запросами одной транзакции?
+    options:
+      a: "Грязное чтение: транзакция читает строку, которую другая транзакция изменила, но ещё не зафиксировала."
+      b: "Неповторяющееся чтение: повторное чтение той же строки в одной транзакции возвращает другие значения, потому что другая транзакция изменила её и зафиксировала."
+      c: "Фантомное чтение: повторный запрос с тем же условием по диапазону возвращает новую строку, которую другая транзакция вставила и зафиксировала."
+      d: "Грязная запись: транзакция перезаписывает строку, которую другая транзакция изменила, но ещё не зафиксировала."
+    optionExplanations:
+      a: Именно от грязного чтения `READ COMMITTED` и защищает. В SQL Server читающий запрос либо ждёт снятия эксклюзивной блокировки писателя, либо (при `READ_COMMITTED_SNAPSHOT ON`) читает последнюю зафиксированную версию строки. В PostgreSQL каждый запрос видит снимок только зафиксированных данных.
+      d: Транзакция всегда держит эксклюзивную блокировку изменённых строк до своего завершения, независимо от уровня изоляции. Вторая транзакция, которая пытается изменить ту же строку, ждёт фиксации или отката первой.
+    answer: Неповторяющееся чтение и фантомное чтение.
+    explanation: |
+      `READ COMMITTED` гарантирует только одно: каждый запрос видит лишь зафиксированные данные. Между запросами
+      одной транзакции ничего не удерживается. В SQL Server в режиме блокировок разделяемая блокировка снимается
+      сразу после чтения строки, а при `READ_COMMITTED_SNAPSHOT ON` и в PostgreSQL каждый запрос получает новый
+      снимок данных. Поэтому другая транзакция может между двумя чтениями изменить строку и зафиксировать
+      изменение (неповторяющееся чтение) или вставить новую строку, подходящую под условие (фантом).
+
+      Неповторяющееся чтение устраняет уровень `REPEATABLE READ`. Фантомы в SQL Server устраняют `SERIALIZABLE`
+      и `SNAPSHOT`, а в PostgreSQL их не допускает уже `REPEATABLE READ`, потому что он работает на одном снимке
+      на всю транзакцию.
+
+      Грязная запись невозможна ни на одном уровне: блокировки на изменение данных не зависят от выбранного
+      уровня изоляции и держатся до конца транзакции.
+    linkTitles:
+      - "SET TRANSACTION ISOLATION LEVEL (Transact-SQL)"
+      - "PostgreSQL: изоляция транзакций"
+  en:
+    title: Which anomalies are possible under the READ COMMITTED isolation level?
+    prompt: |
+      A transaction runs under the `READ COMMITTED` isolation level (the default in SQL Server and PostgreSQL).
+      Select every anomaly that can still occur at this level.
+    hint: How long does the read guarantee of `READ COMMITTED` last - the whole transaction or a single statement? What can happen between two statements of one transaction?
+    options:
+      a: "Dirty read: a transaction reads a row that another transaction changed but has not committed yet."
+      b: "Non-repeatable read: reading the same row again in one transaction returns different values because another transaction changed it and committed."
+      c: "Phantom read: repeating a query with the same range condition returns a new row that another transaction inserted and committed."
+      d: "Dirty write: a transaction overwrites a row that another transaction changed but has not committed yet."
+    optionExplanations:
+      a: Dirty reads are exactly what `READ COMMITTED` prevents. In SQL Server the reading statement either waits for the writer's exclusive lock to be released or (with `READ_COMMITTED_SNAPSHOT ON`) reads the last committed version of the row. In PostgreSQL every statement sees a snapshot of committed data only.
+      d: A transaction always holds an exclusive lock on the rows it modified until it ends, whatever the isolation level. A second transaction that tries to modify the same row waits until the first one commits or rolls back.
+    answer: Non-repeatable reads and phantom reads.
+    explanation: |
+      `READ COMMITTED` guarantees only one thing: each statement sees committed data only. Nothing is held
+      between the statements of a transaction. In SQL Server in locking mode the shared lock is released right
+      after the row is read, and with `READ_COMMITTED_SNAPSHOT ON` and in PostgreSQL every statement gets a new
+      snapshot of the data. So between two reads another transaction can change a row and commit
+      (a non-repeatable read) or insert a new row that matches the condition (a phantom).
+
+      Non-repeatable reads are removed by `REPEATABLE READ`. Phantoms are removed by `SERIALIZABLE` and
+      `SNAPSHOT` in SQL Server, while in PostgreSQL `REPEATABLE READ` already excludes them, because it works
+      on one snapshot for the whole transaction.
+
+      A dirty write is impossible at every level: the locks taken to modify data do not depend on the chosen
+      isolation level and are held until the end of the transaction.
+    linkTitles:
+      - "SET TRANSACTION ISOLATION LEVEL (Transact-SQL)"
+      - "PostgreSQL: transaction isolation"
+meta:
+  authors: [platonenkov]
+  verified: 1970-01-01

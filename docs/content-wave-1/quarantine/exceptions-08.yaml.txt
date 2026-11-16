@@ -1,0 +1,118 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNQTB679EG08YT8NHY
+slug: exception-in-finally-replaces-original
+stack: dotnet
+topic: exceptions
+level: middle
+type: output
+grading: auto
+tags: [finally, exception-propagation, try-finally]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    try
+    {
+        try
+        {
+            throw new InvalidOperationException("A");
+        }
+        finally
+        {
+            throw new ArgumentException("B");
+        }
+    }
+    catch (Exception ex)
+    {
+        Console.Write($"{ex.Message} {ex.InnerException == null}");
+    }
+expect:
+  kind: output
+  value: "B True"
+acceptedOutputs: ["B True"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "B True" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "A True" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "B False" }
+  - id: d
+    correct: false
+    expect: { kind: compile-error }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/statements/exception-handling-statements
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/language-specification/statements
+    lang: en
+    kind: spec
+locales:
+  ru:
+    title: Что увидит внешний catch, если исключение выброшено и в try, и в finally?
+    prompt: |
+      Блок `try` выбрасывает исключение с сообщением `A`, а блок `finally` того же оператора выбрасывает
+      исключение с сообщением `B`. Что выведет эта программа в консоль?
+    hint: Может ли одно исключение ждать, пока распространяется другое, или в каждый момент распространяется только одно?
+    options:
+      a: "B True"
+      b: "A True"
+      c: "B False"
+      d: Ошибка компиляции
+    optionExplanations:
+      b: Исключение `A` не доходит до внешнего обработчика: пока оно распространялось, `finally` выбросил `B`, и дальше распространяется уже `B`.
+      c: Среда выполнения не связывает исключения автоматически. `B` создано без аргумента `innerException`, поэтому его `InnerException` равен `null`, а `A` потеряно.
+      d: "Из `finally` запрещено выходить через `return`, `break`, `continue` или `goto` (CS0157), но оператор `throw` в `finally` разрешён."
+    answer: "B True"
+    explanation: |
+      Исключение `A` начинает распространяться, и перед выходом из внутреннего `try` выполняется `finally`.
+      Если `finally` сам выбрасывает исключение, оно заменяет то, что распространялось: обработка `A`
+      прекращается, и внешний `catch` получает только `B`. Спецификация C# прямо говорит, что в этом случае
+      исходное исключение теряется.
+
+      Автоматической связи между исключениями нет: `B` создано конструктором без `innerException`, поэтому
+      `ex.InnerException == null` даёт `True`. Причина сбоя (`A`) исчезает из логов, а в них остаётся
+      вторичная ошибка из очистки.
+
+      Поэтому код в `finally` и в `Dispose` не должен выбрасывать исключения. Если очистка может упасть,
+      перехватите ошибку внутри `finally` и залогируйте её, не заменяя исходное исключение.
+    linkTitles:
+      - "Операторы обработки исключений"
+      - "Спецификация C#: операторы"
+  en:
+    title: What does the outer catch see when both try and finally throw?
+    prompt: |
+      The `try` block throws an exception with the message `A`, and the `finally` block of the same statement
+      throws an exception with the message `B`. What does this program print to the console?
+    hint: Can one exception wait while another is propagating, or does only one propagate at any moment?
+    options:
+      a: "B True"
+      b: "A True"
+      c: "B False"
+      d: Compile error
+    optionExplanations:
+      b: "Exception `A` never reaches the outer handler: while it was propagating, `finally` threw `B`, and from then on `B` is what propagates."
+      c: "The runtime does not chain exceptions automatically. `B` is created without an `innerException` argument, so its `InnerException` is `null` and `A` is lost."
+      d: "Leaving `finally` through `return`, `break`, `continue` or `goto` is forbidden (CS0157), but a `throw` statement inside `finally` is allowed."
+    answer: "B True"
+    explanation: |
+      Exception `A` starts propagating, and before control leaves the inner `try` its `finally` block runs.
+      When `finally` throws an exception of its own, that exception replaces the one in flight: processing
+      of `A` stops and the outer `catch` receives only `B`. The C# specification states explicitly that the
+      original exception is lost in this case.
+
+      There is no automatic link between the two: `B` is built with a constructor that takes no
+      `innerException`, so `ex.InnerException == null` is `True`. The real cause of the failure (`A`)
+      disappears from the logs, which show only the secondary error from the cleanup code.
+
+      That is why code in `finally` and in `Dispose` should not throw. If cleanup can fail, catch that error
+      inside `finally` and log it instead of letting it replace the original exception.
+    linkTitles:
+      - "Exception-handling statements"
+      - "C# specification: statements"
+meta:
+  authors: [platonenkov]
+  verified: 1970-01-01

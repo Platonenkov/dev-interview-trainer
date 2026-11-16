@@ -1,0 +1,44 @@
+{
+  "verdicts": [
+    {
+      "stubId": "distributed-07",
+      "verdict": "pass",
+      "issues": [
+        {
+          "severity": "minor",
+          "field": "links[1] / locales.en.explanation",
+          "claim": "The Microsoft guide to .NET microservices describes the same approach: an integration event log in the same database, written in one transaction with the business data.",
+          "problem": "The fetched excerpt stops before the section on the event log table. It does show the Outbox pattern as \u0027a transactional table to store the integration events (extending the local transaction)\u0027, which supports the claim in substance. The fetch also returned 429 once, so the \u0027integration event log\u0027 wording rests on my knowledge of the page and not on the excerpt. The other technical claims check out from my knowledge: Kafka and RabbitMQ not taking part in XA, the EF Core default transaction per SaveChanges, the MassTransit and NServiceBus outboxes, and the SKIP LOCKED / UPDLOCK, READPAST hints.",
+          "suggestedFix": "Optional: soften the wording to \u0027a transactional table of integration events that extends the local transaction\u0027 (the outbox) so it matches the visible excerpt exactly."
+        }
+      ]
+    },
+    {
+      "stubId": "distributed-08",
+      "verdict": "fix",
+      "issues": [
+        {
+          "severity": "major",
+          "field": "options[c] vs options[f]",
+          "claim": "c: \u0022Bound the number of attempts and the total time, then return the message to the broker for delayed redelivery or send it to a dead-letter queue (DLQ).\u0022 f: \u0022... independent retries at every layer ... and in the broker redelivery.\u0022",
+          "problem": "The question has one defensible answer set, but c and f contradict each other. f is marked wrong partly because it stacks broker redelivery on top of other retry layers, and the explanation says \u0027retries should live at one layer\u0027. c is marked correct and recommends broker redelivery after in-process retries. Redelivery re-runs the in-process retries, so this is the multiplication that f warns about. A strong candidate could argue that c is unsound, or that f is acceptable when bounded.",
+          "suggestedFix": "Change c to: \u0027Bound the number of attempts and the total retry time (a retry budget), then stop retrying and send the message to a dead-letter queue (DLQ) so it is not lost.\u0027 Drop \u0027return to the broker for delayed redelivery\u0027 from c, from locales.ru.options.c, and from the matching explanation bullet in both locales. Keep f as it is."
+        },
+        {
+          "severity": "minor",
+          "field": "optionExplanations.f",
+          "claim": "3 attempts at each of three layers give up to 27 calls per message",
+          "problem": "Option f lists four layers (HttpClient handler, service client, message handler, broker redelivery) but the explanation counts three. The source example (count of three on both calls = nine retry attempts) is arithmetically different from the 27 figure.",
+          "suggestedFix": "Say \u0027three attempts at each of four layers give up to 81 calls\u0027, or reduce the layers listed in f to three. Apply the same change in ru and en."
+        },
+        {
+          "severity": "minor",
+          "field": "options[d]",
+          "claim": "Retry only transient errors (a timeout, a dropped connection, \u0060503\u0060, \u0060429\u0060)",
+          "problem": "The cited transient-faults page says some codes, such as 503, \u0027might indicate that the service failed and won\u0027t respond to further attempts\u0027. Listing 503 as plainly transient is slightly stronger than the source.",
+          "suggestedFix": "Phrase it as \u0027503 or 429, honouring Retry-After\u0027, or add a note in the explanation that 503 is retried within the bounded budget and the circuit breaker."
+        }
+      ]
+    }
+  ]
+}

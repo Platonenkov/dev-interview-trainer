@@ -1,0 +1,210 @@
+{
+  "topic": "distributed",
+  "source": "msgbatch_019NNUXm6ACGPLaGa4o6eord",
+  "stubs": [
+    {
+      "slug": "competing-consumers-vs-publish-subscribe",
+      "level": "junior",
+      "type": "single",
+      "subtopic": "Queues",
+      "angle": "Three instances of a service read from one point-to-point queue; the question asks how many of them process each message, compared with three subscribers of a publish-subscribe topic.",
+      "answerHinge": "With competing consumers on one queue each message is delivered to exactly one consumer, while publish-subscribe gives every subscription its own copy.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/azure/architecture/patterns/competing-consumers",
+        "https://learn.microsoft.com/en-us/azure/architecture/patterns/publisher-subscriber"
+      ],
+      "stubId": "distributed-01"
+    },
+    {
+      "slug": "rabbitmq-auto-ack-loses-messages",
+      "level": "middle",
+      "type": "single",
+      "subtopic": "RabbitMQ",
+      "angle": "A RabbitMQ consumer uses automatic acknowledgement and crashes halfway through a message; the question asks what happens to that message and to the messages already prefetched.",
+      "answerHinge": "With automatic acknowledgement the broker treats a message as delivered once it is sent, so a consumer crash loses it; manual ack after processing makes the broker redeliver it.",
+      "sources": [
+        "https://www.rabbitmq.com/docs/confirms"
+      ],
+      "stubId": "distributed-02"
+    },
+    {
+      "slug": "kafka-ordering-per-partition-key",
+      "level": "middle",
+      "type": "single",
+      "subtopic": "Kafka",
+      "angle": "Events of one order must be consumed in the order they were produced from a topic with 12 partitions; the question asks which producer setting guarantees that.",
+      "answerHinge": "Kafka guarantees order only within a partition, so all events of one order must use the same message key (for example the order id) to land in the same partition.",
+      "sources": [
+        "https://kafka.apache.org/documentation/"
+      ],
+      "stubId": "distributed-03"
+    },
+    {
+      "slug": "idempotent-consumer-marks-processed-too-early",
+      "level": "middle",
+      "type": "find-bug",
+      "subtopic": "Idempotency",
+      "angle": "A BCL-only simulation of a message consumer records the message id in a processed set before crediting an account; the credit fails once, the message is redelivered and skipped, and the program prints a balance of 0 instead of 100.",
+      "answerHinge": "The message id must be recorded only together with (or after) a successful side effect, otherwise a failure after marking turns a redelivery into a silently lost message.",
+      "sources": [
+        "https://microservices.io/patterns/communication-style/idempotent-consumer.html",
+        "https://learn.microsoft.com/en-us/azure/service-bus-messaging/duplicate-detection"
+      ],
+      "stubId": "distributed-04"
+    },
+    {
+      "slug": "at-least-once-duplicate-causes",
+      "level": "middle",
+      "type": "multi",
+      "subtopic": "Idempotency",
+      "angle": "Select every situation that makes a consumer receive the same message twice under at-least-once delivery: a crash after the database commit but before the ack, a producer resending after a lost publisher confirm, a Kafka rebalance before the offset commit, versus a durable write to disk or a message TTL expiry.",
+      "answerHinge": "Duplicates arise whenever processing or storage succeeded but the confirmation of it (ack, publisher confirm, offset commit) was lost, so the sender or broker repeats the delivery.",
+      "sources": [
+        "https://www.rabbitmq.com/docs/reliability",
+        "https://kafka.apache.org/documentation/"
+      ],
+      "stubId": "distributed-05"
+    },
+    {
+      "slug": "outbox-relay-deletes-before-publish",
+      "level": "senior",
+      "type": "find-bug",
+      "subtopic": "Outbox pattern",
+      "angle": "A BCL-only simulation of an outbox relay removes a row from the outbox list and then calls a fake broker whose first publish throws; the next relay pass finds an empty outbox and the program prints that 0 messages were published.",
+      "answerHinge": "The relay must delete or mark an outbox row only after the broker confirmed the publish, accepting at-least-once delivery instead of losing the message.",
+      "sources": [
+        "https://microservices.io/patterns/data/transactional-outbox.html"
+      ],
+      "stubId": "distributed-06"
+    },
+    {
+      "slug": "dual-write-database-and-broker",
+      "level": "senior",
+      "type": "open",
+      "subtopic": "Outbox pattern",
+      "angle": "A handler saves an order with EF Core and then publishes an OrderCreated event to the broker; the question asks what can go wrong in this sequence and how the transactional outbox fixes it.",
+      "answerHinge": "There is no atomic transaction spanning the database and the broker, so either write can succeed alone; the outbox stores the event in the same local transaction as the data and a relay publishes it afterwards at least once.",
+      "sources": [
+        "https://microservices.io/patterns/data/transactional-outbox.html",
+        "https://learn.microsoft.com/en-us/dotnet/architecture/microservices/multi-container-microservice-net-applications/subscribe-events"
+      ],
+      "stubId": "distributed-07"
+    },
+    {
+      "slug": "retry-backoff-jitter-practices",
+      "level": "senior",
+      "type": "multi",
+      "subtopic": "Retries",
+      "angle": "Select every sound practice for retrying failed calls from a message consumer to a downstream service: exponential backoff, random jitter, a bounded number of attempts, retrying only transient errors, versus immediate tight-loop retries and independent retries at every layer of the call chain.",
+      "answerHinge": "Retries must be bounded, spaced with growing randomized delays and limited to transient faults, because unbounded, synchronized or stacked retries multiply load on a service that is already failing.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/azure/architecture/patterns/retry",
+        "https://learn.microsoft.com/en-us/azure/architecture/best-practices/transient-faults"
+      ],
+      "stubId": "distributed-08"
+    },
+    {
+      "slug": "poison-message-blocks-queue",
+      "level": "senior",
+      "type": "situation",
+      "subtopic": "Queues",
+      "angle": "One malformed message makes the consumer throw on every delivery, it is redelivered endlessly, the queue backlog grows and the logs fill with the same stack trace; the question asks what to do now and what to change.",
+      "answerHinge": "Cap delivery attempts and move the failing message to a dead-letter queue with its error, alert on dead-letter depth, then fix the bug and replay the dead-lettered messages deliberately.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/azure/service-bus-messaging/service-bus-dead-letter-queues",
+        "https://www.rabbitmq.com/docs/dlx"
+      ],
+      "stubId": "distributed-09"
+    },
+    {
+      "slug": "kafka-consumer-group-scaling-partitions",
+      "level": "senior",
+      "type": "single",
+      "subtopic": "Kafka",
+      "angle": "A consumer group on a 6-partition topic lags under load and the team scales it from 6 to 12 instances; the question asks what effect this has on throughput.",
+      "answerHinge": "Each partition is assigned to at most one consumer in a group, so instances beyond the partition count stay idle; throughput needs more partitions, which also remaps keys and breaks per-key ordering during the change.",
+      "sources": [
+        "https://kafka.apache.org/documentation/"
+      ],
+      "stubId": "distributed-10"
+    },
+    {
+      "slug": "kafka-vs-rabbitmq-team-choice",
+      "level": "lead",
+      "type": "open",
+      "subtopic": "Kafka and RabbitMQ",
+      "angle": "The team must pick one broker for a new platform that needs both background job queues and an event stream other teams will read; the question asks how you decide between Kafka and RabbitMQ and what risks you weigh.",
+      "answerHinge": "Kafka is a partitioned, retained log that consumers can replay at their own offsets, while RabbitMQ routes messages and deletes them after per-message acknowledgement; the choice follows replay and fan-out needs versus routing and task-queue semantics, plus the team's ability to operate it.",
+      "sources": [
+        "https://kafka.apache.org/documentation/",
+        "https://www.rabbitmq.com/tutorials/amqp-concepts"
+      ],
+      "stubId": "distributed-11"
+    },
+    {
+      "slug": "duplicate-payments-after-broker-failover",
+      "level": "lead",
+      "type": "situation",
+      "subtopic": "Idempotency",
+      "angle": "After a broker failover dozens of customers were charged twice because payment commands were redelivered; the question asks how you lead the response and what you change so it cannot recur.",
+      "answerHinge": "Contain and refund first, then make the payment step idempotent end to end with a stable idempotency key passed to the payment provider and a reconciliation job, rather than relying on the broker to deliver exactly once.",
+      "sources": [
+        "https://microservices.io/patterns/communication-style/idempotent-consumer.html",
+        "https://learn.microsoft.com/en-us/azure/architecture/patterns/retry"
+      ],
+      "stubId": "distributed-12"
+    },
+    {
+      "slug": "saga-orchestration-vs-choreography",
+      "level": "architect",
+      "type": "open",
+      "subtopic": "Sagas",
+      "angle": "An order flow spans payment, inventory, shipping and loyalty services; the question asks when you would coordinate it with choreography through events and when with a central orchestrator.",
+      "answerHinge": "Choreography keeps services decoupled and suits a few steps, but as steps grow the flow becomes implicit and hard to trace; an orchestrator makes the flow and compensations explicit at the cost of a central component that knows every participant.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/azure/architecture/patterns/saga",
+        "https://microservices.io/patterns/data/saga.html"
+      ],
+      "stubId": "distributed-13"
+    },
+    {
+      "slug": "saga-compensation-semantics",
+      "level": "architect",
+      "type": "multi",
+      "subtopic": "Sagas",
+      "angle": "Select every true statement about saga compensations: they are new business actions rather than database rollbacks, they must be idempotent and retryable, other transactions can see intermediate states, versus claims that a saga gives ACID isolation or that compensation restores the exact previous state.",
+      "answerHinge": "A saga is a sequence of local commits, so it lacks isolation and compensations are semantic undo operations that must tolerate retries and may not restore the original state exactly.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/azure/architecture/patterns/compensating-transaction",
+        "https://learn.microsoft.com/en-us/azure/architecture/patterns/saga"
+      ],
+      "stubId": "distributed-14"
+    },
+    {
+      "slug": "exactly-once-delivery-limits",
+      "level": "architect",
+      "type": "open",
+      "subtopic": "Consistency",
+      "angle": "A team says Kafka's exactly-once semantics mean their consumers that write to SQL Server and call a payment API need no deduplication; the question asks whether that is true and what end-to-end guarantee you can actually design for.",
+      "answerHinge": "Kafka transactions give exactly-once only for read-process-write within Kafka; any side effect in an external system still sees at-least-once delivery, so effectively-once comes from idempotent processing or storing offsets atomically with the result.",
+      "sources": [
+        "https://kafka.apache.org/documentation/",
+        "https://microservices.io/patterns/communication-style/idempotent-consumer.html"
+      ],
+      "stubId": "distributed-15"
+    },
+    {
+      "slug": "strong-vs-eventual-consistency-boundaries",
+      "level": "architect",
+      "type": "open",
+      "subtopic": "Consistency",
+      "angle": "In a system of order, inventory and billing services the question asks how you decide which invariants must be strongly consistent and which may become consistent eventually, and what the business must accept for the latter.",
+      "answerHinge": "Invariants that must never be violated even briefly belong inside one service's local transaction boundary; rules that span services are made eventually consistent through events, sagas and reconciliation, trading immediate correctness for availability and latency.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/azure/architecture/microservices/design/data-considerations",
+        "https://learn.microsoft.com/en-us/azure/architecture/patterns/saga"
+      ],
+      "stubId": "distributed-16"
+    }
+  ]
+}

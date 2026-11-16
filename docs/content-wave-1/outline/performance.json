@@ -1,0 +1,183 @@
+{
+  "topic": "performance",
+  "source": "msgbatch_019NNUXm6ACGPLaGa4o6eord",
+  "stubs": [
+    {
+      "slug": "arraypool-rent-returns-larger-array",
+      "level": "junior",
+      "type": "output",
+      "subtopic": "pooling",
+      "angle": "What does printing the Length of an array rented from ArrayPool<int>.Shared with Rent(10) show on .NET 10?",
+      "answerHinge": "Rent returns an array of at least the requested length, and the shared pool rounds up to its bucket size, so on .NET 10 Rent(10) prints 16. Code must track the requested length itself.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/api/system.buffers.arraypool-1.rent",
+        "https://learn.microsoft.com/en-us/dotnet/api/system.buffers.arraypool-1"
+      ],
+      "stubId": "performance-01"
+    },
+    {
+      "slug": "dotnet-counters-live-metrics",
+      "level": "junior",
+      "type": "single",
+      "subtopic": "profiling",
+      "angle": "Which .NET diagnostic tool watches live CPU, GC and allocation-rate counters of a running process without restarting it?",
+      "answerHinge": "dotnet-counters attaches to a running process and shows live EventCounter and Meter metrics. dotnet-trace records event traces and dotnet-dump captures memory dumps.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-counters",
+        "https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-trace"
+      ],
+      "stubId": "performance-02"
+    },
+    {
+      "slug": "stopwatch-measurement-pitfalls",
+      "level": "middle",
+      "type": "multi",
+      "subtopic": "benchmarking",
+      "angle": "Which factors make a hand-written Stopwatch timing of a single method call unreliable?",
+      "answerHinge": "A Debug build disables JIT optimizations, and the first call includes JIT and tiered compilation. A single iteration cannot separate noise from signal. Using Stopwatch instead of DateTime.Now is not a flaw, because Stopwatch is the high-resolution timer.",
+      "sources": [
+        "https://benchmarkdotnet.org/articles/guides/good-practices.html",
+        "https://learn.microsoft.com/en-us/dotnet/api/system.diagnostics.stopwatch"
+      ],
+      "stubId": "performance-03"
+    },
+    {
+      "slug": "arraypool-return-keeps-stale-data",
+      "level": "middle",
+      "type": "output",
+      "subtopic": "pooling",
+      "angle": "What does the code print when it writes a value into a rented array, returns it without clearArray, and then rents the same size again on the same thread on .NET 10?",
+      "answerHinge": "Return does not clear the array by default, and the shared pool hands the same array back on the same thread. The old value is visible, so a pooled buffer must never be assumed to be zeroed.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/api/system.buffers.arraypool-1.return",
+        "https://learn.microsoft.com/en-us/dotnet/api/system.buffers.arraypool-1.rent"
+      ],
+      "stubId": "performance-04"
+    },
+    {
+      "slug": "memoization-cache-key-missing-parameter",
+      "level": "middle",
+      "type": "find-bug",
+      "subtopic": "caching",
+      "angle": "Find the line that makes a Dictionary-based memoized price lookup return the wrong price when it is called with a different currency.",
+      "answerHinge": "The cache key holds only productId and leaves out currency. The second call hits the entry cached for the first currency, so the key must include every input that affects the result.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.dictionary-2.trygetvalue"
+      ],
+      "stubId": "performance-05"
+    },
+    {
+      "slug": "string-concatenation-in-loop-cost",
+      "level": "middle",
+      "type": "single",
+      "subtopic": "allocations",
+      "angle": "Why does building a large string with += inside a loop get dramatically slower as the number of iterations grows?",
+      "answerHinge": "Strings are immutable. Each += allocates a new string and copies all previous characters, so total work and allocation grow quadratically. StringBuilder appends into growable chunks instead.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/standard/base-types/stringbuilder",
+        "https://learn.microsoft.com/en-us/dotnet/api/system.text.stringbuilder"
+      ],
+      "stubId": "performance-06"
+    },
+    {
+      "slug": "memorycache-sizelimit-requires-entry-size",
+      "level": "middle",
+      "type": "single",
+      "subtopic": "caching",
+      "angle": "What happens when MemoryCache is configured with SizeLimit and code adds an entry without setting its Size?",
+      "answerHinge": "Once SizeLimit is set, every entry must declare a Size, and adding an entry without one throws InvalidOperationException. The cache has no idea of entry sizes on its own; the units are whatever the application chooses.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/aspnet/core/performance/caching/memory"
+      ],
+      "stubId": "performance-07"
+    },
+    {
+      "slug": "collectionsmarshal-asspan-stale-after-growth",
+      "level": "senior",
+      "type": "output",
+      "subtopic": "allocations",
+      "angle": "A List<int> created with capacity 2 holds 1 and 2. The snippet takes CollectionsMarshal.AsSpan of the list, adds a third item, writes 99 to span[0] and prints list[0]. What is printed (.NET 5 and later)?",
+      "answerHinge": "CollectionsMarshal.AsSpan exposes the list's current backing array, and growth copies the items into a new array, so the span goes stale and the write is lost; the output is 1.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/api/system.runtime.interopservices.collectionsmarshal.asspan"
+      ],
+      "stubId": "performance-08"
+    },
+    {
+      "slug": "arraypool-use-after-return",
+      "level": "senior",
+      "type": "find-bug",
+      "subtopic": "pooling",
+      "angle": "Find the line that corrupts the data a helper hands to its caller, where the helper fills a rented buffer and returns it to the pool in finally while still returning the buffer to the caller.",
+      "answerHinge": "The buffer goes back to the pool while the caller still uses it, so the next Rent gets the same array and overwrites the caller's data. Ownership must end with exactly one Return after the last use.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/api/system.buffers.arraypool-1.return",
+        "https://learn.microsoft.com/en-us/dotnet/api/system.buffers.arraypool-1"
+      ],
+      "stubId": "performance-09"
+    },
+    {
+      "slug": "find-allocation-hot-spots-production",
+      "level": "senior",
+      "type": "open",
+      "subtopic": "profiling",
+      "angle": "dotnet-counters shows a high allocation rate and frequent Gen0 collections in production. How do you find which types and call stacks allocate the most?",
+      "answerHinge": "The allocation-rate counter only signals the problem. Attributing it needs a trace with sampled GC allocation events (dotnet-trace with a GC profile, opened in PerfView or Visual Studio), or an allocation profiler, which groups allocations by type and stack.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-trace",
+        "https://learn.microsoft.com/en-us/visualstudio/profiling/dotnet-alloc-tool"
+      ],
+      "stubId": "performance-10"
+    },
+    {
+      "slug": "memorycache-getorcreate-not-atomic",
+      "level": "senior",
+      "type": "multi",
+      "subtopic": "caching",
+      "angle": "Which statements are true about IMemoryCache.GetOrCreate when many requests miss the same key at the same moment?",
+      "answerHinge": "GetOrCreate is not atomic: the factory can run concurrently for the same key, which causes a cache stampede on the backing store. Preventing it needs per-key coordination such as a lock or a cached Lazy, not a different expiration setting.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/aspnet/core/performance/caching/memory"
+      ],
+      "stubId": "performance-11"
+    },
+    {
+      "slug": "benchmark-dead-code-elimination",
+      "level": "senior",
+      "type": "open",
+      "subtopic": "benchmarking",
+      "angle": "A BenchmarkDotNet benchmark reports a sub-nanosecond time for a method that computes a value and discards it. What is happening and how do you fix the benchmark?",
+      "answerHinge": "The JIT removed computation whose result is never used, or folded constant inputs. The benchmark must return or consume the result and take non-constant inputs (fields or Params) so the measured work actually runs.",
+      "sources": [
+        "https://benchmarkdotnet.org/articles/guides/good-practices.html",
+        "https://github.com/dotnet/BenchmarkDotNet"
+      ],
+      "stubId": "performance-12"
+    },
+    {
+      "slug": "pooling-small-objects-pr-decision",
+      "level": "lead",
+      "type": "situation",
+      "subtopic": "pooling",
+      "angle": "A teammate opens a PR that wraps many small, short-lived DTOs in ObjectPool across the codebase and cites a microbenchmark. How do you decide whether to accept it and roll it out?",
+      "answerHinge": "Pooling pays off only for objects that are expensive to create or large. For small short-lived objects, Gen0 allocation is cheap, while pooling adds reset bugs, use-after-return risk and Gen2 retention. The decision should rest on end-to-end profiling of the real workload, applied selectively to measured hot paths.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/aspnet/core/performance/objectpool"
+      ],
+      "stubId": "performance-13"
+    },
+    {
+      "slug": "two-level-cache-across-instances",
+      "level": "architect",
+      "type": "open",
+      "subtopic": "caching",
+      "angle": "A service scaled to many instances uses an in-process cache, and users see different data depending on which instance answers. How do you design caching across instances, and what are the trade-offs?",
+      "answerHinge": "Per-instance caches diverge. A two-level design pairs a fast per-instance L1 with a shared distributed L2 (for example HybridCache from .NET 9 over IDistributedCache) and bounds staleness through a short L1 expiration or invalidation messages. This trades latency and store load against consistency.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/aspnet/core/performance/caching/hybrid",
+        "https://learn.microsoft.com/en-us/aspnet/core/performance/caching/distributed"
+      ],
+      "stubId": "performance-14"
+    }
+  ]
+}

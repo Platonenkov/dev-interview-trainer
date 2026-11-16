@@ -1,0 +1,98 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WN83RA7PGE1B93HD1D
+slug: lazy-loading-navigation-in-report-loop
+stack: dotnet
+topic: ef-core
+level: middle
+type: find-bug
+grading: auto
+tags: [ef-core, lazy-loading, n-plus-one, performance]
+code:
+  language: csharp
+  harness: none
+  source: |
+    public sealed class OrderReport
+    {
+        private readonly ShopContext _db;
+
+        public OrderReport(ShopContext db) => _db = db;
+
+        public async Task<List<string>> BuildAsync(DateTime from)
+        {
+            var orders = await _db.Orders
+                .Where(o => o.CreatedAt >= from)
+                .ToListAsync();
+
+            var lines = new List<string>();
+            foreach (var order in orders)
+            {
+                lines.Add($"{order.Id}: {order.Customer.Name}, {order.Total}");
+            }
+
+            return lines;
+        }
+    }
+bugLineSets: [[16]]
+links:
+  - url: https://learn.microsoft.com/en-us/ef/core/querying/related-data/lazy
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/ef/core/performance/efficient-querying
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строку, из-за которой отчёт по заказам делает запрос на каждый заказ
+    prompt: |
+      `ShopContext` настроен с `UseLazyLoadingProxies()`, навигационное свойство `Order.Customer` объявлено
+      как `virtual`. Отчёт за месяц по 500 заказам строится несколько секунд, а в логе SQL после запроса к
+      таблице `Orders` идут сотни отдельных `SELECT` к таблице `Customers`, по одному на заказ.
+      Щёлкните по строке, которая отправляет в базу лишний запрос на каждой итерации.
+    hint: Что делает прокси ленивой загрузки при первом обращении к навигационному свойству, которое запрос не загрузил?
+    answer: Строка 16, обращение к `order.Customer.Name` внутри цикла.
+    explanation: |
+      Запрос в строках 9-11 загружает только заказы, свойство `Customer` у них не загружено. С включёнными
+      прокси ленивой загрузки первое чтение `order.Customer` в строке 16 незаметно выполняет отдельный запрос
+      к базе за покупателем этого заказа. Цикл повторяет это для каждого заказа: один запрос за списком плюс
+      N запросов за покупателями. Это проблема N+1: каждый запрос дешёв, но сетевые задержки складываются.
+      Кроме того, ленивая загрузка выполняется синхронно, поэтому внутри асинхронного метода она ещё и
+      блокирует поток.
+
+      Исправление - загрузить нужные данные заранее, одним запросом:
+
+      - добавить `.Include(o => o.Customer)` в запрос, тогда покупатели придут через `JOIN`;
+      - или, лучше для отчёта, сделать проекцию:
+        `.Select(o => new { o.Id, CustomerName = o.Customer.Name, o.Total })`. Обращение к `o.Customer`
+        внутри `Select` переводится в SQL, читаются только нужные столбцы, и ленивая загрузка не участвует.
+    linkTitles:
+      - "Ленивая загрузка связанных данных"
+      - "Эффективные запросы в EF Core"
+  en:
+    title: Find the line that makes an order report issue a query per order
+    prompt: |
+      `ShopContext` is configured with `UseLazyLoadingProxies()`, and the navigation property `Order.Customer`
+      is declared `virtual`. A monthly report over 500 orders takes several seconds, and after the query to
+      the `Orders` table the SQL log shows hundreds of separate `SELECT` statements against `Customers`, one
+      per order. Click the line that sends an extra query to the database on every iteration.
+    hint: What does a lazy loading proxy do on the first access to a navigation property that the query did not load?
+    answer: Line 16, the access to `order.Customer.Name` inside the loop.
+    explanation: |
+      The query on lines 9-11 loads only the orders; their `Customer` property is not loaded. With lazy
+      loading proxies enabled, the first read of `order.Customer` on line 16 silently runs a separate query
+      for the customer of that order. The loop repeats this for every order: one query for the list plus N
+      queries for the customers. This is the N+1 problem: each query is cheap, but the network round trips
+      add up. Lazy loading also runs synchronously, so inside an async method it blocks the thread as well.
+
+      The fix is to load the needed data up front, in one query:
+
+      - add `.Include(o => o.Customer)` to the query, so the customers arrive through a `JOIN`;
+      - or, better for a report, use a projection:
+        `.Select(o => new { o.Id, CustomerName = o.Customer.Name, o.Total })`. Accessing `o.Customer`
+        inside `Select` is translated to SQL, only the needed columns are read, and lazy loading is not involved.
+    linkTitles:
+      - "Lazy loading of related data"
+      - "Efficient querying in EF Core"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  noRunReason: The snippet uses EF Core types with lazy loading proxies and needs a database provider, which the sandbox does not have. Not executed.

@@ -1,0 +1,130 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNPZX50H5KC97H0QEV
+slug: deadlock-error-1205-two-procedures
+stack: dotnet
+topic: databases
+level: senior
+type: situation
+grading: self
+tags: [sql-server, deadlocks, locks, extended-events, transactions]
+links:
+  - url: https://learn.microsoft.com/en-us/sql/relational-databases/sql-server-deadlocks-guide
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/sql/relational-databases/extended-events/use-the-system-health-session
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Две хранимые процедуры над Orders и Inventory под нагрузкой падают с ошибкой взаимоблокировки 1205
+    prompt: |
+      Под нагрузкой две хранимые процедуры в SQL Server регулярно завершаются ошибкой 1205: транзакция выбрана
+      жертвой взаимоблокировки (deadlock victim). `usp_PlaceOrder` создаёт заказ в `Orders` и затем списывает
+      остаток в `Inventory`. `usp_CancelOrder` сначала возвращает остаток в `Inventory`, а потом меняет статус
+      заказа в `Orders`. Обе процедуры работают в явной транзакции.
+
+      Как вы будете искать причину, что исправите и как защитите приложение от оставшихся взаимоблокировок?
+    hint: Какие данные SQL Server сохраняет о каждой взаимоблокировке без дополнительной настройки, и что в них видно о порядке захвата ресурсов?
+    answer: |
+      1. **Получить граф взаимоблокировки, а не гадать.** Сессия Extended Events `system_health` включена по
+         умолчанию и записывает событие `xml_deadlock_report`. Его можно прочитать из файлов `system_health*.xel`
+         через `sys.fn_xe_file_target_read_file` с фильтром `object_name = 'xml_deadlock_report'` и открыть XML
+         в SSMS как граф. Если событий много, завести отдельную сессию XE только на это событие.
+      2. **Разобрать граф.** В `process-list` видны участники, их последний оператор (`inputbuf`) и уровень
+         изоляции. В `resource-list` видны ресурсы (`keylock`, `pagelock`, `objectlock`), кто какой режим держит
+         (`owner-list`) и кто чего ждёт (`waiter-list`). Ожидаемая картина: первая процедура держит X-блокировку
+         в `Orders` и ждёт `Inventory`, вторая держит X-блокировку в `Inventory` и ждёт `Orders`, то есть
+         ресурсы захватываются в противоположном порядке. Попутно проверить, не блокируются ли страницы и чужие
+         строки из-за сканирования и нет ли взаимоблокировки преобразования (обе сессии читают с S, затем обновляют).
+      3. **Устранить причину.**
+         - Привести обе процедуры к одному порядку доступа, например всегда сначала `Inventory`, потом `Orders`.
+         - Сократить транзакции: вычисления и чтения, которым не нужны блокировки, вынести наружу, внутри
+           транзакции не делать внешних вызовов и ожиданий.
+         - Добавить индексы под условия `UPDATE` и `WHERE`, чтобы вместо сканирования был поиск и блокировались
+           только нужные строки.
+         - Шаблон «прочитать, затем обновить» заменить атомарным `UPDATE` или брать на чтении `UPDLOCK`.
+         - Если в графе участвуют читатели с S-блокировками, рассмотреть `READ_COMMITTED_SNAPSHOT`. Конфликт
+           двух пишущих транзакций он не устраняет.
+      4. **Повторять транзакцию-жертву.** Полностью исключить взаимоблокировки нельзя, поэтому приложение при
+         `SqlException.Number == 1205` повторяет всю транзакцию целиком, с паузой и ограниченным числом попыток.
+         `SET DEADLOCK_PRIORITY LOW` в менее важной процедуре позволяет выбрать, кто станет жертвой.
+      5. **Проверить результат.** Нагрузочный тест с конкурентными вызовами обеих процедур и наблюдение за
+         числом событий `xml_deadlock_report` после релиза.
+    explanation: |
+      Взаимоблокировка - это цикл ожиданий: каждая транзакция держит ресурс, нужный другой. Монитор блокировок
+      SQL Server находит цикл и прерывает одну из сессий: при равном `DEADLOCK_PRIORITY` жертвой становится та,
+      чью транзакцию дешевле откатить. Транзакция жертвы откатывается целиком, клиент получает ошибку 1205.
+      Граф взаимоблокировки показывает, какие именно ресурсы и в каком порядке захвачены, поэтому исправление
+      начинается с него, а не с подбора хинтов наугад.
+
+      Единый порядок доступа разрывает цикл: если обе процедуры сначала берут `Inventory`, вторая просто ждёт
+      первую, а не держит ресурс, нужный первой. Короткие транзакции уменьшают окно, в котором блокировки
+      удерживаются. Сканирование без подходящего индекса затрагивает гораздо больше строк, чем нужно, и может
+      привести к эскалации блокировок, поэтому вероятность столкновения растёт вместе с нагрузкой.
+
+      Повтор обязателен даже после исправления: редкие взаимоблокировки возможны в любой системе с конкурентной
+      записью. Повторять надо всю транзакцию, а не последний оператор, потому что откатилась вся работа жертвы.
+      В EF Core с `EnableRetryOnFailure` стратегия провайдера SQL Server считает ошибку 1205 временной, но явную
+      транзакцию тогда нужно выполнять внутри `Database.CreateExecutionStrategy().ExecuteAsync(...)`.
+    linkTitles:
+      - "Руководство по взаимоблокировкам в SQL Server"
+      - "Сессия system_health"
+  en:
+    title: Two stored procedures on Orders and Inventory keep failing with deadlock error 1205 under load
+    prompt: |
+      Under load, two stored procedures in SQL Server regularly fail with error 1205: the transaction was chosen
+      as the deadlock victim. `usp_PlaceOrder` creates an order in `Orders` and then decrements stock in
+      `Inventory`. `usp_CancelOrder` first returns stock to `Inventory` and then changes the order status in
+      `Orders`. Both procedures run in an explicit transaction.
+
+      How do you find the cause, what do you fix, and how do you protect the application from the deadlocks
+      that remain?
+    hint: What data does SQL Server keep about every deadlock without any extra setup, and what does it show about the order in which resources are taken?
+    answer: |
+      1. **Get the deadlock graph instead of guessing.** The `system_health` Extended Events session is on by
+         default and records the `xml_deadlock_report` event. Read it from the `system_health*.xel` files with
+         `sys.fn_xe_file_target_read_file`, filtered by `object_name = 'xml_deadlock_report'`, and open the XML
+         in SSMS as a graph. If there are many events, create a dedicated XE session for this event only.
+      2. **Read the graph.** `process-list` shows the participants, their last statement (`inputbuf`) and
+         isolation level. `resource-list` shows the resources (`keylock`, `pagelock`, `objectlock`), which mode
+         each session holds (`owner-list`) and what it waits for (`waiter-list`). The expected picture: the first
+         procedure holds an X lock in `Orders` and waits for `Inventory`, the second holds an X lock in
+         `Inventory` and waits for `Orders`, so the resources are taken in opposite order. Also check whether
+         pages and unrelated rows are locked because of scans, and whether it is a conversion deadlock (both
+         sessions read with S and then update).
+      3. **Remove the cause.**
+         - Make both procedures access tables in the same order, for example always `Inventory` first, then `Orders`.
+         - Shorten the transactions: move computations and reads that need no locks outside, and make no external
+           calls or waits inside the transaction.
+         - Add indexes for the `UPDATE` and `WHERE` conditions so that a seek replaces a scan and only the needed
+           rows are locked.
+         - Replace a "read, then update" pattern with an atomic `UPDATE`, or take `UPDLOCK` on the read.
+         - If readers with S locks take part in the graph, consider `READ_COMMITTED_SNAPSHOT`. It does not remove
+           conflicts between two writing transactions.
+      4. **Retry the victim.** Deadlocks cannot be ruled out completely, so on `SqlException.Number == 1205` the
+         application retries the whole transaction, with a delay and a bounded number of attempts.
+         `SET DEADLOCK_PRIORITY LOW` in the less important procedure lets you choose which one becomes the victim.
+      5. **Verify.** A load test with concurrent calls to both procedures, and monitoring of the number of
+         `xml_deadlock_report` events after the release.
+    explanation: |
+      A deadlock is a cycle of waits: each transaction holds a resource the other one needs. The SQL Server lock
+      monitor detects the cycle and terminates one session: with equal `DEADLOCK_PRIORITY`, the victim is the
+      one whose transaction is cheapest to roll back. The victim's whole transaction is rolled back and the
+      client receives error 1205. The deadlock graph shows exactly which resources were taken and in what order,
+      so the fix starts there, not with random hints.
+
+      A single access order breaks the cycle: if both procedures take `Inventory` first, the second one simply
+      waits for the first instead of holding a resource the first one needs. Short transactions shrink the
+      window in which locks are held. A scan without a suitable index touches far more rows than needed and can
+      lead to lock escalation, so the chance of a collision grows with the load.
+
+      A retry is required even after the fix: rare deadlocks are possible in any system with concurrent writes.
+      Retry the whole transaction, not the last statement, because all of the victim's work was rolled back.
+      In EF Core with `EnableRetryOnFailure`, the SQL Server provider strategy treats error 1205 as transient,
+      but an explicit transaction must then run inside `Database.CreateExecutionStrategy().ExecuteAsync(...)`.
+    linkTitles:
+      - "Deadlocks guide for SQL Server"
+      - "Use the system_health session"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

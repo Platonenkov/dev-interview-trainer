@@ -1,0 +1,111 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNFBK5DVESXTAYTM9G
+slug: tracking-query-identity-resolution
+stack: dotnet
+topic: ef-core
+level: middle
+type: single
+grading: auto
+tags: [ef-core, change-tracking, identity-resolution]
+code:
+  language: csharp
+  harness: none
+  source: |
+    // db is a single ShopContext instance, tracking is on by default
+    var first = await db.Customers.SingleAsync(c => c.Id == 5);
+    first.Name = "Changed locally"; // not saved, the database keeps the old name
+
+    var second = await db.Customers
+        .Where(c => c.Id == 5)
+        .SingleAsync();
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/ef/core/querying/tracking
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/ef/core/change-tracking/identity-resolution
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как связаны результаты двух отслеживающих запросов за одной и той же сущностью?
+    prompt: |
+      Оба запроса выполняются на одном экземпляре `DbContext` с отслеживанием по умолчанию. После первого
+      запроса код меняет `Name` в памяти, но `SaveChanges` не вызывает, поэтому в базе осталось старое имя.
+      Как связаны `first` и `second` после второго запроса?
+    hint: "Сколько экземпляров сущности с одним и тем же ключом может отслеживать один `DbContext`?"
+    options:
+      a: "`first` и `second` - два разных объекта с одинаковым `Id`, и в `second.Name` значение из базы."
+      b: "`first` и `second` - один и тот же объект, и в `Name` по-прежнему локальное значение `Changed locally`."
+      c: "`first` и `second` - один и тот же объект, но второй запрос перезаписал `Name` значением из базы, и локальное изменение потеряно."
+      d: "Второй запрос выбросит `InvalidOperationException`, потому что сущность с таким ключом уже отслеживается."
+    optionExplanations:
+      a: "Так вёл бы себя запрос с `AsNoTracking()`, который каждый раз создаёт новые экземпляры. Отслеживающий запрос сначала проверяет трекер изменений и возвращает уже отслеживаемый объект."
+      c: "Экземпляр действительно один, но EF Core не перезаписывает текущие и исходные значения отслеживаемой сущности данными из базы. Для этого нужен явный `Entry(entity).Reload()`."
+      d: "Конфликт ключей возникает, когда в контекст явно подключают другой экземпляр с тем же ключом, например через `Attach` или `Update`. Запрос не подключает новый объект, а разрешает идентичность и возвращает существующий."
+    answer: "`first` и `second` - один и тот же объект, и в `Name` по-прежнему локальное значение `Changed locally`."
+    explanation: |
+      Отслеживающий запрос проходит через трекер изменений. Если в результатах приходит строка с ключом, который
+      контекст уже отслеживает, EF Core не создаёт новый объект, а возвращает отслеживаемый экземпляр. Это
+      разрешение идентичности: в одном `DbContext` одному ключу соответствует ровно один экземпляр сущности,
+      поэтому `ReferenceEquals(first, second)` равно `true`.
+
+      При этом EF Core не перезаписывает текущие и исходные значения свойств отслеживаемой сущности значениями
+      из базы. Локальное изменение `Name` сохраняется и попадёт в `UPDATE` при `SaveChanges`. Обратная сторона -
+      контекст, который живёт долго, может показывать устаревшие данные, хотя запрос к базе выполнен заново.
+
+      Второй запрос всё равно отправляет SQL в базу: разрешение идентичности происходит при материализации
+      результата. Без обращения к базе обходится только `Find`, если сущность с таким ключом уже отслеживается.
+      Чтобы получить свежие значения, используют `Entry(entity).Reload()` или новый экземпляр контекста.
+      Так отслеживающие запросы работают в EF Core, включая EF Core 10.
+    linkTitles:
+      - "Отслеживающие и неотслеживающие запросы"
+      - "Разрешение идентичности в EF Core"
+  en:
+    title: How do the results of two tracking queries for the same entity relate?
+    prompt: |
+      Both queries run on the same `DbContext` instance with default tracking. After the first query the code
+      changes `Name` in memory but does not call `SaveChanges`, so the database still has the old name.
+      How do `first` and `second` relate after the second query?
+    hint: "How many instances of an entity with the same key can one `DbContext` track?"
+    options:
+      a: "`first` and `second` are two different objects with the same `Id`, and `second.Name` holds the database value."
+      b: "`first` and `second` are the same object, and `Name` still holds the local value `Changed locally`."
+      c: "`first` and `second` are the same object, but the second query overwrote `Name` with the database value and the local change is lost."
+      d: "The second query throws `InvalidOperationException` because an entity with that key is already tracked."
+    optionExplanations:
+      a: "That is how a query with `AsNoTracking()` behaves, creating new instances every time. A tracking query checks the change tracker first and returns the object that is already tracked."
+      c: "There is indeed one instance, but EF Core does not overwrite the current and original values of a tracked entity with database data. That takes an explicit `Entry(entity).Reload()`."
+      d: "A key conflict happens when another instance with the same key is attached explicitly, for example with `Attach` or `Update`. A query does not attach a new object, it resolves the identity and returns the existing one."
+    answer: "`first` and `second` are the same object, and `Name` still holds the local value `Changed locally`."
+    explanation: |
+      A tracking query goes through the change tracker. When a row arrives whose key the context already
+      tracks, EF Core does not create a new object but returns the tracked instance. This is identity
+      resolution: within one `DbContext` a key maps to exactly one entity instance, so
+      `ReferenceEquals(first, second)` is `true`.
+
+      EF Core also does not overwrite the current and original property values of the tracked entity with
+      database values. The local change to `Name` is kept and goes into the `UPDATE` on `SaveChanges`. The
+      flip side is that a long-lived context can show stale data even though the query ran against the
+      database again.
+
+      The second query still sends SQL to the database: identity resolution happens when the results are
+      materialized. Only `Find` skips the database when an entity with that key is already tracked. To get
+      fresh values, use `Entry(entity).Reload()` or a new context instance. This is how tracking queries work
+      in EF Core, including EF Core 10.
+    linkTitles:
+      - "Tracking vs. No-Tracking Queries"
+      - "Identity Resolution in EF Core"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"
+  noRunReason: The snippet uses EF Core types and needs a database provider, which the sandbox does not have.

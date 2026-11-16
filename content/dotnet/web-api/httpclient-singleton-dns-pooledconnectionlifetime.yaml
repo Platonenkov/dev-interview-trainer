@@ -1,0 +1,99 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WRFSYDRHDQ2F0PP6MM
+slug: httpclient-singleton-dns-pooledconnectionlifetime
+stack: dotnet
+topic: web-api
+level: middle
+type: single
+grading: auto
+tags: [httpclient, dns, connection-pooling, sockets-http-handler]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: false
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/fundamentals/networking/http/httpclient-guidelines
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.net.http.socketshttphandler.pooledconnectionlifetime
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как долгоживущему статическому HttpClient замечать смену DNS?
+    prompt: |
+      Сервис на .NET 10 использует один статический экземпляр `HttpClient` на всё время работы процесса.
+      После того как DNS-запись внешнего API переключили на новый адрес, сервис продолжает ходить на старый.
+      Как это исправить, не возвращаясь к созданию `HttpClient` на каждый запрос?
+    hint: В какой момент `HttpClient` вообще разрешает DNS-имя и как долго живёт открытое соединение в пуле?
+    options:
+      a: "Создавать `HttpClient` в блоке `using` на каждый запрос, чтобы каждое соединение заново разрешало DNS."
+      b: "Уменьшить `HttpClient.Timeout`, чтобы старые соединения закрывались быстрее."
+      c: "Передать в конструктор статического `HttpClient` обработчик `SocketsHttpHandler` с заданным `PooledConnectionLifetime`."
+      d: "Задать `ServicePointManager.DnsRefreshTimeout`."
+      e: "Задать `SocketsHttpHandler.PooledConnectionIdleTimeout`."
+    optionExplanations:
+      a: "Это как раз тот откат, который запрещает условие. Каждый освобождённый клиент закрывает свои соединения, сокеты остаются в состоянии TIME_WAIT, и под нагрузкой это приводит к исчерпанию сокетов."
+      b: "`HttpClient.Timeout` ограничивает время одного запроса и не закрывает исправное соединение в пуле, поэтому оно продолжает ходить на старый адрес."
+      d: "В .NET Core и .NET 5+ `HttpClient` работает через `SocketsHttpHandler`, на который настройки `ServicePointManager` не влияют. Сам `ServicePointManager` помечен устаревшим."
+      e: "Этот тайм-аут закрывает только соединения, которые простаивают. При постоянном трафике соединение всё время занято, никогда не становится простаивающим и может жить бесконечно."
+    answer: "Передать в статический `HttpClient` обработчик `SocketsHttpHandler` с заданным `PooledConnectionLifetime`."
+    explanation: |
+      В .NET 10, как и начиная с .NET Core 2.1, `HttpClient` по умолчанию работает через `SocketsHttpHandler`,
+      который держит пул соединений. DNS-имя разрешается только при открытии нового соединения. По умолчанию
+      `PooledConnectionLifetime` бесконечен (`Timeout.InfiniteTimeSpan`), поэтому исправное соединение
+      переиспользуется сколько угодно долго, и долгоживущий клиент так и не узнаёт о новом адресе.
+
+      Если задать `PooledConnectionLifetime`, пул перестаёт переиспользовать соединения, прожившие дольше этого
+      времени, и закрывает их. Следующее соединение открывается заново и снова разрешает DNS. Клиент при этом
+      остаётся один на процесс, поэтому проблемы исчерпания сокетов нет. Значение выбирают по тому, как быстро
+      нужно реагировать на смену DNS.
+
+      Другой рекомендованный вариант - `IHttpClientFactory`: фабрика сама периодически пересоздаёт обработчики.
+    linkTitles:
+      - "Рекомендации по использованию HttpClient"
+      - "Свойство SocketsHttpHandler.PooledConnectionLifetime"
+  en:
+    title: How can a long-lived static HttpClient notice DNS changes?
+    prompt: |
+      A .NET 10 service uses one static `HttpClient` instance for the whole lifetime of the process.
+      After the DNS record of an external API is switched to a new address, the service keeps calling the old one.
+      How do you fix this without going back to creating an `HttpClient` per request?
+    hint: When does `HttpClient` resolve the host name at all, and how long does an open connection live in the pool?
+    options:
+      a: "Create an `HttpClient` in a `using` block for every request, so every connection resolves DNS again."
+      b: "Lower `HttpClient.Timeout` so that old connections are closed sooner."
+      c: "Pass a `SocketsHttpHandler` with `PooledConnectionLifetime` set to the constructor of the static `HttpClient`."
+      d: "Set `ServicePointManager.DnsRefreshTimeout`."
+      e: "Set `SocketsHttpHandler.PooledConnectionIdleTimeout`."
+    optionExplanations:
+      a: "This is exactly the fallback the task rules out. Every disposed client closes its connections, the sockets stay in the TIME_WAIT state, and under load this leads to socket exhaustion."
+      b: "`HttpClient.Timeout` limits the duration of one request and does not close a healthy pooled connection, so it keeps going to the old address."
+      d: "In .NET Core and .NET 5+ `HttpClient` runs on `SocketsHttpHandler`, which `ServicePointManager` settings do not affect. `ServicePointManager` itself is marked obsolete."
+      e: "This timeout only closes connections that sit idle. Under steady traffic the connection is always busy, never becomes idle and can live forever."
+    answer: "Pass a `SocketsHttpHandler` with `PooledConnectionLifetime` set to the static `HttpClient`."
+    explanation: |
+      In .NET 10, as since .NET Core 2.1, `HttpClient` runs on `SocketsHttpHandler` by default, which keeps a
+      connection pool. The host name is resolved only when a new connection is opened. By default
+      `PooledConnectionLifetime` is infinite (`Timeout.InfiniteTimeSpan`), so a healthy connection is reused
+      for as long as it works, and a long-lived client never learns about the new address.
+
+      When `PooledConnectionLifetime` is set, the pool stops reusing connections older than that time and closes
+      them. The next connection is opened from scratch and resolves DNS again. The client is still one per
+      process, so there is no socket exhaustion. Choose the value by how quickly you need to react to DNS changes.
+
+      The other recommended option is `IHttpClientFactory`: the factory recreates handlers periodically by itself.
+    linkTitles:
+      - "HttpClient guidelines for .NET"
+      - "SocketsHttpHandler.PooledConnectionLifetime property"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

@@ -1,0 +1,93 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WRQS2FR1N5C6YBNXAW
+slug: put-vs-patch-semantics
+stack: dotnet
+topic: web-api
+level: junior
+type: open
+grading: self
+tags: [http, rest, put, patch, idempotency]
+links:
+  - url: https://www.rfc-editor.org/rfc/rfc9110
+    lang: en
+    kind: spec
+  - url: https://www.rfc-editor.org/rfc/rfc5789
+    lang: en
+    kind: spec
+  - url: https://www.rfc-editor.org/rfc/rfc7396
+    lang: en
+    kind: spec
+locales:
+  ru:
+    title: Чем PUT отличается от PATCH при обновлении ресурса?
+    prompt: |
+      Клиент хочет изменить у пользователя `/users/42` только поле `email`. Чем отличается обновление через
+      `PUT` от обновления через `PATCH`, и что произойдёт с полями, которые клиент не передал в теле запроса?
+    hint: Что описывает тело запроса в каждом из методов - новое состояние ресурса целиком или изменения к нему?
+    answer: |
+      - **`PUT`** просит заменить состояние ресурса представлением из тела запроса (или создать ресурс, если его
+        не было). Тело - это полное новое состояние. Поля, которых нет в теле, не "сохраняются как были":
+        по смыслу метода они пропадают или сбрасываются в значения по умолчанию. Чтобы поменять только `email`
+        через `PUT`, клиент должен прислать весь объект целиком.
+      - **`PATCH`** (RFC 5789) просит применить к ресурсу набор изменений, описанный телом запроса. Что
+        означают отсутствующие поля, определяет формат тела (медиатип). В JSON Merge Patch
+        (`application/merge-patch+json`, RFC 7396) отсутствующее поле не меняется, а `null` удаляет поле.
+        В JSON Patch (`application/json-patch+json`) тело - это список операций вроде `replace` и `remove`.
+      - **Идемпотентность.** `PUT` идемпотентен: повтор того же запроса даёт то же состояние. `PATCH` в общем
+        случае не идемпотентен, хотя конкретный патч может им быть.
+    explanation: |
+      RFC 9110 определяет `PUT` как замену состояния целевого ресурса на присланное представление: после
+      успешного `PUT` последующий `GET` должен вернуть эквивалентное представление. Поэтому `PUT` с частью
+      полей - это не частичное обновление, а запрос записать ресурс без остальных полей. Сервер может
+      игнорировать или вычислять служебные поля (идентификатор, дату изменения), но смысл метода - полная замена.
+
+      На практике это частая ошибка: в обработчике `PUT` DTO десериализуется из JSON, отсутствующие свойства
+      получают значения по умолчанию (`null`, `0`), и при копировании в сущность эти поля затираются.
+
+      `PATCH` создан как раз для частичных изменений. Сам метод не задаёт формат тела, поэтому клиент и сервер
+      договариваются о медиатипе, и именно он определяет, что значит пропущенное поле. Поскольку патч может
+      содержать операции вроде "добавить элемент в массив", повтор запроса может изменить ресурс ещё раз,
+      поэтому `PATCH` не считается идемпотентным, и клиенты не повторяют его автоматически.
+    linkTitles:
+      - "RFC 9110: семантика HTTP"
+      - "RFC 5789: метод PATCH для HTTP"
+      - "RFC 7396: JSON Merge Patch"
+  en:
+    title: How does PUT differ from PATCH when updating a resource?
+    prompt: |
+      A client wants to change only the `email` field of the user `/users/42`. How does an update through
+      `PUT` differ from an update through `PATCH`, and what happens to the fields the client leaves out of the
+      request body?
+    hint: What does the request body describe in each method - the whole new state of the resource or changes to it?
+    answer: |
+      - **`PUT`** asks the server to replace the state of the resource with the representation in the request
+        body (or to create the resource if it did not exist). The body is the complete new state. Fields missing
+        from the body are not "kept as they were": by the meaning of the method they are removed or reset to
+        defaults. To change only `email` with `PUT`, the client has to send the whole object.
+      - **`PATCH`** (RFC 5789) asks the server to apply a set of changes described by the request body. What
+        missing fields mean is defined by the body format (the media type). In JSON Merge Patch
+        (`application/merge-patch+json`, RFC 7396) a missing field is left unchanged and `null` removes the field.
+        In JSON Patch (`application/json-patch+json`) the body is a list of operations such as `replace` and `remove`.
+      - **Idempotency.** `PUT` is idempotent: repeating the same request leaves the same state. `PATCH` is not
+        idempotent in general, although a particular patch can be.
+    explanation: |
+      RFC 9110 defines `PUT` as replacing the state of the target resource with the enclosed representation:
+      after a successful `PUT`, a later `GET` should return an equivalent representation. So a `PUT` with only
+      some fields is not a partial update, it is a request to store the resource without the other fields. The
+      server may ignore or compute server-managed fields (the id, a modification date), but the meaning of the
+      method is full replacement.
+
+      In practice this is a common mistake: a `PUT` handler deserializes a DTO from JSON, missing properties get
+      default values (`null`, `0`), and copying the DTO into the entity overwrites those fields.
+
+      `PATCH` exists for partial changes. The method itself does not define the body format, so the client and
+      the server agree on a media type, and that media type defines what a missing field means. Because a patch
+      can contain operations such as "append an element to an array", repeating the request can change the
+      resource again, which is why `PATCH` is not considered idempotent and clients do not retry it automatically.
+    linkTitles:
+      - "RFC 9110: HTTP Semantics"
+      - "RFC 5789: PATCH Method for HTTP"
+      - "RFC 7396: JSON Merge Patch"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

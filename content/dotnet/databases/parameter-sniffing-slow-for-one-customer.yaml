@@ -1,0 +1,118 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNBZST1ZBDJYXPMPQJ
+slug: parameter-sniffing-slow-for-one-customer
+stack: dotnet
+topic: databases
+level: senior
+type: situation
+grading: self
+tags: [sql-server, parameter-sniffing, query-store, execution-plans, performance]
+links:
+  - url: https://learn.microsoft.com/en-us/sql/relational-databases/query-processing-architecture-guide
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/sql/relational-databases/performance/monitoring-performance-by-using-the-query-store
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Параметризованный запрос медленный только для одного крупного клиента: что происходит?"
+    prompt: |
+      Сервис через EF Core выполняет в SQL Server параметризованный запрос заказов с фильтром по `@CustomerId`.
+      Для большинства клиентов запрос отвечает за десятки миллисекунд. Но у одного крупного клиента заказов на
+      порядки больше, чем у остальных, и для него запрос иногда выполняется несколько минут. После перезапуска
+      SQL Server проблема то исчезает, то возвращается, а иногда заметно медленнее становятся запросы мелких
+      клиентов. Индексы и код запроса не менялись. Что происходит и что вы будете делать?
+    hint: "От чего зависит план, который SQL Server строит для параметризованного запроса, и сколько раз он его строит?"
+    answer: |
+      1. **Гипотеза: parameter sniffing.** При первой компиляции SQL Server подставляет в оценку фактические
+         значения параметров, строит план под них и кладёт его в кэш планов. Все следующие вызовы с любыми
+         значениями переиспользуют этот план. Перезапуск очищает кэш (как и обновление статистики, изменение
+         схемы или вытеснение плана), и план строится заново под того клиента, который пришёл первым. Если
+         первым был мелкий клиент, получается план с `Index Seek`, `Nested Loops` и `Key Lookup`, рассчитанный
+         на десятки строк, и для миллионов строк крупного клиента он катастрофичен. Если первым был крупный -
+         план со сканированием и `Hash Join` замедляет мелких.
+      2. **Подтвердить.** В Query Store найти запрос: у одного `query_id` несколько планов с резко разной
+         длительностью и числом чтений, отчёт о регрессировавших запросах показывает смену плана. В фактическом
+         плане сравнить `Parameter Compiled Value` и `Parameter Runtime Value` в свойствах корневого оператора и
+         оценку строк с фактической. По гистограмме статистики убедиться в перекосе данных. Воспроизводить через
+         `sp_executesql` с теми же параметрами: запрос с литералами или с другими `SET`-опциями в SSMS получит
+         отдельную запись в кэше и покажет «быстро у меня».
+      3. **Снять острую боль.** Принудительно закрепить в Query Store план, который приемлем для всех клиентов
+         (`sp_query_store_force_plan`). Это обратимо и не требует релиза. Очистка кэша или `sp_recompile` - не
+         исправление, а повторная лотерея.
+      4. **Выбрать постоянное решение, измерив варианты:**
+         - `OPTION (RECOMPILE)` - план под каждое выполнение, ценой CPU на компиляцию при каждом вызове;
+         - `OPTIMIZE FOR (@CustomerId = ...)` или `OPTIMIZE FOR UNKNOWN` - стабильный план, который может быть
+           посредственным для всех;
+         - изменение запроса или индекса: покрывающий индекс, отдельная ветка для крупных клиентов;
+         - в SQL Server 2022 (уровень совместимости 160) оптимизация планов, чувствительных к параметрам (PSP),
+           хранит несколько вариантов плана; подсказки Query Store позволяют добавить хинт без изменения кода,
+           что удобно, когда SQL генерирует EF Core.
+      5. **Закрепить.** Мониторинг регрессий в Query Store и оповещение по длительности этого запроса, нагрузочный
+         тест с данными крупного клиента.
+    explanation: |
+      Кэширование плана экономит компиляцию, но предполагает, что один план хорош для любых значений параметров.
+      При сильном перекосе данных это неверно: оптимальный план для 20 строк и для 2 миллионов строк разный.
+      Поэтому симптомы выглядят случайными: результат зависит от того, какой клиент первым вызвал запрос после
+      очистки кэша.
+
+      Query Store здесь ключевой инструмент: он хранит историю планов и их статистику выполнения между
+      перезапусками, поэтому смену плана видно, даже если она произошла ночью. Каждое исправление имеет цену:
+      `RECOMPILE` тратит CPU, `OPTIMIZE FOR` жертвует частью клиентов, принудительный план может устареть при
+      изменении данных. Поэтому решение выбирают по измерениям, а не по привычке.
+    linkTitles:
+      - "Руководство по архитектуре обработки запросов"
+      - "Мониторинг производительности с помощью Query Store"
+  en:
+    title: "A parameterized query is slow only for one large customer: what is happening?"
+    prompt: |
+      A service runs a parameterized order query filtered by `@CustomerId` against SQL Server through EF Core.
+      For most customers it answers in tens of milliseconds. But one large customer has orders of magnitude more
+      orders than the others, and for that customer the query sometimes takes several minutes. After SQL Server
+      restarts the problem goes away and comes back, and sometimes the queries of small customers become
+      noticeably slower instead. Indexes and the query code have not changed. What is happening and what do you do?
+    hint: "What does the plan SQL Server builds for a parameterized query depend on, and how many times does it build it?"
+    answer: |
+      1. **Hypothesis: parameter sniffing.** On the first compilation SQL Server uses the actual parameter
+         values for its estimates, builds a plan for them and puts it into the plan cache. Every later call with
+         any values reuses that plan. A restart clears the cache (as do a statistics update, a schema change or
+         plan eviction), and the plan is rebuilt for whichever customer comes first. If a small customer was
+         first, the plan uses `Index Seek`, `Nested Loops` and `Key Lookup` sized for tens of rows, and it is
+         disastrous for the millions of rows of the large customer. If the large customer was first, a plan with
+         scans and `Hash Join` slows down the small ones.
+      2. **Confirm it.** In Query Store find the query: one `query_id` has several plans with very different
+         duration and reads, and the regressed queries report shows the plan change. In the actual plan compare
+         `Parameter Compiled Value` and `Parameter Runtime Value` in the root operator properties, and the
+         estimated rows with the actual rows. Check the data skew in the statistics histogram. Reproduce with
+         `sp_executesql` and the same parameters: a query with literals or with different `SET` options in SSMS
+         gets its own cache entry and looks fast on your machine.
+      3. **Stop the immediate pain.** Force a plan in Query Store that is acceptable for all customers
+         (`sp_query_store_force_plan`). It is reversible and needs no release. Clearing the cache or
+         `sp_recompile` is not a fix, just another round of the lottery.
+      4. **Choose a durable fix after measuring the options:**
+         - `OPTION (RECOMPILE)` - a plan for every execution, at the cost of compile CPU on every call;
+         - `OPTIMIZE FOR (@CustomerId = ...)` or `OPTIMIZE FOR UNKNOWN` - a stable plan that may be mediocre for
+           everyone;
+         - a query or index change: a covering index, a separate path for large customers;
+         - in SQL Server 2022 (compatibility level 160) Parameter Sensitive Plan (PSP) optimization keeps
+           several plan variants; Query Store hints add a hint without changing code, which helps when EF Core
+           generates the SQL.
+      5. **Lock it in.** Query Store regression monitoring and an alert on the duration of this query, and a
+         load test with the large customer's data.
+    explanation: |
+      Plan caching saves compilation, but it assumes that one plan is good for any parameter values. With
+      strongly skewed data that is false: the best plan for 20 rows and for 2 million rows is different. That
+      is why the symptoms look random: the result depends on which customer called the query first after the
+      cache was cleared.
+
+      Query Store is the key tool here: it keeps the history of plans and their runtime statistics across
+      restarts, so a plan change is visible even if it happened at night. Every fix has a price: `RECOMPILE`
+      spends CPU, `OPTIMIZE FOR` sacrifices some customers, a forced plan can go stale as data changes. So the
+      fix is chosen by measurement, not by habit.
+    linkTitles:
+      - "Query processing architecture guide"
+      - "Monitor performance by using the Query Store"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

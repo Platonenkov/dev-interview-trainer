@@ -1,0 +1,102 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNG55V6X1S0F4X7PWM
+slug: non-sargable-function-on-indexed-column
+stack: dotnet
+topic: databases
+level: middle
+type: find-bug
+grading: auto
+tags: [sql-server, indexes, sargability, execution-plans]
+code:
+  language: sql
+  harness: none
+  source: |
+    -- Id is the clustered primary key; CreatedAt is datetime2; dbo.Orders has millions of rows
+    CREATE NONCLUSTERED INDEX IX_Orders_CreatedAt
+        ON dbo.Orders (CreatedAt)
+        INCLUDE (CustomerId, Total);
+
+    SELECT Id, CustomerId, Total
+    FROM dbo.Orders
+    WHERE YEAR(CreatedAt) = 2024
+    ORDER BY CreatedAt;
+bugLineSets: [[8]]
+links:
+  - url: https://learn.microsoft.com/en-us/troubleshoot/sql/database-engine/performance/troubleshoot-high-cpu-usage-issues
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/sql/relational-databases/sql-server-index-design-guide
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/sql/relational-databases/showplan-logical-and-physical-operators-reference
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Найдите строку, из-за которой запрос сканирует весь индекс по CreatedAt"
+    prompt: |
+      Отчёт за 2024 год выбирает заказы из таблицы SQL Server на несколько миллионов строк. Индекс по `CreatedAt`
+      есть, но в фактическом плане выполнения вместо `Index Seek` стоит `Index Scan` по `IX_Orders_CreatedAt`:
+      запрос читает все строки индекса, хотя нужна лишь их часть. Щёлкните по строке с дефектом.
+    hint: "Какое условие заставляет движок что-то вычислять для каждой строки, прежде чем сравнить?"
+    answer: "Строка 8, условие `WHERE YEAR(CreatedAt) = 2024`: индексированный столбец обёрнут в функцию."
+    explanation: |
+      Индекс хранит значения `CreatedAt` упорядоченными, поэтому оптимизатор может сразу перейти к началу
+      нужного диапазона и прочитать только его (`Index Seek`). Для этого условие должно сравнивать сам столбец
+      с выражением, значение которого известно до чтения строк.
+
+      `YEAR(CreatedAt)` - это результат функции, вычисленный для каждой строки. Оптимизатор не превращает такое
+      условие в диапазон ключей индекса, поэтому читает индекс целиком и вычисляет `YEAR` для каждой строки.
+      Такие условия называют non-sargable (от Search ARGument ABLE). Индекс при этом покрывающий: `CustomerId` и
+      `Total` включены через `INCLUDE`, а `Id` - ключ кластеризованного индекса, который хранится в каждой строке
+      некластеризованного индекса как указатель на строку. Поэтому план всё равно использует
+      `IX_Orders_CreatedAt`, но в виде полного просмотра.
+
+      Исправление - перенести вычисление на сторону константы и задать полуоткрытый диапазон:
+      `WHERE CreatedAt >= '2024-01-01' AND CreatedAt < '2025-01-01'`. Теперь оптимизатор ищет в индексе
+      границы диапазона и читает только строки за 2024 год. Полуоткрытый диапазон надёжнее, чем
+      `BETWEEN '2024-01-01' AND '2024-12-31'`: во втором случае строки 31 декабря со временем позже полуночи
+      не попадут в результат.
+
+      То же правило действует для других выражений над столбцом: `ISNULL(CreatedAt, ...)`,
+      `LEFT(Name, 3) = 'abc'` (лучше `Name LIKE 'abc%'`), арифметика вроде `DATEADD(day, 1, CreatedAt) > @d`.
+    linkTitles:
+      - "Устранение проблем с высокой загрузкой ЦП в SQL Server"
+      - "Руководство по архитектуре и проектированию индексов SQL Server"
+      - "Справочник по логическим и физическим операторам Showplan"
+  en:
+    title: "Find the line that makes the query scan the whole CreatedAt index"
+    prompt: |
+      A report for 2024 selects orders from a SQL Server table with several million rows. There is an index on
+      `CreatedAt`, but the actual execution plan shows an `Index Scan` of `IX_Orders_CreatedAt` instead of an
+      `Index Seek`: the query reads every row of the index although it needs only part of them. Click the line
+      that contains the defect.
+    hint: "Which condition makes the engine compute something for every row before it can compare?"
+    answer: "Line 8, the condition `WHERE YEAR(CreatedAt) = 2024`: the indexed column is wrapped in a function."
+    explanation: |
+      The index stores `CreatedAt` values in order, so the optimizer can jump to the start of the needed range
+      and read only that range (`Index Seek`). For that, the condition must compare the column itself with an
+      expression whose value is known before any rows are read.
+
+      `YEAR(CreatedAt)` is the result of a function computed for each row. The optimizer does not turn such a
+      condition into a range of index keys, so it reads the whole index and computes `YEAR` for every row. Such
+      conditions are called non-sargable (from Search ARGument ABLE). The index is still covering: `CustomerId`
+      and `Total` are included with `INCLUDE`, and `Id` is the clustered index key, which every nonclustered
+      index row stores as its row locator. So the plan still uses `IX_Orders_CreatedAt`, but as a full scan.
+
+      The fix is to move the computation to the constant side and use a half-open range:
+      `WHERE CreatedAt >= '2024-01-01' AND CreatedAt < '2025-01-01'`. Now the optimizer seeks the range
+      boundaries in the index and reads only the rows of 2024. A half-open range is safer than
+      `BETWEEN '2024-01-01' AND '2024-12-31'`: with the latter, rows on December 31 with a time after midnight
+      are left out.
+
+      The same rule applies to other expressions over the column: `ISNULL(CreatedAt, ...)`,
+      `LEFT(Name, 3) = 'abc'` (prefer `Name LIKE 'abc%'`), arithmetic such as `DATEADD(day, 1, CreatedAt) > @d`.
+    linkTitles:
+      - "Troubleshoot high-CPU-usage issues in SQL Server"
+      - "SQL Server index architecture and design guide"
+      - "Showplan logical and physical operators reference"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  noRunReason: The snippet is T-SQL and needs a SQL Server instance, while the sandbox runs only C# code.

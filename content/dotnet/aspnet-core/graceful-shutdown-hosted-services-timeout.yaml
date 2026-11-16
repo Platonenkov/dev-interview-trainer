@@ -1,0 +1,115 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WM07CA1PAYWVDEP4N4
+slug: graceful-shutdown-hosted-services-timeout
+stack: dotnet
+topic: aspnet-core
+level: senior
+type: open
+grading: self
+tags: [hosting, hosted-services, graceful-shutdown, sigterm]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/host/generic-host
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/host/hosted-services
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/microsoft.extensions.hosting.hostoptions
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что происходит с hosted services и незавершённой работой, когда хост получает SIGTERM?
+    prompt: |
+      Приложение ASP.NET Core на .NET 10 работает в контейнере. При выкатке новой версии оркестратор отправляет
+      процессу SIGTERM. Опишите, что после этого делает хост, что происходит с реализациями `IHostedService`,
+      с `BackgroundService` и с запросами, которые ещё обрабатываются, и что ограничивает время, отведённое им
+      на завершение.
+    hint: Сколько «часов» отсчитывают время остановки - только часы хоста или ещё одни снаружи процесса?
+    answer: |
+      1. **Сигнал.** На SIGTERM `ConsoleLifetime` вызывает `IHostApplicationLifetime.StopApplication()`, и хост
+         начинает остановку: срабатывает токен `ApplicationStopping`.
+      2. **Hosted services.** Хост вызывает `StopAsync` у реализаций `IHostedService` в порядке, обратном порядку
+         регистрации. По умолчанию по очереди; начиная с .NET 8 есть `HostOptions.ServicesStopConcurrently` для
+         параллельной остановки. Токен, переданный в `StopAsync`, отменяется, когда время на остановку истекает.
+      3. **`BackgroundService`.** Его `StopAsync` отменяет `stoppingToken`, переданный в `ExecuteAsync`, и ждёт,
+         пока задача `ExecuteAsync` завершится или пока не отменится токен самого `StopAsync`. Служба, которая не
+         проверяет `stoppingToken`, просто продолжает работать до конца бюджета.
+      4. **Запросы.** Веб-сервер тоже запущен как hosted service. Kestrel перестаёт принимать новые соединения и
+         даёт уже начатым запросам завершиться в пределах того же бюджета.
+      5. **Лимит хоста.** `HostOptions.ShutdownTimeout`: по умолчанию 30 секунд начиная с .NET 6 (до этого
+         5 секунд), в .NET 10 так же. Это один общий бюджет на всю остановку, а не на каждую службу. Когда он
+         истекает, токен отменяется, `BackgroundService` и Kestrel перестают ждать, хост доводит остановку до
+         конца, `Run` возвращает управление, `Main` завершается, и всё недоделанное обрывается вместе с процессом.
+         Работу, запущенную через `Task.Run` в обход hosted services, хост не ждёт вовсе.
+      6. **Лимит снаружи.** После SIGTERM оркестратор ждёт свой срок и присылает SIGKILL: у `docker stop` это
+         10 секунд по умолчанию, в Kubernetes - `terminationGracePeriodSeconds`, по умолчанию 30 секунд. Реальный
+         бюджет - меньшее из двух значений, поэтому `ShutdownTimeout` задают заметно меньше grace period, например
+         `builder.Services.Configure<HostOptions>(o => o.ShutdownTimeout = TimeSpan.FromSeconds(20))`.
+    explanation: |
+      Корректная остановка в .NET кооперативная: хост не может прервать чужой код (`Thread.Abort` в .NET Core
+      и .NET 5+ не поддерживается), он только отменяет токены и ждёт. Поэтому успеет ли работа завершиться,
+      зависит от самого кода: наблюдает ли он `stoppingToken` и токен `StopAsync` и не блокирует ли поток
+      синхронными вызовами. Реализация `IHostedService`, которая игнорирует токен в своём `StopAsync`, может
+      задержать остановку и дольше, пока процесс не убьёт оркестратор.
+
+      Часов двое: `ShutdownTimeout` внутри процесса и grace period снаружи. Если `ShutdownTimeout` не меньше
+      grace period, SIGKILL приходит раньше, и не выполняются ни обработчики `ApplicationStopped`, ни сброс
+      буферов логов. Долгие задачи стоит делать возобновляемыми: фиксировать прогресс частями, а сообщения из
+      очереди подтверждать только после обработки, чтобы прерванное сообщение было доставлено повторно другому
+      экземпляру. В Kubernetes под убирается из балансировки параллельно с отправкой SIGTERM, а не до неё,
+      поэтому несколько новых запросов могут прийти уже во время остановки.
+    linkTitles:
+      - "Универсальный узел .NET в ASP.NET Core"
+      - "Фоновые задачи с размещёнными службами в ASP.NET Core"
+      - "Класс HostOptions"
+  en:
+    title: What happens to hosted services and in-flight work when the host receives SIGTERM?
+    prompt: |
+      An ASP.NET Core application on .NET 10 runs in a container. During a rollout of a new version the
+      orchestrator sends the process SIGTERM. Describe what the host does next, what happens to `IHostedService`
+      implementations, to `BackgroundService` and to requests still being processed, and what limits the time
+      they get to finish.
+    hint: How many clocks measure the shutdown - only the host's, or also one outside the process?
+    answer: |
+      1. **The signal.** On SIGTERM, `ConsoleLifetime` calls `IHostApplicationLifetime.StopApplication()` and the
+         host starts stopping: the `ApplicationStopping` token fires.
+      2. **Hosted services.** The host calls `StopAsync` on the `IHostedService` implementations in reverse
+         registration order. By default one after another; since .NET 8 `HostOptions.ServicesStopConcurrently`
+         stops them in parallel. The token passed to `StopAsync` is cancelled when the shutdown time runs out.
+      3. **`BackgroundService`.** Its `StopAsync` cancels the `stoppingToken` passed to `ExecuteAsync` and waits
+         until the `ExecuteAsync` task completes or the token of `StopAsync` itself is cancelled. A service that
+         does not check `stoppingToken` simply keeps working until the budget runs out.
+      4. **Requests.** The web server also runs as a hosted service. Kestrel stops accepting new connections and
+         lets requests already in progress finish within the same budget.
+      5. **The host limit.** `HostOptions.ShutdownTimeout`: 30 seconds by default since .NET 6 (5 seconds
+         before), and the same in .NET 10. It is one shared budget for the whole shutdown, not one per service.
+         When it expires the token is cancelled, `BackgroundService` and Kestrel stop waiting, the host finishes
+         stopping, `Run` returns, `Main` ends, and unfinished work dies with the process. Work started with
+         `Task.Run` outside hosted services is not awaited at all.
+      6. **The outside limit.** After SIGTERM the orchestrator waits its own period and then sends SIGKILL:
+         10 seconds by default for `docker stop`, `terminationGracePeriodSeconds` in Kubernetes, 30 seconds by
+         default. The real budget is the smaller of the two, so set `ShutdownTimeout` clearly below the grace
+         period, for example
+         `builder.Services.Configure<HostOptions>(o => o.ShutdownTimeout = TimeSpan.FromSeconds(20))`.
+    explanation: |
+      Graceful shutdown in .NET is cooperative: the host cannot interrupt other code (`Thread.Abort` is not
+      supported in .NET Core and .NET 5+), it can only cancel tokens and wait. Whether work finishes in time
+      therefore depends on the code itself: does it observe `stoppingToken` and the `StopAsync` token, and does it
+      avoid blocking the thread with synchronous calls. An `IHostedService` implementation that ignores the token
+      in its own `StopAsync` can delay shutdown even longer, until the orchestrator kills the process.
+
+      There are two clocks: `ShutdownTimeout` inside the process and the grace period outside it. If
+      `ShutdownTimeout` is not below the grace period, SIGKILL arrives first, and neither `ApplicationStopped`
+      handlers nor log buffer flushes run. Long jobs should be resumable: commit progress in chunks, and
+      acknowledge queue messages only after processing so that an interrupted message is redelivered to another
+      instance. In Kubernetes a pod is removed from load balancing in parallel with SIGTERM, not before it, so a
+      few new requests can still arrive while the app is stopping.
+    linkTitles:
+      - ".NET Generic Host in ASP.NET Core"
+      - "Background tasks with hosted services in ASP.NET Core"
+      - "HostOptions class"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

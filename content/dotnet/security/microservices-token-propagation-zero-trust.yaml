@@ -1,0 +1,149 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WQ2GY7AFQVFSDMN0QV
+slug: microservices-token-propagation-zero-trust
+stack: dotnet
+topic: security
+level: architect
+type: situation
+grading: self
+tags: [oauth, oidc, jwt, microservices, zero-trust, token-exchange]
+links:
+  - url: https://www.rfc-editor.org/rfc/rfc8693
+    lang: en
+    kind: spec
+  - url: https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-on-behalf-of-flow
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-client-creds-grant-flow
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Двадцать сервисов доверяют заголовку с id пользователя за API-шлюзом: как перестроить аутентификацию между сервисами?"
+    prompt: |
+      На платформе около двадцати сервисов. API-шлюз проверяет токен доступа пользователя, а затем передаёт запрос
+      внутренним сервисам с обычным заголовком `X-User-Id`, и сервисы доверяют этому заголовку без всяких проверок.
+      Сервисы также вызывают друг друга: часть вызовов идёт от имени пользователя, часть - из фоновых задач, где
+      пользователя нет.
+
+      Служба безопасности попросила перепроектировать аутентификацию и авторизацию между сервисами. Какую целевую
+      схему вы предложите и как перейдёте на неё, не останавливая платформу?
+    hint: |
+      Что мешает скомпрометированному внутреннему сервису самому выставить этот заголовок? И для какого получателя
+      выпущен токен, который пользователь предъявил шлюзу?
+    answer: |
+      1. **Назвать угрозу.** Заголовок легко подделать: любой, кто может отправить запрос внутри сети
+         (скомпрометированный под, уязвимость SSRF в одном из сервисов, ошибка маршрутизации на ingress), может
+         выдать себя за любого пользователя. Модель zero trust не доверяет положению в сети: каждый сервис сам
+         аутентифицирует каждый вызов.
+      2. **Каждый сервис проверяет токен, выпущенный для него.** В провайдере удостоверений каждый сервис
+         регистрируется как отдельный ресурс со своей аудиторией (`aud`) и своими scope. В ASP.NET Core это
+         `AddJwtBearer` с `Authority` и `Audience`: проверяются подпись, издатель, аудитория и срок действия. Шлюз
+         сохраняет грубые проверки (лимиты, scope), но перестаёт быть единственным барьером. Личность пользователя
+         берётся только из проверенных утверждений (`sub`), а не из заголовка.
+      3. **Не пересылать исходный токен всем подряд.** Токен, который принимает каждый сервис, можно повторно
+         предъявить любому из них. Когда сервис A вызывает сервис B от имени пользователя, A получает новый токен с
+         аудиторией B и более узкими scope: через OAuth 2.0 Token Exchange (RFC 8693) или через поток on-behalf-of в
+         Microsoft Entra ID. Пользователь остаётся субъектом токена, а при обмене токенов вызывающий сервис можно
+         зафиксировать в утверждении `act`.
+      4. **Вызовы без пользователя - через client credentials.** Фоновые задачи и интеграции получают токен на
+         собственную идентичность сервиса с правами приложения (роли), выданными отдельно для каждого целевого
+         сервиса. Вместо общих секретов клиента лучше сертификаты или managed identity / workload identity.
+      5. **Авторизация остаётся рядом с данными.** Шлюз и политики на эндпоинтах проверяют scope и роли, а сервис,
+         владеющий данными, делает проверку на уровне ресурса (принадлежит ли этот заказ пользователю из `sub`).
+         Настройку проверки токенов и общих политик выносят во внутреннюю библиотеку, чтобы двадцать команд не
+         настраивали это двадцатью разными способами.
+      6. **Транспорт как второй слой.** mTLS между сервисами (например, через service mesh) аутентифицирует
+         вызывающий сервис и шифрует трафик, но не несёт контекст пользователя, поэтому дополняет токены, а не
+         заменяет их.
+      7. **Переходить постепенно.** Сразу же шлюз начинает удалять `X-User-Id` из входящих снаружи запросов. Дальше
+         сервис за сервисом: проверка токена в режиме «только логировать» рядом со старым заголовком, исправление
+         вызывающих сторон, которые токен не передают, включение обязательной проверки и в конце удаление заголовка.
+         Прогресс видно по метрике «вызовы без валидного токена».
+      8. **Учесть цену.** Сервер токенов становится критичной зависимостью: полученные при обмене токены кэшируются
+         по паре «пользователь, аудитория» до момента незадолго до истечения, ключи подписи кэшируются из JWKS,
+         задержка эндпоинта токенов мониторится, а в журналы аудита пишутся `sub` и идентификатор вызывающего клиента.
+    explanation: |
+      Схема «проверяем только на шлюзе» - это защита периметра: достаточно одной точки входа за периметром, и
+      злоумышленник может действовать от имени любого пользователя, потому что внутренние сервисы ничего не проверяют.
+      Подписанный токен с проверяемой аудиторией решает обе проблемы: его нельзя подделать без ключа издателя, а
+      украденный токен для сервиса B бесполезен против сервиса C. Так ограничивается радиус поражения.
+
+      Простая пересылка исходного токена дальше по цепочке лучше заголовка, но токен с широкой аудиторией снова
+      открывает повторное использование против любого сервиса. Обмен токенов (RFC 8693) и on-behalf-of в Entra ID
+      сохраняют пользователя как субъекта, сужают аудиторию и права и оставляют след о том, кто действует от его
+      имени. Поток client credentials даёт токен без пользователя, поэтому его нельзя использовать, чтобы читать
+      пользовательские данные «по просьбе» другого сервиса: это классическая проблема confused deputy.
+
+      Компромиссы: лишний вызов к серверу токенов на каждом звене цепочки и зависимость от его доступности. Их
+      снимают кэшированием токенов и ключей и мониторингом, а не отказом от проверки в сервисах.
+    linkTitles:
+      - "RFC 8693: OAuth 2.0 Token Exchange"
+      - "Поток OAuth 2.0 On-Behalf-Of в Microsoft identity platform"
+      - "Поток OAuth 2.0 client credentials в Microsoft identity platform"
+  en:
+    title: "Twenty services trust a user-id header behind the API gateway: how would you redesign service-to-service authentication?"
+    prompt: |
+      The platform has about twenty services. The API gateway validates the user's access token, then forwards the
+      request to internal services with a plain `X-User-Id` header, and the services trust that header without any
+      checks. Services also call each other: some calls are made on behalf of the user, some come from background
+      jobs where there is no user.
+
+      The security team asked you to redesign authentication and authorization between services. What target design
+      do you propose, and how do you migrate to it without stopping the platform?
+    hint: |
+      What stops a compromised internal service from setting that header itself? And which recipient was the token
+      that the user presented to the gateway issued for?
+    answer: |
+      1. **Name the threat.** The header is easy to forge: anyone who can send a request inside the network (a
+         compromised pod, an SSRF bug in one service, a routing mistake at the ingress) can pose as any user. A zero
+         trust model does not trust network position: every service authenticates every call itself.
+      2. **Every service validates a token issued for it.** In the identity provider each service is registered as a
+         separate resource with its own audience (`aud`) and scopes. In ASP.NET Core this is `AddJwtBearer` with
+         `Authority` and `Audience`: signature, issuer, audience and lifetime are checked. The gateway keeps coarse
+         checks (rate limits, scopes) but is no longer the only gate. The user's identity comes only from validated
+         claims (`sub`), never from a header.
+      3. **Do not forward the original token everywhere.** A token that every service accepts can be replayed
+         against any of them. When service A calls service B on behalf of the user, A obtains a new token with B's
+         audience and narrower scopes: through OAuth 2.0 Token Exchange (RFC 8693) or the on-behalf-of flow in
+         Microsoft Entra ID. The user stays the subject of the token, and with token exchange the calling service can
+         be recorded in the `act` claim.
+      4. **Calls without a user use client credentials.** Background jobs and integrations get a token for the
+         service's own identity with application permissions (roles) granted separately for each target service.
+         Prefer certificates or managed identities / workload identities over shared client secrets.
+      5. **Authorization stays close to the data.** The gateway and endpoint policies check scopes and roles, and
+         the service that owns the data does the resource-level check (does this order belong to the user in `sub`).
+         Token validation and shared policy setup ship as one internal library, so twenty teams do not configure it
+         in twenty different ways.
+      6. **Transport as a second layer.** mTLS between services (for example through a service mesh) authenticates
+         the calling service and encrypts traffic, but it does not carry the user context, so it complements tokens
+         and does not replace them.
+      7. **Migrate gradually.** Right away the gateway strips `X-User-Id` from requests that come from outside. Then
+         service by service: validate the token in log-only mode next to the old header, fix callers that send no
+         token, switch to enforced validation, and finally remove the header. Progress is visible in a metric of
+         "calls without a valid token".
+      8. **Plan for the cost.** The token service becomes a critical dependency: tokens obtained by exchange are
+         cached per user and audience until shortly before expiry, signing keys are cached from JWKS, the token
+         endpoint latency is monitored, and audit logs record `sub` and the id of the calling client.
+    explanation: |
+      "Validate only at the gateway" is perimeter security: one foothold behind the perimeter is enough to act as
+      any user, because internal services check nothing. A signed token with a checked audience solves both
+      problems: it cannot be forged without the issuer's key, and a stolen token for service B is useless against
+      service C. That limits the blast radius.
+
+      Simply forwarding the original token down the chain is better than a header, but a token with a broad audience
+      again allows replay against any service. Token exchange (RFC 8693) and on-behalf-of in Entra ID keep the user as
+      the subject, narrow the audience and permissions, and leave a trace of who acts on the user's behalf. The client
+      credentials flow yields a token without a user, so it must not be used to read user data "on request" of
+      another service: that is the classic confused deputy problem.
+
+      The trade-offs are an extra call to the token service at each hop of the chain and a dependency on its
+      availability. They are handled with token and key caching and monitoring, not by dropping validation in the
+      services.
+    linkTitles:
+      - "RFC 8693: OAuth 2.0 Token Exchange"
+      - "Microsoft identity platform and OAuth 2.0 On-Behalf-Of flow"
+      - "Microsoft identity platform and the OAuth 2.0 client credentials flow"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

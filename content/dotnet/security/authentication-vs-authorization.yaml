@@ -1,0 +1,106 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WP5QHNP18E4QK9Y3VS
+slug: authentication-vs-authorization
+stack: dotnet
+topic: security
+level: junior
+type: open
+grading: self
+tags: [authentication, authorization, claims-principal, middleware]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/security/authentication/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/security/authorization/introduction
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Чем аутентификация отличается от авторизации в ASP.NET Core?
+    prompt: |
+      Объясните разницу между аутентификацией и авторизацией. На примере запроса к API на ASP.NET Core (.NET 10)
+      покажите, что происходит на каждом из этих шагов, в каком порядке они выполняются и каким ответом
+      заканчивается неудача на каждом шаге.
+    hint: |
+      Что серверу нужно знать о вызывающем, прежде чем проверять любые права, и откуда в запросе он это берёт?
+    answer: |
+      - **Аутентификация** устанавливает, кто вызывающий. Middleware `UseAuthentication` вызывает обработчик
+        схемы (cookie, JWT bearer и т. д.): он читает cookie или заголовок `Authorization: Bearer ...`, проверяет
+        их и строит `ClaimsPrincipal` с набором claims, который попадает в `HttpContext.User`. Запрос без
+        учётных данных на этом шаге не отклоняется: пользователь просто остаётся анонимным.
+      - **Авторизация** решает, может ли уже известный пользователь выполнить это действие. Middleware
+        `UseAuthorization` читает метаданные конечной точки (`[Authorize]`, `RequireAuthorization`) и проверяет
+        роли, claims и политики по `HttpContext.User`.
+      - **Порядок**: сначала аутентификация, затем авторизация, поэтому `UseAuthentication` вызывается до
+        `UseAuthorization`.
+      - **Неудачи**: личность не установлена - challenge, для JWT bearer это `401`, для cookie обычно
+        перенаправление на страницу входа. Личность известна, но прав не хватает - forbid, то есть `403` или
+        перенаправление на страницу «доступ запрещён».
+      - **Пример**: `DELETE /orders/42` с токеном. Обработчик JWT bearer проверяет подпись, издателя, аудиторию
+        и срок действия токена и создаёт principal с claims `sub` и `role`. Затем `[Authorize(Roles = "Admin")]`
+        проверяет, есть ли у этого principal роль `Admin`.
+    explanation: |
+      Это два разных вопроса с разной ответственностью. Аутентификация зависит только от учётных данных
+      запроса и ничего не знает о конечной точке. Авторизация зависит от конечной точки и требований к ней, но
+      не проверяет пароли или токены: она работает с уже построенным `ClaimsPrincipal`. Поэтому авторизация
+      без предшествующей аутентификации бессмысленна - проверять права не у кого.
+
+      Частая путаница - коды ответа. Код `401` называется `Unauthorized`, но по смыслу означает «не
+      аутентифицирован», а `403 Forbidden` - «личность известна, но прав нет».
+
+      Порядок важен, когда middleware вызываются явно. Если `UseAuthorization` стоит раньше
+      `UseAuthentication`, то при политике без явно указанных схем аутентификации (обычный случай) авторизация
+      берёт `HttpContext.User`, видит анонимного пользователя и отклоняет запрос даже с верным токеном.
+      Политика, в которой схемы перечислены явно, выполняет аутентификацию по ним сама. Начиная с .NET 7
+      `WebApplication` добавляет оба middleware автоматически, если сервисы зарегистрированы, а приложение не
+      вызвало их само.
+    linkTitles:
+      - "Обзор аутентификации в ASP.NET Core"
+      - "Введение в авторизацию в ASP.NET Core"
+  en:
+    title: What is the difference between authentication and authorization in ASP.NET Core?
+    prompt: |
+      Explain the difference between authentication and authorization. Using a request to an ASP.NET Core API
+      (.NET 10) as an example, show what happens at each step, in which order the steps run, and which response
+      a failure at each step produces.
+    hint: |
+      What does the server need to know about the caller before it can check any permission, and where in the request does it get that?
+    answer: |
+      - **Authentication** establishes who the caller is. The `UseAuthentication` middleware calls the handler of
+        a scheme (cookie, JWT bearer and so on): it reads the cookie or the `Authorization: Bearer ...` header,
+        validates it and builds a `ClaimsPrincipal` with claims, which is stored in `HttpContext.User`. A request
+        without credentials is not rejected at this step: the user simply stays anonymous.
+      - **Authorization** decides whether the already known user may perform this action. The `UseAuthorization`
+        middleware reads the endpoint metadata (`[Authorize]`, `RequireAuthorization`) and checks roles, claims
+        and policies against `HttpContext.User`.
+      - **Order**: authentication first, then authorization, so `UseAuthentication` is called before
+        `UseAuthorization`.
+      - **Failures**: no identity - challenge, which is `401` for JWT bearer and usually a redirect to the login
+        page for cookies. Identity known but not enough rights - forbid, which is `403` or a redirect to an
+        "access denied" page.
+      - **Example**: `DELETE /orders/42` with a token. The JWT bearer handler validates the signature, issuer,
+        audience and lifetime of the token and creates a principal with `sub` and `role` claims. Then
+        `[Authorize(Roles = "Admin")]` checks whether this principal has the `Admin` role.
+    explanation: |
+      These are two different questions with different responsibilities. Authentication depends only on the
+      credentials in the request and knows nothing about the endpoint. Authorization depends on the endpoint
+      and its requirements, but it does not check passwords or tokens: it works with an already built
+      `ClaimsPrincipal`. That is why authorization without prior authentication is meaningless - there is
+      nobody to check rights for.
+
+      A common confusion is the status codes. `401` is named `Unauthorized`, but it means "not authenticated",
+      while `403 Forbidden` means "identity known, but no rights".
+
+      Order matters when you call the middleware explicitly. If `UseAuthorization` runs before
+      `UseAuthentication`, then with a policy that names no authentication schemes (the usual case)
+      authorization takes `HttpContext.User`, sees an anonymous user and rejects the request even with a valid
+      token. A policy that lists its schemes explicitly authenticates with them on its own. Since .NET 7
+      `WebApplication` adds both middleware automatically when the services are registered and the app does
+      not call them itself.
+    linkTitles:
+      - "Overview of ASP.NET Core authentication"
+      - "Introduction to authorization in ASP.NET Core"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"

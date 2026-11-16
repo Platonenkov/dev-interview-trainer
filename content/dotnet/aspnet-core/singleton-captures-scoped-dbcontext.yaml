@@ -1,0 +1,127 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMASYENCCF6FHHVYKS
+slug: singleton-captures-scoped-dbcontext
+stack: dotnet
+topic: aspnet-core
+level: middle
+type: find-bug
+grading: auto
+tags: [dependency-injection, service-lifetimes, captive-dependency, dbcontext]
+code:
+  language: csharp
+  harness: none
+  source: |
+    var builder = WebApplication.CreateBuilder(args);
+
+    builder.Services.AddDbContext<ShopDbContext>(options =>
+        options.UseSqlServer(builder.Configuration.GetConnectionString("Shop")));
+    builder.Services.AddSingleton<IPriceCache, PriceCache>();
+
+    var app = builder.Build();
+    app.MapGet("/prices/{id}", (int id, IPriceCache cache) => cache.GetPrice(id));
+    app.Run();
+
+    public interface IPriceCache
+    {
+        decimal GetPrice(int id);
+    }
+
+    public class PriceCache : IPriceCache
+    {
+        private readonly ShopDbContext _db;
+
+        public PriceCache(ShopDbContext db)
+        {
+            _db = db;
+        }
+
+        public decimal GetPrice(int id) => _db.Products.Find(id)?.Price ?? 0m;
+    }
+bugLineSets: [[5], [20], [5, 20]]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/dependency-injection
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/extensions/dependency-injection/guidelines
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строку, из-за которой singleton удерживает scoped DbContext
+    prompt: |
+      Minimal API на ASP.NET Core (.NET 10) отдаёт цены товаров. `ShopDbContext` - обычный `DbContext` EF Core
+      с набором `Products`. В Production под нагрузкой часть запросов падает с `InvalidOperationException`,
+      а после изменения цены в базе эндпоинт продолжает отдавать старое значение. Щёлкните по строке с дефектом.
+    hint: Сколько живёт экземпляр, который сервис получил в конструкторе, и сколько должен жить `DbContext`?
+    answer: |
+      Строка 5: `PriceCache` зарегистрирован как singleton, хотя через конструктор (строка 20) получает scoped
+      `ShopDbContext`. Засчитывается выбор строки 5, строки 20 или обеих сразу: дефект - в несовпадении времени
+      жизни между ними.
+    explanation: |
+      `AddDbContext` по умолчанию регистрирует контекст как scoped: один экземпляр на запрос. Singleton создаётся
+      один раз из корневого провайдера, поэтому `ShopDbContext`, полученный им в конструкторе, тоже живёт до
+      остановки приложения. Это захваченная зависимость (captive dependency): сервис с коротким временем жизни
+      удерживается сервисом с длинным. Документация прямо говорит, что сервис не должен использовать контекст
+      базы данных с временем жизни короче, чем у самого сервиса.
+
+      Последствия: все параллельные запросы работают с одним `DbContext`, а он не потокобезопасен, поэтому
+      одновременные вызовы падают с `InvalidOperationException` ("A second operation was started on this context
+      instance..."). Трекер изменений хранит все загруженные товары, а `Find` возвращает уже отслеживаемую
+      сущность без запроса к базе, поэтому цены устаревают, а память растёт.
+
+      В Development `WebApplication.CreateBuilder` включает у провайдера сервисов и `ValidateScopes`, и
+      `ValidateOnBuild`. `ValidateOnBuild` проверяет все регистрации при построении провайдера, поэтому исключение
+      выбрасывает уже `builder.Build()`, и в сообщении есть текст вида "Error while validating the service
+      descriptor ... Cannot consume scoped service 'ShopDbContext' from singleton 'IPriceCache'". Одна только
+      проверка областей без `ValidateOnBuild` сработала бы позже, при первом разрешении `IPriceCache`. В Production
+      обе проверки по умолчанию выключены, поэтому дефект проявляется только под нагрузкой. Поведение описано для
+      ASP.NET Core в .NET 10.
+
+      Исправление: зарегистрировать `PriceCache` через `AddScoped` или оставить singleton и внедрить
+      `IServiceScopeFactory` (создавать область на каждый вызов и получать контекст из неё) либо
+      `IDbContextFactory<ShopDbContext>`, зарегистрированный через `AddDbContextFactory`.
+    linkTitles:
+      - "Внедрение зависимостей в ASP.NET Core"
+      - "Рекомендации по внедрению зависимостей"
+  en:
+    title: Find the line that makes a singleton hold a scoped DbContext
+    prompt: |
+      A minimal API on ASP.NET Core (.NET 10) returns product prices. `ShopDbContext` is a regular EF Core
+      `DbContext` with a `Products` set. In Production under load some requests fail with
+      `InvalidOperationException`, and after a price changes in the database the endpoint keeps returning the old
+      value. Click the line that contains the defect.
+    hint: How long does the instance the service receives in its constructor live, and how long should a `DbContext` live?
+    answer: |
+      Line 5: `PriceCache` is registered as a singleton, although through its constructor (line 20) it receives the
+      scoped `ShopDbContext`. Selecting line 5, line 20 or both is accepted: the defect is the lifetime mismatch
+      between them.
+    explanation: |
+      `AddDbContext` registers the context as scoped by default: one instance per request. A singleton is created
+      once from the root provider, so the `ShopDbContext` it receives in its constructor also lives until the
+      application stops. This is a captive dependency: a shorter-lived service is held by a longer-lived one. The
+      documentation states directly that a service should not use a database context whose lifetime is shorter
+      than the service's own.
+
+      Consequences: all concurrent requests share one `DbContext`, which is not thread-safe, so parallel calls fail
+      with `InvalidOperationException` ("A second operation was started on this context instance..."). The change
+      tracker keeps every loaded product, and `Find` returns an already tracked entity without querying the
+      database, so prices go stale and memory grows.
+
+      In Development `WebApplication.CreateBuilder` enables both `ValidateScopes` and `ValidateOnBuild` on the
+      service provider. `ValidateOnBuild` checks every registration when the provider is built, so `builder.Build()`
+      itself throws, and the message contains text like "Error while validating the service descriptor ...
+      Cannot consume scoped service 'ShopDbContext' from singleton 'IPriceCache'". Scope validation alone, without
+      `ValidateOnBuild`, would fail later, on the first resolution of `IPriceCache`. In Production both checks are
+      off by default, so the defect shows up only under load. The behaviour is described for ASP.NET Core in .NET 10.
+
+      Fix: register `PriceCache` with `AddScoped`, or keep it a singleton and inject `IServiceScopeFactory` (create
+      a scope per call and resolve the context from it) or `IDbContextFactory<ShopDbContext>` registered with
+      `AddDbContextFactory`.
+    linkTitles:
+      - "Dependency injection in ASP.NET Core"
+      - "Dependency injection guidelines"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"
+  noRunReason: "The snippet uses ASP.NET Core and EF Core types, which are not available in the BCL-only sandbox. Not executed."

@@ -1,0 +1,122 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMXG4T1WYK5FW9Y0QT
+slug: middleware-order-request-response
+stack: dotnet
+topic: aspnet-core
+level: junior
+type: single
+grading: auto
+tags: [middleware, pipeline, request-pipeline]
+code:
+  language: csharp
+  harness: none
+  source: |
+    var builder = WebApplication.CreateBuilder(args);
+    var app = builder.Build();
+
+    app.Use(async (context, next) =>
+    {
+        Console.WriteLine("A in");
+        await next(context);
+        Console.WriteLine("A out");
+    });
+
+    app.Use(async (context, next) =>
+    {
+        Console.WriteLine("B in");
+        await next(context);
+        Console.WriteLine("B out");
+    });
+
+    app.Use(async (context, next) =>
+    {
+        Console.WriteLine("C in");
+        await next(context);
+        Console.WriteLine("C out");
+    });
+
+    app.Run(async context =>
+    {
+        Console.WriteLine("Handler");
+        await context.Response.WriteAsync("Hello");
+    });
+
+    app.Run();
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/middleware/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/middleware/write
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: В каком порядке выполняются middleware при обработке запроса и ответа?
+    prompt: |
+      В приложении ASP.NET Core зарегистрированы три middleware через `app.Use` и конечный обработчик через `app.Run`.
+      Каждый middleware пишет строку в консоль до и после вызова `next`. В каком порядке появятся строки при обработке
+      одного запроса?
+    hint: Что именно вызывает делегат `next` и когда управление возвращается в код после `await next(context)`?
+    options:
+      a: "A in → A out → B in → B out → C in → C out → Handler"
+      b: "A in → B in → C in → Handler → C out → B out → A out"
+      c: "A in → B in → C in → Handler → A out → B out → C out"
+      d: "C in → B in → A in → Handler → A out → B out → C out"
+    optionExplanations:
+      a: "Middleware не выполняются по очереди целиком: код после `await next(context)` ждёт, пока завершится вся оставшаяся часть конвейера, включая обработчик."
+      c: "На обратном пути порядок не совпадает с порядком регистрации: первым завершается самый внутренний middleware `C`, а внешний `A` заканчивает последним."
+      d: "На пути запроса middleware вызываются в порядке регистрации, поэтому первым выполняется `A`, а не `C`."
+    answer: "A in → B in → C in → Handler → C out → B out → A out"
+    explanation: |
+      Каждый вызов `app.Use` оборачивает всю оставшуюся часть конвейера: делегат `next` - это следующий middleware
+      вместе со всем, что зарегистрировано после него, вплоть до конечного обработчика. Код до `await next(context)`
+      выполняется на пути запроса в порядке регистрации: `A`, `B`, `C`, затем обработчик из `app.Run`.
+
+      Код после `await next(context)` выполняется только тогда, когда вся внутренняя часть уже завершилась. Поэтому на
+      обратном пути порядок обратный: первым заканчивает `C`, затем `B`, последним `A`, как при вложенных вызовах
+      функций. Именно поэтому порядок регистрации важен: например, обработчик исключений ставят в начало, чтобы он
+      оборачивал всё остальное.
+    linkTitles:
+      - "Middleware в ASP.NET Core"
+      - "Написание собственного middleware в ASP.NET Core"
+  en:
+    title: In what order do middleware run for a request and its response?
+    prompt: |
+      An ASP.NET Core application registers three middleware with `app.Use` and a terminal handler with `app.Run`.
+      Each middleware writes a line to the console before and after calling `next`. In what order do the lines appear
+      for one request?
+    hint: What exactly does the `next` delegate invoke, and when does control return to the code after `await next(context)`?
+    options:
+      a: "A in → A out → B in → B out → C in → C out → Handler"
+      b: "A in → B in → C in → Handler → C out → B out → A out"
+      c: "A in → B in → C in → Handler → A out → B out → C out"
+      d: "C in → B in → A in → Handler → A out → B out → C out"
+    optionExplanations:
+      a: "Middleware do not run one after another as whole units: the code after `await next(context)` waits until the rest of the pipeline, including the handler, has finished."
+      c: "On the way out the order is not the registration order: the innermost middleware `C` finishes first and the outer `A` finishes last."
+      d: "On the way in, middleware are invoked in registration order, so `A` runs first, not `C`."
+    answer: "A in → B in → C in → Handler → C out → B out → A out"
+    explanation: |
+      Each `app.Use` call wraps the rest of the pipeline: the `next` delegate is the following middleware together with
+      everything registered after it, down to the terminal handler. The code before `await next(context)` runs on the
+      way in, in registration order: `A`, `B`, `C`, then the handler from `app.Run`.
+
+      The code after `await next(context)` runs only when the whole inner part has finished. So on the way out the
+      order is reversed: `C` finishes first, then `B`, and `A` last, just like nested function calls. This is why
+      registration order matters: for example, the exception handler goes first so that it wraps everything else.
+    linkTitles:
+      - "ASP.NET Core Middleware"
+      - "Write custom ASP.NET Core middleware"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  noRunReason: The snippet uses ASP.NET Core types (WebApplication, HttpContext), which are not available in the BCL-only sandbox, and it starts a web server.

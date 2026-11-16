@@ -1,0 +1,119 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WM3SZ97PZ4G6ZZKAVH
+slug: minimal-apis-vs-controllers-basics
+stack: dotnet
+topic: aspnet-core
+level: junior
+type: open
+grading: self
+tags: [minimal-apis, controllers, routing]
+code:
+  language: csharp
+  harness: none
+  source: |
+    using Microsoft.AspNetCore.Mvc;
+
+    var builder = WebApplication.CreateBuilder(args);
+    builder.Services.AddControllers(); // registers MVC services for controllers
+
+    var app = builder.Build();
+
+    // Minimal API: the route is mapped directly to a delegate
+    app.MapGet("/minimal/products/{id:int}", (int id) => Results.Ok(new { Id = id }));
+
+    // Controllers: MVC discovers controller classes and maps their attribute routes
+    app.MapControllers();
+
+    app.Run();
+
+    [ApiController]
+    [Route("controller/products")]
+    public class ProductsController : ControllerBase
+    {
+        [HttpGet("{id:int}")]
+        public IActionResult Get(int id) => Ok(new { Id = id });
+    }
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/apis
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/minimal-apis/min-api-filters
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Чем minimal API отличается от контроллеров в ASP.NET Core?
+    prompt: |
+      Что такое конечная точка minimal API, чем она отличается от действия контроллера и как каждый подход
+      выглядит в `Program.cs`? В коде к вопросу оба подхода показаны в одном приложении.
+    hint: Сравните, где находится код обработчика в каждом подходе и кто находит этот код при старте приложения.
+    answer: |
+      - **Minimal API.** Маршрут напрямую связывается с делегатом-обработчиком методами `MapGet`, `MapPost`,
+        `MapPut`, `MapDelete` и подобными, которые вызываются на `WebApplication`. Обработчик - лямбда, локальная
+        функция или метод. Параметры привязываются по соглашениям из маршрута, строки запроса, заголовков, тела
+        запроса (JSON) и из DI. Результат - `IResult` из `Results` или `TypedResults` либо объект, который
+        сериализуется в JSON. Отдельный класс не нужен.
+      - **Контроллеры.** Действия - открытые методы класса, обычно наследника `ControllerBase` с атрибутом
+        `[ApiController]`. В `Program.cs` нужны `builder.Services.AddControllers()` и `app.MapControllers()`:
+        MVC сам находит классы контроллеров, а маршруты задаются атрибутами `[Route]`, `[HttpGet]` и так далее.
+      - **Что дают контроллеры.** Возможности MVC: фильтры MVC (действий, исключений, результатов), `ModelState`
+        и автоматический ответ 400 от `[ApiController]` при невалидной модели.
+      - **Что дают minimal API.** Меньше кода и шаблонной обвязки, группировку маршрутов через `MapGroup` и сквозную
+        логику через фильтры конечных точек (`AddEndpointFilter`, появились в .NET 7) вместо фильтров MVC.
+      - Оба подхода можно использовать в одном приложении: они работают на общей системе маршрутизации.
+    explanation: |
+      Оба подхода в итоге регистрируют конечные точки в одной системе маршрутизации. Разница в том, как описан
+      обработчик и что его оборачивает. Обработчик minimal API вызывается почти напрямую: параметры привязываются
+      по соглашениям, и вокруг него работают только middleware и фильтры конечных точек. Действие контроллера
+      вызывается через инфраструктуру MVC, которая выполняет привязку моделей, заполняет `ModelState` и запускает
+      фильтры MVC.
+
+      Отсюда типичная ошибка: ожидать, что фильтр действия MVC сработает для конечной точки, зарегистрированной
+      через `MapGet`. Он не сработает, для minimal API нужен `IEndpointFilter`.
+
+      Документация Microsoft рекомендует minimal API для новых проектов, а контроллеры оставляет для больших
+      приложений со сложной бизнес-логикой, команд, привыкших к паттерну MVC, и приложений, которым нужны
+      конкретные возможности MVC. Описание соответствует ASP.NET Core в .NET 10.
+    linkTitles:
+      - "Обзор API"
+      - "Фильтры в приложениях minimal API"
+  en:
+    title: How do minimal APIs differ from controllers in ASP.NET Core?
+    prompt: |
+      What is a minimal API endpoint, how does it differ from a controller action, and what does each approach
+      look like in `Program.cs`? The code shows both approaches in one application.
+    hint: Compare where the handler code lives in each approach and who finds that code when the application starts.
+    answer: |
+      - **Minimal API.** A route is mapped directly to a handler delegate with `MapGet`, `MapPost`, `MapPut`,
+        `MapDelete` and similar methods called on `WebApplication`. The handler is a lambda, a local function or
+        a method. Parameters are bound by convention from the route, the query string, headers, the request body
+        (JSON) and DI. The result is an `IResult` from `Results` or `TypedResults`, or an object serialized to
+        JSON. No separate class is needed.
+      - **Controllers.** Actions are public methods of a class, usually derived from `ControllerBase` and marked
+        with `[ApiController]`. `Program.cs` needs `builder.Services.AddControllers()` and `app.MapControllers()`:
+        MVC discovers the controller classes itself, and routes come from attributes such as `[Route]` and `[HttpGet]`.
+      - **What controllers give you.** MVC features: MVC filters (action, exception, result filters), `ModelState`
+        and the automatic 400 response of `[ApiController]` when the model is invalid.
+      - **What minimal APIs give you.** Less code and boilerplate, route groups with `MapGroup`, and cross-cutting
+        logic through endpoint filters (`AddEndpointFilter`, introduced in .NET 7) instead of MVC filters.
+      - Both approaches can be used in one application: they run on the same routing system.
+    explanation: |
+      Both approaches end up registering endpoints in the same routing system. The difference is how the
+      handler is described and what wraps it. A minimal API handler is invoked almost directly: parameters are
+      bound by convention, and only middleware and endpoint filters run around it. A controller action is
+      invoked through the MVC infrastructure, which performs model binding, fills `ModelState` and runs MVC filters.
+
+      This leads to a common mistake: expecting an MVC action filter to run for an endpoint registered with
+      `MapGet`. It does not; minimal APIs need an `IEndpointFilter`.
+
+      The Microsoft documentation recommends minimal APIs for new projects and keeps controllers for large
+      applications with complex business logic, teams familiar with the MVC pattern, and applications that need
+      specific MVC features. The description applies to ASP.NET Core in .NET 10.
+    linkTitles:
+      - "APIs overview"
+      - "Filters in Minimal API apps"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"
+  noRunReason: ASP.NET Core web application that needs the Microsoft.AspNetCore.App shared framework and a running web server, which the console sandbox does not provide.

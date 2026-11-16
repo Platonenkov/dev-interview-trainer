@@ -1,0 +1,113 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WPD6X9ZGFX029RZVFY
+slug: jwt-revocation-strategies
+stack: dotnet
+topic: security
+level: senior
+type: open
+grading: self
+tags: [jwt, revocation, refresh-token, oauth]
+links:
+  - url: https://www.rfc-editor.org/rfc/rfc9700
+    lang: en
+    kind: spec
+  - url: https://www.rfc-editor.org/rfc/rfc7009
+    lang: en
+    kind: spec
+  - url: https://www.rfc-editor.org/rfc/rfc7662
+    lang: en
+    kind: spec
+locales:
+  ru:
+    title: Как отозвать доступ, если API использует JWT без состояния?
+    prompt: |
+      API принимает подписанные JWT access token и проверяет их локально, не обращаясь к серверу авторизации.
+      Пользователь нажимает «Выйти» или администратор блокирует учётную запись, и доступ нужно прекратить сразу.
+      Какие есть способы отзыва и чего стоит каждый из них?
+    hint: Что именно API проверяет в самодостаточном токене и где может храниться знание о том, что токен больше не действителен?
+    answer: |
+      - **Сам по себе подписанный JWT отозвать нельзя.** API проверяет подпись, `exp`, `aud` и `iss` и ничего не знает
+        о событиях после выдачи. Удаление токена на клиенте при выходе не помогает, если токен уже скопирован.
+      - **Короткий срок жизни access token и refresh token.** Access token живёт минуты (например, 5-15), refresh token
+        хранится на сервере авторизации и может быть отозван через endpoint отзыва (RFC 7009). При выходе отзывается
+        refresh token, и новый access token получить уже нельзя. Цена: окно, пока последний access token ещё действителен
+        (плюс `ClockSkew` в `TokenValidationParameters`, по умолчанию 5 минут), и более частые запросы за токенами.
+      - **Ротация refresh token.** Каждое обновление выдаёт новый refresh token и делает старый недействительным. Повторное
+        использование старого - признак кражи, и сервер отзывает всю цепочку. RFC 9700 требует для публичных клиентов
+        либо привязки refresh token к отправителю, либо ротации. Цена: состояние на сервере авторизации и обработка гонок
+        при параллельных обновлениях.
+      - **Список отзыва (denylist) по `jti`.** API, например в `JwtBearerEvents.OnTokenValidated`, ищет `jti` в
+        распределённом кэше, запись хранится до `exp` токена. Вариант для блокировки пользователя - отметка «токены,
+        выпущенные раньше момента T, недействительны» и сравнение с `iat`. Цена: обращение к хранилищу на каждый запрос,
+        зависимость от его доступности и потеря главного преимущества stateless-проверки.
+      - **Интроспекция (RFC 7662) или непрозрачные (reference) токены.** API спрашивает сервер авторизации о каждом токене,
+        и отзыв действует сразу. Цена: задержка и нагрузка на сервер авторизации, его отказ останавливает API. Ответ
+        обычно кэшируют на короткое время, и это снова создаёт окно.
+      - **Смена ключа подписи** делает недействительными все токены сразу. Это аварийная мера при компрометации ключа,
+        а не способ разлогинить одного пользователя.
+      - **Практичная комбинация:** короткие access token и ротация refresh token для всех запросов, а серверная проверка
+        (denylist или интроспекция) только для чувствительных операций, где окно в несколько минут недопустимо.
+    explanation: |
+      Самодостаточный токен ценен тем, что его можно проверить без обращения к хранилищу: всё нужное есть в самом
+      токене и в открытом ключе. Обратная сторона - токен остаётся действительным до `exp`, что бы ни случилось после
+      выдачи. Поэтому любой немедленный отзыв требует состояния на сервере, и вопрос только в том, где оно живёт и как
+      часто к нему обращаются.
+
+      Короткие access token переносят состояние на сервер авторизации: отзывается refresh token, а access token
+      «догорает» сам. Это дёшево, но оставляет окно уязвимости длиной в срок жизни токена. Denylist и интроспекция
+      закрывают окно, но добавляют сетевой вызов или обращение к кэшу на каждый запрос. Сильный ответ называет эту
+      цену явно и выбирает механизм по требованию к скорости отзыва, а не применяет один способ везде.
+    linkTitles:
+      - "RFC 9700: OAuth 2.0 Security Best Current Practice"
+      - "RFC 7009: OAuth 2.0 Token Revocation"
+      - "RFC 7662: OAuth 2.0 Token Introspection"
+  en:
+    title: How do you revoke access when an API uses stateless JWT access tokens?
+    prompt: |
+      An API accepts signed JWT access tokens and validates them locally, without calling the authorization server.
+      A user clicks "Log out" or an administrator blocks an account, and access must stop immediately.
+      What revocation options exist and what does each of them cost?
+    hint: What exactly does the API check in a self-contained token, and where could the knowledge that a token is no longer valid be stored?
+    answer: |
+      - **A signed JWT cannot be revoked by itself.** The API checks the signature, `exp`, `aud` and `iss` and knows
+        nothing about events after issuance. Deleting the token on the client at logout does not help if the token
+        has already been copied.
+      - **Short-lived access tokens plus refresh tokens.** The access token lives for minutes (for example 5-15), the
+        refresh token is stored by the authorization server and can be revoked through the revocation endpoint
+        (RFC 7009). At logout the refresh token is revoked, so no new access token can be obtained. Cost: a window while
+        the last access token is still valid (plus `ClockSkew` in `TokenValidationParameters`, 5 minutes by default),
+        and more frequent token requests.
+      - **Refresh token rotation.** Every refresh issues a new refresh token and invalidates the old one. Reuse of an
+        old one signals theft, and the server revokes the whole chain. RFC 9700 requires refresh tokens of public
+        clients to be either sender-constrained or rotated. Cost: state on the authorization server and handling races
+        between parallel refreshes.
+      - **A denylist by `jti`.** The API, for example in `JwtBearerEvents.OnTokenValidated`, looks up the `jti` in a
+        distributed cache, and the entry is kept until the token's `exp`. A variant for blocking a user is a marker
+        "tokens issued before time T are invalid" compared with `iat`. Cost: a store lookup on every request, a
+        dependency on its availability, and the loss of the main benefit of stateless validation.
+      - **Introspection (RFC 7662) or opaque (reference) tokens.** The API asks the authorization server about each
+        token, so revocation takes effect immediately. Cost: latency and load on the authorization server, and its
+        outage stops the API. The response is usually cached briefly, which reintroduces a window.
+      - **Rotating the signing key** invalidates every token at once. It is an emergency measure for a compromised key,
+        not a way to log out one user.
+      - **A practical combination:** short access tokens and refresh token rotation for all requests, and a server-side
+        check (denylist or introspection) only for sensitive operations where a window of several minutes is not
+        acceptable.
+    explanation: |
+      A self-contained token is valuable because it can be validated without a store lookup: everything needed is in
+      the token and the public key. The flip side is that the token stays valid until `exp`, whatever happens after
+      it is issued. So any immediate revocation needs state on the server, and the only questions are where that state
+      lives and how often it is consulted.
+
+      Short access tokens move the state to the authorization server: the refresh token is revoked and the access
+      token simply runs out. This is cheap but leaves an exposure window as long as the token lifetime. A denylist or
+      introspection closes the window but adds a network call or cache lookup to every request. A strong answer names
+      this cost explicitly and picks the mechanism by how fast revocation must take effect, instead of applying one
+      approach everywhere.
+    linkTitles:
+      - "RFC 9700: OAuth 2.0 Security Best Current Practice"
+      - "RFC 7009: OAuth 2.0 Token Revocation"
+      - "RFC 7662: OAuth 2.0 Token Introspection"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

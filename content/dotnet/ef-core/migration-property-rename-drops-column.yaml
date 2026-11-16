@@ -1,0 +1,93 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNXEM08J0MMG1W6PSW
+slug: migration-property-rename-drops-column
+stack: dotnet
+topic: ef-core
+level: middle
+type: find-bug
+grading: auto
+tags: [ef-core, migrations, data-loss]
+code:
+  language: csharp
+  harness: none
+  source: |
+    public partial class RenameCustomerName : Migration
+    {
+        protected override void Up(MigrationBuilder migrationBuilder)
+        {
+            migrationBuilder.DropColumn(
+                name: "Name",
+                table: "Customers");
+
+            migrationBuilder.AddColumn<string>(
+                name: "FullName",
+                table: "Customers",
+                type: "nvarchar(max)",
+                nullable: false,
+                defaultValue: "");
+        }
+
+        // Down omitted for brevity
+    }
+bugLineSets: [[5, 9], [5]]
+links:
+  - url: https://learn.microsoft.com/en-us/ef/core/managing-schemas/migrations/managing
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/microsoft.entityframeworkcore.migrations.migrationbuilder.renamecolumn
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какие строки миграции после переименования свойства удалят данные?
+    prompt: |
+      В сущности `Customer` свойство `Name` переименовали в `FullName` и выполнили
+      `dotnet ef migrations add RenameCustomerName`. Миграцию закоммитили без изменений. Если применить её к
+      рабочей базе, все имена клиентов пропадут. Щёлкните по строкам, которые приводят к потере данных.
+    hint: Может ли генератор миграций отличить переименование свойства от удаления одного свойства и добавления другого?
+    answer: Строки 5 и 9, пара `DropColumn` и `AddColumn`. Удаление столбца `Name` (строка 5) уничтожает данные, а новый столбец `FullName` создаётся пустым.
+    explanation: |
+      Генератор миграций сравнивает модель со снимком модели и видит, что свойства `Name` больше нет, а
+      появилось свойство `FullName`. Отличить переименование от двух независимых изменений он в общем случае
+      не может, поэтому способен сгенерировать удаление старого столбца и добавление нового. `DropColumn`
+      удаляет столбец вместе со всеми значениями, а `AddColumn` создаёт новый столбец, где у каждой строки
+      значение по умолчанию `""`. При генерации такой миграции EF Core выводит предупреждение о возможной
+      потере данных, и его нельзя пропускать.
+
+      Исправление - вручную отредактировать миграцию и заменить обе операции одной:
+      `migrationBuilder.RenameColumn(name: "Name", table: "Customers", newName: "FullName");`, а в `Down`
+      выполнить обратное переименование. Другой вариант - оставить столбец прежним, указав в конфигурации
+      `HasColumnName("Name")`, тогда схема базы не меняется. Общее правило: каждую сгенерированную миграцию
+      читают на code review, прежде чем применять её к базе с данными.
+    linkTitles:
+      - "Управление миграциями в EF Core"
+      - "Метод MigrationBuilder.RenameColumn"
+  en:
+    title: Which lines of a migration after a property rename delete data?
+    prompt: |
+      In the `Customer` entity the `Name` property was renamed to `FullName`, and
+      `dotnet ef migrations add RenameCustomerName` was run. The migration was committed unchanged. If it is
+      applied to the production database, every customer name is lost. Click the lines that cause the data loss.
+    hint: Can the migrations scaffolder tell a property rename apart from removing one property and adding another?
+    answer: Lines 5 and 9, the `DropColumn` and `AddColumn` pair. Dropping the `Name` column (line 5) destroys the data, and the new `FullName` column is created empty.
+    explanation: |
+      The scaffolder compares the model with the model snapshot and sees that the `Name` property is gone and a
+      `FullName` property has appeared. In general it cannot tell a rename from two independent changes, so it
+      can generate a drop of the old column and an add of a new one. `DropColumn` removes the column with all
+      its values, and `AddColumn` creates a new column where every row gets the default value `""`. When it
+      scaffolds such a migration, EF Core prints a warning about possible data loss, and that warning must not
+      be ignored.
+
+      The fix is to edit the migration by hand and replace both operations with one:
+      `migrationBuilder.RenameColumn(name: "Name", table: "Customers", newName: "FullName");`, with the reverse
+      rename in `Down`. Another option is to keep the old column by configuring `HasColumnName("Name")`, so the
+      database schema does not change at all. The general rule: every scaffolded migration is read in code review
+      before it is applied to a database that holds data.
+    linkTitles:
+      - "Managing migrations in EF Core"
+      - "MigrationBuilder.RenameColumn method"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"
+  noRunReason: The snippet is an EF Core migration and needs EF Core packages and a database provider, which the sandbox does not have.

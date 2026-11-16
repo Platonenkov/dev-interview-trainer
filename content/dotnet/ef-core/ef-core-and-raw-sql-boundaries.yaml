@@ -1,0 +1,160 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNH3QGN88MD1TYW3V5
+slug: ef-core-and-raw-sql-boundaries
+stack: dotnet
+topic: ef-core
+level: architect
+type: open
+grading: self
+tags: [ef-core, raw-sql, sql-injection, architecture, cqrs]
+links:
+  - url: https://learn.microsoft.com/en-us/ef/core/querying/sql-queries
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/ef/core/performance/efficient-querying
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Где в большой системе провести границу между EF Core LINQ и сырым SQL?
+    prompt: |
+      Вы отвечаете за архитектуру большой системы на EF Core 10, которую будут развивать много лет несколько
+      команд. Где вы будете использовать LINQ и отслеживание изменений EF Core, а где разрешите сырой SQL?
+      Какие правила сделают сырой SQL безопасным и сопровождаемым?
+    hint: "Что EF Core знает о запросе, написанном на LINQ, и чего он не знает о строке с SQL?"
+    answer: |
+      **Граница по умолчанию.**
+
+      - **Запись - через EF Core.** Изменения агрегатов идут через сущности, отслеживание изменений и
+        `SaveChanges`: так соблюдаются инварианты модели, работают токены параллелизма, а все команды одного
+        вызова `SaveChanges` выполняются в одной транзакции. Массовые операции без загрузки сущностей -
+        `ExecuteUpdate`/`ExecuteDelete` (EF Core 7 и новее), это по-прежнему LINQ.
+      - **Чтение - сначала LINQ.** Проекция в DTO через `Select` и `AsNoTracking()` для данных только на чтение.
+      - **Сырой SQL - исключение для чтения**, когда LINQ не выражает запрос или генерирует измеримо плохой SQL:
+        рекурсивные CTE, сложные отчёты, подсказки оптимизатору, возможности конкретной СУБД. Решение
+        принимается по плану запроса и замерам, а не «на всякий случай».
+
+      **Инструменты по возрастанию «сырости».**
+
+      1. Представление или функция в базе, созданные миграцией (`migrationBuilder.Sql`), и сущность без ключа,
+         привязанная к ним: SQL живёт в миграциях и версионируется вместе со схемой.
+      2. `FromSql` на `DbSet` (EF Core 7 и новее): результат - сущности, поверх можно дописывать LINQ, если SQL
+         компонуемый.
+      3. `Database.SqlQuery<T>` для скаляров и для неотображённых DTO (неотображённые типы - EF Core 8 и новее)
+         и `Database.ExecuteSql` для команд.
+      4. Микро-ORM (например, Dapper) на стороне чтения, на том же соединении (`Database.GetDbConnection()`), если
+         read-модель целиком строится на SQL.
+
+      **Правила для сырого SQL.**
+
+      - **Только параметры.** Интерполированные `FromSql`/`SqlQuery`/`ExecuteSql`, которые превращают значения в
+        `DbParameter`. Методы `...Raw` - только с явными параметрами, без склейки ввода в строку. Имена таблиц и
+        столбцов параметризовать нельзя: их берут из белого списка.
+      - **Известное место.** SQL лежит в отдельном слое запросов модуля (query objects, read-модель), а не
+        разбросан по контроллерам и сервисам. Это правило проверяется на code review и архитектурными тестами.
+      - **Тесты на реальной СУБД.** Каждый SQL-запрос покрыт интеграционным тестом на той же СУБД, что и в
+        production, на базе после применения всех миграций. Провайдер InMemory сырой SQL не выполняет, а
+        SQLite имеет другой диалект.
+      - **Осознанная цена.** Сырой SQL не видят компилятор, модель и миграции: переименование свойства или
+        столбца ломает его только во время выполнения. Поэтому в чек-листе изменения схемы есть пункт «проверить
+        SQL модуля», а тесты из предыдущего пункта ловят расхождение в CI.
+      - **Никаких записей в обход агрегатов.** `ExecuteSql` не обновляет отслеживаемые сущности и не проверяет
+        инварианты; запись сырым SQL допустима только для явно выделенных массовых сценариев, в транзакции
+        с остальной работой, если она нужна.
+      - **Наблюдаемость.** Запросы помечаются (`TagWith` для LINQ, комментарий в тексте SQL), чтобы находить их в
+        логах и мониторинге СУБД.
+    explanation: |
+      Выбор между LINQ и SQL - это выбор между тем, что знает модель, и тем, что контролирует разработчик.
+      Запрос на LINQ проверяется компилятором, следует за переименованиями в модели, автоматически
+      параметризуется и переводится провайдером. Строка SQL даёт полный контроль над планом и доступ к
+      возможностям СУБД, но для EF Core это непрозрачный текст: миграции его не меняют, рефакторинг его не
+      находит, ошибка проявится только при выполнении.
+
+      Поэтому граница проводится по цене ошибки. На записи ошибка нарушает целостность данных, и там нужны
+      гарантии модели: отслеживание изменений, токены параллелизма, транзакция `SaveChanges`. На чтении
+      ошибка обычно видна сразу и не портит данные, а выигрыш от ручного SQL бывает большим, поэтому там
+      сырой SQL допустим. Это близко к разделению команд и запросов (CQRS): сторона команд работает через
+      доменную модель, сторона запросов может читать базу напрямую.
+
+      Правила компенсируют то, чего SQL лишён: параметризация защищает от SQL-инъекций, единое место и
+      архитектурные тесты не дают SQL расползтись по коду, интеграционные тесты на реальной СУБД заменяют
+      проверку компилятором. Представления и функции, созданные миграциями, переносят часть SQL обратно под
+      контроль версионирования схемы. Ответ относится к EF Core 10; `FromSql` и `ExecuteSql` появились в
+      EF Core 7, `SqlQuery` для неотображённых типов - в EF Core 8.
+    linkTitles:
+      - "SQL-запросы в EF Core"
+      - "Эффективные запросы в EF Core"
+  en:
+    title: Where should a large system draw the line between EF Core LINQ and raw SQL?
+    prompt: |
+      You own the architecture of a large system on EF Core 10 that several teams will evolve for years.
+      Where do you use EF Core LINQ and change tracking, and where do you allow raw SQL? What rules keep
+      the raw SQL safe and maintainable?
+    hint: "What does EF Core know about a query written in LINQ that it does not know about a SQL string?"
+    answer: |
+      **The default boundary.**
+
+      - **Writes go through EF Core.** Aggregate changes go through entities, change tracking and
+        `SaveChanges`: model invariants hold, concurrency tokens work, and all commands of one
+        `SaveChanges` call run in one transaction. Bulk operations that do not load entities use
+        `ExecuteUpdate`/`ExecuteDelete` (EF Core 7 and later), which are still LINQ.
+      - **Reads start with LINQ.** A projection into a DTO with `Select`, and `AsNoTracking()` for read-only data.
+      - **Raw SQL is an exception for reads**, when LINQ cannot express the query or generates measurably bad
+        SQL: recursive CTEs, complex reports, optimizer hints, provider-specific features. The decision is
+        based on the query plan and measurements, not "just in case".
+
+      **Tools in increasing order of rawness.**
+
+      1. A database view or function created by a migration (`migrationBuilder.Sql`) and a keyless entity
+         mapped to it: the SQL lives in migrations and is versioned with the schema.
+      2. `FromSql` on a `DbSet` (EF Core 7 and later): the result is entities, and LINQ can be composed on top
+         if the SQL is composable.
+      3. `Database.SqlQuery<T>` for scalars and unmapped DTOs (unmapped types since EF Core 8) and
+         `Database.ExecuteSql` for commands.
+      4. A micro-ORM (for example Dapper) on the read side, on the same connection
+         (`Database.GetDbConnection()`), when a read model is built entirely on SQL.
+
+      **Rules for raw SQL.**
+
+      - **Parameters only.** Interpolated `FromSql`/`SqlQuery`/`ExecuteSql`, which turn values into
+        `DbParameter`s. The `...Raw` methods only with explicit parameters, never with input pasted into the
+        string. Table and column names cannot be parameters: they come from an allow list.
+      - **A known place.** SQL lives in a dedicated query layer of the module (query objects, read model), not
+        scattered across controllers and services. Code review and architecture tests enforce this.
+      - **Tests on the real engine.** Every SQL query has an integration test on the same database engine as
+        production, against a database with all migrations applied. The InMemory provider does not run raw
+        SQL, and SQLite has a different dialect.
+      - **An accepted cost.** Raw SQL is invisible to the compiler, the model and migrations: renaming a
+        property or column breaks it only at run time. So the schema change checklist includes "check the
+        module's SQL", and the tests above catch the mismatch in CI.
+      - **No writes that bypass aggregates.** `ExecuteSql` does not update tracked entities and does not check
+        invariants; raw SQL writes are allowed only for explicitly designated bulk scenarios, inside a
+        transaction with the rest of the work when needed.
+      - **Observability.** Queries are tagged (`TagWith` for LINQ, a comment in the SQL text) so they can be
+        found in logs and database monitoring.
+    explanation: |
+      Choosing between LINQ and SQL is choosing between what the model knows and what the developer
+      controls. A LINQ query is checked by the compiler, follows renames in the model, is parameterized
+      automatically and is translated by the provider. A SQL string gives full control over the plan and
+      access to database features, but to EF Core it is opaque text: migrations do not change it, refactoring
+      does not find it, and a mistake shows up only at run time.
+
+      So the boundary follows the cost of a mistake. On writes a mistake breaks data integrity, and the
+      guarantees of the model are needed there: change tracking, concurrency tokens, the `SaveChanges`
+      transaction. On reads a mistake is usually visible at once and does not corrupt data, while the gain from
+      hand-written SQL can be large, so raw SQL is acceptable there. This is close to command and query
+      separation (CQRS): the command side works through the domain model, the query side may read the
+      database directly.
+
+      The rules compensate for what SQL lacks: parameterization protects against SQL injection, one place and
+      architecture tests keep SQL from spreading through the code, and integration tests on the real engine
+      replace the compiler's checks. Views and functions created by migrations bring part of the SQL back under
+      schema versioning. The answer is for EF Core 10; `FromSql` and `ExecuteSql` appeared in EF Core 7, and
+      `SqlQuery` for unmapped types in EF Core 8.
+    linkTitles:
+      - "SQL queries in EF Core"
+      - "Efficient querying in EF Core"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

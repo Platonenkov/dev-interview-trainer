@@ -1,0 +1,117 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNGZXREH92VQRPXTG4
+slug: estimated-vs-actual-rows-mismatch
+stack: dotnet
+topic: databases
+level: senior
+type: open
+grading: self
+tags: [sql-server, execution-plans, statistics, cardinality-estimation, memory-grant]
+links:
+  - url: https://learn.microsoft.com/en-us/sql/relational-databases/statistics/statistics
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/sql/relational-databases/performance/display-an-actual-execution-plan
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: О чём говорит расхождение оценки и фактического числа строк в плане выполнения SQL Server?
+    prompt: |
+      В фактическом плане выполнения запроса в SQL Server у оператора `Index Seek` оценка - 10 строк, а
+      фактически он вернул 2 миллиона. О чём говорит такое расхождение, к каким последствиям для плана оно
+      приводит и что вы будете проверять в первую очередь?
+    hint: Какие решения оптимизатор принимает на основе ожидаемого числа строк ещё до того, как запрос начал выполняться?
+    answer: |
+      - **Смысл.** Оценщик кардинальности ошибся на пять порядков, и весь план построен для запроса, который
+        возвращает 10 строк. Сначала стоит убедиться, что это не артефакт: на внутренней стороне `Nested Loops`
+        оценка дана на одно выполнение, а фактическое число строк суммируется по всем выполнениям, поэтому
+        нужно сравнить и число выполнений.
+      - **Причины.**
+        - Устаревшая статистика: автообновление срабатывает только после порога изменений, и свежие значения
+          (например, растущий ключ или дата) лежат за последним шагом гистограммы.
+        - Статистики нет совсем или она построена по слишком малой выборке.
+        - Предикат, который оценщик не умеет моделировать: функция над столбцом, неявное преобразование типа,
+          коррелированные столбцы, локальная переменная, табличная переменная, многооператорная табличная функция.
+        - План скомпилирован для другого значения параметра (parameter sniffing).
+      - **Последствия.**
+        - Неверный тип соединения: `Nested Loops` вместо `Hash Match` или `Merge Join`, и внутренняя сторона
+          выполняется 2 миллиона раз.
+        - Неверный способ доступа: поиск плюс `Key Lookup` на каждую строку вместо сканирования.
+        - Неверный порядок соединений и последовательный план там, где нужен параллельный.
+        - Выделение памяти (memory grant) рассчитано на 10 строк, поэтому `Sort` и `Hash Match` сбрасывают
+          данные в tempdb, и в плане появляются предупреждения о spill.
+        - Ошибка распространяется вверх: все операторы над этим получают неверные входные оценки.
+      - **Проверки и меры.** `sys.dm_db_stats_properties` (`last_updated`, `modification_counter`) и
+        `DBCC SHOW_STATISTICS` для гистограммы; `UPDATE STATISTICS ... WITH FULLSCAN` и повторный замер;
+        переписать предикат в sargable-форму; временная таблица вместо табличной переменной; многостолбцовая
+        или фильтрованная статистика; `OPTION (RECOMPILE)`, если проблема в значениях параметров.
+    explanation: |
+      Оптимизатор SQL Server выбирает план по стоимости, а стоимость почти целиком зависит от ожидаемого
+      числа строк на каждом шаге. Эти оценки берутся из статистики: гистограммы по первому столбцу и векторов
+      плотности. Если статистика не отражает данные или предикат нельзя сопоставить с гистограммой, оценщик
+      подставляет допущения, и ошибка может быть огромной.
+
+      Важно, что решения принимаются один раз, при компиляции. План, оптимальный для 10 строк (вложенные циклы,
+      поиск с `Key Lookup`, маленький memory grant, один поток), на 2 миллионах строк превращается в миллионы
+      случайных чтений и сброс промежуточных данных в tempdb. Поэтому расхождение оценки и факта - главный
+      сигнал при разборе медленного плана: оно указывает, где оптимизатор "ослеп", и обычно лечится не хинтами
+      соединений, а исправлением того, что мешает оценке.
+
+      Не каждое расхождение вредно: если форма плана при правильной оценке осталась бы той же, исправлять
+      нечего. Проверять стоит расхождения, после которых в плане меняется выбор оператора или появляются
+      предупреждения.
+    linkTitles:
+      - "Статистика в SQL Server"
+      - "Отображение фактического плана выполнения"
+  en:
+    title: What does a mismatch between estimated and actual rows in a SQL Server execution plan indicate?
+    prompt: |
+      In the actual execution plan of a query in SQL Server, an `Index Seek` operator is estimated at 10 rows,
+      but it actually returned 2 million. What does this mismatch indicate, what consequences does it have for
+      the plan, and what do you check first?
+    hint: Which decisions does the optimizer make from the expected row count before the query even starts running?
+    answer: |
+      - **Meaning.** The cardinality estimator was off by five orders of magnitude, and the whole plan was built
+        for a query that returns 10 rows. First make sure it is not an artifact: on the inner side of
+        `Nested Loops` the estimate is per execution, while the actual row count is summed over all executions,
+        so compare the number of executions too.
+      - **Causes.**
+        - Stale statistics: auto-update fires only after a threshold of modifications, and recently added values
+          (for example, an ascending key or date) lie beyond the last step of the histogram.
+        - Statistics are missing or were built from too small a sample.
+        - A predicate the estimator cannot model: a function on a column, an implicit type conversion,
+          correlated columns, a local variable, a table variable, a multi-statement table-valued function.
+        - The plan was compiled for a different parameter value (parameter sniffing).
+      - **Consequences.**
+        - Wrong join type: `Nested Loops` instead of `Hash Match` or `Merge Join`, and the inner side runs
+          2 million times.
+        - Wrong access method: a seek plus a `Key Lookup` per row instead of a scan.
+        - Wrong join order, and a serial plan where a parallel one is needed.
+        - The memory grant is sized for 10 rows, so `Sort` and `Hash Match` spill to tempdb, and the plan shows
+          spill warnings.
+        - The error propagates upward: every operator above this one gets wrong input estimates.
+      - **Checks and fixes.** `sys.dm_db_stats_properties` (`last_updated`, `modification_counter`) and
+        `DBCC SHOW_STATISTICS` for the histogram; `UPDATE STATISTICS ... WITH FULLSCAN` and measure again;
+        rewrite the predicate in a sargable form; a temporary table instead of a table variable; multi-column
+        or filtered statistics; `OPTION (RECOMPILE)` when the problem is the parameter values.
+    explanation: |
+      The SQL Server optimizer chooses a plan by cost, and the cost depends almost entirely on the expected
+      number of rows at each step. These estimates come from statistics: a histogram on the first column and
+      density vectors. If the statistics do not reflect the data, or the predicate cannot be matched against the
+      histogram, the estimator falls back to assumptions, and the error can be huge.
+
+      The key point is that these decisions are made once, at compile time. A plan that is optimal for 10 rows
+      (nested loops, a seek with `Key Lookup`, a small memory grant, one thread) turns into millions of random
+      reads and intermediate data spilled to tempdb when 2 million rows arrive. That is why a gap between
+      estimate and actual is the main signal when you analyze a slow plan: it shows where the optimizer went
+      "blind", and the usual cure is not join hints but fixing whatever breaks the estimate.
+
+      Not every mismatch is harmful: if the plan shape would stay the same with a correct estimate, there is
+      nothing to fix. Look at the mismatches after which the choice of operator changes or warnings appear.
+    linkTitles:
+      - "Statistics in SQL Server"
+      - "Display an actual execution plan"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

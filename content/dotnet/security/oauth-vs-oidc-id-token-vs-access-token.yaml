@@ -1,0 +1,98 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WP79KX750DCEQAKRX4
+slug: oauth-vs-oidc-id-token-vs-access-token
+stack: dotnet
+topic: security
+level: middle
+type: open
+grading: self
+tags: [oauth, openid-connect, id-token, access-token, jwt]
+links:
+  - url: https://openid.net/specs/openid-connect-core-1_0.html
+    lang: en
+    kind: spec
+  - url: https://www.rfc-editor.org/rfc/rfc6749
+    lang: en
+    kind: spec
+locales:
+  ru:
+    title: Чем OpenID Connect отличается от OAuth 2.0 и почему API не должен принимать ID token?
+    prompt: |
+      Чем OpenID Connect отличается от OAuth 2.0? В чём разница между ID token и access token, и почему API
+      не должен принимать ID token в заголовке `Authorization: Bearer`?
+    hint: |
+      Посмотрите, для кого выпущен каждый из токенов: чей идентификатор стоит в утверждении `aud`?
+    answer: |
+      - **OAuth 2.0** - фреймворк делегированной авторизации. Владелец ресурса разрешает клиенту действовать
+        от своего имени, и сервер авторизации выдаёт клиенту **access token**, который клиент передаёт серверу
+        ресурсов (API). OAuth не описывает, как клиент узнаёт, кто пользователь: access token предназначен для API,
+        а для клиента он непрозрачен.
+      - **OpenID Connect** - слой идентификации поверх OAuth 2.0. Если клиент запрашивает scope `openid`, сервер
+        авторизации дополнительно возвращает **ID token** - подписанный JWT с утверждениями `iss`, `sub`, `aud`,
+        `exp`, `iat` (и `nonce`, если он был в запросе). Он сообщает клиенту, кто и когда прошёл аутентификацию.
+        Кроме того, OIDC добавляет endpoint UserInfo, discovery-метаданные и стандартные claims.
+      - В `aud` у ID token стоит `client_id` клиентского приложения, а не идентификатор API. Это доказательство входа
+        для клиента, а не разрешение вызывать API: в нём нет scope, выданных клиенту для этого API. API, который
+        принимает ID token, фактически не проверяет аудиторию, и тогда токен, полученный другим приложением того же
+        провайдера или утёкший из фронтенда, открывает доступ к API.
+      - API должен принимать только access token, выпущенные для него: проверять подпись, издателя, срок действия
+        и то, что `aud` совпадает с идентификатором API, а затем проверять scope или роли. В ASP.NET Core это
+        JWT bearer-аутентификация с заданным `Audience` API и включённой проверкой аудитории.
+    explanation: |
+      Два токена отвечают на разные вопросы. Access token отвечает на вопрос «что этому клиенту разрешено сделать
+      в этом API», ID token - «кто пользователь, вошедший в это клиентское приложение». Поэтому правило
+      симметрично: клиент не должен считать access token доказательством личности пользователя (на этом построены
+      ошибки «входа через чистый OAuth» без OIDC), а API не должен считать ID token разрешением на вызов.
+
+      Проверка `aud` защищает от подмены токена: токен, выпущенный для одного получателя, нельзя предъявить
+      другому. Если API принимает ID token, эта граница исчезает: любое приложение, в которое пользователь вошёл
+      через того же провайдера, получает токен, который такой API сочтёт действительным.
+
+      Кроме того, OAuth 2.0 не задаёт формат access token: это может быть непрозрачная строка, которую API
+      проверяет через introspection. ID token по спецификации OIDC всегда JWT и предназначен для разбора
+      клиентом, а не сервером ресурсов.
+    linkTitles:
+      - "Спецификация OpenID Connect Core 1.0"
+      - "RFC 6749: фреймворк авторизации OAuth 2.0"
+  en:
+    title: How does OpenID Connect differ from OAuth 2.0, and why must an API not accept an ID token?
+    prompt: |
+      How does OpenID Connect differ from OAuth 2.0? What is the difference between an ID token and an access
+      token, and why must an API not accept an ID token in the `Authorization: Bearer` header?
+    hint: |
+      Look at who each token is issued for: whose identifier is in the `aud` claim?
+    answer: |
+      - **OAuth 2.0** is a framework for delegated authorization. The resource owner lets a client act on their
+        behalf, and the authorization server issues the client an **access token** that the client presents to a
+        resource server (the API). OAuth does not define how the client learns who the user is: the access token
+        is meant for the API and is opaque to the client.
+      - **OpenID Connect** is an identity layer on top of OAuth 2.0. When the client requests the `openid` scope,
+        the authorization server also returns an **ID token**: a signed JWT with the claims `iss`, `sub`, `aud`,
+        `exp`, `iat` (and `nonce` if it was in the request). It tells the client who authenticated and when. OIDC
+        also adds the UserInfo endpoint, discovery metadata and standard claims.
+      - The `aud` of an ID token is the `client_id` of the client application, not the identifier of the API. It is
+        proof of login for the client, not permission to call the API: it carries no scopes granted to the client
+        for that API. An API that accepts it is effectively not checking the audience, so a token obtained by
+        another application of the same provider, or leaked from the front end, opens the API.
+      - The API must accept only access tokens issued for it: validate the signature, issuer, lifetime and that
+        `aud` matches the API's identifier, then check scopes or roles. In ASP.NET Core this is JWT bearer
+        authentication with the API's `Audience` set and audience validation left on.
+    explanation: |
+      The two tokens answer different questions. An access token answers "what may this client do in this API",
+      an ID token answers "who is the user signed in to this client application". So the rule is symmetric: the
+      client must not treat an access token as proof of the user's identity (this is the classic mistake of
+      "login with plain OAuth" without OIDC), and the API must not treat an ID token as permission to call it.
+
+      Checking `aud` protects against token substitution: a token issued for one recipient cannot be presented to
+      another. If an API accepts ID tokens, that boundary disappears: any application the user signed in to through
+      the same provider holds a token that such an API will consider valid.
+
+      Also, OAuth 2.0 does not define the format of an access token: it can be an opaque string that the API
+      checks through introspection. An ID token is always a JWT by the OIDC specification and is meant to be
+      parsed by the client, not by the resource server.
+    linkTitles:
+      - "OpenID Connect Core 1.0 specification"
+      - "RFC 6749: The OAuth 2.0 Authorization Framework"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

@@ -1,0 +1,121 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMMRZSWJEMNNFRQTQK
+slug: wrong-scheme-and-ip-behind-load-balancer
+stack: dotnet
+topic: aspnet-core
+level: senior
+type: situation
+grading: self
+tags: [hosting, reverse-proxy, forwarded-headers, load-balancer]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/proxy-load-balancer
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/microsoft.aspnetcore.builder.forwardedheadersoptions
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: После переноса за балансировщик с TLS ссылки строятся с http, а у всех клиентов в логах IP балансировщика
+    prompt: |
+      Сервис на ASP.NET Core перенесли за балансировщик нагрузки, который принимает HTTPS от клиентов и передаёт
+      запросы в Kestrel по обычному HTTP. После этого абсолютные ссылки и `redirect_uri` для входа через OIDC
+      строятся со схемой `http`, а в логах и в ограничении частоты запросов по IP у всех клиентов один и тот же
+      адрес - внутренний адрес балансировщика.
+
+      Что вы будете делать и в каком порядке?
+    hint: Что Kestrel знает о соединении между клиентом и балансировщиком и откуда приложение может узнать исходную схему и адрес?
+    answer: |
+      1. **Подтвердить причину.** Kestrel видит только соединение от балансировщика, поэтому `Request.Scheme`
+         равен `http`, а `Connection.RemoteIpAddress` - адрес балансировщика. Временно залогировать схему,
+         удалённый адрес и заголовки `X-Forwarded-For` и `X-Forwarded-Proto`, чтобы убедиться, что балансировщик
+         их отправляет и под какими именами.
+      2. **Включить Forwarded Headers middleware.** В `ForwardedHeadersOptions` задать
+         `ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto`
+         (по умолчанию там `ForwardedHeaders.None`, и middleware ничего не обрабатывает) и вызвать
+         `app.UseForwardedHeaders()` в начале конвейера: до `UseHsts`, `UseHttpsRedirection`, аутентификации,
+         логирования запросов и ограничения частоты. Раньше него допустимы только диагностика и обработка ошибок.
+      3. **Указать доверенные прокси.** Добавить адреса балансировщика в `KnownProxies` или его подсеть в
+         `KnownIPNetworks` (до .NET 10 - `KnownNetworks`, в .NET 10 это свойство помечено устаревшим). По
+         умолчанию в этих списках только loopback-адреса, поэтому заголовки от балансировщика с другим адресом
+         middleware не применяет. Добавлять нужно тот адрес, с которого балансировщик подключается к Kestrel, а не
+         его публичный адрес.
+      4. **Учесть топологию.** Если перед балансировщиком есть ещё CDN, увеличить `ForwardLimit` (по умолчанию 1)
+         и доверить все прокси цепочки. Нестандартные имена заголовков задать через `ForwardedForHeaderName` и
+         `ForwardedProtoHeaderName`. `XForwardedHost` включать только вместе с ограничением `AllowedHosts`.
+      5. **Не открывать доверие всем.** Очистка `KnownProxies` и списка сетей или переменная
+         `ASPNETCORE_FORWARDEDHEADERS_ENABLED=true` допустимы, только если приложение сетью недоступно ни для
+         кого, кроме балансировщика. Иначе клиент подменит свой IP собственным `X-Forwarded-For`.
+      6. **Проверить и закрепить.** Убедиться, что ссылки и `redirect_uri` строятся с `https`, в логах реальные
+         IP клиентов, а ограничение частоты считает их по отдельности; добавить интеграционный тест, который
+         отправляет запрос с forwarded-заголовками.
+    explanation: |
+      TLS заканчивается на балансировщике, поэтому для Kestrel каждый запрос пришёл по HTTP с адреса
+      балансировщика. Исходные схема и IP клиента доходят до приложения только в заголовках, которые добавляет
+      прокси. Forwarded Headers middleware читает их и подставляет в `Request.Scheme`, `Connection.RemoteIpAddress`
+      (и при необходимости `Request.Host`), а исходные значения сохраняет в заголовках `X-Original-*`. Всё, что
+      выполняется в конвейере раньше него, видит неправильные значения, отсюда требование к порядку.
+
+      Список доверенных прокси - это граница безопасности: `X-Forwarded-For` может прислать любой клиент, поэтому
+      верить заголовку можно, только если запрос пришёл от известного прокси. Здесь мешают два разных значения по
+      умолчанию. Первое: `ForwardedHeaders` равно `ForwardedHeaders.None`, поэтому без настройки middleware не
+      обрабатывает ни одного заголовка. Второе: когда заголовки включены, им доверяют только от loopback-адресов,
+      пока не заданы `KnownProxies` или `KnownIPNetworks`. Ответ описан для ASP.NET Core в .NET 10, где список
+      сетей называется `KnownIPNetworks`.
+    linkTitles:
+      - "Настройка ASP.NET Core для работы с прокси-серверами и балансировщиками нагрузки"
+      - "Класс ForwardedHeadersOptions"
+  en:
+    title: Behind a TLS-terminating load balancer, links use http and every client IP in the logs is the balancer's
+    prompt: |
+      An ASP.NET Core service was moved behind a load balancer that accepts HTTPS from clients and forwards
+      requests to Kestrel over plain HTTP. Since then absolute links and the OIDC sign-in `redirect_uri` are
+      built with the `http` scheme, and in the logs and in the per-IP rate limiting every client has the same
+      address: the internal address of the load balancer.
+
+      What do you do, and in what order?
+    hint: What does Kestrel know about the connection between the client and the load balancer, and where could the app learn the original scheme and address?
+    answer: |
+      1. **Confirm the cause.** Kestrel sees only the connection from the load balancer, so `Request.Scheme`
+         is `http` and `Connection.RemoteIpAddress` is the balancer's address. Temporarily log the scheme, the
+         remote address and the `X-Forwarded-For` and `X-Forwarded-Proto` headers to check that the balancer
+         sends them and under which names.
+      2. **Enable the Forwarded Headers middleware.** In `ForwardedHeadersOptions` set
+         `ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto`
+         (the default is `ForwardedHeaders.None`, and then the middleware processes nothing) and call
+         `app.UseForwardedHeaders()` at the start of the pipeline: before `UseHsts`, `UseHttpsRedirection`,
+         authentication, request logging and rate limiting. Only diagnostics and error handling may run before it.
+      3. **Declare the trusted proxies.** Add the balancer addresses to `KnownProxies` or its subnet to
+         `KnownIPNetworks` (`KnownNetworks` before .NET 10, marked obsolete in .NET 10). By default these lists
+         hold only loopback addresses, so the middleware does not apply headers from a balancer with any other
+         address. Add the address from which the balancer connects to Kestrel, not its public address.
+      4. **Account for the topology.** If a CDN sits in front of the balancer, raise `ForwardLimit` (1 by
+         default) and trust every proxy in the chain. Set non-standard header names with
+         `ForwardedForHeaderName` and `ForwardedProtoHeaderName`. Enable `XForwardedHost` only together with an
+         `AllowedHosts` restriction.
+      5. **Do not trust everyone.** Clearing `KnownProxies` and the network list, or setting
+         `ASPNETCORE_FORWARDEDHEADERS_ENABLED=true`, is acceptable only if nothing but the balancer can reach the
+         app over the network. Otherwise a client spoofs its IP with its own `X-Forwarded-For`.
+      6. **Verify and lock it in.** Check that links and `redirect_uri` use `https`, the logs show real client
+         IPs and rate limiting counts them separately; add an integration test that sends a request with
+         forwarded headers.
+    explanation: |
+      TLS ends at the load balancer, so for Kestrel every request arrived over HTTP from the balancer's address.
+      The original scheme and client IP reach the app only in headers that the proxy adds. The Forwarded Headers
+      middleware reads them and writes them into `Request.Scheme`, `Connection.RemoteIpAddress` (and `Request.Host`
+      if enabled), keeping the original values in `X-Original-*` headers. Everything that runs earlier in the
+      pipeline sees the wrong values, which is why the order matters.
+
+      The trusted proxy list is a security boundary: any client can send `X-Forwarded-For`, so the header can be
+      believed only when the request came from a known proxy. Two separate defaults get in the way here. First,
+      `ForwardedHeaders` is `ForwardedHeaders.None`, so without configuration the middleware processes no headers
+      at all. Second, once the headers are enabled, they are trusted only from loopback addresses until
+      `KnownProxies` or `KnownIPNetworks` is set. The answer describes ASP.NET Core in .NET 10, where the network
+      list is named `KnownIPNetworks`.
+    linkTitles:
+      - "Configure ASP.NET Core to work with proxy servers and load balancers"
+      - "ForwardedHeadersOptions class"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"

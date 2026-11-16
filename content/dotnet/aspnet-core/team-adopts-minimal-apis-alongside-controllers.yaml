@@ -1,0 +1,148 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMKN00W67AQGHTHW72
+slug: team-adopts-minimal-apis-alongside-controllers
+stack: dotnet
+topic: aspnet-core
+level: lead
+type: situation
+grading: self
+tags: [minimal-apis, controllers, filters, endpoint-filters, adr]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/apis
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/minimal-apis/min-api-filters
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Половина команды хочет minimal API в сервисе со 150 действиями контроллеров: как принять решение?"
+    prompt: |
+      Команда сопровождает сервис на ASP.NET Core (.NET 10), в котором около 150 действий контроллеров.
+      Сквозная логика живёт в фильтрах MVC: глобальный фильтр действий пишет аудит, фильтр исключений
+      превращает доменные ошибки в ответы, валидацию входных данных обеспечивает `[ApiController]`.
+      Половина команды хочет писать все новые эндпоинты на minimal API, другая половина - остаться на
+      контроллерах. Вы техлид. Как вы примете решение и как внедрите его в команде?
+    hint: Что 150 действий получают от MVC «бесплатно» и что из этого не получит новый эндпоинт minimal API?
+    answer: |
+      1. **Инвентаризировать, на что сервис опирается в MVC.** Глобальные и атрибутные фильтры (действий,
+         результатов, исключений, ресурсов), поведение `[ApiController]` (автоматический ответ 400 с
+         `ValidationProblemDetails`, выведение источника привязки), собственные связыватели модели
+         (`IModelBinder`, `IModelBinderProvider`) и валидаторы (`IModelValidator`), соглашения модели приложения,
+         библиотеки, встроенные в MVC. Для каждого пункта отметить, сработает ли он для эндпоинта minimal API.
+         Фильтры MVC, соглашения и связыватели модели не сработают; middleware, политики авторизации, CORS,
+         ограничение частоты запросов и другие метаданные эндпоинтов работают для обоих подходов.
+      2. **Назвать реальную цену смешивания.** Оба стиля могут жить в одном приложении, но фильтры MVC, которые
+         опираются на `ActionExecutingContext`, `ModelState` или `IActionResult`, на эндпоинты minimal API не
+         переносятся. Если ничего не менять, каждое такое правило получает две реализации: фильтр MVC и
+         `IEndpointFilter`. Новый эндпоинт, к которому забыли подключить фильтр, молча пропускает аудит или
+         преобразование ошибок. Главный риск в этом, а не во вкусах.
+      3. **Решать по каждому сервису и фиксировать решение.** Для этого сервиса разумное правило по умолчанию -
+         остаться на контроллерах, если только инвентаризация не покажет, что MVC-специфичной логики немного.
+         Для новых небольших сервисов minimal API - хороший выбор по умолчанию. Правило записать в ADR с
+         причинами и датой пересмотра.
+      4. **Если minimal API в сервисе разрешены, сначала убрать дублирование.** Вынести HTTP-логику из фильтров
+         MVC туда, где она работает для обоих подходов: middleware, `UseExceptionHandler` с `IExceptionHandler`
+         и `AddProblemDetails`, политики авторизации. Логику, которой нужны аргументы или результат обработчика
+         (например, аудит), можно написать один раз как `IEndpointFilter` и подключить через `AddEndpointFilter`
+         и к `app.MapControllers()`, и к группе `MapGroup`, через которую обязан проходить каждый новый эндпоинт.
+         Такой фильтр видит `HttpContext` и аргументы через `EndpointFilterInvocationContext`, но не `ModelState`
+         и не контекст действия MVC, поэтому часть старых фильтров придётся переписать. Добавить интеграционные
+         тесты, которые проверяют одинаковое поведение (коды состояния, формат ошибки, запись аудита) у действия
+         контроллера и у эндпоинта minimal API.
+      5. **Переносить существующие действия только с причиной.** Никакого переписывания 150 работающих действий
+         ради единообразия: эндпоинт переносится, когда его всё равно меняют и есть измеренная выгода или
+         реальное упрощение.
+      6. **Внедрять вместе с командой.** Короткий эксперимент на одном реальном эндпоинте силами представителей
+         обоих лагерей, заранее согласованные критерии, ADR, шаблон эндпоинта, архитектурный тест и пункт в
+         чек-листе code review.
+    explanation: |
+      Спор «minimal API или контроллеры» быстро превращается в спор о вкусах, поэтому лиду важно перевести его
+      в проверяемые критерии. Решающий вопрос - на какие возможности MVC опирается конкретный сервис. Фильтры MVC
+      выполняются только внутри конвейера вызова действий MVC, поэтому глобальный фильтр, зарегистрированный
+      через `AddControllers`, к эндпоинтам minimal API не применяется. У minimal API свой механизм -
+      `IEndpointFilter` и `AddEndpointFilter`, появившиеся в .NET 7. Документация Microsoft советует выбирать
+      контроллеры, если нужны расширяемая привязка модели (`IModelBinderProvider`, `IModelBinder`), расширенная
+      валидация (`IModelValidator`), части приложения или модель приложения. Встроенная валидация minimal API по
+      атрибутам `System.ComponentModel.DataAnnotations` (`AddValidation`) появилась в .NET 10, а расширяемая
+      валидация в стиле `IModelValidator` остаётся возможностью контроллеров. Ответ дан для .NET 10.
+
+      Смешивать подходы в одном приложении можно: оба построены на маршрутизации эндпоинтов. Цена - не
+      производительность, а согласованность. По умолчанию сквозная логика дублируется, но это не неизбежно:
+      документация показывает, как вызвать `AddEndpointFilter` на результате `MapControllers()`, чтобы один
+      фильтр эндпоинта выполнялся и для действий контроллеров, и для эндпоинтов minimal API. Поэтому логику
+      сначала переносят на уровень, общий для обоих стилей (middleware, обработчик исключений, общий фильтр
+      эндпоинта), а единообразие закрепляют тестами и правилами, а не устными договорённостями.
+
+      Массовая миграция редко окупается: она рискованна, не добавляет ценности пользователям и отнимает время
+      у команды. Явное правило по каждому сервису с датой пересмотра снимает спор и оставляет путь к изменению,
+      если появятся данные.
+    linkTitles:
+      - "Выбор между API на основе контроллеров и minimal API"
+      - "Фильтры в приложениях minimal API"
+  en:
+    title: "Half the team wants minimal APIs in a service with 150 controller actions: how do you decide?"
+    prompt: |
+      Your team maintains an ASP.NET Core service (.NET 10) with about 150 controller actions. Cross-cutting
+      logic lives in MVC filters: a global action filter writes an audit record, an exception filter maps
+      domain errors to responses, and `[ApiController]` provides input validation. Half of the team wants to
+      write all new endpoints as minimal APIs, the other half wants to stay with controllers. You are the tech
+      lead. How do you make the decision and roll it out in the team?
+    hint: What do the 150 actions get from MVC "for free", and which of it would a new minimal API endpoint not get?
+    answer: |
+      1. **Inventory what the service relies on in MVC.** Global and attribute filters (action, result,
+         exception, resource), `[ApiController]` behaviour (automatic 400 response with `ValidationProblemDetails`,
+         binding source inference), custom model binders (`IModelBinder`, `IModelBinderProvider`) and validators
+         (`IModelValidator`), application model conventions, and libraries that plug into MVC. For each item note
+         whether it would also run for a minimal API endpoint. MVC filters, conventions and model binders do not;
+         middleware, authorization policies, CORS, rate limiting and other endpoint metadata apply to both styles.
+      2. **Name the real cost of mixing.** Both styles can live in one app, but MVC filters that rely on
+         `ActionExecutingContext`, `ModelState` or `IActionResult` do not carry over to minimal API endpoints. If
+         nothing changes, every such rule gets two implementations: an MVC filter and an `IEndpointFilter`. A new
+         endpoint that the filter was not attached to silently skips auditing or error mapping. That is the main
+         risk, not taste.
+      3. **Decide per service and write it down.** For this service a reasonable default is to stay with
+         controllers unless the inventory shows that the MVC-specific logic is small. For new small services
+         minimal APIs are a good default. Record the rule in an ADR with the reasons and a review date.
+      4. **If minimal APIs are allowed in the service, remove duplication first.** Move HTTP-level logic out of
+         MVC filters into places that work for both styles: middleware, `UseExceptionHandler` with
+         `IExceptionHandler` and `AddProblemDetails`, authorization policies. Logic that needs the handler
+         arguments or result (for example auditing) can be written once as an `IEndpointFilter` and attached with
+         `AddEndpointFilter` both to `app.MapControllers()` and to the `MapGroup` group that every new endpoint
+         must go through. Such a filter sees `HttpContext` and the arguments through
+         `EndpointFilterInvocationContext`, but not `ModelState` or the MVC action context, so some of the old
+         filters have to be rewritten. Add integration tests that check the same behaviour (status codes, error
+         shape, audit record) for a controller action and a minimal API endpoint.
+      5. **Migrate existing actions only with a reason.** No rewrite of 150 working actions for the sake of
+         uniformity: an endpoint moves when it is being changed anyway and there is a measured benefit or a
+         real simplification.
+      6. **Roll it out with the team.** A short experiment on one real endpoint by people from both camps,
+         criteria agreed in advance, an ADR, an endpoint template, an architecture test and an item in the code
+         review checklist.
+    explanation: |
+      The "minimal APIs or controllers" debate quickly turns into a debate about taste, so a lead has to turn it
+      into checkable criteria. The deciding question is which MVC features this particular service relies on.
+      MVC filters run only inside the MVC action invocation pipeline, so a global filter registered with
+      `AddControllers` does not apply to minimal API endpoints. Minimal APIs have their own mechanism,
+      `IEndpointFilter` and `AddEndpointFilter`, introduced in .NET 7. The Microsoft documentation suggests
+      controllers when you need model binding extensibility (`IModelBinderProvider`, `IModelBinder`), advanced
+      validation (`IModelValidator`), application parts or the application model. Built-in validation of minimal
+      APIs with `System.ComponentModel.DataAnnotations` attributes (`AddValidation`) appeared in .NET 10, while
+      extensible `IModelValidator`-style validation remains a controller feature. The answer is stated for .NET 10.
+
+      Mixing both styles in one app is supported: both are built on endpoint routing. The cost is not
+      performance but consistency. By default cross-cutting logic is duplicated, but that is not unavoidable:
+      the documentation shows calling `AddEndpointFilter` on the result of `MapControllers()` so that one
+      endpoint filter runs for both controller actions and minimal API endpoints. That is why the logic is first
+      moved to a level shared by both styles (middleware, the exception handler, a shared endpoint filter), and
+      consistency is enforced by tests and rules rather than verbal agreements.
+
+      A mass migration rarely pays off: it is risky, adds no value for users and takes the team's time. An
+      explicit rule per service with a review date ends the debate and keeps a path to change if data appears.
+    linkTitles:
+      - "Choose between controller-based APIs and minimal APIs"
+      - "Filters in Minimal API apps"
+meta:
+  authors: [platonenkov]
+  verified: 1970-01-01
+  dotnetVersion: "10"

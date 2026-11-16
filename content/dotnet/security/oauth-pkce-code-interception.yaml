@@ -1,0 +1,110 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WPE823CPY7VC4JTA7A
+slug: oauth-pkce-code-interception
+stack: dotnet
+topic: security
+level: middle
+type: open
+grading: self
+tags: [oauth, pkce, public-clients, authorization-code]
+links:
+  - url: https://www.rfc-editor.org/rfc/rfc7636
+    lang: en
+    kind: spec
+  - url: https://www.rfc-editor.org/rfc/rfc9700
+    lang: en
+    kind: spec
+locales:
+  ru:
+    title: Какой поток OAuth 2.0 выбрать для SPA или мобильного приложения и от какой атаки защищает PKCE?
+    prompt: |
+      Вы подключаете вход через внешний сервер авторизации к SPA и к мобильному приложению. Какой поток (grant)
+      OAuth 2.0 им нужно использовать? Какую атаку предотвращает PKCE, как он работает, и почему implicit flow
+      для таких клиентов не подходит?
+    hint: У SPA и мобильного приложения нет секрета клиента. Что тогда мешает постороннему, который получил код авторизации, обменять его на токены?
+    answer: |
+      - **Поток:** authorization code flow с PKCE (RFC 7636). SPA и мобильное приложение - публичные клиенты:
+        они не могут надёжно хранить `client_secret`, поэтому код авторизации сам по себе ничем не защищён.
+        RFC 9700 требует от публичных клиентов использовать PKCE (MUST).
+      - **Как работает PKCE:** перед каждым входом клиент генерирует случайный `code_verifier` и отправляет в
+        запросе авторизации `code_challenge = BASE64URL(SHA256(code_verifier))` с `code_challenge_method=S256`.
+        При обмене кода на токены клиент передаёт сам `code_verifier`, а сервер авторизации хеширует его и
+        сравнивает с сохранённым `code_challenge`.
+      - **Какую атаку предотвращает:** перехват кода авторизации. Например, вредоносное приложение на телефоне
+        регистрирует ту же пользовательскую URI-схему перенаправления и получает код вместо настоящего клиента.
+        Без `code_verifier`, который не проходит через браузер и перенаправление, обменять перехваченный код на
+        токены нельзя. PKCE также защищает от внедрения чужого кода в ответ авторизации.
+      - **Почему `S256`, а не `plain`:** по RFC 7636 метод `plain` защищает только от атакующего, который видит
+        ответы сервера авторизации; если он видит и запросы, нужен `S256`. RFC 9700 рекомендует методы, которые не
+        раскрывают verifier в запросе авторизации, и сейчас такой метод только один - `S256`.
+      - **Implicit flow** (`response_type=token`) RFC 9700 рекомендует не использовать (SHOULD NOT): токен доступа
+        приходит прямо в ответе авторизации, может утечь (например, через историю браузера) и может быть
+        повторно использован или внедрён, потому что не привязан к клиенту, который начал вход.
+    explanation: |
+      Код авторизации передаётся через браузер или ОС, то есть через канал, который клиент не контролирует.
+      У конфиденциального клиента (серверного приложения) обмен кода дополнительно защищён секретом клиента, у
+      публичного - нет. PKCE заменяет статический секрет одноразовым: только тот, кто начал конкретный вход и
+      сгенерировал `code_verifier`, может завершить обмен. Перехватчик видит лишь `code_challenge`, а из хеша
+      SHA-256 исходное значение не восстановить. Именно поэтому метод `plain` слабее: при нём challenge совпадает
+      с verifier.
+
+      Исторически implicit flow ввели потому, что браузерные приложения не могли делать кросс-доменные запросы к
+      конечной точке токенов. Когда браузеры стали поддерживать такие запросы, эта причина исчезла, а риски
+      остались: токен в ответе авторизации, отсутствие привязки к клиенту и нет способа проверить, что токен
+      получил именно тот, кто начал вход.
+
+      Отдельно от этой истории RFC 9700 (OAuth 2.0 Security Best Current Practice, 2025) формулирует требования:
+      публичные клиенты обязаны использовать PKCE, а клиентам не следует использовать implicit grant и другие
+      типы ответа, при которых токен доступа выдаётся прямо в ответе авторизации.
+    linkTitles:
+      - "RFC 7636: Proof Key for Code Exchange (PKCE)"
+      - "RFC 9700: лучшие практики безопасности OAuth 2.0"
+  en:
+    title: Which OAuth 2.0 flow should a SPA or mobile app use, and what attack does PKCE prevent?
+    prompt: |
+      You are adding sign-in through an external authorization server to a SPA and to a mobile app. Which OAuth 2.0
+      flow (grant) should they use? What attack does PKCE prevent, how does it work, and why is the implicit flow
+      unsuitable for such clients?
+    hint: A SPA and a mobile app have no client secret. What then stops someone who obtained the authorization code from exchanging it for tokens?
+    answer: |
+      - **Flow:** the authorization code flow with PKCE (RFC 7636). A SPA and a mobile app are public clients:
+        they cannot keep a `client_secret` safe, so the authorization code on its own is not protected.
+        RFC 9700 requires public clients to use PKCE (MUST).
+      - **How PKCE works:** before each sign-in the client generates a random `code_verifier` and sends
+        `code_challenge = BASE64URL(SHA256(code_verifier))` with `code_challenge_method=S256` in the authorization
+        request. When exchanging the code for tokens, the client sends the `code_verifier` itself, and the
+        authorization server hashes it and compares it with the stored `code_challenge`.
+      - **Which attack it prevents:** authorization code interception. For example, a malicious app on the phone
+        registers the same custom redirect URI scheme and receives the code instead of the real client. Without
+        the `code_verifier`, which does not travel through the browser or the redirect, the intercepted code
+        cannot be exchanged for tokens. PKCE also protects against injecting someone else's code into the
+        authorization response.
+      - **Why `S256` and not `plain`:** according to RFC 7636, the `plain` method only protects against an attacker
+        who sees the authorization server's responses; if the attacker also sees the requests, `S256` is needed.
+        RFC 9700 recommends methods that do not expose the verifier in the authorization request, and currently
+        `S256` is the only such method.
+      - **The implicit flow** (`response_type=token`) should not be used according to RFC 9700 (SHOULD NOT): the
+        access token arrives directly in the authorization response, can leak (for example through browser
+        history) and can be replayed or injected, because it is not bound to the client that started the sign-in.
+    explanation: |
+      The authorization code travels through the browser or the OS, a channel the client does not control. For a
+      confidential client (a server-side app) the code exchange is also protected by the client secret; for a
+      public client it is not. PKCE replaces the static secret with a one-time one: only whoever started this
+      particular sign-in and generated the `code_verifier` can complete the exchange. An interceptor sees only the
+      `code_challenge`, and the original value cannot be recovered from a SHA-256 hash. That is also why the
+      `plain` method is weaker: with it the challenge equals the verifier.
+
+      Historically, the implicit flow was introduced because browser apps could not make cross-origin requests to
+      the token endpoint. Once browsers supported such requests (CORS), that reason went away, but the risks
+      stayed: a token in the authorization response, no binding to the client and no way to check that the token
+      reached whoever started the sign-in.
+
+      Separately from that history, RFC 9700 (OAuth 2.0 Security Best Current Practice, 2025) states the
+      requirements: public clients must use PKCE, and clients should not use the implicit grant or other response
+      types that issue access tokens directly in the authorization response.
+    linkTitles:
+      - "RFC 7636: Proof Key for Code Exchange (PKCE)"
+      - "RFC 9700: Best Current Practice for OAuth 2.0 Security"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

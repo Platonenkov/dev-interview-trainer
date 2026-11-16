@@ -1,0 +1,90 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WRDAJB2WWC1PE88EGQ
+slug: long-running-202-accepted-polling
+stack: dotnet
+topic: web-api
+level: senior
+type: open
+grading: self
+tags: [http, status-codes, async-request-reply, polling, long-running-operations]
+links:
+  - url: https://learn.microsoft.com/en-us/azure/architecture/patterns/async-request-reply
+    lang: en
+    kind: docs
+  - url: https://www.rfc-editor.org/rfc/rfc9110
+    lang: en
+    kind: spec
+locales:
+  ru:
+    title: Как HTTP API должен отдавать операцию, которая выполняется несколько минут?
+    prompt: |
+      Клиент запускает через HTTP API операцию, которая длится несколько минут, например формирование
+      большого отчёта или импорт файла. Держать HTTP-запрос открытым до её завершения нельзя.
+      Как вы спроектируете API: какие коды состояния, заголовки и ресурсы используете и что должно
+      происходить на сервере?
+    hint: Какой код состояния означает «запрос принят, но ещё не выполнен», и где клиент потом узнает, чем закончилась операция?
+    answer: |
+      - **Запуск.** `POST /reports` синхронно проверяет запрос: ошибки валидации сразу возвращаются как `400` или `422`. Затем сервер сохраняет запись об операции в долговременном хранилище, ставит работу в очередь и отвечает `202 Accepted` с заголовком `Location: /reports/operations/{id}` (ресурс статуса), при необходимости с `Retry-After` и текущим статусом в теле.
+      - **Ресурс статуса.** `GET /reports/operations/{id}` возвращает `200 OK` с состоянием (`queued`, `running` с прогрессом, `succeeded`, `failed`) и подсказкой `Retry-After`, когда опросить снова. После успеха он даёт ссылку на результат (`/reports/{reportId}`) или отвечает перенаправлением `303 See Other` на него. После неудачи возвращает описание ошибки, например в формате Problem Details.
+      - **Сервер.** Работу выполняет фоновый обработчик, отделённый от запроса: очередь сообщений и отдельный worker или `BackgroundService`. Статус хранится не в памяти процесса, потому что экземпляров несколько и любой может перезапуститься.
+      - **Детали.** Ключ идемпотентности на `POST`, чтобы повторная отправка после тайм-аута не создала вторую операцию; отмена через `DELETE` ресурса статуса; срок хранения статусов и результатов; та же авторизация на ресурс статуса, что и на саму операцию. Если опрос слишком частый или нужна мгновенная реакция, его дополняют push-уведомлением: webhook, SignalR или Server-Sent Events.
+    explanation: |
+      Держать запрос открытым минутами плохо: прокси и балансировщики обрывают долгие запросы по тайм-ауту,
+      при обрыве соединения результат теряется и забрать его негде, а сервер всё это время держит соединение
+      и ресурсы.
+
+      RFC 9110 описывает `202 Accepted` как намеренно уклончивый ответ: запрос принят к обработке, но
+      обработка не завершена, и в HTTP нет способа позже отправить итоговый статус в рамках того же обмена.
+      Поэтому ответ должен описывать текущее состояние и указывать на монитор статуса. Смысл `Location`
+      для `202` в RFC отдельно не определён: передавать в нём адрес ресурса статуса - распространённое
+      соглашение, которое описывает, например, паттерн Asynchronous Request-Reply в Azure Architecture Center.
+      Дублировать ссылку в теле ответа тоже полезно.
+
+      Когда операция завершена, `303 See Other` прямо говорит: ответ находится по другому адресу, получите
+      его через `GET`. Учтите, что многие HTTP-клиенты, включая `HttpClient` с настройками по умолчанию,
+      сами следуют перенаправлениям, и код опроса получит сразу результат, а не статус. Если это неудобно,
+      отдавайте `200` со ссылкой на результат.
+
+      В ASP.NET Core ответ `202` формируется через `Results.Accepted(uri, value)` в minimal API или через
+      `Accepted` и `AcceptedAtAction` в контроллерах.
+    linkTitles:
+      - "Паттерн Asynchronous Request-Reply"
+      - "RFC 9110: HTTP Semantics"
+  en:
+    title: How should an HTTP API expose an operation that takes several minutes?
+    prompt: |
+      A client starts an operation through an HTTP API that takes several minutes, such as building a large
+      report or importing a file. Keeping the HTTP request open until it finishes is not an option.
+      How do you design the API: which status codes, headers and resources do you use, and what should
+      happen on the server?
+    hint: Which status code means "accepted but not done yet", and where does the client later find out how the operation ended?
+    answer: |
+      - **Start.** `POST /reports` validates the request synchronously: validation errors are returned at once as `400` or `422`. The server then stores an operation record in durable storage, queues the work and answers `202 Accepted` with a `Location: /reports/operations/{id}` header (the status resource), optionally with `Retry-After` and the current status in the body.
+      - **Status resource.** `GET /reports/operations/{id}` returns `200 OK` with the state (`queued`, `running` with progress, `succeeded`, `failed`) and a `Retry-After` hint for when to poll again. On success it gives a link to the result (`/reports/{reportId}`) or answers with a `303 See Other` redirect to it. On failure it returns the error details, for example as Problem Details.
+      - **Server.** A background processor separate from the request does the work: a message queue and a separate worker or a `BackgroundService`. The status is not kept in process memory, because there are several instances and any of them can restart.
+      - **Details.** An idempotency key on the `POST`, so that a resend after a timeout does not create a second operation; cancellation through `DELETE` on the status resource; a retention period for statuses and results; the same authorization on the status resource as on the operation itself. If polling is too chatty or an instant reaction is needed, add push notifications: a webhook, SignalR or Server-Sent Events.
+    explanation: |
+      Holding a request open for minutes is bad: proxies and load balancers cut long requests on timeout, a
+      dropped connection loses the result with no way to fetch it, and the server holds the connection and
+      resources the whole time.
+
+      RFC 9110 describes `202 Accepted` as intentionally noncommittal: the request has been accepted for
+      processing but processing is not complete, and HTTP has no way to send the final status later in the
+      same exchange. So the response should describe the current state and point to a status monitor. The
+      RFC does not define a separate meaning of `Location` for `202`: putting the status resource address
+      there is a widespread convention, described for example by the Asynchronous Request-Reply pattern in
+      the Azure Architecture Center. Repeating the link in the response body also helps.
+
+      When the operation is complete, `303 See Other` says directly: the answer is at another address, get
+      it with `GET`. Keep in mind that many HTTP clients, including `HttpClient` with default settings, follow
+      redirects on their own, so the polling code receives the result instead of the status. If that is
+      inconvenient, return `200` with a link to the result.
+
+      In ASP.NET Core a `202` response is produced with `Results.Accepted(uri, value)` in minimal APIs, or
+      with `Accepted` and `AcceptedAtAction` in controllers.
+    linkTitles:
+      - "Asynchronous Request-Reply pattern"
+      - "RFC 9110: HTTP Semantics"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

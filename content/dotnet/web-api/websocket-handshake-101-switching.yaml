@@ -1,0 +1,102 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WR6YSVDFD8V1XC3GP8
+slug: websocket-handshake-101-switching
+stack: dotnet
+topic: web-api
+level: junior
+type: single
+grading: auto
+tags: [websockets, http, handshake, status-codes]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+links:
+  - url: https://www.rfc-editor.org/rfc/rfc6455
+    lang: en
+    kind: spec
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/websockets
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как устанавливается WebSocket-соединение и какой код состояния возвращает сервер?
+    prompt: |
+      Как по RFC 6455 устанавливается WebSocket-соединение поверх HTTP/1.1 и какой код состояния
+      возвращает сервер, если рукопожатие прошло успешно?
+    hint: Рукопожатие начинается как обычный HTTP-запрос, а после него по тому же соединению HTTP больше не используется. Как сервер сообщает о такой смене?
+    options:
+      a: "Клиент открывает обычное TCP-соединение и сразу отправляет WebSocket-фреймы, HTTP и коды состояния не участвуют."
+      b: "Клиент отправляет HTTP-запрос `GET` с заголовками `Upgrade: websocket` и `Connection: Upgrade`, сервер отвечает `101 Switching Protocols`."
+      c: "Клиент отправляет `POST` на адрес конечной точки, сервер отвечает `201 Created` и возвращает идентификатор соединения."
+      d: "Клиент отправляет `GET` с заголовком `Upgrade: websocket`, сервер отвечает `200 OK`, после чего по соединению идут фреймы."
+      e: "Клиент отправляет `GET` с заголовком `Upgrade: websocket`, сервер отвечает `426 Upgrade Required`, что подтверждает переход на новый протокол."
+    optionExplanations:
+      a: "WebSocket намеренно начинается с HTTP-рукопожатия, чтобы работать через те же порты 80 и 443 и проходить через HTTP-инфраструктуру. Без рукопожатия сервер не примет фреймы."
+      c: "Рукопожатие использует метод `GET`, а не `POST`, и не создаёт ресурс. Код `201 Created` к WebSocket отношения не имеет."
+      d: "По RFC 6455 любой код, кроме `101`, означает, что рукопожатие по HTTP/1.1 не завершилось. Ответ `200 OK` - обычный HTTP-ответ, после которого соединение продолжает говорить на HTTP."
+      e: "`426 Upgrade Required` - это код ошибки: он сообщает, что клиенту нужно перейти на другой протокол, прежде чем сервер обработает запрос, а не подтверждает переход. По RFC 6455 любой код, кроме `101`, означает, что рукопожатие не завершилось."
+    answer: "Клиент отправляет `GET` с `Upgrade: websocket` и `Connection: Upgrade`, сервер отвечает `101 Switching Protocols`."
+    explanation: |
+      Рукопожатие WebSocket по HTTP/1.1 - это обычный запрос `GET` с заголовками `Upgrade: websocket`,
+      `Connection: Upgrade`, `Sec-WebSocket-Key` и `Sec-WebSocket-Version: 13`. Сервер, который согласен
+      перейти на WebSocket, отвечает `101 Switching Protocols` и заголовком `Sec-WebSocket-Accept`, значение
+      которого вычислено из `Sec-WebSocket-Key`: так клиент убеждается, что сервер действительно понял
+      WebSocket-запрос.
+
+      После ответа `101` то же самое TCP-соединение перестаёт использоваться для HTTP и несёт WebSocket-фреймы
+      в обе стороны. Любой другой код состояния означает, что рукопожатие не состоялось и продолжает действовать
+      обычная семантика HTTP. Всё это относится к HTTP/1.1: WebSocket поверх HTTP/2 (RFC 8441, в ASP.NET Core
+      начиная с .NET 7) устанавливается через расширенный `CONNECT`, и там успешный ответ - `200`.
+
+      В ASP.NET Core `UseWebSockets` включает и настраивает поддержку WebSocket, а рукопожатие завершает
+      обработчик: он проверяет `context.WebSockets.IsWebSocketRequest` и вызывает `AcceptWebSocketAsync()`,
+      который отправляет клиенту ответ `101`.
+    linkTitles:
+      - "RFC 6455: протокол WebSocket"
+      - "Поддержка WebSockets в ASP.NET Core"
+  en:
+    title: How is a WebSocket connection established and which status code does the server return?
+    prompt: |
+      According to RFC 6455, how is a WebSocket connection established over HTTP/1.1, and which status
+      code does the server return when the handshake succeeds?
+    hint: The handshake starts as an ordinary HTTP request, and after it the same connection no longer speaks HTTP. How does the server announce that change?
+    options:
+      a: "The client opens a plain TCP connection and immediately sends WebSocket frames; HTTP and status codes play no part."
+      b: "The client sends an HTTP `GET` with the headers `Upgrade: websocket` and `Connection: Upgrade`, and the server answers `101 Switching Protocols`."
+      c: "The client sends a `POST` to the endpoint URL, and the server answers `201 Created` with a connection id."
+      d: "The client sends a `GET` with `Upgrade: websocket`, the server answers `200 OK`, and then the connection carries frames."
+      e: "The client sends a `GET` with `Upgrade: websocket`, and the server answers `426 Upgrade Required`, which confirms the switch to the new protocol."
+    optionExplanations:
+      a: "WebSocket deliberately starts with an HTTP handshake so that it works over the same ports 80 and 443 and passes through HTTP infrastructure. Without the handshake the server does not accept frames."
+      c: "The handshake uses `GET`, not `POST`, and creates no resource. `201 Created` has nothing to do with WebSocket."
+      d: "In RFC 6455 any status code other than `101` means the HTTP/1.1 handshake did not complete. A `200 OK` is an ordinary HTTP response, after which the connection keeps speaking HTTP."
+      e: "`426 Upgrade Required` is an error status: it tells the client that it must switch to another protocol before the request can be served, it does not confirm a switch. RFC 6455 says any status other than `101` means the handshake did not complete."
+    answer: "The client sends a `GET` with `Upgrade: websocket` and `Connection: Upgrade`, and the server answers `101 Switching Protocols`."
+    explanation: |
+      The WebSocket handshake over HTTP/1.1 is an ordinary `GET` request with the headers `Upgrade: websocket`,
+      `Connection: Upgrade`, `Sec-WebSocket-Key` and `Sec-WebSocket-Version: 13`. A server that agrees to switch
+      answers `101 Switching Protocols` with a `Sec-WebSocket-Accept` header whose value is computed from
+      `Sec-WebSocket-Key`: this is how the client knows the server really understood a WebSocket request.
+
+      After the `101` response the same TCP connection stops carrying HTTP and carries WebSocket frames in both
+      directions. Any other status code means the handshake did not take place and the semantics of HTTP still
+      apply. All of this is specific to HTTP/1.1: WebSockets over HTTP/2 (RFC 8441, in ASP.NET Core since .NET 7)
+      use extended `CONNECT`, and there a successful response is `200`.
+
+      In ASP.NET Core, `UseWebSockets` enables and configures WebSocket support, and the handler completes the
+      handshake: it checks `context.WebSockets.IsWebSocketRequest` and calls `AcceptWebSocketAsync()`, which
+      sends the `101` response to the client.
+    linkTitles:
+      - "RFC 6455: The WebSocket Protocol"
+      - "WebSockets support in ASP.NET Core"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

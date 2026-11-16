@@ -1,0 +1,86 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMRDKGNMVHCR34G42H
+slug: di-transient-scoped-singleton-explained
+stack: dotnet
+topic: aspnet-core
+level: junior
+type: open
+grading: self
+tags: [dependency-injection, di-lifetimes, transient, scoped, singleton]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/dependency-injection
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/extensions/dependency-injection
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Чем отличаются времена жизни Transient, Scoped и Singleton в DI ASP.NET Core?
+    prompt: |
+      Объясните, как работают времена жизни `Transient`, `Scoped` и `Singleton` во встроенном контейнере
+      внедрения зависимостей ASP.NET Core. Приведите пример типичного сервиса для каждого из них.
+    hint: Сколько экземпляров сервиса получат два разных потребителя в одном HTTP-запросе и в двух разных запросах?
+    answer: |
+      - **Transient** (`AddTransient`): новый экземпляр создаётся при каждом разрешении сервиса из контейнера.
+        Если в одном запросе сервис нужен контроллеру и другому сервису, каждый получит свой экземпляр.
+        Типичный пример - лёгкий сервис без состояния: валидатор, маппер, построитель письма.
+      - **Scoped** (`AddScoped`): один экземпляр на область (scope). В ASP.NET Core область создаётся на каждый
+        HTTP-запрос, поэтому внутри запроса все потребители получают один и тот же экземпляр, а в другом запросе
+        будет другой. Типичный пример - `DbContext` из EF Core (`AddDbContext` по умолчанию регистрирует его как
+        scoped), единица работы, сведения о текущем пользователе запроса.
+      - **Singleton** (`AddSingleton`): один экземпляр на всё время жизни приложения, общий для всех запросов
+        и потоков. Типичный пример - `IMemoryCache`, `IHttpClientFactory`, `ILoggerFactory`, сервисы с
+        дорогой инициализацией и общим потокобезопасным состоянием.
+    explanation: |
+      Время жизни отвечает на вопрос, когда контейнер создаёт новый экземпляр и когда он его освобождает.
+      Объекты `IDisposable`, созданные контейнером, освобождаются в конце своей области: scoped и transient -
+      в конце запроса, singleton - при остановке приложения.
+
+      Выбор следует из состояния сервиса. Если состояния нет, подходит любое время жизни, обычно transient
+      или singleton. Если состояние относится к одному запросу (контекст базы данных, текущий пользователь),
+      нужен scoped. Если состояние общее для всего приложения (кэш), нужен singleton, и тогда сервис обязан
+      быть потокобезопасным, потому что его одновременно используют параллельные запросы.
+
+      Вне HTTP-запроса, например в фоновой службе, области нет автоматически: её создают явно через
+      `IServiceScopeFactory.CreateScope()`. Также сервис не должен зависеть от сервиса с более коротким
+      временем жизни: singleton, получивший scoped-зависимость, удержит один её экземпляр навсегда.
+    linkTitles:
+      - "Внедрение зависимостей в ASP.NET Core"
+      - "Внедрение зависимостей в .NET"
+  en:
+    title: How do the Transient, Scoped and Singleton DI lifetimes differ in ASP.NET Core?
+    prompt: |
+      Explain how the `Transient`, `Scoped` and `Singleton` lifetimes work in the built-in dependency
+      injection container of ASP.NET Core. Give an example of a typical service for each of them.
+    hint: How many instances of a service do two different consumers get within one HTTP request, and across two different requests?
+    answer: |
+      - **Transient** (`AddTransient`): a new instance is created every time the service is resolved from the
+        container. If a controller and another service both need it in one request, each gets its own instance.
+        A typical example is a lightweight stateless service: a validator, a mapper, an email message builder.
+      - **Scoped** (`AddScoped`): one instance per scope. ASP.NET Core creates a scope for every HTTP request,
+        so all consumers within a request share one instance, and another request gets a different one.
+        A typical example is an EF Core `DbContext` (`AddDbContext` registers it as scoped by default), a unit
+        of work, or information about the current user of the request.
+      - **Singleton** (`AddSingleton`): one instance for the whole lifetime of the application, shared by all
+        requests and threads. A typical example is `IMemoryCache`, `IHttpClientFactory`, `ILoggerFactory`, or
+        services with expensive initialization and shared thread-safe state.
+    explanation: |
+      A lifetime answers the question of when the container creates a new instance and when it releases it.
+      `IDisposable` objects created by the container are disposed at the end of their scope: scoped and
+      transient ones at the end of the request, singletons when the application stops.
+
+      The choice follows from the state of the service. With no state any lifetime works, usually transient
+      or singleton. If the state belongs to one request (a database context, the current user), use scoped.
+      If the state is shared by the whole application (a cache), use singleton, and then the service must be
+      thread-safe, because concurrent requests use it at the same time.
+
+      Outside an HTTP request, for example in a background service, there is no scope automatically: you
+      create one explicitly with `IServiceScopeFactory.CreateScope()`. Also, a service must not depend on a
+      service with a shorter lifetime: a singleton that receives a scoped dependency keeps one instance of it forever.
+    linkTitles:
+      - "Dependency injection in ASP.NET Core"
+      - ".NET dependency injection"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

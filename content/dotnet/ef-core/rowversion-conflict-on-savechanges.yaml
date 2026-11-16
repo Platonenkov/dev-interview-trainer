@@ -1,0 +1,109 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNY5YGGDHPYCK0V44T
+slug: rowversion-conflict-on-savechanges
+stack: dotnet
+topic: ef-core
+level: middle
+type: single
+grading: auto
+tags: [ef-core, concurrency, rowversion, optimistic-concurrency]
+code:
+  language: csharp
+  harness: none
+  source: |
+    public class Product
+    {
+        public int Id { get; set; }
+        public decimal Price { get; set; }
+
+        [Timestamp]
+        public byte[] Version { get; set; }
+    }
+
+    // User A
+    var product = await db.Products.SingleAsync(p => p.Id == 42);
+    // Meanwhile user B updates product 42 and commits
+    product.Price = 19.99m;
+    await db.SaveChangesAsync();
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/ef/core/saving/concurrency
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/microsoft.entityframeworkcore.dbupdateconcurrencyexception
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что сделает SaveChanges, если строку с rowversion уже изменил другой пользователь?
+    prompt: |
+      У сущности `Product` есть токен параллелизма `Version` с атрибутом `[Timestamp]` (в SQL Server это
+      столбец `rowversion`). Пользователь A загрузил товар 42, затем пользователь B изменил эту же строку и
+      сохранил изменения. Что произойдёт, когда пользователь A вызовет `SaveChangesAsync`?
+    hint: Какое условие EF Core добавляет в `UPDATE` для сущности с токеном параллелизма и что означает ответ «изменено 0 строк»?
+    options:
+      a: "`UPDATE` перезапишет изменения пользователя B: побеждает последний сохранивший."
+      b: "`UPDATE` не затронет ни одной строки, и EF Core выбросит `DbUpdateConcurrencyException`."
+      c: "`SaveChangesAsync` тихо пропустит обновление и вернёт `0` без исключения."
+      d: "EF Core сам перечитает строку из базы, объединит значения и сохранит результат."
+    optionExplanations:
+      a: Так было бы без токена параллелизма. С токеном исходное значение `Version` попадает в `WHERE`, и строка с новой версией под условие не подходит.
+      c: EF Core проверяет число изменённых строк. Ожидалась одна, получено ноль, и это считается конфликтом, о котором сообщается исключением, а не возвращаемым значением.
+      d: EF Core не разрешает конфликты автоматически. Перечитать значения через `GetDatabaseValues` и решить, что сохранять, должен код приложения в обработчике исключения.
+    answer: "`UPDATE` не затронет ни одной строки, и EF Core выбросит `DbUpdateConcurrencyException`."
+    explanation: |
+      Для сущности с токеном параллелизма EF Core добавляет исходное значение токена в условие обновления:
+      `UPDATE Products SET Price = @p0 WHERE Id = @p1 AND Version = @p2`. SQL Server меняет значение
+      `rowversion` при каждом обновлении строки, поэтому после сохранения пользователем B версия в базе уже
+      другая, и условие не находит строку.
+
+      База сообщает, что изменено 0 строк, EF Core видит расхождение с ожидаемым числом и выбрасывает
+      `DbUpdateConcurrencyException`. Данные пользователя B остаются нетронутыми, а изменения этого вызова
+      `SaveChanges` не применяются. Это оптимистичная блокировка: конфликт не предотвращается заранее, а
+      обнаруживается при записи, и приложение решает, как его разрешить.
+    linkTitles:
+      - "Обработка конфликтов параллелизма в EF Core"
+      - "Класс DbUpdateConcurrencyException"
+  en:
+    title: What does SaveChanges do if another user already changed a row with a rowversion?
+    prompt: |
+      The `Product` entity has a concurrency token `Version` marked with `[Timestamp]` (a `rowversion`
+      column in SQL Server). User A loaded product 42, then user B changed the same row and saved.
+      What happens when user A calls `SaveChangesAsync`?
+    hint: What condition does EF Core add to the `UPDATE` for an entity with a concurrency token, and what does a "0 rows affected" result mean?
+    options:
+      a: "The `UPDATE` overwrites user B's changes: the last writer wins."
+      b: "The `UPDATE` affects no rows, and EF Core throws `DbUpdateConcurrencyException`."
+      c: "`SaveChangesAsync` silently skips the update and returns `0` without an exception."
+      d: "EF Core rereads the row from the database, merges the values and saves the result."
+    optionExplanations:
+      a: That would happen without a concurrency token. With the token, the original `Version` value goes into the `WHERE` clause, and the row with the new version does not match it.
+      c: EF Core checks the number of affected rows. It expected one and got zero, which counts as a conflict and is reported with an exception, not a return value.
+      d: EF Core does not resolve conflicts automatically. Rereading the values with `GetDatabaseValues` and deciding what to save is the job of application code in the exception handler.
+    answer: "The `UPDATE` affects no rows, and EF Core throws `DbUpdateConcurrencyException`."
+    explanation: |
+      For an entity with a concurrency token, EF Core adds the original token value to the update condition:
+      `UPDATE Products SET Price = @p0 WHERE Id = @p1 AND Version = @p2`. SQL Server changes the `rowversion`
+      value on every update of the row, so after user B saved, the version in the database is different and
+      the condition finds no row.
+
+      The database reports 0 affected rows, EF Core sees the mismatch with the expected count and throws
+      `DbUpdateConcurrencyException`. User B's data stays untouched, and the changes of this `SaveChanges`
+      call are not applied. This is optimistic concurrency: the conflict is not prevented up front but
+      detected on write, and the application decides how to resolve it.
+    linkTitles:
+      - "Handling concurrency conflicts in EF Core"
+      - "DbUpdateConcurrencyException class"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"
+  noRunReason: The snippet uses EF Core types and needs a SQL Server database with a rowversion column, which the sandbox does not have.

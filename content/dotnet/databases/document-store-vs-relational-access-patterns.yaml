@@ -1,0 +1,130 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNVHFX6JGRH4DW2JNA
+slug: document-store-vs-relational-access-patterns
+stack: dotnet
+topic: databases
+level: architect
+type: open
+grading: self
+tags: [nosql, document-store, relational, partitioning, data-modeling]
+links:
+  - url: https://learn.microsoft.com/en-us/azure/architecture/guide/technology-choices/data-store-overview
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/azure/cosmos-db/partitioning-overview
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как выбрать между реляционной базой и документным хранилищем и какие решения потом трудно отменить?
+    prompt: |
+      Команда начинает новый сервис, и нужно выбрать хранилище для его основных данных: реляционную базу
+      (например, SQL Server или PostgreSQL) или документное хранилище (например, Azure Cosmos DB или MongoDB).
+      Как вы будете принимать это решение и какие из решений, принятых на старте, будет дорого изменить
+      через год-два эксплуатации?
+    hint: Начните не с технологии, а с вопроса, какие запросы и записи сервис будет делать чаще всего и какие данные должны меняться атомарно вместе.
+    answer: |
+      1. **Начать с шаблонов доступа.** Выписать основные чтения и записи, их частоту и требования к задержке;
+         понять, какие сущности читаются и меняются вместе, где нужны транзакции через несколько сущностей,
+         нужны ли произвольные отчёты и запросы, которые пока неизвестны. Оценить объём данных и нагрузку
+         с учётом роста.
+      2. **Когда выигрывает реляционная модель.** Много связей, которые запрашивают в разных сочетаниях;
+         будущие запросы заранее неизвестны; инварианты охватывают несколько сущностей и нужны дешёвые
+         ACID-транзакции; нужна аналитика и отчёты прямо по данным. Масштабирование - вертикальное и через
+         реплики для чтения, шардирование придётся строить самостоятельно.
+      3. **Когда выигрывает документное хранилище.** Данные естественно складываются в агрегаты, которые
+         читаются и пишутся целиком по известному ключу; объём и пропускная способность требуют
+         горизонтального разделения на партиции; структура документов различается и часто меняется.
+         Цена: нет произвольных соединений, данные денормализуются и дублируются, и копии надо
+         синхронизировать; транзакции ограничены (в Cosmos DB - пределами одной логической партиции);
+         запросы без ключа партиции расходятся по всем партициям и стоят дорого; аналитику обычно выносят
+         в отдельное хранилище.
+      4. **Что трудно отменить.**
+         - Ключ партиции: в Cosmos DB его нельзя поменять у существующего контейнера, нужен новый контейнер
+           и перенос данных. Неудачный ключ даёт горячие партиции и дорогие межпартиционные запросы.
+         - Форма документа и границы агрегатов (вложить или сослаться): она зашита в уже сохранённые данные
+           и во всех читателей.
+         - Денормализованные копии и механизмы их синхронизации, на которые опирается код.
+         - Сама смена класса хранилища: семантика транзакций и согласованности расходится по коду сервиса.
+         - Для реляционной базы схему меняют миграциями, это обратимо, но горизонтальное шардирование,
+           добавленное позже, - большая переделка.
+      5. **Как снизить риск.** Прототип основных запросов на реалистичном объёме данных с замером стоимости;
+         ключ партиции с высокой кардинальностью и равномерным распределением, который присутствует в
+         фильтре самых частых запросов; поле версии схемы в документах; доступ к данным за границей модуля.
+         Если шаблоны доступа неясны, по умолчанию выбрать реляционную базу (при необходимости с
+         JSON-столбцами) и добавлять документную модель чтения рядом, когда появится измеренная потребность.
+    explanation: |
+      Утверждение «NoSQL масштабируется, а SQL нет» слишком грубое. Документное хранилище получает
+      горизонтальное масштабирование и быстрые чтения агрегата одним обращением именно потому, что заранее
+      фиксирует, как данные будут читаться: документ хранит агрегат целиком, а ключ партиции решает, на какой
+      узел он попадёт. Запросы, совпадающие с этой формой, дешёвые; запросы поперёк неё (соединения, фильтры
+      без ключа партиции, транзакции через несколько партиций) дорогие или невозможны. Реляционная модель,
+      наоборот, хранит факты нормализованно и позволяет задать почти любой запрос позже, но горизонтально
+      масштабируется с трудом.
+
+      Поэтому выбор следует из шаблонов доступа, а не из популярности технологии. Задача архитектора -
+      отделить обратимые решения от необратимых: индекс или столбец можно добавить миграцией, а ключ
+      партиции и форма документа определяют физическое расположение уже накопленных данных, и их изменение
+      означает перенос всех данных и правку всех потребителей. На такие решения стоит тратить время до
+      запуска: прототип, замеры и явная запись компромисса в архитектурном решении.
+    linkTitles:
+      - "Обзор моделей хранилищ данных"
+      - "Партиционирование и горизонтальное масштабирование в Azure Cosmos DB"
+  en:
+    title: How do you choose between a relational database and a document store, and which decisions are hard to reverse?
+    prompt: |
+      A team is starting a new service and must choose a store for its main data: a relational database
+      (for example SQL Server or PostgreSQL) or a document store (for example Azure Cosmos DB or MongoDB).
+      How do you make this decision, and which of the decisions made at the start will be expensive to change
+      after a year or two in production?
+    hint: Start not with the technology but with which reads and writes the service will do most often and which data must change atomically together.
+    answer: |
+      1. **Start from the access patterns.** List the main reads and writes, their frequency and latency
+         requirements; find which entities are read and changed together, where transactions across several
+         entities are needed, and whether ad-hoc reports and not yet known queries are required. Estimate data
+         volume and load, including growth.
+      2. **When the relational model wins.** Many relationships queried in different combinations; future
+         queries are not known up front; invariants span several entities and need cheap ACID transactions;
+         analytics and reports run directly on the data. Scaling is vertical and through read replicas;
+         sharding has to be built by you.
+      3. **When the document store wins.** Data naturally forms aggregates that are read and written as a
+         whole by a known key; volume and throughput need horizontal partitioning; document structure varies
+         and changes often. The price: no ad-hoc joins, data is denormalized and duplicated, and the copies
+         must be kept in sync; transactions are limited (in Cosmos DB to a single logical partition); queries
+         without the partition key fan out to all partitions and are expensive; analytics usually moves to a
+         separate store.
+      4. **What is hard to reverse.**
+         - The partition key: in Cosmos DB it cannot be changed on an existing container, you need a new
+           container and a data migration. A poor key causes hot partitions and costly cross-partition queries.
+         - The document shape and aggregate boundaries (embed or reference): it is baked into the stored data
+           and into every reader.
+         - Denormalized copies and the mechanisms that sync them, which code relies on.
+         - Switching the class of store itself: transaction and consistency semantics spread through the
+           service code.
+         - For a relational database the schema changes through migrations, which is reversible, but
+           horizontal sharding added later is a major rework.
+      5. **How to reduce the risk.** Prototype the main queries on realistic data volume and measure their
+         cost; pick a partition key with high cardinality and even distribution that appears in the filter of
+         the most frequent queries; add a schema version field to documents; keep data access behind a module
+         boundary. If the access patterns are unclear, default to a relational database (with JSON columns if
+         needed) and add a document read model next to it when a measured need appears.
+    explanation: |
+      The claim "NoSQL scales and SQL does not" is too crude. A document store gains horizontal scaling and
+      fast single-call reads of an aggregate precisely because it fixes up front how data will be read: a
+      document holds the whole aggregate, and the partition key decides which node it lands on. Queries that
+      match this shape are cheap; queries that cut across it (joins, filters without the partition key,
+      transactions across partitions) are expensive or impossible. The relational model, in contrast, stores
+      facts in normalized form and lets you ask almost any query later, but scales horizontally with difficulty.
+
+      That is why the choice follows the access patterns, not the popularity of a technology. The architect's
+      job is to separate reversible decisions from irreversible ones: an index or a column can be added with a
+      migration, while the partition key and the document shape define the physical placement of data already
+      stored, and changing them means moving all the data and updating every consumer. Those decisions deserve
+      time before launch: a prototype, measurements and an explicit record of the trade-off in an architecture
+      decision.
+    linkTitles:
+      - "Overview of data store models"
+      - "Partitioning and horizontal scaling in Azure Cosmos DB"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

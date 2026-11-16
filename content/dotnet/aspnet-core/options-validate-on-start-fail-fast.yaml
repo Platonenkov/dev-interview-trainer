@@ -1,0 +1,154 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMHP6V8GB9X13BCAHD
+slug: options-validate-on-start-fail-fast
+stack: dotnet
+topic: aspnet-core
+level: middle
+type: multi
+grading: auto
+tags: [options-pattern, configuration, validation, fail-fast]
+code:
+  language: csharp
+  harness: none
+  source: |
+    public class SmtpOptions
+    {
+        [Required]
+        public string Host { get; set; }
+    }
+
+    // Production configuration has no "Smtp:Host" value.
+    // Each answer option is the complete registration in Program.cs.
+    var section = builder.Configuration.GetSection("Smtp");
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: false
+  - id: d
+    correct: true
+  - id: e
+    correct: false
+  - id: f
+    correct: true
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/configuration/options
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/extensions/options
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как заставить ASP.NET Core упасть при запуске, если секция настроек невалидна?
+    prompt: |
+      Приложение на ASP.NET Core (.NET 10) читает секцию `Smtp` в класс `SmtpOptions` (код ниже). В боевой среде
+      в конфигурации нет значения `Smtp:Host`. Сервис отправки писем получает `IOptions<SmtpOptions>` и читает
+      `.Value` только в момент отправки письма.
+
+      Выберите все регистрации, при которых приложение с такой конфигурацией упадёт при запуске, а не при первом
+      запросе, который отправляет письмо.
+    hint: |
+      Когда именно выполняются правила проверки настроек, если ничего специально не включать? И что нужно, чтобы
+      при запуске было что проверять?
+    options:
+      a: "`builder.Services.AddOptions<SmtpOptions>().Bind(section).ValidateDataAnnotations().ValidateOnStart();`"
+      b: "`builder.Services.AddOptions<SmtpOptions>().Bind(section).ValidateDataAnnotations();`"
+      c: "`builder.Services.AddOptions<SmtpOptions>().Bind(section).ValidateOnStart();`"
+      d: "`builder.Services.AddOptions<SmtpOptions>().Bind(section).Validate(o => !string.IsNullOrEmpty(o.Host)).ValidateOnStart();`"
+      e: "`builder.Services.Configure<SmtpOptions>(section);` (атрибут `[Required]` на `Host` уже есть)"
+      f: "`builder.Services.AddOptionsWithValidateOnStart<SmtpOptions>().Bind(section).ValidateDataAnnotations();`"
+    optionExplanations:
+      b: |
+        Правила проверки есть, но без `ValidateOnStart` они выполняются лениво: при первом обращении к
+        `IOptions<SmtpOptions>.Value`. Приложение запустится, а `OptionsValidationException` получит первый запрос,
+        который отправляет письмо.
+      c: |
+        `ValidateOnStart` только запускает уже зарегистрированные проверки при старте хоста, сам он правил не
+        добавляет. Проверок нет, поэтому запуск пройдёт успешно, а пустой `Host` всплывёт только при отправке письма.
+      e: |
+        `Configure` лишь привязывает секцию. Атрибуты вроде `[Required]` никто не проверяет, пока не вызван
+        `ValidateDataAnnotations`, и запуск проверки при старте тоже не включён. Приложение работает с `Host == null`.
+    answer: |
+      Варианты a, d и f: в каждом есть правило проверки (`ValidateDataAnnotations` или `Validate`) и запуск проверки
+      при старте (`ValidateOnStart` или `AddOptionsWithValidateOnStart`).
+    explanation: |
+      Проверка настроек выполняется в момент первого создания экземпляра настроек, то есть при первом чтении
+      `IOptions<T>.Value` (или при первом получении значения через `IOptionsSnapshot<T>` и `IOptionsMonitor<T>`).
+      Без дополнительных действий это происходит внутри первого запроса, которому нужны эти настройки, и ошибка
+      конфигурации превращается в ошибку запроса.
+
+      Чтобы приложение падало сразу при запуске, нужны две вещи вместе:
+
+      - **правила**: `ValidateDataAnnotations()` для атрибутов из `System.ComponentModel.DataAnnotations`,
+        `Validate(predicate)` или собственная реализация `IValidateOptions<T>`;
+      - **момент проверки**: `ValidateOnStart()` регистрирует тип настроек для проверки при запуске хоста, и
+        невалидная конфигурация приводит к `OptionsValidationException` до того, как приложение начнёт принимать
+        запросы.
+
+      `AddOptionsWithValidateOnStart<T>()` - это `AddOptions<T>()` с уже включённым `ValidateOnStart()` (метод
+      есть в .NET 10), поэтому вариант f эквивалентен варианту a.
+    linkTitles:
+      - "Шаблон параметров в ASP.NET Core"
+      - "Шаблон параметров в .NET"
+  en:
+    title: How do you make ASP.NET Core fail at startup when an options section is invalid?
+    prompt: |
+      An ASP.NET Core application (.NET 10) binds the `Smtp` section to the `SmtpOptions` class (code below). In
+      the production environment the configuration has no `Smtp:Host` value. The mail service receives
+      `IOptions<SmtpOptions>` and reads `.Value` only when it sends an email.
+
+      Select all registrations that make the application with this configuration fail at startup rather than on
+      the first request that sends an email.
+    hint: |
+      When exactly do options validation rules run if you enable nothing special? And what is needed so that there
+      is something to check at startup?
+    options:
+      a: "`builder.Services.AddOptions<SmtpOptions>().Bind(section).ValidateDataAnnotations().ValidateOnStart();`"
+      b: "`builder.Services.AddOptions<SmtpOptions>().Bind(section).ValidateDataAnnotations();`"
+      c: "`builder.Services.AddOptions<SmtpOptions>().Bind(section).ValidateOnStart();`"
+      d: "`builder.Services.AddOptions<SmtpOptions>().Bind(section).Validate(o => !string.IsNullOrEmpty(o.Host)).ValidateOnStart();`"
+      e: "`builder.Services.Configure<SmtpOptions>(section);` (the `[Required]` attribute on `Host` is already there)"
+      f: "`builder.Services.AddOptionsWithValidateOnStart<SmtpOptions>().Bind(section).ValidateDataAnnotations();`"
+    optionExplanations:
+      b: |
+        The rules exist, but without `ValidateOnStart` they run lazily, on the first access to
+        `IOptions<SmtpOptions>.Value`. The application starts, and the first request that sends an email gets the
+        `OptionsValidationException`.
+      c: |
+        `ValidateOnStart` only runs the validations that are already registered when the host starts; it adds no
+        rules itself. There are no validations, so startup succeeds and the empty `Host` surfaces only when an
+        email is sent.
+      e: |
+        `Configure` only binds the section. Attributes such as `[Required]` are not checked unless
+        `ValidateDataAnnotations` is called, and startup validation is not enabled either. The application runs with
+        `Host == null`.
+    answer: |
+      Options a, d and f: each has a validation rule (`ValidateDataAnnotations` or `Validate`) and runs validation
+      at startup (`ValidateOnStart` or `AddOptionsWithValidateOnStart`).
+    explanation: |
+      Options validation runs the first time an options instance is created, that is on the first read of
+      `IOptions<T>.Value` (or the first time a value is obtained through `IOptionsSnapshot<T>` or
+      `IOptionsMonitor<T>`). By default this happens inside the first request that needs the options, so a
+      configuration error turns into a request error.
+
+      To make the application fail right at startup, you need two things together:
+
+      - **rules**: `ValidateDataAnnotations()` for attributes from `System.ComponentModel.DataAnnotations`,
+        `Validate(predicate)`, or your own `IValidateOptions<T>` implementation;
+      - **the moment of checking**: `ValidateOnStart()` registers the options type for validation when the host
+        starts, and an invalid configuration causes an `OptionsValidationException` before the application begins
+        accepting requests.
+
+      `AddOptionsWithValidateOnStart<T>()` is `AddOptions<T>()` with `ValidateOnStart()` already applied (the
+      method is available in .NET 10), so option f is equivalent to option a.
+    linkTitles:
+      - "Options pattern in ASP.NET Core"
+      - "Options pattern in .NET"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"
+  noRunReason: Illustrative ASP.NET Core options registration; startup validation needs a configured host and is not executed in the BCL-only sandbox.

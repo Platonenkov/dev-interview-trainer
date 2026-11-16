@@ -1,0 +1,114 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNQ7689FRB16ADD5NN
+slug: apply-migrations-in-production-options
+stack: dotnet
+topic: ef-core
+level: middle
+type: multi
+grading: auto
+tags: [ef-core, migrations, deployment]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/ef/core/managing-schemas/migrations/applying
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/ef/core/managing-schemas/ensure-created
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какие способы применения миграций EF Core рекомендуются для production?
+    prompt: |
+      Команда переходит от разработки к выкладке в production и выбирает, как применять миграции EF Core
+      к боевой базе. Выберите все способы, которые документация EF Core (для EF Core 10) рекомендует для
+      production-развёртываний.
+    hint: Подумайте, можно ли проверить SQL до того, как он выполнится на боевой базе, какие права нужны учётной записи приложения и насколько легко откатить неудачное развёртывание.
+    options:
+      a: "Сгенерировать SQL-скрипт командой `dotnet ef migrations script` (например, с `--idempotent`), проверить его и применить к базе в рамках развёртывания."
+      b: "Собрать пакет миграций командой `dotnet ef migrations bundle` и запустить полученный исполняемый файл в конвейере развёртывания."
+      c: "Вызывать `context.Database.Migrate()` при старте приложения, чтобы каждый экземпляр сам приводил схему к актуальному состоянию."
+      d: "Запускать `dotnet ef database update` против боевой базы с машины разработчика или с сервера сборки с исходным кодом проекта."
+      e: "Вызывать `context.Database.EnsureCreated()` при старте: он создаёт недостающие таблицы и применяет новые миграции."
+    optionExplanations:
+      c: "Документация советует хорошо подумать, прежде чем делать так в production: приложению нужны повышенные права на изменение схемы, SQL выполняется без возможности его просмотреть и поправить, а откатить применённую миграцию сложно. Начиная с EF Core 9 `Migrate` берёт блокировку на всю базу, и одновременный старт нескольких экземпляров уже не портит схему, но механизм блокировки зависит от провайдера (в SQLite брошенная блокировка может мешать следующим миграциям) и остальные недостатки не устраняет."
+      d: "Инструмент выполняет SQL напрямую, без шанса проверить его заранее, и требует .NET SDK, инструмент EF и исходный код проекта там, откуда идёт подключение к боевой базе. Это удобно для разработки и тестов, но не для production."
+      e: "`EnsureCreated` обходит миграции: он создаёт схему по текущей модели, только если в базе ещё нет таблиц, и не применяет миграции. Документация предупреждает, что `EnsureCreated` и миграции плохо совместимы: после него `Migrate` завершается ошибкой."
+    answer: "Сгенерированные SQL-скрипты (в том числе идемпотентные) и пакеты миграций."
+    explanation: |
+      Документация EF Core рекомендует для production два способа: пакет миграций для автоматизации и
+      SQL-скрипт, когда изменения нужно проверить и согласовать. Скрипт можно прочитать, поправить (например,
+      сохранить данные при переименовании), отдать на проверку DBA и применить штатными средствами. Ключ
+      `--idempotent` генерирует скрипт, который по таблице `__EFMigrationsHistory` сам определяет, какие
+      миграции уже применены, поэтому его можно запускать, не зная точного состояния базы.
+
+      Пакеты миграций (EF Core 6 и новее, в том числе EF Core 10) - это один исполняемый файл, который
+      применяет миграции. Ему не нужны .NET SDK, инструмент EF и исходный код проекта (пакету, зависящему от
+      платформы, нужна среда выполнения .NET, автономному - нет), поэтому его удобно запускать как отдельный
+      шаг конвейера CI/CD.
+
+      Вызов `Migrate()` при старте приложения и `dotnet ef database update` подходят для локальной разработки
+      и тестов. В production у них есть недостатки: SQL выполняется без возможности его просмотреть и
+      поправить, приложению или машине с инструментом нужны повышенные права на изменение схемы, а откатить
+      миграцию, применённую при старте, сложно. `dotnet ef database update` вдобавок требует SDK, инструмент EF
+      и исходный код. Начиная с EF Core 9 `Migrate`, `database update` и пакеты берут блокировку миграций на
+      всю базу, поэтому параллельный старт экземпляров больше не портит схему, но блокировка зависит от
+      провайдера и остальные недостатки не снимает. `EnsureCreated` - инструмент для прототипов и тестов,
+      который обходит миграции.
+    linkTitles:
+      - "Применение миграций"
+      - "API создания и удаления базы (EnsureCreated)"
+  en:
+    title: Which ways of applying EF Core migrations are recommended for production?
+    prompt: |
+      A team is moving from development to production deployments and is choosing how to apply EF Core
+      migrations to the production database. Select all approaches that the EF Core documentation (for
+      EF Core 10) recommends for production deployments.
+    hint: Think about whether the SQL can be reviewed before it runs on production, which permissions the application account needs, and how easily a failed deployment can be rolled back.
+    options:
+      a: "Generate a SQL script with `dotnet ef migrations script` (for example with `--idempotent`), review it and apply it to the database as part of the deployment."
+      b: "Build a migration bundle with `dotnet ef migrations bundle` and run the resulting executable in the deployment pipeline."
+      c: "Call `context.Database.Migrate()` at application startup so that every instance brings the schema up to date itself."
+      d: "Run `dotnet ef database update` against the production database from a developer machine or a build server with the project source code."
+      e: "Call `context.Database.EnsureCreated()` at startup: it creates missing tables and applies new migrations."
+    optionExplanations:
+      c: "The documentation says to consider carefully before doing this in production: the application needs elevated permissions to change the schema, the SQL runs without a chance to inspect or modify it, and an applied migration is hard to roll back. Since EF Core 9 `Migrate` takes a database-wide lock, so several instances starting at once no longer corrupt the schema, but the locking mechanism is provider-specific (on SQLite an abandoned lock can block later migrations) and it does not remove the other drawbacks."
+      d: "The tool runs the SQL directly, with no chance to review it first, and needs the .NET SDK, the EF tool and the project source code wherever it connects to the production database from. It suits development and testing, not production."
+      e: "`EnsureCreated` bypasses migrations: it creates the schema from the current model only if the database has no tables yet, and it applies no migrations. The documentation warns that `EnsureCreated` and migrations do not work well together: after it, `Migrate` fails."
+    answer: "Generated SQL scripts (including idempotent scripts) and migration bundles."
+    explanation: |
+      The EF Core documentation recommends two approaches for production: a migration bundle for automation,
+      and a SQL script when review and approval are required. A script can be read, edited (for example, to
+      keep data during a rename), reviewed by a DBA and applied with the usual tooling. The `--idempotent`
+      switch generates a script that checks the `__EFMigrationsHistory` table to decide which migrations are
+      already applied, so it can run without knowing the exact state of the database.
+
+      Migration bundles (EF Core 6 and later, including EF Core 10) are a single executable that applies the
+      migrations. They need no .NET SDK, no EF tool and no project source code (a framework-dependent bundle
+      still needs the .NET runtime, a self-contained one does not), so they fit well as a separate step of a
+      CI/CD pipeline.
+
+      Calling `Migrate()` at startup and `dotnet ef database update` are fine for local development and
+      testing. In production they have drawbacks: the SQL runs without a chance to inspect or modify it, the
+      application or the machine running the tool needs elevated schema permissions, and a migration applied
+      at startup is hard to roll back. `dotnet ef database update` also needs the SDK, the EF tool and the
+      source code. Since EF Core 9, `Migrate`, `database update` and bundles take a database-wide migration
+      lock, so concurrent instances no longer corrupt the schema, but the lock is provider-specific and does
+      not remove the other drawbacks. `EnsureCreated` is a tool for prototypes and tests that bypasses
+      migrations.
+    linkTitles:
+      - "Applying migrations"
+      - "Create and drop APIs (EnsureCreated)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"

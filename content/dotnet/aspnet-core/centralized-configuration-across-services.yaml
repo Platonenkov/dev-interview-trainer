@@ -1,0 +1,169 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMVZP5NK7C0SCMGZEM
+slug: centralized-configuration-across-services
+stack: dotnet
+topic: aspnet-core
+level: architect
+type: open
+grading: self
+tags: [configuration, options-pattern, ioptionsmonitor, azure-app-configuration, microservices]
+links:
+  - url: https://learn.microsoft.com/en-us/azure/azure-app-configuration/overview
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/configuration/options
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как спроектировать централизованную конфигурацию для 40 сервисов ASP.NET Core?
+    prompt: |
+      В компании 40 сервисов на ASP.NET Core. Бизнес хочет менять настройки (лимиты, тайм-ауты, адреса
+      внешних систем, включение функций) во время работы, без повторного развёртывания.
+
+      Как вы спроектируете управление конфигурацией: где хранятся значения, как они попадают в код и как
+      сервисы узнают об изменениях? Какие риски появляются вместе с такой возможностью и как вы их
+      ограничите?
+    hint: Какие защитные механизмы даёт обычное развёртывание и какие из них пропадают, когда значение меняется без развёртывания?
+    answer: |
+      **Архитектура**
+
+      1. **Центральное хранилище как ещё один источник `IConfiguration`.** Код по-прежнему видит только
+         `IConfiguration` и параметры (options). Провайдер хранилища (например, Azure App Configuration)
+         добавляется в `Program.cs` после `appsettings.json`: при совпадении ключей побеждает провайдер,
+         добавленный последним, поэтому значения из хранилища перекрывают файловые. `appsettings.json` и
+         переменные окружения остаются безопасными значениями по умолчанию. Нужно явно решить, может ли
+         сервис стартовать, если хранилище недоступно (на локальных значениях), или должен упасть сразу.
+      2. **Структура ключей и владельцы.** Соглашение об именах вида `Shared:...` и `{Service}:...`,
+         разделение по окружениям (метки или префиксы), у каждого ключа есть команда-владелец. Секреты не
+         хранятся как обычные значения: в хранилище лежат ссылки на хранилище секретов (Key Vault), доступ -
+         через управляемые удостоверения.
+      3. **Статические и динамические настройки.** Изменения видит только код, который читает
+         `IOptionsMonitor<T>` (`CurrentValue`, `OnChange`) или `IOptionsSnapshot<T>` в рамках запроса.
+         `IOptions<T>` вычисляется один раз. Настройки, использованные при старте (адреса Kestrel,
+         регистрации в DI, размеры пулов), всё равно требуют перезапуска; список перезагружаемых ключей
+         документируется.
+      4. **Механизм обновления.** Провайдер периодически опрашивает хранилище или получает события об
+         изменениях. Чтобы связанные значения применялись вместе и 40 сервисов со всеми экземплярами не
+         перечитывали всё при каждой правке, удобно следить за одним ключом-маркером (sentinel), который
+         меняется последним после согласованного набора правок.
+      5. **Изменение конфигурации - это развёртывание.** Значения хранятся в git и меняются через pull
+         request и code review, а в хранилище их публикует конвейер. Перед публикацией - та же валидация,
+         что и при старте (`ValidateDataAnnotations`, `Validate`). Каждое изменение версионировано и
+         проходит аудит (кто, когда, что), есть быстрый откат к предыдущей версии. Раскатка постепенная:
+         тестовое окружение, затем один сервис или часть экземпляров (метки, флаги функций с
+         таргетингом), затем все.
+      6. **Наблюдаемость.** Сервис логирует и отдаёт в метриках версию примененной конфигурации, чтобы
+         всплеск ошибок можно было связать с конкретной правкой.
+
+      **Риски**
+
+      - **Радиус поражения.** Одно неверное значение за интервал обновления доходит до всех 40 сервисов,
+        минуя сборку, тесты и canary-релиз.
+      - **Новая зависимость.** Хранилище может быть недоступно при старте, а частый опрос из сотен
+        экземпляров упирается в лимиты запросов.
+      - **Несогласованность.** Экземпляры применяют изменения в разные моменты, связанные ключи могут
+        быть видны наполовину обновлёнными.
+      - **Ошибки валидации во время работы.** `ValidateOnStart` проверяет параметры только при старте;
+        неверное значение, пришедшее позже, проявится исключением при чтении параметров.
+      - **Код, не готовый к перезагрузке.** Значения, скопированные в поля, или объекты, созданные один
+        раз, тихо продолжают работать со старыми данными.
+      - **Утечка секретов и права доступа** к общему хранилищу.
+      - **Воспроизводимость.** Поведение зависит от содержимого хранилища в конкретный момент, поэтому
+        для разбора инцидентов нужна история изменений.
+    explanation: |
+      Главная мысль: изменение настроек без развёртывания убирает не только сам деплой, но и все
+      защитные механизмы, которые с ним приходили: review, сборку, тесты, постепенную раскатку и откат.
+      Если их не восстановить вокруг конфигурации, правка одного значения становится самым быстрым и
+      самым непроверенным способом сломать все сервисы сразу.
+
+      Подключение хранилища как обычного провайдера `IConfiguration` оставляет код независимым от
+      конкретного хранилища: локальная разработка и тесты работают на `appsettings.json`, а хранилище
+      можно заменить. Порядок провайдеров важен, потому что при совпадении ключа побеждает значение
+      последнего добавленного источника.
+
+      Перезагрузка работает только там, где код к ней готов. `IOptions<T>` вычисляется один раз,
+      `IOptionsSnapshot<T>` пересчитывается на каждый запрос и зарегистрирован как scoped, а
+      `IOptionsMonitor<T>` - singleton, который отдаёт актуальное значение и уведомляет об изменениях.
+      Поэтому часть настроек честно остаётся статической, и это нужно зафиксировать, а не обещать бизнесу,
+      что меняется всё.
+    linkTitles:
+      - "Что такое Azure App Configuration"
+      - "Шаблон параметров (options pattern) в ASP.NET Core"
+  en:
+    title: How do you design centralized configuration for 40 ASP.NET Core services?
+    prompt: |
+      A company runs 40 ASP.NET Core services. The business wants to change settings (limits, timeouts,
+      addresses of external systems, feature switches) at runtime, without redeploying.
+
+      How would you design configuration management: where do values live, how do they reach the code,
+      and how do services learn about changes? What risks come with this ability, and how would you
+      contain them?
+    hint: Which safeguards does a normal deployment give you, and which of them disappear when a value changes without a deployment?
+    answer: |
+      **Architecture**
+
+      1. **The central store is one more `IConfiguration` source.** The code still sees only
+         `IConfiguration` and options. The store's provider (for example Azure App Configuration) is added
+         in `Program.cs` after `appsettings.json`: when keys collide, the provider added last wins, so
+         values from the store override the file. `appsettings.json` and environment variables stay as
+         safe defaults. Decide explicitly whether a service may start when the store is unreachable (on
+         local values) or must fail immediately.
+      2. **Key layout and owners.** A naming convention such as `Shared:...` and `{Service}:...`, a
+         split per environment (labels or prefixes), and an owning team for every key. Secrets are not
+         stored as plain values: the store holds references to a secret store (Key Vault), accessed
+         through managed identities.
+      3. **Static versus dynamic settings.** Only code that reads `IOptionsMonitor<T>` (`CurrentValue`,
+         `OnChange`) or `IOptionsSnapshot<T>` within a request sees changes. `IOptions<T>` is computed
+         once. Settings consumed at startup (Kestrel endpoints, DI registrations, pool sizes) still need
+         a restart; document which keys are reloadable.
+      4. **Refresh mechanism.** The provider polls the store or receives change events. So that related
+         values are applied together and 40 services with all their instances do not reload everything
+         on every edit, watch a single sentinel key that is changed last, after a consistent set of
+         edits.
+      5. **A configuration change is a deployment.** Values live in git and change through a pull
+         request and code review, and a pipeline publishes them to the store. Before publishing, run the
+         same validation as at startup (`ValidateDataAnnotations`, `Validate`). Every change is versioned
+         and audited (who, when, what), with a fast rollback to the previous version. Roll out gradually:
+         a test environment, then one service or a share of instances (labels, feature flags with
+         targeting), then everyone.
+      6. **Observability.** Each service logs and reports in metrics the version of configuration it
+         applied, so an error spike can be tied to a specific edit.
+
+      **Risks**
+
+      - **Blast radius.** One bad value reaches all 40 services within one refresh interval, bypassing
+        the build, tests and canary release.
+      - **A new dependency.** The store can be unavailable at startup, and frequent polling from hundreds
+        of instances runs into request limits.
+      - **Inconsistency.** Instances apply changes at different moments, and related keys can be seen
+        half updated.
+      - **Validation failures at runtime.** `ValidateOnStart` checks options only at startup; an invalid
+        value that arrives later shows up as an exception when options are read.
+      - **Code not ready for reload.** Values copied into fields, or objects built once, silently keep
+        working with the old data.
+      - **Secret leaks and access rights** to the shared store.
+      - **Reproducibility.** Behaviour depends on what the store held at a given moment, so incident
+        analysis needs the change history.
+    explanation: |
+      The key point: changing settings without a deployment removes not only the deployment itself but
+      every safeguard that came with it: review, build, tests, gradual rollout and rollback. If you do
+      not rebuild them around configuration, editing one value becomes the fastest and least checked way
+      to break every service at once.
+
+      Plugging the store in as an ordinary `IConfiguration` provider keeps the code independent of the
+      specific store: local development and tests run on `appsettings.json`, and the store can be
+      replaced. Provider order matters, because when a key collides the value from the source added last
+      wins.
+
+      Reload works only where the code is ready for it. `IOptions<T>` is computed once,
+      `IOptionsSnapshot<T>` is recomputed per request and registered as scoped, and `IOptionsMonitor<T>`
+      is a singleton that returns the up-to-date value and notifies about changes. So some settings
+      honestly stay static, and that should be written down rather than promising the business that
+      everything can change.
+    linkTitles:
+      - "What is Azure App Configuration?"
+      - "Options pattern in ASP.NET Core"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

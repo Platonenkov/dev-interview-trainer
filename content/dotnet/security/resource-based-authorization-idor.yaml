@@ -1,0 +1,129 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WP73A7KJ7TB06SFPBH
+slug: resource-based-authorization-idor
+stack: dotnet
+topic: security
+level: senior
+type: open
+grading: self
+tags: [authorization, idor, broken-access-control, aspnet-core]
+code:
+  language: csharp
+  harness: none
+  source: |
+    [ApiController]
+    [Route("orders")]
+    public class OrdersController : ControllerBase
+    {
+        private readonly ShopDbContext _db;
+
+        public OrdersController(ShopDbContext db) => _db = db;
+
+        [HttpGet("{id:int}")]
+        [Authorize(Roles = "Customer")]
+        public async Task<ActionResult<OrderDto>> Get(int id)
+        {
+            var order = await _db.Orders.FindAsync(id);
+            if (order is null)
+            {
+                return NotFound();
+            }
+
+            return OrderDto.From(order);
+        }
+    }
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/security/authorization/resource-based
+    lang: en
+    kind: docs
+  - url: https://top10.owasp.org/A01_2021-Broken_Access_Control/
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему проверка роли не мешает покупателю читать чужой заказ?
+    prompt: |
+      В API есть endpoint, показанный ниже. Вызвать его может любой аутентифицированный пользователь с ролью
+      `Customer`. Тестировщик, вошедший как покупатель A, меняет число в URL и получает заказ покупателя B.
+      Почему атрибут `[Authorize(Roles = "Customer")]` этого не предотвращает, как называется этот класс
+      уязвимостей и как правильно исправить код в ASP.NET Core?
+    hint: Какие данные доступны атрибуту в момент проверки?
+    answer: |
+      - **Почему так происходит.** `[Authorize(Roles = "Customer")]` отвечает на вопрос «может ли пользователь
+        вызывать этот endpoint вообще», а не «может ли он видеть заказ 42». Атрибут, как и любая политика на
+        уровне endpoint, проверяется до того, как действие загрузит заказ, поэтому о владельце он ничего не
+        знает. Проверку проходит любой покупатель, а код возвращает тот заказ, на который указывает `id`.
+      - **Как это называется.** Небезопасная прямая ссылка на объект (IDOR), частный случай нарушения
+        контроля доступа, категория A01 в OWASP Top 10 2021.
+      - **Исправление: авторизация на основе ресурса.** Загрузить заказ и вызвать
+        `IAuthorizationService.AuthorizeAsync(User, order, "OrderOwner")`. Политика `OrderOwner` содержит
+        требование `OrderOwnerRequirement`, его обрабатывает `AuthorizationHandler<OrderOwnerRequirement, Order>`:
+        сравнивает `order.CustomerId` с идентификатором пользователя из его claims и вызывает
+        `context.Succeed(requirement)` только при совпадении. Обработчик регистрируется в DI как
+        `IAuthorizationHandler`. Если `result.Succeeded` равно `false`, вернуть `Forbid()` (403) или
+        `NotFound()` (404), чтобы не подтверждать существование чужого заказа.
+      - **Дополнительно.** Фильтровать запросы к данным по владельцу
+        (`Where(o => o.Id == id && o.CustomerId == userId)`); брать идентификатор пользователя только из
+        аутентифицированного `User`, никогда из маршрута или тела запроса; применить ту же проверку к
+        изменению, удалению и вложенным ресурсам; добавить тест «покупатель A запрашивает заказ B и получает
+        403 или 404».
+      - Неугадываемые идентификаторы (например, `Guid`) затрудняют перебор, но контролем доступа не являются.
+    explanation: |
+      Роль - свойство пользователя, а владение - связь между пользователем и конкретными данными. Проверки на
+      уровне endpoint, такие как `[Authorize]`, выполняются до привязки модели и до кода действия, поэтому
+      знать о конкретном заказе они не могут. Проверку, которая зависит от данных, нужно делать там, где
+      данные уже загружены.
+
+      `IAuthorizationService` с обработчиком держит правило в одном месте: его можно переиспользовать в
+      нескольких endpoint, покрыть модульными тестами и расширить, например разрешить роли `Support` читать
+      любые заказы, не трогая контроллеры. Фильтр по владельцу в самом запросе тоже корректен и дешевле, когда
+      правило сводится к равенству идентификаторов; обработчик выигрывает, когда правила сложнее. Скрыть
+      ссылки в интерфейсе недостаточно: атакующий вызывает API напрямую.
+    linkTitles:
+      - "Авторизация на основе ресурса в ASP.NET Core"
+      - "OWASP Top 10 2021: A01 Нарушение контроля доступа"
+  en:
+    title: Why does a role check not stop a customer from reading someone else's order?
+    prompt: |
+      The API has the endpoint shown below. Any authenticated user with the `Customer` role can call it.
+      A tester signed in as customer A changes the number in the URL and receives customer B's order.
+      Why does the `[Authorize(Roles = "Customer")]` attribute not prevent this, what is this class of
+      vulnerability called, and how do you fix the code properly in ASP.NET Core?
+    hint: What data is available to the attribute at the moment of the check?
+    answer: |
+      - **Why it happens.** `[Authorize(Roles = "Customer")]` answers "may this user call this endpoint at
+        all", not "may this user see order 42". The attribute, like any endpoint-level policy, is evaluated
+        before the action loads the order, so it knows nothing about the owner. Every customer passes the
+        check, and the code returns whatever order `id` points to.
+      - **What it is called.** Insecure direct object reference (IDOR), a case of broken access control,
+        category A01 in the OWASP Top 10 2021.
+      - **The fix: resource-based authorization.** Load the order and call
+        `IAuthorizationService.AuthorizeAsync(User, order, "OrderOwner")`. The `OrderOwner` policy contains
+        an `OrderOwnerRequirement`, handled by an `AuthorizationHandler<OrderOwnerRequirement, Order>` that
+        compares `order.CustomerId` with the user id from the user's claims and calls
+        `context.Succeed(requirement)` only when they match. The handler is registered in DI as an
+        `IAuthorizationHandler`. If `result.Succeeded` is `false`, return `Forbid()` (403) or `NotFound()`
+        (404) so as not to confirm that someone else's order exists.
+      - **In addition.** Filter data queries by owner
+        (`Where(o => o.Id == id && o.CustomerId == userId)`); take the user id only from the authenticated
+        `User`, never from the route or the request body; apply the same check to update, delete and nested
+        resources; add a test "customer A requests order B and gets 403 or 404".
+      - Unguessable ids (for example `Guid`) make enumeration harder but are not access control.
+    explanation: |
+      A role is a property of the user, while ownership is a relation between the user and specific data.
+      Endpoint-level checks such as `[Authorize]` run before model binding and before the action code, so
+      they cannot know about a particular order. A check that depends on data must run where the data has
+      already been loaded.
+
+      `IAuthorizationService` with a handler keeps the rule in one place: it can be reused across several
+      endpoints, covered by unit tests and extended, for example to let the `Support` role read any order,
+      without touching the controllers. Filtering by owner in the query itself is also correct and cheaper
+      when the rule is just an id comparison; the handler wins when the rules are more complex. Hiding links
+      in the UI is not enough: an attacker calls the API directly.
+    linkTitles:
+      - "Resource-based authorization in ASP.NET Core"
+      - "OWASP Top 10 2021: A01 Broken Access Control"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  noRunReason: "ASP.NET Core and EF Core code; the sandbox provides only the base class library."

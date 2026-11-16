@@ -1,0 +1,98 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WN1GWWCNWVHVFE2SEK
+slug: sql-server-lock-escalation-facts
+stack: dotnet
+topic: databases
+level: senior
+type: multi
+grading: auto
+tags: [sql-server, lock-escalation, locks, concurrency]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+  - id: e
+    correct: true
+  - id: f
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/sql/relational-databases/sql-server-transaction-locking-and-row-versioning-guide
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Что верно об эскалации блокировок в SQL Server?"
+    prompt: |
+      Выберите все верные утверждения об эскалации блокировок в SQL Server.
+    hint: "Какую проблему решает эскалация, с какой гранулярности на какую она переходит и что происходит, если нужную блокировку нельзя получить сразу?"
+    options:
+      a: "Эскалация запускается, когда одна инструкция T-SQL получает около 5000 блокировок на одном объекте: таблице или индексе."
+      b: "Блокировки строк сначала эскалируются до блокировок страниц и только потом до блокировки таблицы."
+      c: "После эскалации до блокировки таблицы другие сессии могут ждать даже при обращении к строкам, которые эскалирующая транзакция не трогала."
+      d: "Если другая сессия держит несовместимую блокировку на таблице, эскалирующая сессия ждёт её освобождения, пока не получит блокировку таблицы."
+      e: "Для секционированной таблицы настройка `LOCK_ESCALATION = AUTO` позволяет эскалировать блокировки до уровня секции, а не всей таблицы."
+      f: "Эскалация возможна только на уровнях `REPEATABLE READ` и `SERIALIZABLE`, при `READ COMMITTED` блокировки не эскалируются."
+    optionExplanations:
+      b: "SQL Server не эскалирует блокировки строк до страниц: блокировки строк и страниц переходят сразу в блокировку таблицы или секции."
+      d: "Эскалация не ждёт. При конфликте попытка просто не удаётся, сессия продолжает брать блокировки строк и повторяет попытку через каждые дополнительные 1250 блокировок."
+      f: "Монопольные блокировки `UPDATE` и `DELETE` держатся до конца транзакции на любом уровне изоляции, поэтому массовое обновление при `READ COMMITTED` тоже приводит к эскалации."
+    answer: |
+      Верны a, c и e: порог около 5000 блокировок одной инструкции на одном объекте, блокировка таблицы
+      мешает другим сессиям, а `LOCK_ESCALATION = AUTO` разрешает эскалацию до секции.
+    explanation: |
+      Каждая блокировка занимает память и требует учёта. Когда одна инструкция набирает слишком много мелких
+      блокировок на одном объекте (порог около 5000), SQL Server заменяет их одной блокировкой таблицы или, при
+      `LOCK_ESCALATION = AUTO` на секционированной таблице, секции. Эскалация также запускается, когда память
+      под блокировки во всём экземпляре превышает пороговое значение. Промежуточного шага через страницы нет.
+
+      Если на объекте есть несовместимая блокировка другой сессии, эскалация не ждёт, а откладывается: сессия
+      работает дальше на блокировках строк и пробует снова позже. Цена успешной эскалации - конкурентность:
+      монопольная блокировка таблицы задерживает другие сессии, даже если им нужны совсем другие строки.
+
+      На практике эскалацию избегают, обрабатывая массовые изменения пакетами меньше порога и добавляя индексы,
+      чтобы инструкции затрагивали меньше строк. Отключать её через `LOCK_ESCALATION = DISABLE` стоит осторожно:
+      растёт расход памяти на блокировки.
+    linkTitles:
+      - "Руководство по блокировкам транзакций и управлению версиями строк"
+  en:
+    title: "What is true about lock escalation in SQL Server?"
+    prompt: |
+      Select every true statement about lock escalation in SQL Server.
+    hint: "Which problem does escalation solve, from which granularity to which does it go, and what happens if the needed lock cannot be granted right away?"
+    options:
+      a: "Escalation is triggered when a single T-SQL statement acquires about 5,000 locks on one object: a table or an index."
+      b: "Row locks are first escalated to page locks and only then to a table lock."
+      c: "After escalation to a table lock, other sessions can wait even when they access rows that the escalating transaction never touched."
+      d: "If another session holds an incompatible lock on the table, the escalating session waits for it to be released until it gets the table lock."
+      e: "For a partitioned table, the setting `LOCK_ESCALATION = AUTO` allows locks to escalate to the partition level instead of the whole table."
+      f: "Escalation is possible only at `REPEATABLE READ` and `SERIALIZABLE`; under `READ COMMITTED` locks are not escalated."
+    optionExplanations:
+      b: "SQL Server does not escalate row locks to page locks: row and page locks go directly to a table or partition lock."
+      d: "Escalation does not wait. On a conflict the attempt simply fails, the session keeps taking row locks and retries for every additional 1,250 locks."
+      f: "Exclusive locks of `UPDATE` and `DELETE` are held until the end of the transaction at any isolation level, so a bulk update under `READ COMMITTED` escalates too."
+    answer: |
+      a, c and e are true: the threshold is about 5,000 locks by one statement on one object, a table lock
+      gets in the way of other sessions, and `LOCK_ESCALATION = AUTO` allows escalation to a partition.
+    explanation: |
+      Every lock takes memory and bookkeeping. When one statement collects too many fine-grained locks on one
+      object (a threshold of about 5,000), SQL Server replaces them with one lock on the table or, with
+      `LOCK_ESCALATION = AUTO` on a partitioned table, on the partition. Escalation is also triggered when lock
+      memory across the whole instance exceeds a threshold. There is no intermediate step through pages.
+
+      If another session holds an incompatible lock on the object, escalation does not wait but is postponed:
+      the session continues on row locks and tries again later. The price of a successful escalation is
+      concurrency: an exclusive table lock delays other sessions even if they need completely different rows.
+
+      In practice escalation is avoided by processing bulk changes in batches below the threshold and by adding
+      indexes so that statements touch fewer rows. Disabling it with `LOCK_ESCALATION = DISABLE` needs care:
+      lock memory usage grows.
+    linkTitles:
+      - "Transaction locking and row versioning guide"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

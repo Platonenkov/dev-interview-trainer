@@ -1,0 +1,122 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMRR9BBBSY7TTB13CS
+slug: disposable-transient-root-provider-leak
+stack: dotnet
+topic: aspnet-core
+level: senior
+type: open
+grading: self
+tags: [dependency-injection, service-lifetime, idisposable, memory-leak]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/core/extensions/dependency-injection-guidelines
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/extensions/dependency-injection
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему растёт память, если transient-сервис с IDisposable много раз получают из корневого IServiceProvider?
+    prompt: |
+      Класс `ReportBuilder` реализует `IDisposable` и зарегистрирован через `AddTransient`. Обработчик сообщений
+      зарегистрирован как singleton, получает `IServiceProvider` через конструктор и на каждое сообщение вызывает
+      `GetRequiredService<ReportBuilder>()` внутри `using`. За сутки память процесса растёт, а дамп показывает
+      миллионы живых экземпляров `ReportBuilder`, хотя у каждого уже вызван `Dispose()`.
+
+      Почему объекты не собираются сборщиком мусора и как это исправить?
+    hint: Кто, кроме вашего кода, хранит ссылку на созданный экземпляр, и когда этот владелец сам освобождается?
+    answer: |
+      - Встроенный контейнер запоминает каждый созданный им объект, который реализует `IDisposable` или
+        `IAsyncDisposable`, в той области (scope), из которой его получили, чтобы вызвать `Dispose` при
+        освобождении этой области. Это касается и transient-сервисов.
+      - `IServiceProvider`, внедрённый в singleton, - это корневой провайдер. Корневая область освобождается
+        только при остановке приложения, поэтому каждый вызов `GetRequiredService` добавляет в неё ещё одну
+        ссылку, и сборщик мусора не может собрать эти объекты. Получается утечка памяти.
+      - Собственный `using` или вызов `Dispose()` не помогает: контейнер не убирает объект из своего списка
+        и при остановке приложения вызовет `Dispose` ещё раз.
+      - Исправления:
+        1. **Область на единицу работы.** Внедрить `IServiceScopeFactory`, на каждое сообщение создавать
+           `using var scope = scopeFactory.CreateScope();` (или `await using` с `CreateAsyncScope()`) и брать
+           сервис из `scope.ServiceProvider`. Объекты освобождаются и отпускаются вместе с областью.
+        2. **Фабрика вместо transient-регистрации.** Зарегистрировать фабрику с методом `Create()`, которая
+           создаёт объект вне контейнера (`new` или `ActivatorUtilities.CreateInstance`), а владельцем и
+           ответственным за `Dispose` становится вызывающий код. Регистрация лямбдой
+           `AddTransient(sp => new ReportBuilder())` не помогает: такой экземпляр создаёт контейнер, и он
+           его тоже отслеживает.
+        3. **Другое время жизни.** Если объекту не нужно отдельное состояние на каждую операцию, сделать его
+           scoped или singleton.
+    explanation: |
+      Контейнер считает освобождение частью владения: что он создал, то он и освобождает, причём в момент
+      освобождения области, из которой объект был получен. Для этого он держит ссылку на каждый такой объект
+      до конца области. Для области HTTP-запроса это значит "до конца запроса" и безопасно. Для корневой
+      области это значит "до остановки приложения", поэтому долго живущий процесс, который постоянно получает
+      disposable transient-сервисы из корня, накапливает их без ограничения.
+
+      Попасть в корневой провайдер легко случайно: `app.Services` в `Program.cs`, `IServiceProvider` в
+      конструкторе singleton-сервиса или hosted service (hosted services тоже синглтоны). Проверка областей
+      (`ValidateScopes`) в Development здесь не спасает: она запрещает получать из корня scoped-сервисы, но
+      не transient. В дампе такая утечка видна по цепочке корней: экземпляры удерживает список disposable-объектов
+      корневой области провайдера.
+
+      Только объект, созданный вне контейнера, полностью принадлежит вызывающему коду, поэтому рекомендация
+      Microsoft - не регистрировать `IDisposable`-типы как transient, а использовать фабрику или явную область.
+      Поведение описано для встроенного контейнера Microsoft.Extensions.DependencyInjection в .NET 10.
+    linkTitles:
+      - "Рекомендации по внедрению зависимостей"
+      - "Внедрение зависимостей в .NET"
+  en:
+    title: Why does memory grow when a transient IDisposable service is resolved repeatedly from the root IServiceProvider?
+    prompt: |
+      The class `ReportBuilder` implements `IDisposable` and is registered with `AddTransient`. A message
+      handler is registered as a singleton, takes `IServiceProvider` in its constructor and calls
+      `GetRequiredService<ReportBuilder>()` inside a `using` for every message. Over a day the process memory
+      keeps growing, and a dump shows millions of live `ReportBuilder` instances, although `Dispose()` has
+      already been called on each of them.
+
+      Why does the garbage collector not collect these objects, and how do you fix it?
+    hint: Who else, besides your code, holds a reference to the created instance, and when is that owner itself disposed?
+    answer: |
+      - The built-in container remembers every object it creates that implements `IDisposable` or
+        `IAsyncDisposable` in the scope it was resolved from, so that it can call `Dispose` when that scope
+        is disposed. This applies to transient services too.
+      - The `IServiceProvider` injected into a singleton is the root provider. The root scope is disposed only
+        when the application stops, so each `GetRequiredService` call adds one more reference to it, and the
+        garbage collector cannot collect these objects. The result is a memory leak.
+      - Your own `using` or `Dispose()` call does not help: the container does not remove the object from its
+        list and calls `Dispose` once more when the application stops.
+      - Fixes:
+        1. **A scope per unit of work.** Inject `IServiceScopeFactory`, create
+           `using var scope = scopeFactory.CreateScope();` (or `await using` with `CreateAsyncScope()`) for
+           every message and resolve the service from `scope.ServiceProvider`. The objects are disposed and
+           released together with the scope.
+        2. **A factory instead of a transient registration.** Register a factory with a `Create()` method that
+           builds the object outside the container (`new` or `ActivatorUtilities.CreateInstance`), so the
+           calling code owns it and is responsible for `Dispose`. A lambda registration
+           `AddTransient(sp => new ReportBuilder())` does not help: the container creates that instance, so
+           it tracks it as well.
+        3. **A different lifetime.** If the object does not need separate state per operation, make it scoped
+           or a singleton.
+    explanation: |
+      The container treats disposal as part of ownership: what it created, it disposes, at the moment the
+      scope the object was resolved from is disposed. To do that it keeps a reference to every such object
+      until the scope ends. For an HTTP request scope that means "until the end of the request" and is
+      harmless. For the root scope it means "until the application stops", so a long-running process that
+      keeps resolving disposable transient services from the root accumulates them without limit.
+
+      It is easy to reach the root provider by accident: `app.Services` in `Program.cs`, or `IServiceProvider`
+      in the constructor of a singleton or a hosted service (hosted services are singletons too). Scope
+      validation (`ValidateScopes`) in Development does not catch this: it forbids resolving scoped services
+      from the root, not transient ones. In a dump the leak shows up in the root chain: the instances are held
+      by the list of disposable objects of the provider's root scope.
+
+      Only an object created outside the container fully belongs to the calling code, which is why Microsoft
+      recommends not registering `IDisposable` types as transient and using a factory or an explicit scope
+      instead. The behaviour described is that of the built-in Microsoft.Extensions.DependencyInjection
+      container in .NET 10.
+    linkTitles:
+      - "Dependency injection guidelines"
+      - "Dependency injection in .NET"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

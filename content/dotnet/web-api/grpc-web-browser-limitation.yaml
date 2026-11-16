@@ -1,0 +1,107 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WRV7MF6ACHX9EBBJWJ
+slug: grpc-web-browser-limitation
+stack: dotnet
+topic: web-api
+level: middle
+type: single
+grading: auto
+tags: [grpc, grpc-web, json-transcoding, http2]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: false
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/grpc/grpcweb
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/grpc/supported-platforms
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему браузер не может напрямую вызвать gRPC-сервис и что предлагает ASP.NET Core?
+    prompt: |
+      Фронтенд-команда хочет вызывать из JavaScript-кода в браузере обычный gRPC-сервис на ASP.NET Core
+      (.NET 10) без промежуточного бэкенда. Какое утверждение верно объясняет, почему это не работает, и
+      называет решение, которое предлагает ASP.NET Core?
+    hint: Поддерживают ли браузеры HTTP/2 и даёт ли браузер коду страницы доступ ко всему, что gRPC передаёт в HTTP/2-ответе?
+    options:
+      a: "Браузеры не поддерживают HTTP/2, поэтому нужно перевести gRPC-сервис на HTTP/1.1 в настройках Kestrel."
+      b: "Браузер не умеет отправлять двоичные данные, поэтому нужно заменить Protobuf на JSON в самом gRPC-протоколе."
+      c: "API браузера (`fetch`, `XMLHttpRequest`) не дают нужного gRPC контроля над HTTP/2, в частности над trailers. Нужен gRPC-Web (`UseGrpcWeb`) или gRPC JSON transcoding."
+      d: "gRPC требует клиентский сертификат (mTLS), который браузер предъявить не может, поэтому нужно отключить TLS."
+      e: "Запрос блокирует политика CORS. Достаточно разрешить источник фронтенда через `AddCors` и `UseCors`."
+    optionExplanations:
+      a: "Современные браузеры поддерживают HTTP/2, но управляют соединением сами и не дают странице работать на уровне кадров и trailers. Перевод сервиса на HTTP/1.1 только ломает обычный gRPC."
+      b: "`fetch` и `XMLHttpRequest` отправляют и принимают двоичные тела. gRPC-Web, который работает в браузере, передаёт тот же двоичный Protobuf."
+      d: "gRPC не требует клиентских сертификатов, это лишь одна из возможных схем аутентификации. Отключение TLS не решает проблему протокола."
+      e: "CORS решает, разрешит ли браузер запрос к другому источнику, но не учит браузер протоколу gRPC. Для gRPC-Web с другого домена CORS настраивают дополнительно, а не вместо него."
+    answer: "API браузера не дают нужного gRPC контроля над HTTP/2, в частности над trailers, поэтому нужен gRPC-Web (`UseGrpcWeb`) или gRPC JSON transcoding."
+    explanation: |
+      gRPC опирается на возможности HTTP/2, которые браузер не открывает коду страницы. Например, итоговый
+      статус вызова (`grpc-status`) передаётся в HTTP trailers, а `fetch` и `XMLHttpRequest` не дают надёжного
+      доступа к ним и к управлению потоками HTTP/2. Поэтому обычный gRPC-клиент в браузере написать нельзя.
+
+      ASP.NET Core предлагает два пути:
+
+      - **gRPC-Web.** Вариант протокола, который работает поверх HTTP/1.1 и HTTP/2 и переносит trailers в тело
+        ответа. На сервере - пакет `Grpc.AspNetCore.Web`, middleware `UseGrpcWeb` и `EnableGrpcWeb` для сервисов,
+        в браузере - клиент gRPC-Web. Ограничение: клиентский и двунаправленный стриминг не поддерживаются,
+        серверный стриминг работает.
+      - **gRPC JSON transcoding** (начиная с .NET 7, есть и в .NET 10). Пакет
+        `Microsoft.AspNetCore.Grpc.JsonTranscoding` и `AddJsonTranscoding()` публикуют методы gRPC-сервиса как
+        обычные HTTP-эндпоинты с JSON по аннотациям `google.api.http` в `.proto`-файле. Браузер вызывает их как
+        обычный REST API.
+    linkTitles:
+      - "gRPC-Web в приложениях ASP.NET Core gRPC"
+      - "Поддерживаемые платформы gRPC в .NET"
+  en:
+    title: Why can't a browser call a gRPC service directly, and what does ASP.NET Core offer instead?
+    prompt: |
+      A front-end team wants JavaScript code in the browser to call a standard gRPC service on ASP.NET Core
+      (.NET 10) directly, with no intermediate backend. Which statement correctly explains why this does not
+      work and names the solution ASP.NET Core offers?
+    hint: Do browsers support HTTP/2, and does the browser give page code access to everything gRPC sends in an HTTP/2 response?
+    options:
+      a: "Browsers do not support HTTP/2, so you must switch the gRPC service to HTTP/1.1 in the Kestrel settings."
+      b: "A browser cannot send binary data, so you must replace Protobuf with JSON inside the gRPC protocol itself."
+      c: "Browser APIs (`fetch`, `XMLHttpRequest`) do not give the control over HTTP/2 that gRPC needs, trailers in particular. You need gRPC-Web (`UseGrpcWeb`) or gRPC JSON transcoding."
+      d: "gRPC requires a client certificate (mTLS) that a browser cannot present, so you must disable TLS."
+      e: "The CORS policy blocks the request. Allowing the front-end origin with `AddCors` and `UseCors` is enough."
+    optionExplanations:
+      a: "Modern browsers support HTTP/2, but they manage the connection themselves and do not let a page work at the level of frames and trailers. Switching the service to HTTP/1.1 only breaks regular gRPC."
+      b: "`fetch` and `XMLHttpRequest` send and receive binary bodies. gRPC-Web, which does work in the browser, carries the same binary Protobuf."
+      d: "gRPC does not require client certificates, they are just one possible authentication scheme. Disabling TLS does not solve the protocol problem."
+      e: "CORS decides whether the browser allows a request to another origin, but it does not teach the browser the gRPC protocol. For gRPC-Web from another domain CORS is configured in addition, not instead."
+    answer: "Browser APIs do not give the control over HTTP/2 that gRPC needs, trailers in particular, so you need gRPC-Web (`UseGrpcWeb`) or gRPC JSON transcoding."
+    explanation: |
+      gRPC relies on HTTP/2 features that the browser does not expose to page code. For example, the final
+      status of a call (`grpc-status`) is sent in HTTP trailers, and `fetch` and `XMLHttpRequest` give no
+      reliable access to them or to control over HTTP/2 streams. That is why a standard gRPC client cannot be
+      written for the browser.
+
+      ASP.NET Core offers two ways out:
+
+      - **gRPC-Web.** A variant of the protocol that works over HTTP/1.1 and HTTP/2 and moves trailers into the
+        response body. On the server: the `Grpc.AspNetCore.Web` package, the `UseGrpcWeb` middleware and
+        `EnableGrpcWeb` on services; in the browser: a gRPC-Web client. Limitation: client streaming and
+        bidirectional streaming are not supported, server streaming works.
+      - **gRPC JSON transcoding** (since .NET 7, also in .NET 10). The
+        `Microsoft.AspNetCore.Grpc.JsonTranscoding` package and `AddJsonTranscoding()` expose gRPC service
+        methods as plain HTTP endpoints with JSON, driven by `google.api.http` annotations in the `.proto` file.
+        The browser calls them like a regular REST API.
+    linkTitles:
+      - "gRPC-Web in ASP.NET Core gRPC apps"
+      - "gRPC on .NET supported platforms"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

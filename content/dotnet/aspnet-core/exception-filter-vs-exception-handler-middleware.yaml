@@ -1,0 +1,102 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMNHHQ9SBTBPGQZA18
+slug: exception-filter-vs-exception-handler-middleware
+stack: dotnet
+topic: aspnet-core
+level: middle
+type: open
+grading: self
+tags: [exception-handling, filters, middleware]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/mvc/controllers/filters
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/error-handling
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Когда исключение ловит фильтр исключений MVC, а когда нужен middleware обработки исключений?
+    prompt: |
+      В приложении ASP.NET Core зарегистрирован глобальный фильтр исключений MVC (`IExceptionFilter`), а в
+      `Program.cs` есть `app.UseExceptionHandler(...)`. Какие исключения перехватит фильтр, какие - только
+      middleware, и что вы выберете для единой обработки ошибок в API?
+    hint: Где в конвейере запроса находится вызов действия контроллера и что выполняется до него и после него?
+    answer: |
+      - **Фильтр исключений** работает внутри вызова действия MVC. Он перехватывает исключения, возникшие при
+        создании контроллера, привязке модели, в action-фильтрах и в самом методе действия. Чтобы пометить
+        исключение обработанным, фильтр устанавливает `context.ExceptionHandled = true` или задаёт `context.Result`.
+      - Фильтр **не видит** исключения из resource-фильтров, result-фильтров и выполнения результата (например,
+        при сериализации ответа), а также из middleware, маршрутизации и minimal API-эндпоинтов: всё это
+        находится вне вызова действия MVC.
+      - **`UseExceptionHandler`**, зарегистрированный в начале конвейера, перехватывает необработанные исключения
+        из всех middleware, добавленных после него, и из любых эндпоинтов: контроллеров, Razor Pages, minimal API.
+        Он логирует исключение и повторно выполняет запрос по пути ошибки или через лямбду, а начиная с .NET 8
+        может передать исключение реализациям `IExceptionHandler` (`AddExceptionHandler<T>()`). Вместе с
+        `AddProblemDetails()` ответ формируется в формате ProblemDetails.
+      - **Выбор:** для единой обработки ошибок - middleware. Фильтр исключений оставляют для случаев, когда ответ
+        зависит от конкретного контроллера или действия, например доменное исключение превращается в 409 только
+        для одной группы действий.
+      - **Ограничения middleware:** он не видит исключения из middleware, зарегистрированных до него, и не может
+        заменить ответ, который уже начал отправляться: в этом случае исключение пробрасывается дальше.
+    explanation: |
+      После того как маршрутизация выбрала эндпоинт контроллера, MVC запускает свой конвейер фильтров. Фильтр
+      исключений оборачивает только часть этого конвейера: создание контроллера, привязку модели, action-фильтры
+      и действие. Всё, что выполняется раньше (middleware, маршрутизация, resource-фильтры) или позже
+      (result-фильтры и запись результата), до него не доходит. Minimal API-эндпоинты вообще не используют
+      конвейер фильтров MVC.
+
+      Middleware, наоборот, оборачивает весь остаток конвейера: исключение, не пойманное ниже, поднимается по
+      стеку вызовов `next` и попадает в `UseExceptionHandler`. Поэтому его ставят как можно раньше, а документация
+      рекомендует предпочитать middleware и использовать фильтры исключений только там, где обработка должна
+      отличаться в зависимости от действия.
+
+      Оба механизма можно сочетать: фильтр обработает исключения своих действий, а остальные дойдут до
+      middleware. Описание соответствует ASP.NET Core в .NET 10.
+    linkTitles:
+      - "Фильтры в ASP.NET Core"
+      - "Обработка ошибок в ASP.NET Core"
+  en:
+    title: When does an MVC exception filter catch an exception, and when do you need exception handling middleware?
+    prompt: |
+      An ASP.NET Core application registers a global MVC exception filter (`IExceptionFilter`), and `Program.cs`
+      also calls `app.UseExceptionHandler(...)`. Which exceptions does the filter catch, which ones only the
+      middleware catches, and which would you choose for consistent error handling in an API?
+    hint: Where in the request pipeline is the controller action invoked, and what runs before and after it?
+    answer: |
+      - **An exception filter** runs inside the MVC action invocation. It catches exceptions thrown while creating
+        the controller, during model binding, in action filters and in the action method itself. To mark an
+        exception as handled, the filter sets `context.ExceptionHandled = true` or assigns `context.Result`.
+      - The filter **does not see** exceptions from resource filters, result filters and result execution (for
+        example while serializing the response), nor from middleware, routing or minimal API endpoints: all of
+        these are outside the MVC action invocation.
+      - **`UseExceptionHandler`**, registered early in the pipeline, catches unhandled exceptions from every
+        middleware added after it and from any endpoint: controllers, Razor Pages, minimal APIs. It logs the
+        exception and re-executes the request through an error path or a lambda, and since .NET 8 it can pass the
+        exception to `IExceptionHandler` implementations (`AddExceptionHandler<T>()`). Together with
+        `AddProblemDetails()` the response uses the ProblemDetails format.
+      - **The choice:** middleware for consistent error handling. Keep an exception filter for cases where the
+        response depends on the specific controller or action, for example a domain exception that becomes a 409
+        only for one group of actions.
+      - **Middleware limits:** it does not see exceptions from middleware registered before it, and it cannot
+        replace a response that has already started: in that case the exception is rethrown.
+    explanation: |
+      Once routing has selected a controller endpoint, MVC runs its own filter pipeline. An exception filter wraps
+      only part of it: controller creation, model binding, action filters and the action. Anything that runs
+      earlier (middleware, routing, resource filters) or later (result filters and writing the result) never
+      reaches it. Minimal API endpoints do not use the MVC filter pipeline at all.
+
+      Middleware, by contrast, wraps the whole rest of the pipeline: an exception not caught further down bubbles
+      up through the `next` calls and reaches `UseExceptionHandler`. That is why it is placed as early as possible,
+      and the documentation recommends preferring middleware and using exception filters only where handling must
+      differ by action.
+
+      The two can be combined: the filter handles exceptions of its actions, and the rest reach the middleware.
+      The description matches ASP.NET Core in .NET 10.
+    linkTitles:
+      - "Filters in ASP.NET Core"
+      - "Handle errors in ASP.NET Core"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

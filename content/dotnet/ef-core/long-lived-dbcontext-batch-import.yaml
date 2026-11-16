@@ -1,0 +1,129 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WN3K2PGPV7E1SZNRMQ
+slug: long-lived-dbcontext-batch-import
+stack: dotnet
+topic: ef-core
+level: senior
+type: situation
+grading: self
+tags: [ef-core, change-tracking, dbcontext-lifetime, batch-processing, performance]
+links:
+  - url: https://learn.microsoft.com/en-us/ef/core/dbcontext-configuration/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/ef/core/change-tracking/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/ef/core/change-tracking/change-detection
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/microsoft.entityframeworkcore.changetracking.changetracker.clear
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Ночной импорт двух миллионов строк через один DbContext замедляется и съедает память
+    prompt: |
+      Ночная задача импортирует два миллиона строк из файла. Для каждой строки она ищет клиента в базе,
+      обновляет его или создаёт нового. Вся задача работает с одним экземпляром `DbContext` и вызывает
+      `SaveChanges` каждые 1000 строк. Память процесса растёт всё время работы, каждый следующий
+      `SaveChanges` выполняется дольше предыдущего, и задача уже не укладывается в ночное окно.
+      Что вы будете делать и в каком порядке?
+    hint: "Что происходит с сущностью в трекере изменений после `SaveChanges` и сколько сущностей проверяет каждый следующий вызов?"
+    answer: |
+      1. **Подтвердить причину.** Периодически логировать `ChangeTracker.Entries().Count()` и время каждого
+         `SaveChanges`, снять дамп памяти. Если число отслеживаемых сущностей растёт вместе с числом
+         обработанных строк, а в дампе преобладают сущности и записи трекера, причина в долгоживущем контексте.
+      2. **Разбить работу на пакеты с коротким контекстом.** Обрабатывать строки пакетами (например, по
+         1000-5000), на каждый пакет создавать новый `DbContext` через `IDbContextFactory<TContext>` и
+         освобождать его после `SaveChanges`. Если пересоздавать контекст неудобно, вызывать
+         `ChangeTracker.Clear()` после каждого `SaveChanges` (EF Core 5 и новее).
+      3. **Не отслеживать то, что только читается.** Проверки существования и справочники читать через
+         `AsNoTracking()` или проекцию. Справочные данные загрузить один раз в словарь, а не запрашивать на
+         каждую строку; клиентов пакета искать одним запросом по списку ключей, а не по одному.
+      4. **Убрать лишнюю работу с сущностями.** Массовые изменения без логики на сущностях выполнять через
+         `ExecuteUpdate` и `ExecuteDelete` (EF Core 7 и новее), а чистую вставку большого объёма - через
+         механизм массовой загрузки конкретного провайдера, например на SQL Server через `SqlBulkCopy` во
+         временную таблицу с последующим `MERGE`, если это оправдано замерами.
+      5. **Сделать задачу перезапускаемой.** Каждый пакет - отдельная транзакция; сохранять отметку последней
+         обработанной строки, чтобы после сбоя продолжить с неё, и делать обработку строки идемпотентной.
+      6. **Проверить результат.** На объёме, близком к боевому: память стабильна, время пакета не растёт.
+    explanation: |
+      `DbContext` рассчитан на одну единицу работы. Каждая отслеживаемая сущность держит запись в трекере,
+      снимок исходных значений и место в карте идентичности, и всё это освобождается только при освобождении
+      контекста или очистке трекера. После `SaveChanges` сущности не исчезают из трекера, а переходят в
+      состояние `Unchanged`, поэтому за ночь контекст накапливает сотни тысяч объектов, и память растёт
+      линейно.
+
+      Замедление объясняется обнаружением изменений. По умолчанию EF Core использует снимки: `SaveChanges`
+      вызывает `DetectChanges`, который сравнивает каждую отслеживаемую сущность с её снимком. Стоимость
+      каждого вызова пропорциональна числу всех сущностей, обработанных с начала задачи, а суммарная работа
+      растёт примерно квадратично. Увеличение размера пакета `SaveChanges` лишь уменьшает число проходов, но
+      не устраняет рост.
+
+      Короткий контекст на пакет делает стоимость пакета постоянной и отпускает объекты для сборщика мусора.
+      Цена решения - сущности прошлых пакетов больше не отслеживаются: если они нужны, их перечитывают или
+      держат нужные данные (например, ключи) отдельно. `ChangeTracker.Clear()` даёт тот же эффект для трекера
+      без пересоздания контекста. В справке по API этого метода сказано, что контекст рассчитан на короткую
+      жизнь, а очистка трекера полезна там, где создать новый экземпляр контекста неудобно. Ответ описывает
+      поведение EF Core 10.
+    linkTitles:
+      - "Время жизни, настройка и инициализация DbContext"
+      - "Отслеживание изменений в EF Core"
+      - "Обнаружение изменений и уведомления"
+      - "Метод ChangeTracker.Clear"
+  en:
+    title: A nightly import of two million rows through one DbContext slows down and eats memory
+    prompt: |
+      A nightly job imports two million rows from a file. For each row it looks up a customer in the database,
+      updates it or creates a new one. The whole job uses a single `DbContext` instance and calls
+      `SaveChanges` every 1000 rows. Process memory grows for the entire run, every `SaveChanges` takes longer
+      than the previous one, and the job no longer fits into the nightly window.
+      What do you do, and in what order?
+    hint: "What happens to an entity in the change tracker after `SaveChanges`, and how many entities does each next call check?"
+    answer: |
+      1. **Confirm the cause.** Periodically log `ChangeTracker.Entries().Count()` and the duration of each
+         `SaveChanges`, and take a memory dump. If the number of tracked entities grows with the number of
+         processed rows and the dump is dominated by entities and tracker entries, the long-lived context is
+         the cause.
+      2. **Split the work into batches with a short-lived context.** Process rows in batches (for example
+         1000-5000), create a new `DbContext` per batch with `IDbContextFactory<TContext>` and dispose it after
+         `SaveChanges`. If recreating the context is impractical, call `ChangeTracker.Clear()` after each
+         `SaveChanges` (EF Core 5 and later).
+      3. **Do not track what you only read.** Read existence checks and reference data with `AsNoTracking()` or
+         a projection. Load reference data once into a dictionary instead of querying per row, and fetch the
+         customers of a batch with one query by a list of keys instead of one by one.
+      4. **Remove unnecessary entity work.** Run bulk changes that need no entity logic with `ExecuteUpdate`
+         and `ExecuteDelete` (EF Core 7 and later), and large pure inserts with a provider-specific bulk-load
+         mechanism, for example on SQL Server `SqlBulkCopy` into a staging table followed by a `MERGE`, if
+         measurements justify it.
+      5. **Make the job restartable.** Each batch is its own transaction; store a marker of the last processed
+         row so that after a failure the job resumes from it, and make row processing idempotent.
+      6. **Verify.** On data close to production size: memory stays flat and batch time does not grow.
+    explanation: |
+      `DbContext` is designed for a single unit of work. Every tracked entity holds a tracker entry, a
+      snapshot of its original values and a slot in the identity map, and all of that is released only when
+      the context is disposed or the tracker is cleared. After `SaveChanges` entities do not leave the
+      tracker, they become `Unchanged`, so over the night the context accumulates hundreds of thousands of
+      objects and memory grows linearly.
+
+      The slowdown comes from change detection. By default EF Core uses snapshots: `SaveChanges` calls
+      `DetectChanges`, which compares every tracked entity with its snapshot. Each call costs in proportion
+      to all entities processed since the job started, so the total work grows roughly quadratically. A
+      larger `SaveChanges` batch only reduces the number of passes; it does not remove the growth.
+
+      A short-lived context per batch keeps the cost per batch constant and lets the garbage collector
+      reclaim the objects. The price is that entities from earlier batches are no longer tracked: if they are
+      needed, reread them or keep the required data (for example, keys) separately. `ChangeTracker.Clear()`
+      has the same effect on the tracker without recreating the context. The API documentation of this
+      method notes that a context is designed for a short lifetime and that clearing the tracker is useful
+      where creating a new context instance is not practical. The answer describes EF Core 10.
+    linkTitles:
+      - "DbContext Lifetime, Configuration, and Initialization"
+      - "Change Tracking in EF Core"
+      - "Change Detection and Notifications"
+      - "ChangeTracker.Clear method"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"

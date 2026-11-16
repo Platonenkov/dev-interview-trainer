@@ -1,0 +1,134 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WRWS46P0J3SND7YZC4
+slug: api-versioning-url-vs-header
+stack: dotnet
+topic: web-api
+level: middle
+type: open
+grading: self
+tags: [api-versioning, rest, http-caching]
+links:
+  - url: https://learn.microsoft.com/en-us/azure/architecture/best-practices/api-design
+    lang: en
+    kind: docs
+  - url: https://github.com/dotnet/aspnet-api-versioning
+    lang: en
+    kind: docs
+  - url: https://www.rfc-editor.org/rfc/rfc9111
+    lang: en
+    kind: spec
+locales:
+  ru:
+    title: Как версионировать Web API - через путь URL, строку запроса или заголовок?
+    prompt: |
+      Команда готовит к публикации HTTP API и выбирает, как клиент будет указывать версию:
+
+      - в пути URL: `/v1/orders`;
+      - в параметре строки запроса: `/orders?api-version=1.0`;
+      - в заголовке или в типе содержимого: `api-version: 1.0` или `Accept: application/vnd.contoso.v1+json`.
+
+      Сравните эти подходы и объясните, в какой ситуации вы выбрали бы каждый из них.
+    hint: Что HTTP-кэш и прокси считают ключом ответа и что увидит человек, который просто скопировал ссылку на ресурс?
+    answer: |
+      - **Путь URL (`/v1/orders`).** Версия видна сразу: в браузере, в `curl`, в логах и документации. Кэши,
+        шлюзы и маршрутизация различают версии как разные URL без дополнительной настройки. Цена: один и тот же
+        ресурс получает разные URI в разных версиях, сохранённые клиентами ссылки при переходе приходится
+        переписывать, а версия обычно меняется сразу для всего API.
+      - **Строка запроса (`?api-version=1.0`).** Путь ресурса не меняется, версия по-прежнему видна и входит в URI,
+        поэтому разные версии кэшируются как разные адреса. Параметр легко сделать необязательным с версией по
+        умолчанию. Цена: версия смешивается с параметрами фильтрации, а некоторые кэши и CDN можно настроить так,
+        что они игнорируют или нормализуют параметры строки запроса, поэтому стоит проверить, как с ними
+        обращается ваша инфраструктура.
+      - **Заголовок или тип содержимого.** URI остаются стабильными, версия относится к представлению ресурса, а
+        вариант с `Accept` вписывается в согласование содержимого HTTP и позволяет версионировать отдельные
+        представления. Цена: версию не видно в ссылке; запрос нельзя проверить, просто открыв URL в браузере;
+        документации и инструментам нужна дополнительная настройка; сервер должен отдавать заголовок `Vary`, иначе
+        кэш может вернуть ответ не той версии.
+      - **Выбор.** Публичный API для широкого круга клиентов - путь URL или строка запроса: проще для потребителей
+        и инструментов. Заголовок или тип содержимого - когда важны стабильные URI (гипермедиа, ссылки хранятся у
+        клиентов) и клиенты достаточно зрелые. В любом случае одна схема на весь API, новая версия только при
+        несовместимых изменениях, заранее определённое поведение для запроса без версии (версия по умолчанию или
+        `400`) и явный список поддерживаемых и устаревших версий.
+      - В ASP.NET Core все варианты поддерживают библиотеки `Asp.Versioning` (репозиторий
+        `dotnet/aspnet-api-versioning`): `UrlSegmentApiVersionReader`, `QueryStringApiVersionReader`,
+        `HeaderApiVersionReader`, `MediaTypeApiVersionReader`, их можно объединить через `ApiVersionReader.Combine`,
+        а `ReportApiVersions` добавляет в ответ заголовки `api-supported-versions` и `api-deprecated-versions`.
+        Имя заголовка `api-version` в примере условное: имя задаётся при создании `HeaderApiVersionReader`.
+    explanation: |
+      Суть выбора в том, к чему относится версия: к идентичности ресурса (URI) или к его представлению. По
+      RFC 9111 основной ключ кэша состоит из метода и целевого URI запроса. Если версия в пути или строке запроса,
+      разные версии автоматически получают разные ключи. Если версия в заголовке, кэш различает ответы только по
+      заголовкам, перечисленным в `Vary`, и без него может отдать клиенту v2 ответ, сохранённый для v1. Поэтому
+      рекомендации Azure Architecture Center называют версионирование через URI и строку запроса удобным для
+      кэширования, а версии в заголовке и типе содержимого требуют дополнительной логики.
+
+      Версия в URL выигрывает в наглядности и простоте поддержки инструментами, но с точки зрения REST один
+      ресурс получает несколько адресов. Версия в заголовке сохраняет адреса, но прячет версию от человека и
+      требует дополнительной логики на сервере, в документации и в клиентах.
+
+      Объективно лучшего варианта нет. Сильный ответ называет этот компромисс, привязывает выбор к аудитории API
+      и подчёркивает, что последовательность и правила вывода версий из эксплуатации важнее конкретной схемы.
+    linkTitles:
+      - "Рекомендации по проектированию RESTful Web API (Azure Architecture Center)"
+      - "Репозиторий dotnet/aspnet-api-versioning"
+      - "RFC 9111: кэширование в HTTP"
+  en:
+    title: How should you version a web API - URL path, query string or header?
+    prompt: |
+      A team is about to publish an HTTP API and must choose how clients specify the version:
+
+      - in the URL path: `/v1/orders`;
+      - in a query string parameter: `/orders?api-version=1.0`;
+      - in a header or the media type: `api-version: 1.0` or `Accept: application/vnd.contoso.v1+json`.
+
+      Compare these approaches and explain when you would choose each of them.
+    hint: What do HTTP caches and proxies use as the key of a response, and what does a person see when they just copy a link to the resource?
+    answer: |
+      - **URL path (`/v1/orders`).** The version is visible at once: in a browser, in `curl`, in logs and in docs.
+        Caches, gateways and routing treat versions as different URLs with no extra setup. Cost: the same
+        resource gets a different URI in each version, links stored by clients must be rewritten when they
+        migrate, and the version usually changes for the whole API at once.
+      - **Query string (`?api-version=1.0`).** The resource path does not change, and the version is still
+        visible and part of the URI, so different versions are cached as different addresses. The parameter is
+        easy to make optional with a default version. Cost: the version mixes with filtering parameters, and some
+        caches and CDNs can be configured to ignore or normalise query string parameters, so check how your
+        infrastructure treats them.
+      - **Header or media type.** URIs stay stable, the version belongs to the representation, and the `Accept`
+        variant fits HTTP content negotiation and lets you version individual representations. Cost: the
+        version is not visible in the link; you cannot test a request by opening the URL in a browser; docs and
+        tools need extra setup; and the server must send a `Vary` header, otherwise a cache may return a
+        response of the wrong version.
+      - **Choice.** A public API for a broad audience - URL path or query string: simpler for consumers and
+        tools. Header or media type - when stable URIs matter (hypermedia, links stored by clients) and the
+        clients are mature. In every case: one scheme across the API, a new version only for breaking changes,
+        defined behaviour for a request without a version (a default version or `400`), and an explicit list of
+        supported and deprecated versions.
+      - In ASP.NET Core the `Asp.Versioning` libraries (repository `dotnet/aspnet-api-versioning`) support all
+        of them: `UrlSegmentApiVersionReader`, `QueryStringApiVersionReader`, `HeaderApiVersionReader`,
+        `MediaTypeApiVersionReader`, which can be combined with `ApiVersionReader.Combine`, and
+        `ReportApiVersions` adds the `api-supported-versions` and `api-deprecated-versions` response headers.
+        The header name `api-version` in the example is illustrative: you choose it when you create the
+        `HeaderApiVersionReader`.
+    explanation: |
+      The choice is about what the version belongs to: the identity of the resource (the URI) or its
+      representation. Under RFC 9111 the primary cache key consists of the request method and the target URI.
+      When the version is in the path or the query string, different versions get different keys automatically.
+      When the version is in a header, the cache tells responses apart only by the headers listed in `Vary`, and
+      without it may serve a v2 client a response stored for v1. That is why the Azure Architecture Center
+      guidance calls URI and query string versioning cache-friendly, while header and media type versioning need
+      extra logic.
+
+      A version in the URL wins on visibility and tooling support, but from the REST point of view one resource
+      gets several addresses. A version in a header keeps addresses stable, but hides the version from people
+      and needs extra logic on the server, in the docs and in the clients.
+
+      There is no objectively best option. A strong answer names this trade-off, ties the choice to the
+      audience of the API, and stresses that consistency and rules for retiring versions matter more than the
+      particular scheme.
+    linkTitles:
+      - "Best practices for RESTful web API design (Azure Architecture Center)"
+      - "dotnet/aspnet-api-versioning repository"
+      - "RFC 9111: HTTP Caching"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

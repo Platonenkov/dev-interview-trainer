@@ -1,0 +1,91 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMKDTZKBA8EWJ242GE
+slug: ioptionsmonitor-in-singleton-reload
+stack: dotnet
+topic: aspnet-core
+level: middle
+type: single
+grading: auto
+tags: [options-pattern, configuration, ioptionsmonitor, service-lifetimes]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: false
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/configuration/options
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/microsoft.extensions.options.ioptionsmonitor-1
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какой интерфейс options нужен singleton-сервису, чтобы видеть изменения appsettings.json?
+    prompt: |
+      Сервис `PricingRules` зарегистрирован как singleton и читает секцию `Pricing` из appsettings.json, привязанную
+      через `builder.Services.Configure<PricingOptions>(builder.Configuration.GetSection("Pricing"))`. Администраторы
+      правят файл на работающем сервере и ожидают, что сервис увидит новые значения без перезапуска.
+      Что должен внедрить сервис?
+    hint: Учтите не только то, перечитывает ли интерфейс значения, но и с каким временем жизни он зарегистрирован.
+    options:
+      a: "`IOptions<PricingOptions>`"
+      b: "`IOptionsSnapshot<PricingOptions>`"
+      c: "`IOptionsMonitor<PricingOptions>`"
+      d: "`IConfiguration`, из которого секция привязывается через `Get<PricingOptions>()` в конструкторе"
+    optionExplanations:
+      a: "`IOptions<T>` вычисляет `Value` один раз при первом обращении и дальше возвращает закэшированный объект, поэтому изменения файла после старта не видны."
+      b: "`IOptionsSnapshot<T>` пересчитывается на каждый запрос, но зарегистрирован как scoped, а singleton не может зависеть от scoped-сервиса: в Development проверка областей выбросит исключение, а без неё singleton захватит один экземпляр и увидит только значения первого чтения."
+      d: "`IConfiguration` действительно получает новые значения, но привязка в конструкторе выполняется один раз, и сервис навсегда сохраняет копию, сделанную при создании."
+    answer: "`IOptionsMonitor<PricingOptions>`"
+    explanation: |
+      `WebApplication.CreateBuilder` подключает appsettings.json с `reloadOnChange: true`, поэтому `IConfiguration`
+      узнаёт об изменении файла. Вопрос в том, пересчитывает ли значения слой options.
+
+      `IOptionsMonitor<T>` зарегистрирован как singleton, поэтому его можно внедрять в сервис с любым временем
+      жизни. Он подписан на токены изменений конфигурации, сбрасывает кэш при изменении и через `CurrentValue`
+      возвращает новые значения, а `OnChange` позволяет отреагировать на изменение.
+
+      Важная деталь: сервис должен читать `CurrentValue` при каждом использовании, а не копировать его в поле
+      в конструкторе, иначе он снова застынет на первом значении.
+    linkTitles:
+      - "Паттерн options в ASP.NET Core"
+      - "Интерфейс IOptionsMonitor<TOptions>"
+  en:
+    title: Which options interface lets a singleton see changes to appsettings.json?
+    prompt: |
+      The `PricingRules` service is registered as a singleton and reads the `Pricing` section of appsettings.json,
+      bound with `builder.Services.Configure<PricingOptions>(builder.Configuration.GetSection("Pricing"))`. Operators
+      edit the file on a running server and expect the service to see the new values without a restart.
+      What should the service inject?
+    hint: Consider not only whether the interface re-reads values, but also which lifetime it is registered with.
+    options:
+      a: "`IOptions<PricingOptions>`"
+      b: "`IOptionsSnapshot<PricingOptions>`"
+      c: "`IOptionsMonitor<PricingOptions>`"
+      d: "`IConfiguration`, binding the section with `Get<PricingOptions>()` in the constructor"
+    optionExplanations:
+      a: "`IOptions<T>` computes `Value` once on first access and then returns the cached object, so changes to the file after startup are not visible."
+      b: "`IOptionsSnapshot<T>` is recomputed per request, but it is registered as scoped, and a singleton cannot depend on a scoped service: in Development scope validation throws, and without it the singleton captures one instance and sees only the values of its first read."
+      d: "`IConfiguration` does receive the new values, but binding in the constructor runs once, and the service keeps the copy made at creation forever."
+    answer: "`IOptionsMonitor<PricingOptions>`"
+    explanation: |
+      `WebApplication.CreateBuilder` adds appsettings.json with `reloadOnChange: true`, so `IConfiguration` learns
+      about the file change. The question is whether the options layer recomputes the values.
+
+      `IOptionsMonitor<T>` is registered as a singleton, so it can be injected into a service of any lifetime. It
+      listens to configuration change tokens, invalidates its cache on a change and returns the new values through
+      `CurrentValue`, while `OnChange` lets you react to a change.
+
+      An important detail: the service must read `CurrentValue` on every use rather than copy it into a field in
+      the constructor, otherwise it freezes on the first value again.
+    linkTitles:
+      - "Options pattern in ASP.NET Core"
+      - "IOptionsMonitor<TOptions> interface"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

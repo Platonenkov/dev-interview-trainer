@@ -1,0 +1,101 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WN1RFC3RQQCHNDC5GY
+slug: composite-index-leading-column-seek
+stack: dotnet
+topic: databases
+level: middle
+type: single
+grading: auto
+tags: [sql-server, indexes, composite-index, index-seek]
+code:
+  language: sql
+  harness: none
+  source: |
+    CREATE NONCLUSTERED INDEX IX_Orders_CustomerId_CreatedAt
+        ON dbo.Orders (CustomerId, CreatedAt);
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/sql/relational-databases/sql-server-index-design-guide
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/sql/relational-databases/indexes/clustered-and-nonclustered-indexes-described
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какое условие WHERE позволяет искать по составному индексу сразу по двум столбцам?
+    prompt: |
+      В SQL Server у таблицы `dbo.Orders` есть составной некластеризованный индекс, показанный в коде.
+      При каком условии `WHERE` оптимизатор может выполнить поиск по индексу (Index Seek), диапазон которого
+      ограничен и по `CustomerId`, и по `CreatedAt`?
+    hint: Представьте телефонный справочник, отсортированный сначала по фамилии, а внутри фамилии по имени. По какому условию в нём можно сразу открыть нужную страницу и читать подряд?
+    options:
+      a: "`WHERE CreatedAt >= '2024-01-01'`"
+      b: "`WHERE CustomerId = 42 AND CreatedAt >= '2024-01-01' AND CreatedAt < '2024-02-01'`"
+      c: "`WHERE CustomerId > 40 AND CreatedAt = '2024-01-15'`"
+      d: "`WHERE CustomerId = 42 OR CreatedAt >= '2024-01-01'`"
+    optionExplanations:
+      a: "Индекс отсортирован прежде всего по `CustomerId`, а строки с нужной датой разбросаны по всем клиентам. Без условия на ведущий столбец нет непрерывного диапазона, к которому можно перейти, поэтому этот индекс можно только просмотреть целиком (Scan)."
+      c: "Диапазон по ведущему столбцу ограничивает поиск только по `CustomerId`. Внутри диапазона `CustomerId > 40` строки упорядочены по `CreatedAt` лишь в пределах каждого клиента, а не целиком, поэтому условие на `CreatedAt` не может сузить читаемый диапазон и только проверяется на прочитанных строках."
+      d: "Из-за `OR` подходят и строки любых клиентов с подходящей датой, а они разбросаны по всему индексу. Одним непрерывным диапазоном такое условие не описать, а ветку с `CreatedAt` этот индекс поиском не обслужит."
+    answer: "Условие `WHERE CustomerId = 42 AND CreatedAt >= '2024-01-01' AND CreatedAt < '2024-02-01'`."
+    explanation: |
+      Строки составного индекса упорядочены сначала по `CustomerId`, а при равном `CustomerId` - по `CreatedAt`,
+      как телефонный справочник: сначала по фамилии, потом по имени. При условии `CustomerId = 42` все строки
+      этого клиента лежат подряд и уже отсортированы по дате. Движок спускается по B-дереву к первой записи
+      `(42, '2024-01-01')` и читает подряд, пока дата меньше `'2024-02-01'`. Читаемый диапазон ограничен обоими
+      столбцами.
+
+      Тот же порядок сортировки объясняет остальные варианты. Без условия на ведущий столбец подходящие строки
+      не лежат подряд, и искать по этому индексу нельзя. После диапазона по столбцу ключа следующие столбцы
+      упорядочены только внутри каждого его значения, поэтому они уже не сужают диапазон, а лишь проверяются на
+      прочитанных строках. Отсюда практическое правило: равенства по ведущим столбцам, затем не больше одного
+      диапазона. Порядок условий в тексте `WHERE` значения не имеет: важен порядок столбцов в определении индекса.
+    linkTitles:
+      - "Руководство по архитектуре и проектированию индексов SQL Server"
+      - "Кластеризованные и некластеризованные индексы"
+  en:
+    title: Which WHERE clause allows a seek on both columns of a composite index?
+    prompt: |
+      In SQL Server, the `dbo.Orders` table has the composite nonclustered index shown in the code.
+      With which `WHERE` condition can the optimizer perform an index seek whose range is bounded by both
+      `CustomerId` and `CreatedAt`?
+    hint: Picture a phone book sorted by last name, and within a last name by first name. With which condition can you open the right page directly and read straight through?
+    options:
+      a: "`WHERE CreatedAt >= '2024-01-01'`"
+      b: "`WHERE CustomerId = 42 AND CreatedAt >= '2024-01-01' AND CreatedAt < '2024-02-01'`"
+      c: "`WHERE CustomerId > 40 AND CreatedAt = '2024-01-15'`"
+      d: "`WHERE CustomerId = 42 OR CreatedAt >= '2024-01-01'`"
+    optionExplanations:
+      a: "The index is sorted by `CustomerId` first, and rows with the wanted date are spread across all customers. Without a condition on the leading column there is no contiguous range to jump to, so this index can only be scanned as a whole."
+      c: "A range on the leading column bounds the seek by `CustomerId` only. Inside the range `CustomerId > 40`, rows are ordered by `CreatedAt` only within each customer, not as a whole, so the `CreatedAt` condition cannot narrow the range that is read and is only checked on the rows read."
+      d: "Because of `OR`, rows of any customer with a matching date also qualify, and they are spread over the whole index. One contiguous range cannot describe the condition, and this index cannot serve the `CreatedAt` branch with a seek."
+    answer: "The condition `WHERE CustomerId = 42 AND CreatedAt >= '2024-01-01' AND CreatedAt < '2024-02-01'`."
+    explanation: |
+      Rows of a composite index are ordered by `CustomerId` first, and for equal `CustomerId` by `CreatedAt`,
+      like a phone book sorted by last name and then by first name. With `CustomerId = 42`, all rows of that
+      customer are stored together and are already sorted by date. The engine navigates the B-tree to the first
+      entry `(42, '2024-01-01')` and reads forward while the date is below `'2024-02-01'`. The range that is
+      read is bounded by both columns.
+
+      The same sort order explains the other options. Without a condition on the leading column the matching
+      rows are not contiguous, so this index cannot be used for a seek. After a range on a key column, the next
+      columns are sorted only within each value of that column, so they no longer narrow the range and are only
+      checked on the rows read. Hence the practical rule: equalities on the leading columns, then at most one
+      range. The order of the conditions in the `WHERE` text does not matter: what matters is the column order
+      in the index definition.
+    linkTitles:
+      - "SQL Server index architecture and design guide"
+      - "Clustered and nonclustered indexes described"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  noRunReason: "The snippet is T-SQL and needs a SQL Server database, while the sandbox runs only C#."

@@ -1,0 +1,134 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNF3ECE1X1KS5YKA4M
+slug: key-lookup-covering-index-include
+stack: dotnet
+topic: databases
+level: middle
+type: open
+grading: self
+tags: [sql-server, indexes, key-lookup, covering-index, execution-plan]
+code:
+  language: sql
+  harness: none
+  source: |
+    -- Clustered index: PK_Orders (OrderId)
+    CREATE NONCLUSTERED INDEX IX_Orders_CustomerId
+        ON dbo.Orders (CustomerId);
+
+    -- For a selective customer the plan shows Index Seek + Key Lookup
+    SELECT OrderId, Status, Total
+    FROM dbo.Orders
+    WHERE CustomerId = @customerId;
+
+    -- Covering version of the same index
+    CREATE NONCLUSTERED INDEX IX_Orders_CustomerId
+        ON dbo.Orders (CustomerId)
+        INCLUDE (Status, Total)
+        WITH (DROP_EXISTING = ON);
+links:
+  - url: https://learn.microsoft.com/en-us/sql/relational-databases/indexes/create-indexes-with-included-columns
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/sql/relational-databases/showplan-logical-and-physical-operators-reference
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/sql/relational-databases/indexes/clustered-and-nonclustered-indexes-described
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что означает Key Lookup в плане выполнения и как его убрать с помощью INCLUDE?
+    prompt: |
+      В плане выполнения запроса из примера рядом с `Index Seek` по `IX_Orders_CustomerId` стоит оператор
+      `Key Lookup`. Что он означает, когда он становится дорогим и как столбцы `INCLUDE` позволяют от него
+      избавиться? Чем приходится платить за такое решение?
+    hint: Каких столбцов из `SELECT` нет в строке некластеризованного индекса и где движок их берёт?
+    answer: |
+      - **Что это.** Оптимизатор нашёл строки через некластеризованный индекс, но запросу нужны столбцы,
+        которых в этом индексе нет (из списка `SELECT`, из остаточного фильтра, из `ORDER BY`). Для каждой
+        найденной строки движок идёт в кластеризованный индекс по ключу кластеризации и дочитывает недостающие
+        столбцы. В плане это оператор `Key Lookup (Clustered)`, и он всегда работает в паре с оператором
+        `Nested Loops`; в свойствах оператора (Output List) видно, какие столбцы он дочитывает. Для кучи
+        (таблицы без кластеризованного индекса) то же самое делает `RID Lookup` по идентификатору строки.
+      - **Когда это дорого.** Стоимость растёт линейно с числом строк: каждый lookup - отдельный спуск по
+        B-дереву кластеризованного индекса, то есть несколько логических чтений и случайный ввод-вывод. Для
+        десятка строк это дёшево, для тысяч lookup доминирует в плане. С какого-то числа строк оптимизатор
+        решает, что полный просмотр кластеризованного индекса дешевле, и некластеризованный индекс перестаёт
+        использоваться. Ошибка в оценке числа строк усугубляет проблему: план выбран под 10 строк, а
+        lookup выполняется для сотен тысяч.
+      - **Как помогает INCLUDE.** Недостающие столбцы добавляют в индекс: через `INCLUDE`, если они только
+        читаются, и в ключ, если по ним ищут или сортируют. Включённые столбцы хранятся на листовом уровне
+        индекса, не входят в ключ и не учитываются в ограничениях на размер и число столбцов ключа. Индекс
+        становится покрывающим, и запрос выполняется одним `Index Seek` без lookup.
+      - **Цена.** Индекс становится шире: больше места на диске и в памяти, больше работы при каждом
+        `INSERT`, `DELETE` и `UPDATE` включённых столбцов. Покрывать стоит важные частые запросы, а не все
+        подряд; запрос с `SELECT *` покрыть индексом обычно нецелесообразно.
+    explanation: |
+      Строка некластеризованного индекса хранит ключевые столбцы индекса и указатель на строку данных. Если у
+      таблицы есть кластеризованный индекс, указателем служит ключ кластеризации, поэтому `OrderId` из примера
+      уже есть в `IX_Orders_CustomerId` и включать его не нужно. А `Status` и `Total` хранятся только в
+      кластеризованном индексе, отсюда и `Key Lookup`.
+
+      Lookup выполняется по одной строке за раз внутри `Nested Loops`, поэтому план, который отлично работает
+      для клиента с пятью заказами, деградирует для клиента с сотней тысяч заказов. После добавления
+      `INCLUDE (Status, Total)` все нужные столбцы лежат на листовом уровне некластеризованного индекса, и
+      обращаться к кластеризованному индексу не нужно вовсе.
+
+      Включать столбцы, а не добавлять их в ключ, выгоднее, когда они не участвуют в поиске и сортировке:
+      ключ остаётся узким и эффективным. Но каждый включённый столбец - это ещё одна копия данных, которую
+      нужно поддерживать при записи, поэтому очень широкие индексы стоит проверять: окупает ли выигрыш на
+      чтении стоимость их обновления. Решение принимают по реальному плану и частоте запроса.
+    linkTitles:
+      - "Создание индексов с включёнными столбцами"
+      - "Справочник по логическим и физическим операторам Showplan"
+      - "Кластеризованные и некластеризованные индексы"
+  en:
+    title: What does a Key Lookup in an execution plan mean and how does INCLUDE remove it?
+    prompt: |
+      In the execution plan of the query from the example, a `Key Lookup` operator appears next to the
+      `Index Seek` on `IX_Orders_CustomerId`. What does it mean, when does it become expensive, and how do
+      `INCLUDE` columns get rid of it? What do you pay for that?
+    hint: Which columns from the `SELECT` are missing from the nonclustered index row, and where does the engine get them?
+    answer: |
+      - **What it is.** The optimizer found the rows through a nonclustered index, but the query needs columns
+        that the index does not contain (from the `SELECT` list, a residual filter, `ORDER BY`). For every row
+        found, the engine goes to the clustered index by the clustering key and reads the missing columns. In
+        the plan this is a `Key Lookup (Clustered)` operator, and it is always paired with a `Nested Loops`
+        operator; the operator properties (Output List) show which columns it fetches. On a heap (a table
+        without a clustered index) the same job is done by a `RID Lookup` using the row identifier.
+      - **When it is expensive.** The cost grows linearly with the number of rows: each lookup is a separate
+        traversal of the clustered index B-tree, that is several logical reads and random I/O. For a dozen
+        rows it is cheap, for thousands the lookups dominate the plan. Beyond some row count the optimizer
+        decides that a full scan of the clustered index is cheaper, and the nonclustered index is no longer
+        used. A wrong row estimate makes it worse: the plan was chosen for 10 rows, and the lookup runs for
+        hundreds of thousands.
+      - **How INCLUDE helps.** Add the missing columns to the index: with `INCLUDE` if they are only read, and
+        to the key if they are used for seeking or sorting. Included columns are stored at the leaf level of
+        the index, are not part of the key and do not count toward the limits on key size and number of key
+        columns. The index becomes covering, and the query runs as a single `Index Seek` without lookups.
+      - **The price.** The index gets wider: more space on disk and in memory, more work on every `INSERT`,
+        `DELETE` and `UPDATE` of the included columns. Cover important frequent queries, not every query;
+        covering a `SELECT *` query with an index is usually not worth it.
+    explanation: |
+      A nonclustered index row stores the index key columns and a locator of the data row. When the table has
+      a clustered index, the locator is the clustering key, so `OrderId` from the example is already in
+      `IX_Orders_CustomerId` and does not need to be included. `Status` and `Total`, however, live only in
+      the clustered index, which is where the `Key Lookup` comes from.
+
+      The lookup runs one row at a time inside `Nested Loops`, so a plan that works well for a customer with
+      five orders degrades for a customer with a hundred thousand orders. After adding
+      `INCLUDE (Status, Total)`, every needed column is at the leaf level of the nonclustered index, and the
+      clustered index is not touched at all.
+
+      Including columns instead of adding them to the key pays off when they take no part in seeking or
+      sorting: the key stays small and efficient. But every included column is one more copy of the data to
+      maintain on writes, so check very wide indexes: does the read gain outweigh the cost of updating them?
+      Decide based on the real plan and how often the query runs.
+    linkTitles:
+      - "Create indexes with included columns"
+      - "Showplan logical and physical operators reference"
+      - "Clustered and nonclustered indexes described"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  noRunReason: "The snippet is T-SQL and needs a SQL Server database, while the sandbox runs only C#."

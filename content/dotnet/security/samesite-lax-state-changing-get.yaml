@@ -1,0 +1,107 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WPRGRYB74QDBF4DQ79
+slug: samesite-lax-state-changing-get
+stack: dotnet
+topic: security
+level: middle
+type: single
+grading: auto
+tags: [csrf, samesite, cookies]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/security/samesite
+    lang: en
+    kind: docs
+  - url: https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Какой кросс-сайтовый запрос получит cookie с SameSite=Lax?
+    prompt: |
+      Сайт `bank.example` выдаёт аутентификационную cookie с явно заданным атрибутом `SameSite=Lax`.
+      Перевод денег выполняется запросом `GET /transfer?to=...&amount=...`. Пользователь вошёл в банк, а затем
+      открыл страницу `evil.example`.
+
+      В каком из случаев браузер отправит cookie банка, и атака CSRF сработает?
+    hint: Чем переход, после которого меняется адрес в строке браузера, отличается от запроса, который страница делает сама?
+    options:
+      a: "Пользователь нажимает на `evil.example` ссылку на `https://bank.example/transfer?to=attacker&amount=1000`, и браузер переходит по ней."
+      b: "Страница `evil.example` автоматически отправляет скрытую форму методом `POST` на `https://bank.example/transfer`."
+      c: "Страница `evil.example` содержит `<img src='https://bank.example/transfer?to=attacker&amount=1000'>`."
+      d: "Скрипт на `evil.example` вызывает `fetch('https://bank.example/transfer?to=attacker&amount=1000', { credentials: 'include' })`."
+      e: "Страница `evil.example` загружает `https://bank.example/transfer?to=attacker&amount=1000` во `<iframe>`."
+    optionExplanations:
+      b: "При явно заданном `SameSite=Lax` браузер не прикладывает cookie к кросс-сайтовому `POST`, даже если это переход верхнего уровня."
+      c: "Загрузка картинки - это вложенный запрос, а не переход верхнего уровня. Для таких кросс-сайтовых запросов `Lax` cookie не отправляет."
+      d: "`fetch` с другого сайта - тоже вложенный запрос. `credentials: 'include'` не отменяет ограничение `SameSite=Lax`, cookie не будет."
+      e: "Загрузка во фрейме не меняет адрес верхнего окна, это вложенная навигация. Для неё `Lax` cookie не отправляет."
+    answer: "Переход верхнего уровня по ссылке методом `GET` (вариант a)."
+    explanation: |
+      `SameSite=Lax` - компромисс между защитой и удобством. Браузер не прикладывает cookie к кросс-сайтовым
+      вложенным запросам (картинки, фреймы, `fetch` и XHR) и к кросс-сайтовым запросам небезопасными методами
+      вроде `POST`. Но при переходе верхнего уровня безопасным методом `GET` cookie отправляется: иначе
+      пользователь, пришедший по ссылке с другого сайта, оказывался бы разлогинен.
+
+      Поэтому `Lax` защищает только при условии, что `GET` ничего не меняет. Если перевод выполняется по `GET`,
+      злоумышленнику достаточно ссылки, перенаправления или присваивания `window.location` на своей странице:
+      браузер перейдёт на `bank.example` с cookie, и перевод выполнится.
+
+      Исправление - сделать `GET` безопасным, а изменения состояния выполнять через `POST` с antiforgery-токеном.
+      `SameSite` - дополнительный уровень защиты, а не замена токенам: он не защищает от атак с поддоменов того
+      же сайта (они считаются same-site) и зависит от поведения браузера. `SameSite=Strict` закрыл бы и этот
+      случай, но пользователь, пришедший по внешней ссылке, оказывался бы не залогинен.
+    linkTitles:
+      - "Работа с cookie SameSite в ASP.NET Core"
+      - "OWASP: памятка по защите от CSRF"
+  en:
+    title: Which cross-site request still gets a SameSite=Lax cookie?
+    prompt: |
+      The site `bank.example` issues an authentication cookie with an explicit `SameSite=Lax` attribute.
+      A money transfer is done with a `GET /transfer?to=...&amount=...` request. The user has signed in to the
+      bank and then opens a page on `evil.example`.
+
+      In which case does the browser send the bank's cookie, so that the CSRF attack succeeds?
+    hint: How does a navigation that changes the address bar differ from a request that the page makes by itself?
+    options:
+      a: "The user clicks a link on `evil.example` to `https://bank.example/transfer?to=attacker&amount=1000`, and the browser navigates to it."
+      b: "The page on `evil.example` auto-submits a hidden form with `POST` to `https://bank.example/transfer`."
+      c: "The page on `evil.example` contains `<img src='https://bank.example/transfer?to=attacker&amount=1000'>`."
+      d: "A script on `evil.example` calls `fetch('https://bank.example/transfer?to=attacker&amount=1000', { credentials: 'include' })`."
+      e: "The page on `evil.example` loads `https://bank.example/transfer?to=attacker&amount=1000` in an `<iframe>`."
+    optionExplanations:
+      b: "With an explicit `SameSite=Lax` the browser does not attach the cookie to a cross-site `POST`, even when it is a top-level navigation."
+      c: "Loading an image is a subresource request, not a top-level navigation. `Lax` does not send the cookie on such cross-site requests."
+      d: "A `fetch` from another site is also a subresource request. `credentials: 'include'` does not override `SameSite=Lax`, so no cookie is sent."
+      e: "Loading a page in a frame does not change the top-level window address; it is a nested navigation, and `Lax` does not send the cookie for it."
+    answer: "A top-level navigation by a link with `GET` (option a)."
+    explanation: |
+      `SameSite=Lax` is a compromise between protection and usability. The browser withholds the cookie on
+      cross-site subresource requests (images, frames, `fetch` and XHR) and on cross-site requests with unsafe
+      methods such as `POST`. But on a top-level navigation with the safe `GET` method the cookie is sent:
+      otherwise a user who follows a link from another site would appear signed out.
+
+      So `Lax` protects you only if `GET` changes nothing. If a transfer runs on `GET`, the attacker needs only a
+      link, a redirect or an assignment to `window.location` on their page: the browser navigates to
+      `bank.example` with the cookie, and the transfer runs.
+
+      The fix is to keep `GET` safe and make state changes through `POST` with an antiforgery token. `SameSite`
+      is defense in depth, not a replacement for tokens: it does not protect against attacks from subdomains of
+      the same site (they count as same-site) and depends on browser behavior. `SameSite=Strict` would close this
+      case too, but a user arriving from an external link would appear signed out.
+    linkTitles:
+      - "Work with SameSite cookies in ASP.NET Core"
+      - "OWASP Cross-Site Request Forgery Prevention Cheat Sheet"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

@@ -1,0 +1,88 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNNB8ESB47MSBCYRZ6
+slug: savechanges-default-transaction
+stack: dotnet
+topic: ef-core
+level: junior
+type: open
+grading: self
+tags: [ef-core, transactions, savechanges]
+links:
+  - url: https://learn.microsoft.com/en-us/ef/core/saving/transactions
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/ef/core/saving/basic
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что станет со вставкой заказа, если в том же вызове SaveChanges упадёт обновление остатка?
+    prompt: |
+      Код добавляет новый заказ через `db.Orders.Add(order)`, уменьшает остаток товара
+      (`product.Stock -= order.Quantity`) и один раз вызывает `db.SaveChanges()`. Обновление остатка в базе
+      завершается ошибкой, например нарушено ограничение `CHECK (Stock >= 0)`.
+
+      Окажется ли новый заказ в базе? Объясните почему.
+    hint: Какой единицей работы для базы данных является один вызов `SaveChanges`?
+    answer: |
+      - **Заказа в базе не будет.** `SaveChanges` выбрасывает `DbUpdateException`, и ни одно изменение этого
+        вызова не применяется: ни `INSERT` заказа, ни `UPDATE` остатка.
+      - **Причина.** Если провайдер базы данных поддерживает транзакции, EF Core по умолчанию выполняет все
+        команды одного вызова `SaveChanges` в одной транзакции. Фиксация происходит только после того, как
+        успешно выполнены все команды, а ошибка любой из них откатывает транзакцию целиком.
+      - **Граница гарантии - один вызов.** Если бы заказ сохранили отдельным `SaveChanges` раньше, он остался
+        бы в базе. Чтобы несколько вызовов `SaveChanges` фиксировались или откатывались вместе, нужна явная
+        транзакция.
+    explanation: |
+      Один вызов `SaveChanges` - это единица работы: EF Core собирает все изменения, которые видит трекер
+      изменений, и отправляет их в базу внутри одной транзакции. Поэтому вызов либо применяется полностью,
+      либо оставляет базу без изменений. Без этой гарантии в базе мог бы остаться заказ, для которого остаток
+      товара не уменьшился, то есть несогласованные данные.
+
+      Важная деталь: откатывается база, а не объекты в памяти. Контекст продолжает отслеживать сущности, и их
+      значения не возвращаются к тому, что было до вызова. Поэтому после ошибки обычно проще создать новый
+      `DbContext`, чем повторять `SaveChanges` на том же. Повторять на старом контексте стоит, только если вы
+      проверили и исправили отслеживаемые сущности.
+
+      Для большинства провайдеров баз данных `SaveChanges` транзакционный. Нереляционные провайдеры, например
+      in-memory, могут не поддерживать транзакции, и тогда такая атомарность не гарантируется.
+    linkTitles:
+      - "Использование транзакций в EF Core"
+      - "Базовое использование SaveChanges"
+  en:
+    title: What happens to an order insert if the stock update in the same SaveChanges call fails?
+    prompt: |
+      The code adds a new order with `db.Orders.Add(order)`, decreases the product stock
+      (`product.Stock -= order.Quantity`) and calls `db.SaveChanges()` once. The stock update fails in the
+      database, for example because it violates a `CHECK (Stock >= 0)` constraint.
+
+      Does the new order end up in the database? Explain why.
+    hint: What unit of work does one `SaveChanges` call represent for the database?
+    answer: |
+      - **The order is not in the database.** `SaveChanges` throws `DbUpdateException`, and none of the
+        changes of that call are applied: neither the order `INSERT` nor the stock `UPDATE`.
+      - **The reason.** If the database provider supports transactions, EF Core by default runs all commands
+        of a single `SaveChanges` call in one transaction. It commits only after every command has succeeded,
+        and a failure of any command rolls back the whole transaction.
+      - **The guarantee covers one call.** If the order had been saved by a separate, earlier `SaveChanges`,
+        it would stay in the database. To make several `SaveChanges` calls commit or roll back together, you
+        need an explicit transaction.
+    explanation: |
+      One `SaveChanges` call is a unit of work: EF Core collects every change the change tracker sees and
+      sends them to the database inside one transaction. So the call either applies completely or leaves the
+      database unchanged. Without this guarantee the database could keep an order whose stock was never
+      decreased, which is inconsistent data.
+
+      An important detail: the database changes are rolled back, but the objects in memory are not reverted.
+      The context keeps tracking the entities, and their values do not return to what they were before the
+      call. So after the error it is usually simpler to create a new `DbContext` than to retry `SaveChanges`
+      on the same one. Retry on the old context only after you have inspected and fixed the tracked entities.
+
+      For most database providers `SaveChanges` is transactional. Non-relational providers, such as the
+      in-memory provider, may not support transactions, and then this atomicity is not guaranteed.
+    linkTitles:
+      - "Using transactions in EF Core"
+      - "Basic SaveChanges"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

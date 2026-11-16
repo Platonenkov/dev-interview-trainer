@@ -1,0 +1,118 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WN9SBHXFG8K98D5AN4
+slug: resolve-concurrency-conflict-strategy
+stack: dotnet
+topic: ef-core
+level: senior
+type: situation
+grading: self
+tags: [ef-core, concurrency, optimistic-concurrency, rowversion, lost-update]
+links:
+  - url: https://learn.microsoft.com/en-us/ef/core/saving/concurrency
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/microsoft.entityframeworkcore.dbupdateconcurrencyexception
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Правки карточек клиентов пропадают, когда два оператора сохраняют одну запись
+    prompt: |
+      В CRM операторы редактируют карточки клиентов в веб-интерфейсе. Поддержка сообщает: если два оператора
+      открыли одну карточку и оба сохранили её, изменения первого бесследно пропадают, ошибок в логах нет.
+      Сохранение устроено так: форма присылает DTO, сервис превращает его в `Customer`, вызывает
+      `db.Customers.Update(customer)` и `SaveChangesAsync()`. Как вы обнаружите такие конфликты и как будете
+      их разрешать?
+    hint: "Что должно оказаться в условии `UPDATE`, чтобы база заметила, что строку изменили после того, как оператор её открыл?"
+    answer: |
+      1. **Подтвердить причину.** Воспроизвести в двух вкладках или двумя экземплярами `DbContext`. `Update`
+         помечает изменёнными все свойства, и `UPDATE ... WHERE Id = @id` перезаписывает строку целиком, даже
+         если операторы правили разные поля. Строка находится, изменена одна строка, поэтому ошибки нет: это
+         «побеждает последний сохранивший».
+      2. **Добавить токен параллелизма.** Свойство `[Timestamp] public byte[] Version` (в SQL Server столбец
+         `rowversion`) и миграция. Без поддержки `rowversion` в базе - токен, управляемый приложением
+         (`[ConcurrencyCheck]` или `IsConcurrencyToken()`), который код меняет при каждом сохранении.
+      3. **Довезти токен до клиента и обратно.** Версия, прочитанная при открытии карточки, должна прийти
+         с формой (скрытое поле, ETag и `If-Match` в API). Если DTO с версией превращается в сущность и
+         передаётся в `Update`, исходным значением токена станет присланная версия. Если сервис сначала
+         загружает сущность, нужно явно задать `Entry(customer).Property(c => c.Version).OriginalValue = dto.Version`,
+         иначе сравнение пойдёт со свежей версией и конфликт не обнаружится.
+      4. **Разрешать конфликт осознанно.** Перехватить `DbUpdateConcurrencyException`, для каждого элемента
+         `ex.Entries` получить `GetDatabaseValuesAsync()`:
+         - `null` - запись удалили, сообщить оператору;
+         - иначе сравнить три набора: что оператор видел (`OriginalValues`), что хочет сохранить
+           (`CurrentValues`) и что сейчас в базе. Поля, изменённые только одной стороной, можно слить
+           автоматически; поля, изменённые обоими, показать оператору и вернуть 409 с текущими значениями и
+           новой версией;
+         - после решения вызвать `entry.OriginalValues.SetValues(databaseValues)` и повторить `SaveChanges`
+           в цикле с ограничением попыток. «Побеждает база» - `entry.ReloadAsync()` и отказ от правок.
+      5. **Закрепить.** Интеграционный тест с двумя контекстами на реальной базе, метрика числа конфликтов,
+         политика разрешения согласована с владельцем продукта.
+    explanation: |
+      Потеря правок тихая, потому что без токена `UPDATE` отбирает строку только по ключу, а он не меняется.
+      Токен параллелизма добавляет в `WHERE` исходную версию: если строку уже изменили, обновлено 0 строк, и
+      EF Core выбрасывает `DbUpdateConcurrencyException`. Это оптимистичная блокировка: конфликт не
+      предотвращается, а обнаруживается при записи. Пессимистичная блокировка здесь не подходит: держать
+      блокировку в базе, пока человек минутами редактирует форму, нельзя, и в EF Core для неё нет отдельного API.
+
+      Обнаружение - техническая часть, а разрешение - бизнес-решение. EF Core даёт для этого исходные, текущие
+      и актуальные значения записи, но не выбирает политику. Для слияния по полям нужно знать, что именно
+      видел оператор, поэтому форма должна передавать исходные значения или только изменённые поля: `Update`
+      с полным DTO этого знания не сохраняет.
+    linkTitles:
+      - "Обработка конфликтов параллелизма в EF Core"
+      - "Класс DbUpdateConcurrencyException"
+  en:
+    title: Customer record edits are lost when two operators save the same record
+    prompt: |
+      In a CRM, operators edit customer records in a web UI. Support reports that if two operators open the
+      same record and both save it, the first operator's changes disappear without a trace, and the logs show
+      no errors. Saving works like this: the form sends a DTO, the service turns it into a `Customer`, calls
+      `db.Customers.Update(customer)` and `SaveChangesAsync()`. How do you detect these conflicts and how do
+      you resolve them?
+    hint: "What must be in the `UPDATE` condition for the database to notice that the row changed after the operator opened it?"
+    answer: |
+      1. **Confirm the cause.** Reproduce it in two browser tabs or with two `DbContext` instances. `Update`
+         marks every property as modified, and `UPDATE ... WHERE Id = @id` overwrites the whole row even if the
+         operators edited different fields. The row is found and one row is affected, so there is no error:
+         this is last-writer-wins.
+      2. **Add a concurrency token.** A `[Timestamp] public byte[] Version` property (a `rowversion` column in
+         SQL Server) and a migration. If the database has no `rowversion`, an application-managed token
+         (`[ConcurrencyCheck]` or `IsConcurrencyToken()`) that the code changes on every save.
+      3. **Round-trip the token to the client.** The version read when the record was opened must come back
+         with the form (a hidden field, or an ETag and `If-Match` in an API). If the DTO with the version is
+         turned into an entity and passed to `Update`, the sent version becomes the original token value. If
+         the service loads the entity first, it must set
+         `Entry(customer).Property(c => c.Version).OriginalValue = dto.Version`, otherwise the comparison uses
+         the fresh version and the conflict is never detected.
+      4. **Resolve the conflict deliberately.** Catch `DbUpdateConcurrencyException` and for each item in
+         `ex.Entries` call `GetDatabaseValuesAsync()`:
+         - `null` means the record was deleted; tell the operator;
+         - otherwise compare three sets: what the operator saw (`OriginalValues`), what they want to save
+           (`CurrentValues`) and what is in the database now. Fields changed by only one side can be merged
+           automatically; fields changed by both are shown to the operator, returning 409 with the current
+           values and the new version;
+         - after the decision call `entry.OriginalValues.SetValues(databaseValues)` and retry `SaveChanges`
+           in a loop with a bounded number of attempts. "Database wins" is `entry.ReloadAsync()` and dropping
+           the edits.
+      5. **Lock it in.** An integration test with two contexts on a real database, a metric for the number of
+         conflicts, and a resolution policy agreed with the product owner.
+    explanation: |
+      The loss is silent because without a token the `UPDATE` selects the row by key only, and the key does
+      not change. A concurrency token adds the original version to the `WHERE` clause: if the row was already
+      changed, 0 rows are updated and EF Core throws `DbUpdateConcurrencyException`. This is optimistic
+      concurrency: the conflict is not prevented but detected on write. Pessimistic locking does not fit here:
+      you cannot hold a database lock while a person edits a form for minutes, and EF Core has no dedicated API
+      for it.
+
+      Detection is the technical part; resolution is a business decision. EF Core provides the original,
+      current and database values of the entry, but does not choose the policy. A per-field merge requires
+      knowing what the operator saw, so the form must send the original values or only the changed fields:
+      `Update` with a full DTO does not preserve that knowledge.
+    linkTitles:
+      - "Handling concurrency conflicts in EF Core"
+      - "DbUpdateConcurrencyException class"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

@@ -1,0 +1,97 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNJ172XKT2P6C3QDEN
+slug: fromsqlraw-interpolated-string-injection
+stack: dotnet
+topic: ef-core
+level: middle
+type: find-bug
+grading: auto
+tags: [ef-core, raw-sql, sql-injection, security]
+code:
+  language: csharp
+  harness: none
+  source: |
+    public sealed class ProductSearch
+    {
+        private readonly ShopContext _db;
+
+        public ProductSearch(ShopContext db) => _db = db;
+
+        public Task<List<Product>> FindAsync(string term)
+        {
+            return _db.Products
+                .FromSqlRaw($"SELECT * FROM Products WHERE Name LIKE '%{term}%'")
+                .OrderBy(p => p.Name)
+                .ToListAsync();
+        }
+    }
+bugLineSets: [[10]]
+links:
+  - url: https://learn.microsoft.com/en-us/ef/core/querying/sql-queries
+    lang: en
+    kind: docs
+  - url: https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Найдите строку с SQL-инъекцией в поиске через FromSqlRaw
+    prompt: |
+      Метод ищет товары по фрагменту названия, который вводит пользователь. Тестировщик заметил, что поиск
+      по строке `O'Reilly` падает с ошибкой синтаксиса SQL, а ввод `' OR 1=1 --` возвращает все товары.
+      Щёлкните по строке с дефектом.
+    hint: Во что превращается строка `$"..."`, если метод принимает обычный параметр типа `string`?
+    answer: Строка 10, вызов `FromSqlRaw` с интерполированной строкой, в которую подставлен ввод пользователя.
+    explanation: |
+      `FromSqlRaw` принимает `string`. Интерполированная строка `$"..."` вычисляется ещё до вызова, и значение
+      `term` вклеивается прямо в текст SQL. База получает не параметр, а готовую команду, поэтому апостроф во
+      вводе ломает синтаксис, а специально подобранный ввод меняет смысл запроса: например,
+      `x%' OR 1=1 --` превращает условие в `Name LIKE '%x%' OR 1=1 --%'`. Это SQL-инъекция.
+
+      Исправление - передавать значение как параметр:
+
+      - В EF Core 7 и новее (включая EF Core 10) использовать `FromSql`, а в более ранних версиях -
+        `FromSqlInterpolated`. Они принимают `FormattableString`, и каждое подставленное значение становится
+        `DbParameter`: `var pattern = $"%{term}%";` и затем
+        `_db.Products.FromSql($"SELECT * FROM Products WHERE Name LIKE {pattern}")`.
+      - Если сырой SQL не нужен, проще написать запрос на LINQ: `_db.Products.Where(p => p.Name.Contains(term))`,
+        EF Core сам параметризует значение.
+
+      `FromSqlRaw` оставляют для случаев, когда текст SQL действительно собирается динамически, и даже тогда
+      пользовательские значения передают отдельными параметрами, а не вклеивают в строку.
+    linkTitles:
+      - "SQL-запросы в EF Core"
+      - "OWASP: шпаргалка по защите от SQL-инъекций"
+  en:
+    title: Find the line with SQL injection in a FromSqlRaw search
+    prompt: |
+      The method searches products by a fragment of the name typed by the user. A tester noticed that
+      searching for `O'Reilly` fails with an SQL syntax error, and the input `' OR 1=1 --` returns every product.
+      Click the line that contains the defect.
+    hint: What does a `$"..."` string turn into when the method takes a plain `string` parameter?
+    answer: Line 10, the call to `FromSqlRaw` with an interpolated string that embeds the user input.
+    explanation: |
+      `FromSqlRaw` takes a `string`. The interpolated string `$"..."` is evaluated before the call, and the
+      value of `term` is pasted straight into the SQL text. The database receives a finished command, not a
+      parameter, so an apostrophe in the input breaks the syntax, and crafted input changes the meaning of the
+      query: for example, `x%' OR 1=1 --` turns the condition into `Name LIKE '%x%' OR 1=1 --%'`. This is SQL injection.
+
+      The fix is to pass the value as a parameter:
+
+      - In EF Core 7 and later (including EF Core 10) use `FromSql`, and in earlier versions
+        `FromSqlInterpolated`. They take a `FormattableString`, and every interpolated value becomes a
+        `DbParameter`: `var pattern = $"%{term}%";` and then
+        `_db.Products.FromSql($"SELECT * FROM Products WHERE Name LIKE {pattern}")`.
+      - If raw SQL is not needed, a LINQ query is simpler: `_db.Products.Where(p => p.Name.Contains(term))`,
+        and EF Core parameterizes the value itself.
+
+      Keep `FromSqlRaw` for cases where the SQL text really is built dynamically, and even then pass user
+      values as separate parameters instead of pasting them into the string.
+    linkTitles:
+      - "SQL queries in EF Core"
+      - "OWASP SQL Injection Prevention Cheat Sheet"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"
+  noRunReason: The snippet uses EF Core types and needs a database provider, which the sandbox does not have.

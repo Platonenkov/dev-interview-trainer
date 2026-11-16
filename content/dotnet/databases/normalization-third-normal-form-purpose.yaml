@@ -1,0 +1,105 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WN23CABC647S5BR0ZV
+slug: normalization-third-normal-form-purpose
+stack: dotnet
+topic: databases
+level: junior
+type: open
+grading: self
+tags: [normalization, third-normal-form, database-design]
+links:
+  - url: https://learn.microsoft.com/en-us/office/troubleshoot/access/database-normalization-description
+    lang: en
+    kind: docs
+  - url: https://en.wikipedia.org/wiki/Third_normal_form
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Что такое нормализация до третьей нормальной формы и какую проблему она решает?
+    prompt: |
+      В таблице `Orders` рядом с каждым заказом хранятся `OrderId`, `OrderDate`, `CustomerId`, `CustomerName`
+      и `CustomerCity`. Что такое нормализация до третьей нормальной формы (3НФ), какое её правило нарушает
+      эта таблица и к каким проблемам это приводит?
+    hint: "От чего на самом деле зависит город: от номера заказа или от другого столбца этой же таблицы?"
+    answer: |
+      Нормализация - это разбиение данных на таблицы так, чтобы каждый факт хранился ровно в одном месте.
+
+      - **1НФ**: в каждом поле одно атомарное значение, нет повторяющихся групп (нет `Phone1`, `Phone2` или
+        списка через запятую), у каждой строки есть первичный ключ.
+      - **2НФ**: таблица в 1НФ, и каждый неключевой столбец зависит от всего первичного ключа, а не от его
+        части. Это важно для составных ключей.
+      - **3НФ**: таблица во 2НФ, и неключевые столбцы зависят только от ключа, а не от других неключевых
+        столбцов, то есть нет транзитивных зависимостей.
+
+      В `Orders` город зависит не от `OrderId`, а от `CustomerId`: `OrderId -> CustomerId -> CustomerCity`.
+      Это транзитивная зависимость, 3НФ нарушена. Последствия:
+
+      - **аномалия обновления**: клиент переехал, и город нужно менять во всех его заказах; пропущенная строка
+        оставляет в базе два разных города одного клиента;
+      - **аномалия вставки**: нельзя записать клиента и его город, пока у него нет ни одного заказа;
+      - **аномалия удаления**: удаление последнего заказа клиента стирает и сведения о его городе.
+
+      Решение - вынести клиента в отдельную таблицу `Customers (CustomerId, Name, City)`, а в `Orders`
+      оставить только внешний ключ `CustomerId`. Город хранится один раз и меняется одной строкой.
+    explanation: |
+      Избыточность сама по себе - не только лишнее место. Главная беда в том, что копии одного факта могут
+      разойтись, и база перестаёт быть источником истины. Нормальные формы - это проверочный список: каждый
+      неключевой столбец должен описывать именно ту сущность, ключом которой является первичный ключ таблицы.
+      Город описывает клиента, а не заказ, поэтому ему место в таблице клиентов.
+
+      Важная оговорка: если бизнесу нужен город на момент заказа (например, адрес доставки), это уже другой
+      факт, который принадлежит заказу, и хранить его в `Orders` правильно. Нормализация требует понять, от
+      чего зависит значение, а не механически убрать все похожие столбцы.
+
+      За нормализацию платят соединениями (`JOIN`) при чтении. Осознанная денормализация ради скорости
+      чтения возможна, но это отдельное решение, которое принимают после измерений.
+    linkTitles:
+      - "Основы нормализации баз данных"
+      - "Третья нормальная форма (Википедия)"
+  en:
+    title: What is normalization up to third normal form and which problem does it solve?
+    prompt: |
+      The `Orders` table stores `OrderId`, `OrderDate`, `CustomerId`, `CustomerName` and `CustomerCity` next
+      to every order. What is normalization up to third normal form (3NF), which of its rules does this table
+      break, and what problems does that cause?
+    hint: "What does the city really depend on: the order number or another column of the same table?"
+    answer: |
+      Normalization means splitting data into tables so that every fact is stored in exactly one place.
+
+      - **1NF**: every field holds one atomic value, there are no repeating groups (no `Phone1`, `Phone2` or
+        comma-separated lists), and every row has a primary key.
+      - **2NF**: the table is in 1NF and every non-key column depends on the whole primary key, not on part
+        of it. This matters for composite keys.
+      - **3NF**: the table is in 2NF and non-key columns depend only on the key, not on other non-key
+        columns, so there are no transitive dependencies.
+
+      In `Orders` the city depends on `CustomerId`, not on `OrderId`: `OrderId -> CustomerId -> CustomerCity`.
+      That is a transitive dependency, so 3NF is broken. The consequences:
+
+      - **update anomaly**: the customer moves, and the city has to be changed in every one of their orders;
+        a missed row leaves two different cities for one customer in the database;
+      - **insert anomaly**: you cannot record a customer and their city until they have at least one order;
+      - **delete anomaly**: deleting the customer's last order also erases what you knew about their city.
+
+      The fix is to move the customer into a separate table `Customers (CustomerId, Name, City)` and keep only
+      the foreign key `CustomerId` in `Orders`. The city is stored once and changed in one row.
+    explanation: |
+      Redundancy is not only wasted space. The real problem is that copies of one fact can diverge, and the
+      database stops being the source of truth. The normal forms are a checklist: every non-key column must
+      describe exactly the entity whose key is the table's primary key. The city describes the customer, not
+      the order, so it belongs in the customers table.
+
+      An important caveat: if the business needs the city at the time of the order (for example, a delivery
+      address), that is a different fact that belongs to the order, and storing it in `Orders` is correct.
+      Normalization asks you to understand what a value depends on, not to remove every similar column
+      mechanically.
+
+      The price of normalization is joins (`JOIN`) on reads. Deliberate denormalization for read speed is
+      possible, but it is a separate decision made after measuring.
+    linkTitles:
+      - "Description of the database normalization basics"
+      - "Third normal form (Wikipedia)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

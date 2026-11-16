@@ -1,0 +1,100 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WP6SSRCP7X4DG51QR3
+slug: csrf-cookie-auth-vs-bearer-header
+stack: dotnet
+topic: security
+level: middle
+type: multi
+grading: auto
+tags: [csrf, antiforgery, cookies, bearer-token]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/security/anti-request-forgery
+    lang: en
+    kind: docs
+  - url: https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Каким конечным точкам ASP.NET Core нужна защита от CSRF?
+    prompt: |
+      В приложении ASP.NET Core есть четыре конечные точки. Выберите все, которым нужна защита от CSRF
+      (antiforgery-токены или равноценная проверка, которую чужой сайт не может воспроизвести).
+    hint: Какие учётные данные браузер добавляет к запросу сам, даже если запрос инициировала чужая страница?
+    options:
+      a: "Форма Razor Pages, которая отправляет `POST` для смены email; пользователь аутентифицирован cookie."
+      b: "JSON API (`POST`, `PUT`, `DELETE`), которое изменяет данные; его вызывает SPA того же сайта через `fetch`, аутентификация по той же cookie."
+      c: "API, которое изменяет данные и принимает только bearer-токен в заголовке `Authorization`; клиент добавляет заголовок сам, cookie для аутентификации не используются."
+      d: "Анонимный `GET`, который возвращает публичный каталог товаров и ничего не меняет."
+    optionExplanations:
+      c: "Браузер не добавляет заголовок `Authorization` автоматически. Чужая страница не знает токен и не может прочитать его из хранилища другого origin, поэтому подделанный запрос придёт без учётных данных и будет отклонён."
+      d: "Запрос не меняет состояние и не использует полномочия пользователя: злоумышленник может выполнить его и сам, поэтому подделывать здесь нечего."
+    answer: "Конечные точки, которые изменяют данные и аутентифицируют по cookie: форма (a) и JSON API (b)."
+    explanation: |
+      CSRF-атака возможна потому, что браузер сам прикладывает cookie к любому запросу на сайт, кто бы этот
+      запрос ни инициировал. Страница `evil.example` может отправить форму или запрос на ваш сайт, и сервер
+      увидит действительную аутентификационную cookie: по ней нельзя отличить действие пользователя от подделки.
+      Поэтому каждая конечная точка, которая меняет состояние и аутентифицирует по cookie, должна проверять то,
+      что чужая страница получить не может, - antiforgery-токен в скрытом поле формы или в заголовке запроса.
+      В Razor Pages токен генерируется и проверяется автоматически, в MVC для этого есть
+      `[ValidateAntiForgeryToken]` и `[AutoValidateAntiforgeryToken]`.
+
+      Формат JSON сам по себе API не защищает. Расчёт на то, что кросс-сайтовый запрос с
+      `Content-Type: application/json` требует предварительного CORS-запроса, хрупкий: защита пропадает, если
+      конечная точка принимает ещё и тела форм или `text/plain`, или если политика CORS слишком широкая. SPA
+      должна получить antiforgery-токен и отправлять его в заголовке каждого изменяющего запроса.
+
+      Bearer-токен в заголовке `Authorization` браузер автоматически не добавляет, поэтому такой API к CSRF не
+      уязвим - до тех пор, пока он не принимает тот же токен ещё и из cookie. Главный риск для такого токена -
+      кража через XSS, а не CSRF. Анонимный запрос только на чтение не несёт полномочий пользователя, и
+      подделывать в нём нечего.
+    linkTitles:
+      - "Защита от атак CSRF в ASP.NET Core"
+      - "OWASP: памятка по защите от CSRF"
+  en:
+    title: Which ASP.NET Core endpoints need CSRF protection?
+    prompt: |
+      An ASP.NET Core application has four endpoints. Select every endpoint that needs CSRF protection
+      (antiforgery tokens or an equivalent check that another site cannot reproduce).
+    hint: Which credentials does the browser add to a request by itself, even when another site's page started the request?
+    options:
+      a: "A Razor Pages form that sends a `POST` to change the email address; the user is authenticated by a cookie."
+      b: "A JSON API (`POST`, `PUT`, `DELETE`) that changes data; the site's own SPA calls it with `fetch`, authenticated by the same cookie."
+      c: "An API that changes data and accepts only a bearer token in the `Authorization` header; the client adds the header itself and no cookies are used for authentication."
+      d: "An anonymous `GET` that returns a public product catalog and changes nothing."
+    optionExplanations:
+      c: "The browser does not add the `Authorization` header automatically. The attacker's page does not know the token and cannot read it from another origin's storage, so a forged request arrives without credentials and is rejected."
+      d: "The request changes no state and uses none of the user's authority: the attacker could make it directly, so there is nothing to forge."
+    answer: "The endpoints that change data and authenticate by cookie: the form (a) and the JSON API (b)."
+    explanation: |
+      A CSRF attack works because the browser attaches cookies to every request to a site, no matter who started
+      the request. A page on `evil.example` can submit a form or send a request to your site, and the server sees
+      a valid authentication cookie: it cannot tell the user's action from a forged one. So every endpoint that
+      changes state and authenticates by cookie must check something the attacker's page cannot obtain - an
+      antiforgery token in a hidden form field or in a request header. Razor Pages generate and validate the token
+      automatically; in MVC you use `[ValidateAntiForgeryToken]` and `[AutoValidateAntiforgeryToken]`.
+
+      JSON as a format does not protect an API. Relying on the fact that a cross-site request with
+      `Content-Type: application/json` needs a CORS preflight is fragile: the protection disappears if the
+      endpoint also accepts form bodies or `text/plain`, or if the CORS policy is too broad. The SPA should obtain
+      an antiforgery token and send it in a header with every state-changing request.
+
+      The browser never adds a bearer token in the `Authorization` header by itself, so such an API is not
+      vulnerable to CSRF - as long as it does not also accept the same token from a cookie. The main risk for such
+      a token is theft through XSS, not CSRF. An anonymous read-only request carries no user authority, so there
+      is nothing to forge.
+    linkTitles:
+      - "Prevent Cross-Site Request Forgery (XSRF/CSRF) attacks in ASP.NET Core"
+      - "OWASP Cross-Site Request Forgery Prevention Cheat Sheet"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

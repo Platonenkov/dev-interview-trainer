@@ -1,0 +1,111 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNYN6XPYJHWNRSCF4B
+slug: detectchanges-snapshot-cost
+stack: dotnet
+topic: ef-core
+level: senior
+type: open
+grading: self
+tags: [ef-core, change-tracking, detectchanges, performance]
+links:
+  - url: https://learn.microsoft.com/en-us/ef/core/change-tracking/change-detection
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/microsoft.entityframeworkcore.changetracking.changetracker.autodetectchangesenabled
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как EF Core обнаруживает изменения сущностей и когда стоит отключать AutoDetectChangesEnabled?
+    prompt: |
+      Сущности - обычные классы, без `INotifyPropertyChanged` и без прокси отслеживания изменений.
+      Как EF Core по умолчанию узнаёт, что у отслеживаемой сущности изменилось свойство, во что это обходится
+      и в каком случае оправдано выключить `ChangeTracker.AutoDetectChangesEnabled`? Ответ дайте для EF Core 10.
+    hint: Сущность сама не сообщает об изменениях. С чем EF Core может сравнить её текущие значения и как часто ему приходится это делать?
+    answer: |
+      - **Снимки.** Когда сущность начинает отслеживаться (например, её вернул отслеживающий запрос или её
+        присоединили через `Attach`), EF Core сохраняет копию значений её свойств - снимок.
+      - **`DetectChanges`.** Метод обходит все отслеживаемые сущности и сравнивает текущие значения со снимком:
+        помечает изменённые свойства как `Modified`, находит сущности, добавленные в навигации или убранные из них,
+        и исправляет связи.
+      - **Автоматический вызов.** По умолчанию полное обнаружение изменений запускают `SaveChanges` и
+        `SaveChangesAsync`, `ChangeTracker.Entries()`, `ChangeTracker.HasChanges()`, `ChangeTracker.CascadeChanges()`
+        и `DbSet<T>.Local`. `DbContext.Entry` и члены `EntityEntry` проверяют только одну сущность.
+      - **Цена.** Память на снимок каждой сущности и время, пропорциональное числу отслеживаемых сущностей и их
+        свойств, при каждом полном вызове. Если такой API вызывается в цикле на большом контексте, суммарная
+        стоимость растёт квадратично.
+      - **Когда отключать.** В горячем цикле, где на контексте с большим числом сущностей многократно вызываются
+        API с автоматическим обнаружением, а промежуточные изменения обнаруживать не нужно. Флаг выключают в
+        `try`/`finally`, а перед `SaveChanges` один раз явно вызывают `ChangeTracker.DetectChanges()`: при
+        выключенном флаге `SaveChanges` сам изменения не ищет, и правки свойств молча не сохранятся.
+      - **Что попробовать сначала.** Отслеживать меньше: `AsNoTracking` для чтения, короткоживущий контекст или
+        `ChangeTracker.Clear()` между пачками, `ExecuteUpdate` для массовых правок. Если обнаружение изменений
+        действительно узкое место, сущности могут сами уведомлять о правках (`INotifyPropertyChanging` и
+        `INotifyPropertyChanged`) или можно включить прокси отслеживания изменений.
+    explanation: |
+      У обычного класса нет механизма, который сообщил бы EF Core о присваивании свойства, поэтому по умолчанию
+      используется сравнение со снимком. Модель программирования от этого простая: меняете свойство, вызываете
+      `SaveChanges`, и EF Core сам строит `UPDATE` только по изменённым столбцам. Расплата - работа, которая растёт
+      вместе с числом отслеживаемых сущностей, а не с числом реально изменённых.
+
+      Для типичного запроса веб-приложения с десятками сущностей эта стоимость незаметна, поэтому
+      `AutoDetectChangesEnabled` по умолчанию включён, и трогать его без замеров профилировщиком не стоит. Проблема
+      появляется, когда контекст живёт долго и накапливает тысячи сущностей, а код в цикле вызывает `Entries()`,
+      `HasChanges()` или `SaveChanges`: каждый вызов заново сравнивает весь набор.
+
+      Отключение - это обмен корректности по умолчанию на скорость. Пока флаг выключен, состояния в `Entries()`
+      могут быть устаревшими, связи не исправляются, а `SaveChanges` не увидит изменённые свойства, если перед ним
+      не вызвать `DetectChanges()`. Поэтому флаг выключают только на узком участке и обязательно возвращают, а
+      чаще проблему решают уменьшением числа отслеживаемых сущностей. Ответ описывает поведение EF Core 10.
+    linkTitles:
+      - "Обнаружение изменений и уведомления в EF Core"
+      - "Свойство ChangeTracker.AutoDetectChangesEnabled"
+  en:
+    title: How does EF Core detect changes to entities, and when should you turn off AutoDetectChangesEnabled?
+    prompt: |
+      The entities are plain classes, with no `INotifyPropertyChanged` and no change-tracking proxies.
+      How does EF Core find out by default that a property of a tracked entity changed, what does that cost,
+      and when is it justified to turn off `ChangeTracker.AutoDetectChangesEnabled`? Answer for EF Core 10.
+    hint: The entity does not report its changes. What can EF Core compare its current values with, and how often does it have to do that?
+    answer: |
+      - **Snapshots.** When an entity starts being tracked (for example, it is returned by a tracking query or
+        attached with `Attach`), EF Core stores a copy of its property values - a snapshot.
+      - **`DetectChanges`.** The method walks every tracked entity and compares current values with the snapshot:
+        it marks changed properties as `Modified`, finds entities added to or removed from navigations,
+        and fixes up relationships.
+      - **Automatic calls.** By default full change detection is triggered by `SaveChanges` and
+        `SaveChangesAsync`, `ChangeTracker.Entries()`, `ChangeTracker.HasChanges()`, `ChangeTracker.CascadeChanges()`
+        and `DbSet<T>.Local`. `DbContext.Entry` and `EntityEntry` members check a single entity only.
+      - **Cost.** Memory for a snapshot of every entity, and time proportional to the number of tracked entities
+        and their properties on every full call. If such an API is called in a loop on a large context, the total
+        cost grows quadratically.
+      - **When to turn it off.** In a hot loop where APIs with automatic detection are called many times on a
+        context with many entities, and intermediate changes do not need to be detected. Turn the flag off in a
+        `try`/`finally`, and call `ChangeTracker.DetectChanges()` explicitly once before `SaveChanges`: with the
+        flag off, `SaveChanges` does not look for changes itself, and property edits are silently not saved.
+      - **What to try first.** Track less: `AsNoTracking` for reads, a short-lived context or
+        `ChangeTracker.Clear()` between batches, `ExecuteUpdate` for bulk edits. If change detection really is the
+        bottleneck, entities can report edits themselves (`INotifyPropertyChanging` and
+        `INotifyPropertyChanged`), or you can enable change-tracking proxies.
+    explanation: |
+      A plain class has no mechanism to tell EF Core that a property was assigned, so by default EF Core compares
+      against a snapshot. This keeps the programming model simple: you change a property, call `SaveChanges`, and
+      EF Core builds an `UPDATE` for the changed columns only. The price is work that grows with the number of
+      tracked entities, not with the number of entities that actually changed.
+
+      For a typical web request with tens of entities this cost is invisible, which is why
+      `AutoDetectChangesEnabled` is on by default and should not be touched without profiler measurements. The
+      problem appears when a context lives long and accumulates thousands of entities while code calls
+      `Entries()`, `HasChanges()` or `SaveChanges` in a loop: every call compares the whole set again.
+
+      Turning it off trades default correctness for speed. While the flag is off, states in `Entries()` can be
+      stale, relationships are not fixed up, and `SaveChanges` does not see changed properties unless
+      `DetectChanges()` is called before it. So the flag is turned off only for a narrow section and always
+      restored, and more often the problem is solved by tracking fewer entities. The answer describes EF Core 10.
+    linkTitles:
+      - "Change detection and notifications in EF Core"
+      - "ChangeTracker.AutoDetectChangesEnabled property"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

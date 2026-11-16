@@ -1,0 +1,100 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WRF4W49CJQ7M0PZ1EJ
+slug: signalr-scale-out-missing-messages
+stack: dotnet
+topic: web-api
+level: senior
+type: situation
+grading: self
+tags: [signalr, scale-out, sticky-sessions, backplane, redis]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/signalr/scale
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/signalr/redis-backplane
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: После масштабирования SignalR до трёх экземпляров клиенты не подключаются и получают не все рассылки
+    prompt: |
+      Приложение с хабом ASP.NET Core SignalR работало на одном сервере. Его развернули на трёх экземплярах
+      за балансировщиком нагрузки, который распределяет запросы по кругу (round-robin). После этого:
+
+      - часть клиентов не может подключиться или подключается только с нескольких попыток, особенно в сетях,
+        где WebSockets недоступны;
+      - сообщения, которые сервер рассылает через `Clients.All` и `Clients.Group(...)`, получает примерно
+        треть пользователей.
+
+      Как вы будете диагностировать проблему и что исправите?
+    hint: Что один экземпляр знает о соединениях, открытых на других, и из скольких HTTP-запросов состоит установка одного соединения SignalR?
+    answer: |
+      1. **Подтвердить причину сбоев подключения.** В инструментах разработчика браузера и в логах клиента и сервера проследить одно соединение: запрос `negotiate` обработал один экземпляр, а следующий запрос транспорта (WebSocket, Server-Sent Events или long polling) балансировщик отправил на другой. Второй экземпляр не знает этого идентификатора соединения и отвечает ошибкой (обычно 404). SSE и long polling делают много HTTP-запросов на одно соединение, поэтому без WebSockets сбоев больше.
+      2. **Подтвердить причину потерянных рассылок.** Каждый экземпляр хранит свои соединения, группы и сопоставление пользователей в памяти. `Clients.All`, `Clients.Group` и `Clients.User`, вызванные на экземпляре A, доходят только до клиентов, подключённых к A. Отсюда и доля получателей около трети.
+      3. **Включить sticky sessions** (привязку клиента к экземпляру) на балансировщике, чтобы все запросы одного соединения попадали на один сервер. Без них можно обойтись, только если все клиенты работают исключительно через WebSockets с `SkipNegotiation`, либо если соединения держит Azure SignalR Service.
+      4. **Добавить backplane.** Либо Redis backplane (`AddSignalR().AddStackExchangeRedis(...)` из пакета `Microsoft.AspNetCore.SignalR.StackExchangeRedis`), который пересылает каждое сообщение на все экземпляры, либо Azure SignalR Service (`AddAzureSignalR()`), который сам держит клиентские соединения и снимает требование sticky sessions.
+      5. **Проверить инфраструктуру.** Балансировщик пропускает заголовки `Upgrade` для WebSockets, а его тайм-аут простоя больше интервала keep-alive SignalR. Если один Redis делят несколько приложений, задан `ChannelPrefix`. При аутентификации через cookie у всех экземпляров общие ключи Data Protection.
+      6. **Закрепить.** Тест на нескольких экземплярах, который проверяет доставку рассылки клиентам на разных серверах, и метрики: число соединений на экземпляр, ошибки `negotiate`, состояние подключения к Redis.
+    explanation: |
+      Соединение SignalR - это не один HTTP-запрос. Сначала клиент вызывает `negotiate` и получает
+      идентификатор соединения, затем открывает транспорт, а SSE и long polling продолжают отправлять
+      отдельные запросы всё время жизни соединения. Состояние соединения хранится в памяти процесса,
+      который его принял, поэтому все эти запросы должны попадать на один экземпляр. Это решают sticky sessions.
+
+      Вторую половину задачи sticky sessions не решают: экземпляр по-прежнему знает только свои соединения.
+      Backplane передаёт сообщение всем экземплярам, и каждый доставляет его своим клиентам.
+
+      Компромиссы:
+
+      - Redis backplane не хранит сообщения: если Redis недоступен, рассылки за это время теряются, SignalR
+        их не буферизует. После переподключения клиенту нужно запросить актуальное состояние.
+      - Каждое сообщение уходит на каждый сервер, поэтому с ростом числа серверов и рассылок backplane
+        становится узким местом. Azure SignalR Service выносит соединения и рассылку из приложения.
+      - Sticky sessions дают неравномерную нагрузку, а при перезапуске экземпляра все его клиенты
+        переподключаются, поэтому клиентам нужно автоматическое переподключение (`WithAutomaticReconnect`).
+    linkTitles:
+      - "Размещение и масштабирование ASP.NET Core SignalR"
+      - "Redis backplane для масштабирования ASP.NET Core SignalR"
+  en:
+    title: SignalR scaled to three instances drops connections and delivers broadcasts to only part of the users
+    prompt: |
+      An app with an ASP.NET Core SignalR hub ran on a single server. It was deployed to three instances
+      behind a load balancer that distributes requests round-robin. Since then:
+
+      - some clients cannot connect, or connect only after several attempts, especially on networks where
+        WebSockets are unavailable;
+      - messages that the server broadcasts through `Clients.All` and `Clients.Group(...)` reach roughly
+        a third of the users.
+
+      How do you diagnose the problem and what do you fix?
+    hint: What does one instance know about connections opened on the others, and how many HTTP requests does it take to establish one SignalR connection?
+    answer: |
+      1. **Confirm the cause of the connection failures.** In the browser developer tools and in client and server logs, follow one connection: one instance handled the `negotiate` request, and the load balancer sent the next transport request (WebSocket, Server-Sent Events or long polling) to another one. The second instance does not know that connection id and answers with an error (usually 404). SSE and long polling send many HTTP requests per connection, so failures are more frequent without WebSockets.
+      2. **Confirm the cause of the lost broadcasts.** Each instance keeps its own connections, groups and user mapping in memory. `Clients.All`, `Clients.Group` and `Clients.User` called on instance A reach only the clients connected to A. That explains the share of about a third.
+      3. **Turn on sticky sessions** (client affinity to an instance) on the load balancer so that all requests of one connection reach the same server. You can do without them only if every client uses WebSockets exclusively with `SkipNegotiation`, or if Azure SignalR Service holds the connections.
+      4. **Add a backplane.** Either the Redis backplane (`AddSignalR().AddStackExchangeRedis(...)` from the `Microsoft.AspNetCore.SignalR.StackExchangeRedis` package), which forwards every message to all instances, or Azure SignalR Service (`AddAzureSignalR()`), which holds the client connections itself and removes the need for sticky sessions.
+      5. **Check the infrastructure.** The load balancer passes the `Upgrade` headers for WebSockets, and its idle timeout is longer than the SignalR keep-alive interval. If several apps share one Redis, a `ChannelPrefix` is set. With cookie authentication, all instances share the Data Protection keys.
+      6. **Lock it in.** A test on several instances that checks delivery of a broadcast to clients on different servers, and metrics: connections per instance, `negotiate` errors, the state of the Redis connection.
+    explanation: |
+      A SignalR connection is not a single HTTP request. The client first calls `negotiate` and receives a
+      connection id, then opens the transport, and SSE and long polling keep sending separate requests for
+      the whole life of the connection. The connection state lives in the memory of the process that accepted
+      it, so all of these requests must reach the same instance. Sticky sessions solve this.
+
+      Sticky sessions do not solve the other half: an instance still knows only its own connections.
+      A backplane passes a message to every instance, and each one delivers it to its own clients.
+
+      Trade-offs:
+
+      - The Redis backplane does not store messages: while Redis is unavailable, broadcasts are lost and
+        SignalR does not buffer them. After reconnecting, a client needs to fetch the current state.
+      - Every message goes to every server, so as servers and broadcasts grow, the backplane becomes a
+        bottleneck. Azure SignalR Service moves connections and fan-out out of the app.
+      - Sticky sessions spread load unevenly, and when an instance restarts all its clients reconnect, so
+        clients need automatic reconnection (`WithAutomaticReconnect`).
+    linkTitles:
+      - "ASP.NET Core SignalR hosting and scaling"
+      - "Redis backplane for ASP.NET Core SignalR scale-out"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

@@ -1,0 +1,138 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMDQ95ZZAMKJA16554
+slug: scoped-service-used-after-response
+stack: dotnet
+topic: aspnet-core
+level: senior
+type: find-bug
+grading: auto
+tags: [dependency-injection, scoped-lifetime, dbcontext, fire-and-forget, background-work]
+code:
+  language: csharp
+  harness: none
+  source: |
+    [ApiController]
+    [Route("orders")]
+    public class OrdersController : ControllerBase
+    {
+        private readonly AppDbContext _db;
+
+        public OrdersController(AppDbContext db)
+        {
+            _db = db;
+        }
+
+        [HttpPost("{id}/complete")]
+        public async Task<IActionResult> Complete(int id)
+        {
+            var order = await _db.Orders.FindAsync(id);
+            if (order is null)
+            {
+                return NotFound();
+            }
+
+            order.Status = OrderStatus.Completed;
+            await _db.SaveChangesAsync();
+
+            // Write the audit record in the background so the client does not wait.
+            _ = Task.Run(async () =>
+            {
+                _db.AuditEntries.Add(new AuditEntry { OrderId = id, Action = "completed" });
+                await _db.SaveChangesAsync();
+            });
+
+            return Accepted();
+        }
+    }
+bugLineSets: [[25], [27], [28], [27, 28], [25, 27, 28]]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/best-practices
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/extensions/dependency-injection/guidelines
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/host/hosted-services
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему фоновая задача в контроллере теряет записи в базу?
+    prompt: |
+      Контроллер завершает заказ и, чтобы клиент не ждал, пишет запись аудита в фоне. `AppDbContext`
+      зарегистрирован через `AddDbContext` с временем жизни по умолчанию. В боевой среде записи аудита иногда
+      пропадают, а в логах приложения об этом ничего нет; локально всё работает.
+
+      Щёлкните по строке с дефектом.
+    hint: |
+      Кто владеет экземпляром `AppDbContext`, который получил контроллер, и когда этот владелец заканчивает
+      свою жизнь?
+    answer: |
+      Строка 25: `Task.Run` запускает фоновую работу без ожидания, а её лямбда (строки 27 и 28) использует `_db` -
+      `DbContext` из области DI запроса - уже после того, как действие вернуло ответ. Засчитывается строка 25,
+      любая из строк 27 и 28, обе эти строки вместе или все три строки: дефект - захват сервиса запроса в фоновой
+      работе.
+    explanation: |
+      `AddDbContext` по умолчанию регистрирует контекст как scoped. В ASP.NET Core на каждый HTTP-запрос создаётся
+      своя область DI, и по завершении запроса она освобождается вместе со всеми scoped-сервисами, включая
+      `AppDbContext`.
+
+      Действие возвращает `Accepted()`, не дожидаясь задачи, и лямбда соревнуется с завершением запроса. Если она
+      успела до освобождения области, запись сохраняется; если нет, обращение к контексту выбрасывает
+      `ObjectDisposedException`. Исключение остаётся внутри задачи, которую никто не ожидает, поэтому теряется
+      молча. Исход зависит от тайминга: на свободной локальной машине задача обычно успевает, а под нагрузкой
+      пул потоков запускает её позже. Документация ASP.NET Core разбирает именно этот случай и называет его
+      результатом `ObjectDisposedException`.
+
+      Исправление: не захватывать в фоновой работе сервисы запроса (и `HttpContext`). Внедрить
+      `IServiceScopeFactory` (это singleton), в фоновом коде создать собственную область через `CreateScope()`,
+      получить `AppDbContext` из `scope.ServiceProvider` и освободить область по окончании работы. Документация
+      также рекомендует реализовывать фоновые задачи как размещённые службы: например, очередь на `Channel<T>`,
+      которую обрабатывает `BackgroundService`. Такая служба сама создаёт область на каждый элемент и логирует
+      ошибки, а хост при штатной остановке вызывает её `StopAsync` и даёт ей время завершить работу.
+    linkTitles:
+      - "Рекомендации по ASP.NET Core"
+      - "Рекомендации по внедрению зависимостей"
+      - "Фоновые задачи с размещёнными службами в ASP.NET Core"
+  en:
+    title: Why does background work started in a controller lose database writes?
+    prompt: |
+      The controller completes an order and, so that the client does not wait, writes an audit record in the
+      background. `AppDbContext` is registered with `AddDbContext` using the default lifetime. In the production
+      environment audit records sometimes go missing and the application logs show nothing; locally everything
+      works.
+
+      Click the line that contains the defect.
+    hint: |
+      What owns the `AppDbContext` instance that the controller received, and when does that owner end its life?
+    answer: |
+      Line 25: `Task.Run` starts background work without awaiting it, and its lambda (lines 27 and 28) uses `_db`,
+      the `DbContext` from the request's DI scope, after the action has already returned the response. Line 25,
+      either of lines 27 and 28, both of them together, or all three lines are accepted: the defect is capturing a
+      request service in background work.
+    explanation: |
+      `AddDbContext` registers the context as scoped by default. ASP.NET Core creates a DI scope for every HTTP
+      request, and when the request ends the scope is disposed together with all scoped services, including
+      `AppDbContext`.
+
+      The action returns `Accepted()` without waiting for the task, so the lambda races the end of the request. If
+      it runs before the scope is disposed, the record is saved; if not, using the context throws
+      `ObjectDisposedException`. The exception stays inside a task that nobody awaits, so it is lost silently. The
+      outcome depends on timing: on an idle local machine the task usually wins, while under load the thread pool
+      starts it later. The ASP.NET Core documentation describes exactly this case and names
+      `ObjectDisposedException` as its result.
+
+      The fix: do not capture request services (or `HttpContext`) in background work. Inject
+      `IServiceScopeFactory` (it is a singleton), create a separate scope in the background code with
+      `CreateScope()`, resolve `AppDbContext` from `scope.ServiceProvider` and dispose the scope when the work is
+      done. The documentation also recommends implementing background tasks as hosted services: for example, a
+      `Channel<T>` queue processed by a `BackgroundService`. Such a service creates a scope per item and logs
+      failures itself, and on a graceful shutdown the host calls its `StopAsync` and gives it time to finish.
+    linkTitles:
+      - "ASP.NET Core best practices"
+      - "Dependency injection guidelines"
+      - "Background tasks with hosted services in ASP.NET Core"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  noRunReason: Uses ASP.NET Core controllers and an EF Core DbContext, which are not available in the BCL-only sandbox; not executed.

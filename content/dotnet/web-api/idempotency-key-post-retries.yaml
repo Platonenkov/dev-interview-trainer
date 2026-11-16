@@ -1,0 +1,96 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WR1VTRGE9GAKZPQJ9J
+slug: idempotency-key-post-retries
+stack: dotnet
+topic: web-api
+level: middle
+type: open
+grading: self
+tags: [idempotency, http, post, retries, payments]
+links:
+  - url: https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/
+    lang: en
+    kind: spec
+  - url: https://www.rfc-editor.org/rfc/rfc9110
+    lang: en
+    kind: spec
+locales:
+  ru:
+    title: Как сделать POST-запрос на создание платежа безопасным для повторов?
+    prompt: |
+      Клиент отправляет `POST /payments`, чтобы создать платёж, и не дожидается ответа из-за тайм-аута.
+      Он не знает, был ли платёж создан, и хочет повторить запрос. Как спроектировать API, чтобы повтор
+      не списал деньги второй раз?
+    hint: Как серверу узнать, что запрос - повтор, и что ему стоит ответить?
+    answer: |
+      - **Ключ от клиента.** Перед первой попыткой клиент генерирует уникальный ключ операции (например, UUID v4)
+        и передаёт его в заголовке `Idempotency-Key`. При каждом повторе он отправляет тот же ключ и то же тело.
+        Новый платёж получает новый ключ.
+      - **Атомарная запись ключа.** До выполнения операции сервер сохраняет ключ (в области клиента или аккаунта)
+        вместе с отпечатком запроса, например хешем тела, и статусом «в обработке». Уникальное ограничение в базе
+        не даёт двум параллельным запросам с одним ключом выполнить операцию дважды.
+      - **Сохранение результата.** После выполнения сервер записывает под ключом итог: код состояния и тело ответа,
+        лучше в той же транзакции, что и сам платёж.
+      - **Ответ на повтор.** Если операция с этим ключом завершена, сервер возвращает сохранённый ответ и ничего не
+        выполняет заново. Если она ещё выполняется - `409 Conflict`. Если ключ тот же, а тело другое - `422`.
+        Если ключ обязателен, а его нет - `400`.
+      - **Срок хранения.** Ключи хранятся ограниченное и задокументированное время (например, сутки), потом удаляются.
+      - **Дальше по цепочке.** При вызове платёжного провайдера тоже передаётся ключ идемпотентности, чтобы повтор
+        внутреннего вызова не привёл к двойному списанию.
+    explanation: |
+      Тайм-аут неоднозначен: запрос мог не дойти, мог выполниться, а мог потерять только ответ. По RFC 9110
+      методы `OPTIONS`, `HEAD`, `GET`, `PUT` и `DELETE` идемпотентны, а `POST` и `PATCH` - нет, поэтому простой
+      повтор `POST` может создать второй платёж. Ключ идемпотентности превращает повтор в поиск уже известного
+      результата.
+
+      Хранить нужно именно результат, а не только факт «ключ видели»: клиенту при повторе нужен тот же ответ,
+      например идентификатор созданного платежа. Отпечаток тела защищает от ошибки клиента, который случайно
+      использовал старый ключ для другой операции.
+
+      Заголовок `Idempotency-Key` описан в черновике IETF, который ещё не стал RFC, но тот же подход давно
+      используют крупные платёжные API. Альтернатива - клиент сам генерирует идентификатор ресурса и создаёт
+      его через `PUT`, который RFC 9110 относит к идемпотентным методам.
+    linkTitles:
+      - "Черновик IETF: заголовок Idempotency-Key"
+      - "RFC 9110: семантика HTTP"
+  en:
+    title: How do you make a POST that creates a payment safe for retries?
+    prompt: |
+      A client sends `POST /payments` to create a payment and gets no response because of a timeout.
+      It does not know whether the payment was created and wants to retry. How do you design the API so
+      that the retry does not charge the money a second time?
+    hint: How can the server recognise a retry, and what should it reply?
+    answer: |
+      - **A key from the client.** Before the first attempt the client generates a unique operation key (for example
+        a UUID v4) and sends it in the `Idempotency-Key` header. Every retry sends the same key and the same body.
+        A new payment gets a new key.
+      - **Record the key atomically.** Before executing, the server stores the key (scoped to the client or account)
+        with a fingerprint of the request, for example a hash of the body, and the status "in progress". A unique
+        constraint in the database stops two concurrent requests with the same key from both executing.
+      - **Store the outcome.** After the operation the server saves the result under the key: the status code and
+        the response body, ideally in the same transaction as the payment itself.
+      - **Answer the retry.** If the operation for the key is complete, the server returns the stored response and
+        executes nothing again. If it is still running - `409 Conflict`. Same key with a different body - `422`.
+        Key required but missing - `400`.
+      - **Retention.** Keys are kept for a limited, documented period (for example a day) and then removed.
+      - **Down the chain.** The call to the payment provider also carries an idempotency key, so a retry of the
+        internal call cannot double charge either.
+    explanation: |
+      A timeout is ambiguous: the request may not have arrived, may have executed, or only its response may have
+      been lost. Under RFC 9110 the methods `OPTIONS`, `HEAD`, `GET`, `PUT` and `DELETE` are idempotent while
+      `POST` and `PATCH` are not, so a naive retry of a `POST` can create a second payment. The idempotency key
+      turns the retry into a lookup of a result that is already known.
+
+      The server must store the result, not only the fact that the key was seen: on a retry the client needs the
+      same answer, for example the id of the created payment. The body fingerprint protects against a client bug
+      that reuses an old key for a different operation.
+
+      The `Idempotency-Key` header is described in an IETF draft that is not yet an RFC, but large payment APIs
+      have used the same approach for years. An alternative is for the client to generate the resource id itself
+      and create the resource with `PUT`, which RFC 9110 lists among the idempotent methods.
+    linkTitles:
+      - "IETF draft: the Idempotency-Key header field"
+      - "RFC 9110: HTTP Semantics"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

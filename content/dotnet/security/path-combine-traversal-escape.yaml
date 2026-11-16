@@ -1,0 +1,125 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WPA1944BHGVHVDR087
+slug: path-combine-traversal-escape
+stack: dotnet
+topic: security
+level: senior
+type: find-bug
+grading: auto
+tags: [path-traversal, path-combine, owasp, broken-access-control]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    const string UploadRoot = "/srv/app/uploads/";
+
+    string BuildDownloadPath(string fileName)
+    {
+        // fileName comes from the request: GET /download?name=...
+        return Path.Combine(UploadRoot, fileName);
+    }
+
+    Console.WriteLine(BuildDownloadPath("report.pdf"));
+    Console.WriteLine(BuildDownloadPath("../../../etc/passwd"));
+    Console.WriteLine(BuildDownloadPath("/etc/passwd"));
+bugLineSets: [[6]]
+fixedSource: |
+  const string UploadRoot = "/srv/app/uploads/";
+
+  string BuildDownloadPath(string fileName)
+  {
+      string fullPath = Path.GetFullPath(Path.Combine(UploadRoot, fileName));
+      // UploadRoot ends with a separator, so "/srv/app/uploads-old/x" is not accepted.
+      return fullPath.StartsWith(UploadRoot, StringComparison.Ordinal) ? fullPath : null;
+  }
+
+  Console.WriteLine(BuildDownloadPath("report.pdf") ?? "rejected");
+  Console.WriteLine(BuildDownloadPath("../../../etc/passwd") ?? "rejected");
+  Console.WriteLine(BuildDownloadPath("/etc/passwd") ?? "rejected");
+fixedExpect:
+  kind: output
+  value: |-
+    /srv/app/uploads/report.pdf
+    rejected
+    rejected
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.io.path.combine
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.io.path.getfullpath
+    lang: en
+    kind: docs
+  - url: https://owasp.org/www-community/attacks/Path_Traversal
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Найдите строку, через которую имя файла выходит за пределы каталога загрузок
+    prompt: |
+      Метод строит путь к файлу для скачивания по имени, которое пользователь передаёт в запросе. Он должен
+      возвращать только пути внутри `/srv/app/uploads/`. В .NET 10 на Linux программа выводит
+      `/srv/app/uploads/report.pdf`, затем `/srv/app/uploads/../../../etc/passwd` и `/etc/passwd`: два последних
+      пути ведут за пределы каталога. Щёлкните по строке с дефектом.
+    hint: |
+      Проверяет ли `Path.Combine` свои аргументы и приводит ли их к нормальному виду?
+    answer: |
+      Строка 6: результат `Path.Combine(UploadRoot, fileName)` возвращается без разрешения полного пути и без
+      проверки, что он остаётся внутри `UploadRoot`.
+    explanation: |
+      `Path.Combine` - это работа со строками, а не проверка безопасности. Если очередной аргумент является
+      абсолютным путём (на Linux начинается с `/`), все предыдущие части отбрасываются, поэтому `"/etc/passwd"`
+      возвращается как есть. Сегменты `..` метод тоже не схлопывает: строка `/srv/app/uploads/../../../etc/passwd`
+      выглядит как путь внутри каталога, но при открытии файла операционная система разрешит её в `/etc/passwd`.
+      Это обход каталогов (path traversal), одна из форм нарушения контроля доступа из OWASP Top 10.
+
+      Исправление: получить полный путь через `Path.GetFullPath`, который убирает `.` и `..`, и проверить, что он
+      начинается с корня каталога. Корень сравнивается вместе с завершающим разделителем, иначе пройдёт
+      `/srv/app/uploads-old/...`. На Linux сравнение порядковое с учётом регистра, на Windows обычно нужен
+      `StringComparison.OrdinalIgnoreCase`, а абсолютными там считаются и `C:\...`, и `\\server\share`.
+
+      Проверка по префиксу работает с текстом пути: `GetFullPath` только приводит путь к нормальному виду, поэтому
+      символическая ссылка внутри каталога всё равно может вести наружу. Если пользователи могут создавать там
+      ссылки, разрешайте их отдельно (например, через `FileSystemInfo.ResolveLinkTarget`) или запретите их.
+      Надёжнее вообще не принимать путь от клиента: хранить файлы под сгенерированными идентификаторами и
+      сопоставлять идентификатор с файлом на сервере. Поведение описано для .NET 10 на Linux.
+    linkTitles:
+      - "Метод Path.Combine"
+      - "Метод Path.GetFullPath"
+      - "OWASP: Path Traversal"
+  en:
+    title: Find the line that lets a file name escape the upload directory
+    prompt: |
+      The method builds the path of a file to download from a name the user sends in the request. It must return
+      only paths inside `/srv/app/uploads/`. On .NET 10 on Linux the program prints `/srv/app/uploads/report.pdf`,
+      then `/srv/app/uploads/../../../etc/passwd` and `/etc/passwd`: the last two paths point outside the
+      directory. Click the line that contains the defect.
+    hint: |
+      Does `Path.Combine` check its arguments, and does it normalise them?
+    answer: |
+      Line 6: the result of `Path.Combine(UploadRoot, fileName)` is returned without resolving the full path and
+      without checking that it stays inside `UploadRoot`.
+    explanation: |
+      `Path.Combine` is string handling, not a security check. If a later argument is an absolute path (on Linux,
+      it starts with `/`), every previous part is discarded, so `"/etc/passwd"` comes back unchanged. It does not
+      collapse `..` segments either: `/srv/app/uploads/../../../etc/passwd` looks like a path inside the directory,
+      but when the file is opened the operating system resolves it to `/etc/passwd`. This is path traversal, a form
+      of broken access control from the OWASP Top 10.
+
+      The fix is to get the full path with `Path.GetFullPath`, which removes `.` and `..`, and check that it starts
+      with the root directory. Compare the root including its trailing separator, otherwise
+      `/srv/app/uploads-old/...` passes. On Linux the comparison is ordinal and case-sensitive; on Windows you
+      usually need `StringComparison.OrdinalIgnoreCase`, and both `C:\...` and `\\server\share` count as rooted.
+
+      The prefix check works on the path text: `GetFullPath` only normalises the path, so a symbolic link inside
+      the directory can still point outside. If users can create links there, resolve them separately (for example
+      with `FileSystemInfo.ResolveLinkTarget`) or forbid them. It is safer not to accept a path from the client at
+      all: store files under generated identifiers and map the identifier to a file on the server. The behaviour
+      described is for .NET 10 on Linux.
+    linkTitles:
+      - "Path.Combine method"
+      - "Path.GetFullPath method"
+      - "OWASP: Path Traversal"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"

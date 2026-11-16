@@ -1,0 +1,100 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WP516ZXXSCCW1RMM21
+slug: cors-browser-enforced-not-access-control
+stack: dotnet
+topic: security
+level: middle
+type: open
+grading: self
+tags: [cors, same-origin-policy, aspnet-core]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/security/cors
+    lang: en
+    kind: docs
+  - url: https://fetch.spec.whatwg.org/
+    lang: en
+    kind: spec
+locales:
+  ru:
+    title: От чего защищает CORS и почему он не мешает вызвать API через curl?
+    prompt: |
+      В API на ASP.NET Core настроена политика CORS, которая разрешает только origin `https://app.example.com`.
+      Коллега считает, что теперь никто, кроме этого фронтенда, не сможет вызвать API. Объясните, от чего на
+      самом деле защищает CORS, кто его применяет и почему серверный скрипт или `curl` без проблем вызывают
+      этот API.
+    hint: |
+      Кто читает заголовки `Access-Control-Allow-*` и решает, что с ними делать?
+    answer: |
+      - **Защищает политика одного источника (same-origin policy), а CORS - исключение из неё.** Браузер не даёт
+        скрипту со страницы одного origin (схема, хост, порт) читать ответы другого origin. CORS позволяет серверу
+        ослабить это правило: с помощью заголовка `Access-Control-Allow-Origin` и связанных с ним заголовков сервер
+        сообщает браузеру, каким origin разрешено читать его ответы. Политика CORS никогда не делает API строже,
+        чем без неё.
+      - **Проверку выполняет браузер, а не сервер.** CORS middleware в ASP.NET Core только добавляет или не добавляет
+        заголовки в ответ. Простой запрос браузер отправляет, эндпоинт выполняется, и лишь потом браузер скрывает ответ
+        от скрипта, если заголовки не разрешают origin страницы. Для остальных запросов браузер сначала отправляет
+        предварительный запрос `OPTIONS` (preflight) и не отправляет основной, если preflight не одобрен.
+      - **Небраузерные клиенты его игнорируют.** `curl`, Postman, серверный скрипт или мобильное приложение не
+        реализуют политику одного источника, могут подставить любой заголовок `Origin` или не передавать его вовсе
+        и читают ответ независимо от заголовков CORS.
+      - **API на самом деле защищают** аутентификация и авторизация на каждом эндпоинте, ограничение частоты запросов,
+        а при аутентификации по cookie ещё antiforgery-токены и атрибут `SameSite` против CSRF. CORS защищает только
+        пользователей браузера: не даёт чужой странице прочитать ответы, которые их браузер получил с их учётными данными.
+    explanation: |
+      Вопрос проверяет, понимает ли кандидат, где происходит проверка. Заголовок `Origin` выставляет сам браузер, и
+      скрипт на странице не может его подделать, поэтому браузер может доверять собственному решению. Любой другой
+      клиент записывает туда что угодно, так что сервер не может считать `Origin` доказательством того, кто его
+      вызывает. CORS ослабляет политику одного источника для браузеров и не является механизмом контроля доступа.
+      Стандарт Fetch рассуждает так же: заголовок `Access-Control-Allow-Origin: *` лишь открывает ресурс скриптам в
+      браузере так же, как он уже открыт для `curl` и `wget`, а ресурсы, защищённые только IP-адресом или файрволом,
+      открывать через CORS небезопасно.
+
+      Практическое следствие: запрещённый origin не означает, что запрос не дошёл до сервера. Отправка формы или
+      простой `POST` с чужой страницы доходит до эндпоинта и меняет состояние, браузер лишь прячет ответ. Поэтому от
+      CSRF нужна отдельная защита, а ограничение CORS нужно для того, чтобы данные не утекали на чужие страницы.
+      Контроль доступа остаётся задачей аутентификации и авторизации.
+    linkTitles:
+      - "Включение CORS в ASP.NET Core"
+      - "Стандарт Fetch (WHATWG), включая протокол CORS"
+  en:
+    title: What does CORS protect against, and why does it not stop curl from calling the API?
+    prompt: |
+      An ASP.NET Core API has a CORS policy that allows only the origin `https://app.example.com`.
+      A colleague believes that now nobody except this frontend can call the API. Explain what CORS actually
+      protects against, who enforces it, and why a server-side script or `curl` can call this API without trouble.
+    hint: |
+      Who reads the `Access-Control-Allow-*` headers and decides what to do with them?
+    answer: |
+      - **The same-origin policy is the protection, and CORS is an exception to it.** A browser does not let a script
+        from a page of one origin (scheme, host, port) read responses from another origin. CORS lets the server relax
+        that rule: with the `Access-Control-Allow-Origin` header and related headers the server tells the browser which
+        origins may read its responses. A CORS policy never makes an API stricter than it is without one.
+      - **The browser enforces it, not the server.** The ASP.NET Core CORS middleware only adds or omits response
+        headers. For a simple request the browser sends it, the endpoint runs, and only then the browser hides the
+        response from the script if the headers do not allow the page's origin. For other requests the browser first
+        sends a preflight `OPTIONS` request and does not send the real one if the preflight is not approved.
+      - **Non-browser clients ignore it.** `curl`, Postman, a server-side script or a mobile app do not implement the
+        same-origin policy, can send any `Origin` header or none at all, and read the response regardless of the CORS
+        headers.
+      - **What actually protects the API** is authentication and authorization on every endpoint, rate limiting, and,
+        with cookie authentication, antiforgery tokens and the `SameSite` attribute against CSRF. CORS only protects
+        browser users: it keeps a foreign page from reading responses that their browser received with their credentials.
+    explanation: |
+      The question checks whether the candidate knows where the check happens. The `Origin` header is set by the
+      browser itself, and a script in a page cannot forge it, which is why the browser can trust its own decision.
+      Any other client can put any value there, so the server cannot treat `Origin` as proof of who is calling.
+      CORS relaxes the same-origin policy for browsers and is not an access-control mechanism. The Fetch Standard
+      reasons the same way: the `Access-Control-Allow-Origin: *` header only shares a resource with browser scripts
+      the way it is already shared with `curl` and `wget`, and resources protected only by an IP address or a
+      firewall are unsafe to open through CORS.
+
+      A practical consequence: a disallowed origin does not mean the request never reached the server. A form post
+      or a simple `POST` from a foreign page reaches the endpoint and changes state; the browser only hides the
+      response. That is why CSRF needs its own protection, and why restricting CORS is about not leaking data to
+      foreign pages. Access control remains the job of authentication and authorization.
+    linkTitles:
+      - "Enable Cross-Origin Requests (CORS) in ASP.NET Core"
+      - "Fetch Standard (WHATWG), including the CORS protocol"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

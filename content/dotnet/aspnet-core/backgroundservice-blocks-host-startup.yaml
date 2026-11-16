@@ -1,0 +1,145 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMJDRRBNE10H3RQBB6
+slug: backgroundservice-blocks-host-startup
+stack: dotnet
+topic: aspnet-core
+level: senior
+type: situation
+grading: self
+tags: [hosting, backgroundservice, hosted-services, startup, diagnostics]
+code:
+  language: csharp
+  harness: none
+  source: |
+    public sealed class OutboxPoller : BackgroundService
+    {
+        private readonly OutboxPublisher _publisher;
+
+        public OutboxPoller(OutboxPublisher publisher) => _publisher = publisher;
+
+        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+        {
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                _publisher.PublishPending(); // synchronous database call
+                Thread.Sleep(TimeSpan.FromSeconds(5));
+            }
+        }
+    }
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/host/hosted-services
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/microsoft.extensions.hosting.backgroundservice
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/compatibility/extensions/10.0/backgroundservice-executeasync-task
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.periodictimer
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: После добавления BackgroundService приложение на .NET 8 не начинает слушать порт
+    prompt: |
+      Сервис на ASP.NET Core и .NET 8. В него добавили `BackgroundService`, показанный ниже, и зарегистрировали
+      его через `builder.Services.AddHostedService<OutboxPoller>()`. Теперь процесс запускается и не падает, но в
+      логе нет строки `Now listening on`, порт не открыт, проверки готовности не проходят. Без этой службы
+      приложение стартует нормально. Как вы будете диагностировать проблему и как её исправите?
+    hint: Где находится хост, пока выполняется ваш цикл?
+    answer: |
+      1. **Найти, где висит запуск.** Процесс жив, но хост не дошёл до запуска сервера. Снять стеки работающего
+         процесса: `dotnet-stack report -p <PID>` или дамп через `dotnet-dump collect` и `clrstack -all` в
+         `dotnet-dump analyze`. Главный поток стоит в `OutboxPoller.ExecuteAsync`, вызванном из
+         `BackgroundService.StartAsync` внутри `Host.StartAsync`.
+      2. **Понять причину.** В .NET 8 `BackgroundService.StartAsync` вызывает `ExecuteAsync` прямо на потоке
+         запуска и возвращает управление, только когда `ExecuteAsync` вернёт задачу, то есть дойдёт до первого
+         `await` незавершённой задачи. В этом методе `await` нет (компилятор выдаёт предупреждение CS1998),
+         поэтому он не возвращается никогда. Hosted services запускаются по очереди и до старта веб-сервера,
+         поэтому ни следующие службы, ни Kestrel так и не запускаются.
+      3. **Исправить цикл.** Сделать его асинхронным и начинать с ожидания: `PeriodicTimer` и
+         `await timer.WaitForNextTickAsync(stoppingToken)`, а внутри асинхронный вызов к базе с передачей
+         `stoppingToken`. Если библиотека даёт только синхронный API, увести цикл с потока запуска: либо
+         `await Task.Yield()` в начале метода (цикл продолжится на потоке из пула потоков и будет занимать его),
+         либо, что лучше для долгой синхронной работы, отдельный поток через `Task.Factory.StartNew` с
+         `TaskCreationOptions.LongRunning`.
+      4. **Починить остановку.** `Thread.Sleep` не видит `stoppingToken`, поэтому служба замечает отмену с
+         задержкой: до конца паузы в 5 секунд и текущего вызова `PublishPending()`. Если один блокирующий шаг
+         длится дольше `HostOptions.ShutdownTimeout`, хост перестанет его ждать, и процесс завершится посреди
+         работы. Ожидание через `PeriodicTimer` или `Task.Delay` с токеном прерывается сразу.
+      5. **Учесть версию.** В .NET 10 `BackgroundService` выполняет весь `ExecuteAsync` как фоновую задачу, и
+         синхронное начало метода запуск хоста уже не блокирует. Исправление нужно и там: блокирующий цикл
+         занимает поток из пула потоков и медленно реагирует на отмену.
+      6. **Закрепить.** Интеграционный тест, который поднимает хост и проверяет, что запуск укладывается в
+         ограниченное время, и правило для code review: никакой блокирующей работы в `ExecuteAsync`.
+    explanation: |
+      Ключевой момент: `async` не делает код асинхронным. Метод выполняется синхронно до первого `await`
+      незавершённой задачи. Базовый класс в .NET 8 полагается на то, что `ExecuteAsync` быстро вернёт задачу, и
+      лишь проверяет, не завершилась ли она сразу. Синхронный цикл нарушает этот контракт, и блокируется не
+      только сама служба, но и весь `Host.StartAsync`: следующие hosted services, сервер Kestrel и событие
+      `ApplicationStarted`.
+
+      Тот же эффект дают и менее очевидные варианты: долгая синхронная инициализация перед первым `await`
+      (например, миграция или `.Result` у задачи) и `await` уже завершённой задачи, после которого выполнение
+      продолжается синхронно. В .NET 10 это поведение изменили (критическое изменение описано в документации),
+      и симптом исчез, но код, который должен работать и на .NET 8, нужно исправлять явно.
+    linkTitles:
+      - "Фоновые задачи с размещёнными службами в ASP.NET Core"
+      - "Класс BackgroundService"
+      - "Критическое изменение в .NET 10: BackgroundService выполняет весь ExecuteAsync как Task"
+      - "Класс PeriodicTimer"
+  en:
+    title: After adding a BackgroundService, a .NET 8 app never starts listening on its port
+    prompt: |
+      A service on ASP.NET Core and .NET 8. The `BackgroundService` below was added and registered with
+      `builder.Services.AddHostedService<OutboxPoller>()`. Now the process starts and does not crash, but the log
+      has no `Now listening on` line, the port is not open and readiness checks fail. Without this service the
+      application starts normally. How do you diagnose the problem and how do you fix it?
+    hint: Where is the host while your loop is running?
+    answer: |
+      1. **Find where startup hangs.** The process is alive, but the host never got to starting the server.
+         Capture the stacks of the running process: `dotnet-stack report -p <PID>`, or a dump with
+         `dotnet-dump collect` and `clrstack -all` in `dotnet-dump analyze`. The main thread sits in
+         `OutboxPoller.ExecuteAsync`, called from `BackgroundService.StartAsync` inside `Host.StartAsync`.
+      2. **Understand the cause.** In .NET 8 `BackgroundService.StartAsync` calls `ExecuteAsync` directly on the
+         startup thread and returns only when `ExecuteAsync` returns a task, that is, when it reaches the first
+         `await` of an incomplete task. This method has no `await` (the compiler reports warning CS1998), so it
+         never returns. Hosted services start one after another and before the web server, so neither the
+         following services nor Kestrel ever start.
+      3. **Fix the loop.** Make it asynchronous and begin with a wait: `PeriodicTimer` and
+         `await timer.WaitForNextTickAsync(stoppingToken)`, with an asynchronous database call inside that
+         receives `stoppingToken`. If the library offers only a synchronous API, move the loop off the startup
+         thread: either `await Task.Yield()` at the start of the method (the loop continues on a thread pool
+         thread and occupies it), or, better for long synchronous work, a dedicated thread through
+         `Task.Factory.StartNew` with `TaskCreationOptions.LongRunning`.
+      4. **Fix shutdown too.** `Thread.Sleep` does not see `stoppingToken`, so the service notices cancellation
+         late: after the rest of the 5-second pause and the current `PublishPending()` call. If a single blocking
+         step lasts longer than `HostOptions.ShutdownTimeout`, the host stops waiting for it and the process ends
+         in the middle of the work. A wait through `PeriodicTimer` or `Task.Delay` with the token ends at once.
+      5. **Mind the version.** In .NET 10 `BackgroundService` runs the whole of `ExecuteAsync` as a background
+         task, so a synchronous start of the method no longer blocks host startup. The fix is still needed there:
+         the blocking loop occupies a thread pool thread and reacts slowly to cancellation.
+      6. **Lock it in.** An integration test that starts the host and checks that startup completes within a
+         bounded time, and a code review rule: no blocking work in `ExecuteAsync`.
+    explanation: |
+      The key point is that `async` does not make code asynchronous. The method runs synchronously until the
+      first `await` of an incomplete task. The base class in .NET 8 relies on `ExecuteAsync` returning a task
+      quickly and only checks whether that task has already completed. A synchronous loop breaks this contract,
+      and it blocks not only the service itself but the whole `Host.StartAsync`: the following hosted services,
+      the Kestrel server and the `ApplicationStarted` event.
+
+      Less obvious variants have the same effect: long synchronous initialization before the first `await` (for
+      example a migration or `.Result` on a task), and an `await` of an already completed task, after which
+      execution continues synchronously. .NET 10 changed this behaviour (the breaking change is documented), and
+      the symptom is gone, but code that must also run on .NET 8 has to be fixed explicitly.
+    linkTitles:
+      - "Background tasks with hosted services in ASP.NET Core"
+      - "BackgroundService class"
+      - "Breaking change in .NET 10: BackgroundService runs all of ExecuteAsync as a Task"
+      - "PeriodicTimer class"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"
+  noRunReason: "Hosting scenario: the class needs an ASP.NET Core host and a database, which the sandbox does not provide."

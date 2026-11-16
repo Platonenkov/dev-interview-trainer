@@ -1,0 +1,103 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WRJ33Q74SZ25RMPX85
+slug: httpclient-baseaddress-trailing-slash
+stack: dotnet
+topic: web-api
+level: middle
+type: find-bug
+grading: auto
+tags: [httpclient, baseaddress, uri, rfc-3986]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    using HttpClient client = new(new PrintingHandler())
+    {
+        BaseAddress = new Uri("https://api.example.com/v2")
+    };
+
+    await client.GetAsync("orders/42");
+
+    class PrintingHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Console.WriteLine(request.RequestUri);
+            return Task.FromResult(new HttpResponseMessage());
+        }
+    }
+bugLineSets: [[3]]
+fixedSource: |
+  using HttpClient client = new(new PrintingHandler())
+  {
+      BaseAddress = new Uri("https://api.example.com/v2/")
+  };
+
+  await client.GetAsync("orders/42");
+
+  class PrintingHandler : HttpMessageHandler
+  {
+      protected override Task<HttpResponseMessage> SendAsync(
+          HttpRequestMessage request, CancellationToken cancellationToken)
+      {
+          Console.WriteLine(request.RequestUri);
+          return Task.FromResult(new HttpResponseMessage());
+      }
+  }
+fixedExpect: { kind: output, value: "https://api.example.com/v2/orders/42" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.net.http.httpclient.baseaddress
+    lang: en
+    kind: docs
+  - url: https://www.rfc-editor.org/rfc/rfc3986
+    lang: en
+    kind: spec
+locales:
+  ru:
+    title: Найдите строку, из-за которой HttpClient теряет версию API в адресе запроса
+    prompt: |
+      API заказов расположено по адресу `https://api.example.com/v2/`, и программа должна запросить
+      `https://api.example.com/v2/orders/42`. Обработчик-заглушка вместо отправки в сеть печатает адрес
+      запроса, и программа выводит `https://api.example.com/orders/42`: сегмент `v2` пропал.
+      Щёлкните по строке с дефектом.
+    hint: Как `HttpClient` объединяет `BaseAddress` с относительным адресом запроса и какая часть пути базового адреса сохраняется в результате?
+    answer: Строка 3, `BaseAddress` задан без завершающего `/`.
+    explanation: |
+      `HttpClient` объединяет `BaseAddress` с относительным адресом запроса по правилам разрешения
+      относительных ссылок из RFC 3986. Документация `BaseAddress` прямо предупреждает: все символы после
+      самого правого `/` в базовом адресе при объединении отбрасываются. Если путь базового адреса не
+      заканчивается на `/`, его последний сегмент считается "файлом" и пропадает: от `/v2` остаётся `/`,
+      к нему дописывается `orders/42`, и получается `https://api.example.com/orders/42`.
+
+      Исправление - завершить `BaseAddress` слешем: `https://api.example.com/v2/`. Тогда программа выводит
+      `https://api.example.com/v2/orders/42`. Относительный путь при этом должен начинаться без `/`: путь
+      `/orders/42` заменил бы весь путь базового адреса, и `v2` пропал бы даже при правильном `BaseAddress`.
+    linkTitles:
+      - "Свойство HttpClient.BaseAddress"
+      - "RFC 3986: универсальный синтаксис URI"
+  en:
+    title: Find the line that makes HttpClient drop the API version from the request URL
+    prompt: |
+      The orders API lives at `https://api.example.com/v2/`, and the program should request
+      `https://api.example.com/v2/orders/42`. A stub handler prints the request URL instead of going to the
+      network, and the program prints `https://api.example.com/orders/42`: the `v2` segment is gone.
+      Click the line that contains the defect.
+    hint: How does `HttpClient` combine `BaseAddress` with a relative request URL, and which part of the base path is kept in the result?
+    answer: Line 3, `BaseAddress` is set without a trailing `/`.
+    explanation: |
+      `HttpClient` combines `BaseAddress` with the relative request URL using the relative reference resolution
+      rules of RFC 3986. The `BaseAddress` documentation warns about it directly: all characters after the
+      right-most `/` in the base URI are excluded when it is combined with the request URI. When the base path
+      does not end with `/`, its last segment is treated like a "file" and dropped: `/v2` becomes `/`,
+      `orders/42` is appended, and the result is `https://api.example.com/orders/42`.
+
+      The fix is to end `BaseAddress` with a slash: `https://api.example.com/v2/`. The program then prints
+      `https://api.example.com/v2/orders/42`. The relative path must also start without `/`: the path
+      `/orders/42` would replace the whole base path, and `v2` would be lost even with a correct `BaseAddress`.
+    linkTitles:
+      - "HttpClient.BaseAddress property"
+      - "RFC 3986: URI Generic Syntax"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

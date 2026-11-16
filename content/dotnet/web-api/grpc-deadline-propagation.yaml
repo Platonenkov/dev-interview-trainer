@@ -1,0 +1,99 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WR6KTMYNK4YRS37D5Q
+slug: grpc-deadline-propagation
+stack: dotnet
+topic: web-api
+level: senior
+type: open
+grading: self
+tags: [grpc, deadline, cancellation, timeout]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/grpc/deadlines-cancellation
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/grpc/clientfactory
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Чем deadline в gRPC отличается от обычного таймаута клиента и как его передавать по цепочке вызовов?
+    prompt: |
+      Сервис A вызывает по gRPC сервис B, а тот - сервис C. Чем deadline вызова gRPC отличается от обычного
+      таймаута на стороне клиента (например, `HttpClient.Timeout` или `CancellationTokenSource` с задержкой)?
+      Как deadline должен проходить через цепочку A -> B -> C в ASP.NET Core и что будет, если этого не делать?
+    hint: Кто знает о таймауте клиента, кроме самого клиента? И сколько времени остаётся у C, если A ждёт 5 секунд?
+    answer: |
+      - **Таймаут клиента** живёт только у клиента: по его истечении клиент перестаёт ждать, но сервер о бюджете
+        времени заранее не знает и узнаёт об отмене, только если до него дойдёт сброс запроса.
+      - **Deadline** - момент времени, после которого результат вызова не нужен. Он задаётся параметром
+        `deadline` (или `CallOptions.Deadline`) в UTC и передаётся серверу вместе с вызовом. Сервер видит его в
+        `ServerCallContext.Deadline`, а при истечении срока срабатывает `ServerCallContext.CancellationToken`.
+        Клиент получает `RpcException` со статусом `DeadlineExceeded`.
+      - По умолчанию deadline нет: вызов gRPC не ограничен по времени, пока его не задали явно.
+      - Сервер должен передавать `context.CancellationToken` во все асинхронные операции: HTTP-запрос
+        прерывается, но сам метод сервиса продолжает выполняться, пока код не отреагирует на отмену.
+      - **Распространение:** в сервисе B исходящий вызов к C должен получить тот же `context.Deadline` и
+        `context.CancellationToken`. Вручную их передают в параметры вызова, а с фабрикой клиентов gRPC
+        достаточно `AddGrpcClient<T>(...).EnableCallContextPropagation()`.
+      - Без распространения B и C продолжают работать после того, как A уже сдался: тратятся ресурсы,
+        выполняются записи, результат которых никто не прочитает, а под нагрузкой это усиливает перегрузку.
+    explanation: |
+      Главное отличие - кто владеет бюджетом времени. Таймаут на клиенте - локальное решение "я больше не жду".
+      Deadline - часть контракта вызова: сервер знает срок заранее, может не начинать дорогую работу, если
+      времени уже не осталось, и отменяет её сам, когда срок истёк, не дожидаясь сигнала от клиента.
+
+      Deadline задаётся абсолютным моментом, поэтому при передаче дальше он не продлевается: если A дал 5 секунд,
+      а B потратил 2, у C остаётся около 3. Независимые таймауты на каждом звене складываются и не связаны
+      с тем, сколько готов ждать исходный клиент: каждое звено может ждать свои 5 секунд, хотя A уже получил
+      ошибку.
+
+      `EnableCallContextPropagation()` берёт deadline и токен отмены из текущего серверного вызова и подставляет
+      их в дочерний вызов. Если клиент используется вне контекста вызова gRPC, по умолчанию это ошибка; её можно
+      подавить опцией `SuppressContextNotFoundErrors`. Повторные попытки (retry) тоже должны укладываться в
+      исходный deadline, а не начинать отсчёт заново.
+    linkTitles:
+      - "Надёжные сервисы gRPC: deadline и отмена"
+      - "Интеграция фабрики клиентов gRPC в .NET"
+  en:
+    title: How does a gRPC deadline differ from a plain client timeout, and how should it flow through a chain of calls?
+    prompt: |
+      Service A calls service B over gRPC, and B calls service C. How does a gRPC call deadline differ from a
+      plain client-side timeout (for example `HttpClient.Timeout` or a `CancellationTokenSource` with a delay)?
+      How should the deadline flow through the chain A -> B -> C in ASP.NET Core, and what happens if it does not?
+    hint: Who knows about a client timeout, apart from the client itself? And how much time does C have left if A waits 5 seconds?
+    answer: |
+      - **A client timeout** lives only on the client: when it expires the client stops waiting, but the server
+        never knew the time budget and learns about the cancellation only if the request reset reaches it.
+      - **A deadline** is the point in time after which the result is no longer needed. It is set with the
+        `deadline` parameter (or `CallOptions.Deadline`) in UTC and is sent to the server with the call. The
+        server sees it in `ServerCallContext.Deadline`, and when it passes, `ServerCallContext.CancellationToken`
+        fires. The client gets an `RpcException` with status `DeadlineExceeded`.
+      - There is no default deadline: a gRPC call has no time limit until one is set explicitly.
+      - The server must pass `context.CancellationToken` to every async operation: the HTTP request is aborted,
+        but the service method keeps running until the code reacts to the cancellation.
+      - **Propagation:** in service B the outgoing call to C must receive the same `context.Deadline` and
+        `context.CancellationToken`. They can be passed manually as call parameters, or with the gRPC client
+        factory `AddGrpcClient<T>(...).EnableCallContextPropagation()` does it.
+      - Without propagation B and C keep working after A has given up: resources are wasted, writes happen
+        whose result nobody reads, and under load this makes an overload worse.
+    explanation: |
+      The key difference is who owns the time budget. A client timeout is a local decision: "I stop waiting".
+      A deadline is part of the call contract: the server knows it up front, can skip expensive work when no
+      time is left, and cancels the work itself when the deadline passes, without waiting for a signal from
+      the client.
+
+      A deadline is an absolute point in time, so passing it on does not extend it: if A allowed 5 seconds and
+      B spent 2, C has about 3 left. Independent timeouts at each hop add up and are unrelated to how long the
+      original caller is willing to wait: every hop may wait its own 5 seconds although A has already received
+      an error.
+
+      `EnableCallContextPropagation()` takes the deadline and cancellation token from the current server call
+      and applies them to the child call. Using the client outside a gRPC call context is an error by default;
+      the `SuppressContextNotFoundErrors` option turns it off. Retries must also fit into the original deadline
+      instead of starting the clock again.
+    linkTitles:
+      - "Reliable gRPC services with deadlines and cancellation"
+      - "gRPC client factory integration in .NET"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

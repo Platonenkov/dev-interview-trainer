@@ -1,0 +1,112 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNF4GCTBR1V8D9REF4
+slug: split-query-trade-offs
+stack: dotnet
+topic: ef-core
+level: senior
+type: open
+grading: self
+tags: [ef-core, split-query, cartesian-explosion, eager-loading, performance]
+links:
+  - url: https://learn.microsoft.com/en-us/ef/core/querying/single-split-queries
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/ef/core/performance/efficient-querying
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Когда в EF Core выбирать один SQL-запрос, а когда AsSplitQuery при загрузке двух коллекций?
+    prompt: |
+      Запрос загружает блоги вместе с двумя коллекциями: `Include(b => b.Posts)` и `Include(b => b.Contributors)`.
+      Сравните выполнение одним SQL-запросом (поведение по умолчанию) и с `AsSplitQuery()`. Какие издержки есть
+      у каждого варианта и в каких случаях какой из них лучше? Ответ дайте для EF Core 10.
+    hint: "Что JOIN делает с числом строк, когда родителя соединяют сразу с двумя независимыми коллекциями?"
+    answer: |
+      - **Один запрос** (по умолчанию). EF Core строит один SQL с JOIN к обеим коллекциям. Коллекции независимы
+        друг от друга, поэтому для каждого блога база возвращает все сочетания поста и автора: 100 постов и
+        20 авторов дают 2000 строк вместо примерно 120. Это декартов взрыв (cartesian explosion). Вдобавок столбцы
+        блога повторяются в каждой строке, что ощутимо, если у блога есть широкие столбцы. Плюсы: одно обращение к
+        базе (round trip) и согласованные данные, потому что всё читается одной командой.
+      - **Разделённый запрос** (`AsSplitQuery()`, EF Core 5 и новее, включая EF Core 10). Отдельный SQL для
+        блогов и по SQL на каждую коллекцию, соединённый с корнем по тем же условиям. Объём данных растёт как
+        сумма, а не как произведение. Цена:
+        - дополнительное обращение к базе на каждую коллекцию, что заметно при большой задержке до базы;
+        - нет гарантии согласованности между запросами: если данные меняются параллельно, посты и авторы могут
+          относиться к разным моментам времени. Смягчить это можно транзакцией с более строгим уровнем изоляции
+          (например, serializable или snapshot), но у неё своя цена;
+        - если провайдер не умеет читать несколько результатов на одном соединении одновременно (в SQL Server
+          это умеет режим MARS), результаты предыдущих запросов буферизуются в памяти приложения;
+        - в версиях EF Core до 10 при `Skip`/`Take` порядок сортировки должен быть полностью уникальным
+          (например, дата и `Id`), иначе отдельные запросы могут вернуть разные строки; в EF Core 10 это
+          ограничение снято.
+      - **Выбор.** Один запрос лучше для одной коллекции или небольших коллекций, при высокой задержке до базы и
+        когда важна согласованность. Разделённый лучше, когда загружаются две и более крупные независимые
+        коллекции. Решение принимают по измерениям. Режим можно задать глобально через
+        `UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery)` и переопределять в конкретном запросе
+        через `AsSingleQuery()`. Независимо от режима стоит читать только нужные столбцы проекцией `Select`.
+    explanation: |
+      Результат SQL-запроса - плоская таблица. Если к одному родителю присоединить две независимые коллекции,
+      каждая строка одной коллекции сочетается с каждой строкой другой. EF Core при материализации уберёт
+      дубликаты, но база, сеть и разбор результата уже заплатили за произведение. С одной коллекцией взрыва нет,
+      остаётся только повторение столбцов родителя, которое обычно существенно лишь при очень больших столбцах.
+      Связи один к одному EF Core всегда загружает через JOIN в том же запросе.
+
+      Разделённый запрос меняет произведение на сумму, но превращает одну операцию чтения в несколько.
+      Отсюда его минусы: задержка складывается из нескольких обращений к базе, а между запросами данные могут
+      измениться, и итоговый граф объектов окажется несогласованным. EF Core выдаёт предупреждение, когда запрос
+      загружает несколько коллекций, а режим разделения явно не настроен, именно чтобы разработчик принял это
+      решение осознанно. Предупреждение документации об уникальной сортировке при `Skip`/`Take` относится к
+      версиям до EF Core 10.
+    linkTitles:
+      - "Одиночные и разделённые запросы в EF Core"
+      - "Эффективные запросы в EF Core"
+  en:
+    title: When should EF Core use a single SQL query and when AsSplitQuery for loading two collections?
+    prompt: |
+      A query loads blogs together with two collections: `Include(b => b.Posts)` and `Include(b => b.Contributors)`.
+      Compare running it as a single SQL query (the default behavior) and with `AsSplitQuery()`. What costs does
+      each option have, and when is each one the better choice? Answer for EF Core 10.
+    hint: "What does a JOIN do to the row count when a parent is joined with two independent collections at once?"
+    answer: |
+      - **Single query** (the default). EF Core builds one SQL statement with JOINs to both collections. The
+        collections are independent of each other, so for every blog the database returns every combination of
+        post and contributor: 100 posts and 20 contributors give 2000 rows instead of about 120. This is the
+        cartesian explosion. On top of that, the blog columns are repeated in every row, which matters when the
+        blog has wide columns. Benefits: one database round trip and consistent data, because everything is read
+        by one command.
+      - **Split query** (`AsSplitQuery()`, EF Core 5 and later, including EF Core 10). One SQL statement for the
+        blogs and one per collection, joined to the root with the same conditions. The data volume grows as a
+        sum, not a product. The cost:
+        - an extra round trip per collection, noticeable when latency to the database is high;
+        - no consistency guarantee between the queries: if data changes concurrently, posts and contributors may
+          come from different points in time. A transaction with a stricter isolation level (for example
+          serializable or snapshot) can mitigate this, at its own cost;
+        - if the provider cannot read several result sets on one connection at the same time (in SQL Server the
+          MARS mode allows it), the results of earlier queries are buffered in application memory;
+        - on EF Core versions before 10, with `Skip`/`Take` the ordering must be fully unique (for example date
+          plus `Id`), otherwise the separate queries may return different rows; EF Core 10 lifts this requirement.
+      - **Choice.** A single query is better for one collection or small collections, for high database latency,
+        and when consistency matters. A split query is better when two or more large independent collections are
+        loaded. Decide by measuring. The mode can be set globally with
+        `UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery)` and overridden per query with
+        `AsSingleQuery()`. In either mode, read only the needed columns with a `Select` projection.
+    explanation: |
+      An SQL result is a flat table. When two independent collections are joined to one parent, every row of
+      one collection is combined with every row of the other. EF Core removes the duplicates during
+      materialization, but the database, the network and result parsing have already paid for the product.
+      With a single collection there is no explosion, only repetition of the parent columns, which usually
+      matters only for very big columns. One-to-one related entities are always loaded with JOINs in the same query.
+
+      A split query trades the product for a sum, but turns one read into several. That is where its downsides
+      come from: latency adds up over several round trips, and data can change between the queries, leaving an
+      inconsistent object graph. EF Core logs a warning when a query loads several collections and the splitting
+      behavior is not configured explicitly, precisely so that the developer makes this decision deliberately.
+      The documentation's warning about unique ordering with `Skip`/`Take` applies to versions before EF Core 10.
+    linkTitles:
+      - "Single vs. split queries in EF Core"
+      - "Efficient querying in EF Core"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"

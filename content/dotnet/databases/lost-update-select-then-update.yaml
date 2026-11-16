@@ -1,0 +1,110 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WN8PTV2C04KF4MNJ1P
+slug: lost-update-select-then-update
+stack: dotnet
+topic: databases
+level: middle
+type: find-bug
+grading: auto
+tags: [sql-server, t-sql, lost-update, locks, isolation-levels]
+code:
+  language: sql
+  harness: none
+  source: |
+    CREATE PROCEDURE dbo.Withdraw
+        @AccountId int,
+        @Amount decimal(18, 2)
+    AS
+    BEGIN
+        SET NOCOUNT ON;
+        DECLARE @balance decimal(18, 2);
+
+        BEGIN TRANSACTION;
+
+        SELECT @balance = Balance FROM dbo.Accounts WHERE AccountId = @AccountId;
+
+        IF @balance < @Amount
+        BEGIN
+            ROLLBACK TRANSACTION;
+            THROW 50001, 'Insufficient funds.', 1;
+        END;
+
+        DECLARE @newBalance decimal(18, 2) = @balance - @Amount;
+
+        UPDATE dbo.Accounts SET Balance = @newBalance WHERE AccountId = @AccountId;
+
+        COMMIT TRANSACTION;
+    END;
+bugLineSets: [[21], [11, 21]]
+links:
+  - url: https://learn.microsoft.com/en-us/sql/relational-databases/sql-server-transaction-locking-and-row-versioning-guide
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/sql/t-sql/queries/hints-transact-sql-table
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строку, из-за которой теряются параллельные списания с баланса
+    prompt: |
+      Процедура списывает деньги со счёта в SQL Server на уровне изоляции по умолчанию `READ COMMITTED`.
+      Под нагрузкой сверка показывает, что успешных списаний больше, чем уменьшился баланс: при балансе 100
+      два одновременных вызова на 30 и на 50 оба завершаются успешно, а в итоге баланс равен 70 или 50, а не 20.
+      Щёлкните по строке, в которой одно списание затирает другое.
+    hint: Что успевает сделать вторая сессия между `SELECT` и `UPDATE` первой, и какое значение каждая из них потом записывает?
+    answer: Строка 21, `UPDATE ... SET Balance = @newBalance`, которая записывает значение, вычисленное из баланса, прочитанного раньше.
+    explanation: |
+      При `READ COMMITTED` разделяемая блокировка, взятая `SELECT` в строке 11, снимается сразу после чтения,
+      а не в конце транзакции. Поэтому обе сессии читают баланс 100, обе проходят проверку и вычисляют свои
+      значения: 70 и 50. Затем `UPDATE` первой сессии берёт эксклюзивную блокировку строки, вторая ждёт её
+      фиксации и после этого записывает своё абсолютное значение поверх. Списание первой сессии потеряно:
+      это аномалия потерянного обновления (lost update). Включённый `READ_COMMITTED_SNAPSHOT` её не устраняет:
+      обе сессии так же читают одну и ту же зафиксированную версию строки.
+
+      Исправление - сделать чтение, проверку и запись одной атомарной операцией:
+      `UPDATE dbo.Accounts SET Balance = Balance - @Amount WHERE AccountId = @AccountId AND Balance >= @Amount;`
+      и затем `IF @@ROWCOUNT = 0` сообщать о нехватке средств. Отдельный `SELECT` и переменная больше не нужны.
+      Вторая сессия ждёт блокировку строки и вычисляет `Balance - @Amount` от уже зафиксированного значения 70,
+      поэтому итог равен 20, а списание, на которое денег не хватает, просто не изменит ни одной строки.
+
+      Если чтение перед записью действительно нужно, его делают с подсказкой `WITH (UPDLOCK, HOLDLOCK)`: блокировка
+      на обновление держится до конца транзакции, и вторая сессия ждёт уже на `SELECT`. Простое повышение уровня
+      до `REPEATABLE READ` превращает потерянное обновление во взаимоблокировку: обе сессии держат разделяемые
+      блокировки и обе пытаются получить эксклюзивную.
+    linkTitles:
+      - "Руководство по блокировкам транзакций и управлению версиями строк в SQL Server"
+      - "Табличные подсказки (Transact-SQL)"
+  en:
+    title: Find the line that loses concurrent withdrawals from a balance
+    prompt: |
+      The procedure withdraws money from an account in SQL Server under the default `READ COMMITTED` isolation
+      level. Under load, reconciliation shows more successful withdrawals than the balance went down: with a
+      balance of 100, two concurrent calls for 30 and for 50 both succeed, and the final balance is 70 or 50, not 20.
+      Click the line where one withdrawal overwrites the other.
+    hint: What does the second session manage to do between the first session's `SELECT` and `UPDATE`, and which value does each of them write afterwards?
+    answer: Line 21, `UPDATE ... SET Balance = @newBalance`, which writes a value computed from a balance read earlier.
+    explanation: |
+      Under `READ COMMITTED` the shared lock taken by the `SELECT` on line 11 is released right after the read,
+      not at the end of the transaction. So both sessions read a balance of 100, both pass the check and compute
+      their values: 70 and 50. Then the first session's `UPDATE` takes an exclusive lock on the row, the second
+      waits for its commit and then writes its own absolute value on top. The first withdrawal is lost: this is
+      the lost update anomaly. Turning on `READ_COMMITTED_SNAPSHOT` does not remove it: both sessions still read
+      the same committed version of the row.
+
+      The fix is to make the read, the check and the write one atomic operation:
+      `UPDATE dbo.Accounts SET Balance = Balance - @Amount WHERE AccountId = @AccountId AND Balance >= @Amount;`
+      followed by `IF @@ROWCOUNT = 0` to report insufficient funds. The separate `SELECT` and the variable are no
+      longer needed. The second session waits for the row lock and computes `Balance - @Amount` from the already
+      committed value 70, so the result is 20, and a withdrawal that the balance cannot cover simply changes no rows.
+
+      If a read before the write is really needed, do it with the `WITH (UPDLOCK, HOLDLOCK)` hint: the update lock
+      is held until the end of the transaction, and the second session waits already at the `SELECT`. Just raising
+      the level to `REPEATABLE READ` turns the lost update into a deadlock: both sessions hold shared locks and both
+      try to get an exclusive one.
+    linkTitles:
+      - "SQL Server transaction locking and row versioning guide"
+      - "Table hints (Transact-SQL)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  noRunReason: The snippet is a T-SQL stored procedure and needs SQL Server with two concurrent sessions, which the sandbox does not have.

@@ -1,0 +1,143 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WRBJWZDG1760F9K28X
+slug: rest-vs-grpc-public-and-internal
+stack: dotnet
+topic: web-api
+level: architect
+type: situation
+grading: self
+tags: [grpc, rest, protobuf, http2, api-design, contract-evolution]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/grpc/comparison
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/grpc/versioning
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/grpc/json-transcoding
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "REST или gRPC для публичного API партнёров и для десятков внутренних сервисов"
+    prompt: |
+      Платформа состоит из нескольких десятков внутренних сервисов (в основном .NET, часть на Go и Java)
+      и публичного API, которым пользуются сотни партнёров со своими стеками. Есть ещё SPA в браузере и
+      мобильное приложение. Сейчас всё общается по HTTP с JSON, но между сервисами растёт число вызовов,
+      появились задержки и регулярно ломаются контракты при выпусках.
+
+      Вам нужно выбрать протокол синхронных запросов и ответов отдельно для публичной стороны и для
+      внутренних вызовов, с расчётом на несколько лет развития платформы. Что вы выберете, какие риски
+      учтёте и как будете развивать контракты?
+    hint: Кто клиенты каждой стороны, и что каждый протокол требует от клиента и от инфраструктуры между клиентом и сервером?
+    answer: |
+      1. **Разделить требования двух сторон.** Публичный API обслуживает клиентов, которых вы не контролируете:
+         любые языки, браузеры, прокси, отладка через `curl`. Внутренние вызовы - это клиенты, которых вы
+         контролируете вместе с инфраструктурой, а важны строгие контракты, задержки и объём трафика.
+      2. **Публичная сторона - REST с JSON и описанием в OpenAPI.** Работает поверх HTTP/1.1 и HTTP/2 через
+         любые прокси и CDN, вызывается из браузера без дополнительных слоёв, читается человеком при разборе
+         проблем партнёра, поддерживается любым стеком. Изменения - через явные версии и политику устаревания.
+      3. **Внутренние вызовы - gRPC по умолчанию.** Контракт в `.proto` описывается заранее, клиенты и серверы
+         генерируются для .NET, Go и Java, поэтому расхождение контракта ловится при сборке. Protobuf компактнее
+         JSON, HTTP/2 мультиплексирует вызовы в одном соединении, есть потоковая передача (серверная, клиентская,
+         двунаправленная), а дедлайны и отмена передаются по цепочке вызовов.
+      4. **Заранее оплатить цену gRPC.** HTTP/2 нужен на всём пути: ingress, балансировщики, service mesh должны
+         его поддерживать вместе с trailers. Долгоживущее HTTP/2-соединение при балансировке на уровне L4
+         прилипает к одному экземпляру, поэтому нужна балансировка L7 или на стороне клиента. Бинарный формат
+         сложнее отлаживать - нужны рефлексия сервисов, `grpcurl`, логирование и трассировка. Браузер не вызывает
+         gRPC напрямую, поэтому SPA остаётся на REST (через BFF или шлюз) или использует gRPC-Web.
+      5. **Правила эволюции контрактов на годы.** Общий репозиторий `.proto` с владельцами; разрешено только
+         добавлять поля и методы; номера полей никогда не переиспользуются, номера удалённых полей помечаются
+         `reserved`; несовместимые изменения - новый пакет с версией (`orders.v2`) рядом со старым; автоматическая
+         проверка совместимости в CI. Для публичного API - то же самое на OpenAPI: сравнение спецификаций в CI.
+      6. **Мост между сторонами.** Публичная модель отделена от внутренней: шлюз или фасад переводит REST в gRPC.
+         Для простых случаев можно публиковать gRPC-сервис ещё и как REST через JSON transcoding (ASP.NET Core,
+         начиная с .NET 7, доступно и в .NET 10), но тогда публичный контракт привязан к внутреннему `.proto`.
+      7. **Не догма, а решение с проверкой.** Простые малонагруженные внутренние сервисы могут остаться на REST,
+         а многие взаимодействия лучше сделать асинхронными через сообщения. Решение фиксируется в ADR,
+         проверяется пилотом на паре сервисов с измерением задержек и затрат на поддержку.
+    explanation: |
+      Выбор протокола - это выбор того, кому вы перекладываете сложность. У публичной стороны главная ценность -
+      охват: партнёр должен вызвать API из любого стека, через любой корпоративный прокси и разобраться в ответе
+      глазами. REST с JSON это даёт, а цена (больший размер сообщений, слабая типизация без OpenAPI) там
+      несущественна по сравнению с ценой каждого партнёра, который не смог интегрироваться.
+
+      Внутри всё наоборот: клиенты и инфраструктура ваши, вызовов много, а основная боль - контракты, которые
+      расходятся между командами. gRPC закрывает её генерацией кода из `.proto` и строгими правилами
+      совместимости Protobuf, а эффективность сериализации, мультиплексирование HTTP/2, потоковая передача и
+      передача дедлайнов дают выигрыш на объёме. Платой становятся требования к инфраструктуре (HTTP/2 на всём
+      пути, балансировка L7), более сложная отладка и отсутствие прямой поддержки в браузере. Если эту цену не
+      заложить, внедрение gRPC приводит к неравномерной нагрузке на экземпляры и непрозрачным сбоям.
+
+      Горизонт в несколько лет делает главными не байты, а эволюцию: правила добавления полей, запрет
+      переиспользования номеров, версии пакетов и автоматическая проверка совместимости важнее выбора
+      сериализатора. Типичная ошибка архитектора - выставить внутренний `.proto` наружу один к одному: тогда любой
+      внутренний рефакторинг становится несовместимым изменением для партнёров.
+    linkTitles:
+      - "Сравнение gRPC-сервисов и HTTP API"
+      - "Версионирование gRPC-сервисов"
+      - "JSON transcoding для gRPC в ASP.NET Core"
+  en:
+    title: "REST or gRPC for a public partner API and for dozens of internal services"
+    prompt: |
+      A platform consists of several dozen internal services (mostly .NET, some in Go and Java) and a public
+      API used by hundreds of partners with their own stacks. There is also a browser SPA and a mobile app.
+      Today everything talks HTTP with JSON, but the number of service-to-service calls is growing, latency
+      has appeared and contracts break regularly on releases.
+
+      You need to choose a request-response protocol separately for the public side and for internal calls,
+      planning for several years of platform evolution. What do you choose, which risks do you account for,
+      and how will the contracts evolve?
+    hint: Who are the clients on each side, and what does each protocol demand from the client and from the infrastructure between client and server?
+    answer: |
+      1. **Separate the requirements of the two sides.** The public API serves clients you do not control:
+         any language, browsers, proxies, debugging with `curl`. Internal calls have clients you control together
+         with the infrastructure, and what matters is strict contracts, latency and traffic volume.
+      2. **Public side: REST with JSON, described with OpenAPI.** It works over HTTP/1.1 and HTTP/2 through any
+         proxy and CDN, is callable from a browser without extra layers, is human-readable when you debug a
+         partner's problem, and every stack supports it. Changes go through explicit versions and a deprecation policy.
+      3. **Internal calls: gRPC by default.** The contract is written first in a `.proto` file, and clients and
+         servers are generated for .NET, Go and Java, so contract drift is caught at build time. Protobuf is more
+         compact than JSON, HTTP/2 multiplexes calls over one connection, streaming is built in (server,
+         client, bidirectional), and deadlines and cancellation flow through the call chain.
+      4. **Pay the price of gRPC up front.** HTTP/2 is required along the whole path: ingress, load balancers and
+         the service mesh must support it, trailers included. A long-lived HTTP/2 connection sticks to one instance
+         under L4 load balancing, so you need L7 or client-side balancing. The binary format is harder to debug,
+         so you need service reflection, `grpcurl`, logging and tracing. Browsers cannot call gRPC directly, so the
+         SPA stays on REST (through a BFF or gateway) or uses gRPC-Web.
+      5. **Rules for contract evolution over years.** A shared `.proto` repository with owners; only adding
+         fields and methods is allowed; field numbers are never reused and numbers of removed fields are marked
+         `reserved`; breaking changes go into a new versioned package (`orders.v2`) next to the old one; an
+         automatic compatibility check runs in CI. For the public API the same idea with OpenAPI: diff the specs in CI.
+      6. **A bridge between the sides.** The public model is separate from the internal one: a gateway or facade
+         translates REST into gRPC. For simple cases a gRPC service can also be published as REST through JSON
+         transcoding (ASP.NET Core, available since .NET 7 and in .NET 10), but then the public contract is tied
+         to the internal `.proto`.
+      7. **A decision that is tested, not a dogma.** Simple low-traffic internal services may stay on REST, and
+         many interactions are better made asynchronous through messaging. Record the decision in an ADR and check
+         it with a pilot on a couple of services, measuring latency and maintenance cost.
+    explanation: |
+      Choosing a protocol means choosing who carries the complexity. On the public side the main value is
+      reach: a partner must be able to call the API from any stack, through any corporate proxy, and read the
+      response by eye. REST with JSON gives that, and its cost (larger messages, weak typing without OpenAPI)
+      is negligible next to the cost of every partner who failed to integrate.
+
+      Inside it is the opposite: the clients and the infrastructure are yours, calls are many, and the main pain
+      is contracts that drift between teams. gRPC addresses it with code generation from `.proto` and the strict
+      compatibility rules of Protobuf, while efficient serialization, HTTP/2 multiplexing, streaming and deadline
+      propagation pay off at volume. The price is infrastructure requirements (HTTP/2 along the whole path, L7
+      balancing), harder debugging and no direct browser support. If that price is not planned for, adopting gRPC
+      leads to uneven load across instances and opaque failures.
+
+      Over a horizon of several years the bytes matter less than evolution: rules for adding fields, never
+      reusing numbers, versioned packages and automatic compatibility checks matter more than the choice of
+      serializer. A typical architectural mistake is exposing the internal `.proto` to partners one to one: then
+      every internal refactoring becomes a breaking change for partners.
+    linkTitles:
+      - "Compare gRPC services with HTTP APIs"
+      - "Versioning gRPC services"
+      - "gRPC JSON transcoding in ASP.NET Core"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

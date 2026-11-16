@@ -1,0 +1,176 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNFEYQ2PP9A7V56C4P
+slug: index-sprawl-write-latency-governance
+stack: dotnet
+topic: databases
+level: lead
+type: situation
+grading: self
+tags: [indexes, sql-server, query-store, write-performance, governance]
+links:
+  - url: https://learn.microsoft.com/en-us/sql/relational-databases/system-dynamic-management-objects/sys-dm-db-index-usage-stats-transact-sql
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/sql/relational-databases/sql-server-index-design-guide
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/sql/relational-databases/performance/monitoring-performance-by-using-the-query-store
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/sql/relational-databases/indexes/tune-nonclustered-missing-index-suggestions
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: На ключевой таблице накопились десятки индексов, запись всё медленнее, а команды просят ещё. Как действовать?
+    prompt: |
+      В SQL Server у таблицы `Orders` за несколько лет появилось около сорока некластеризованных индексов.
+      Каждый добавляли под отдельную задачу: медленный отчёт, новый фильтр в API, подсказка о недостающем индексе
+      в плане запроса. За последний год задержка вставки и обновления заказов заметно выросла, а в этом спринте
+      три команды снова просят добавить «всего один индекс».
+
+      Вы технический лидер. Как вы решите, какие индексы менять, как проведёте изменения без риска для
+      production и какой процесс введёте, чтобы ситуация не повторилась?
+    hint: Какие данные сервер уже собирает о том, как часто каждый индекс читается и сколько раз он обновляется, и как убрать индекс так, чтобы его определение сохранилось и его можно было восстановить?
+    answer: |
+      1. **Сначала измерить, ничего не трогая.**
+         - Соединить `sys.indexes` с `sys.dm_db_index_usage_stats` через `LEFT JOIN` и сравнить чтения
+           (`user_seeks`, `user_scans`, `user_lookups`) с записями (`user_updates`). Индекс, который много
+           обновляется и почти не читается, - кандидат на удаление. Индекс без строки в DMV не использовался
+           с момента сброса счётчиков.
+         - Счётчики обнуляются при перезапуске экземпляра, а строки базы удаляются при её отсоединении или
+           закрытии (например, при `AUTO_CLOSE`), поэтому нужны снимки за полный бизнес-цикл, включая закрытие
+           месяца и редкие отчёты.
+         - Стоимость записи по индексам показывает `sys.dm_db_index_operational_stats` (вставки и обновления
+           на листовом уровне, выделения страниц, ожидания латчей); это представление перечислено в разделе о
+           метаданных индексов руководства по проектированию. Query Store показывает, какие запросы на запись
+           замедлились, а по сохранённым в нём планам (XML плана) можно найти запросы, чьи планы ссылаются на
+           конкретный индекс.
+      2. **Классифицировать индексы.**
+         - Неиспользуемые.
+         - Дубликаты с теми же ключевыми столбцами.
+         - Перекрывающиеся: ключ одного является ведущим префиксом ключа другого. Их часто можно слить в один
+           индекс, объединив столбцы `INCLUDE`.
+         - Действительно нужные.
+
+         Отдельно проверить то, что нельзя убирать по статистике: индексы первичного ключа и ограничений
+         уникальности (они обеспечивают правила данных), индексы под внешние ключи, подсказки `WITH (INDEX(...))`
+         в коде и принудительные планы в Query Store, которые ссылаются на индекс.
+      3. **Менять поэтапно и обратимо.**
+         - Определения всех индексов сохранить в репозитории как скрипты миграций.
+         - Проверить изменения на копии с объёмом данных, близким к боевому.
+         - Убирать по одному или небольшими группами, вне пикового времени: отключить некластеризованный индекс
+           через `ALTER INDEX ... DISABLE` (определение остаётся в метаданных) или удалить его при готовом
+           скрипте восстановления.
+         - После каждого шага смотреть в Query Store на регрессии чтения и на выигрыш по записи. Вернуть индекс -
+           `ALTER INDEX ... REBUILD` или `CREATE INDEX` из сохранённого скрипта. На большой таблице это полное
+           построение индекса, поэтому время восстановления нужно оценить заранее.
+      4. **Ввести процесс для новых индексов.**
+         - Индексы на этой таблице создаются только миграциями через code review у владельца таблицы или DBA.
+         - Заявка содержит запрос и частоту его выполнения, фактический план до и после, проверку, нельзя ли
+           расширить существующий индекс, и оценку стоимости для записи.
+         - Подсказки о недостающих индексах - это входные данные для анализа, а не готовое решение.
+         - Регулярный пересмотр по статистике использования и панель с задержкой записи и числом индексов
+           таблицы, чтобы цена была видна всем командам.
+      5. **Спросить, место ли этой нагрузке здесь.** Тяжёлые отчёты можно перенести на реплику для чтения или
+         в отдельное аналитическое хранилище, вместо того чтобы обслуживать их индексами основной OLTP-таблицы.
+    explanation: |
+      Разрастание индексов - типичная проблема общего ресурса. Каждый индекс полезен своему запросу, а цена
+      размазана по всем записям: `INSERT` и `DELETE` обновляют каждый некластеризованный индекс (фильтрованный -
+      только если строка подходит под фильтр), а `UPDATE` - каждый индекс, который содержит изменённые столбцы.
+      Отсюда больше журнала транзакций, блокировок, расщеплений страниц, памяти в буферном пуле и времени на
+      обслуживание. Ни одна команда не отвечает за суммарную стоимость, поэтому без владельца и правил индексов
+      только прибавляется.
+
+      Решение должно опираться на данные, а не на мнения: статистика использования и операционная статистика
+      показывают, что индекс стоит и что он даёт, а Query Store связывает изменения с конкретными запросами и
+      позволяет увидеть регрессию сразу после шага. Главные ловушки - сброс счётчиков после перезапуска (индекс
+      «не используется», потому что статистика собрана за два дня) и редкие, но критичные запросы, поэтому
+      окно наблюдения и поэтапные обратимые изменения важнее скорости чистки.
+
+      Подсказки о недостающих индексах строятся при оптимизации отдельных запросов и не учитывают ни нагрузку
+      в целом, ни стоимость поддержки индекса. Если принимать их без анализа, получаются те самые
+      пересекающиеся индексы. Задача лидера здесь не только техническая: сделать цену видимой, договориться о
+      владельце таблицы и поставить простой, но обязательный фильтр перед каждым новым индексом.
+    linkTitles:
+      - "sys.dm_db_index_usage_stats"
+      - "Руководство по архитектуре и проектированию индексов SQL Server"
+      - "Мониторинг производительности с помощью Query Store"
+      - "Настройка некластеризованных индексов по подсказкам о недостающих индексах"
+  en:
+    title: A core table has dozens of indexes, writes keep slowing down and teams want more. What do you do?
+    prompt: |
+      In SQL Server, the `Orders` table has gathered about forty nonclustered indexes over several years. Each one
+      was added for a separate ticket: a slow report, a new API filter, a missing-index hint in a query plan. Over
+      the last year the latency of inserting and updating orders has grown noticeably, and this sprint three teams
+      again ask for "just one more index".
+
+      You are the tech lead. How do you decide which indexes to change, how do you roll out the changes without
+      risk to production, and what process do you set up so this does not happen again?
+    hint: What data does the server already collect about how often each index is read and how often it is updated, and how can you remove an index in a way that keeps its definition so it can be restored?
+    answer: |
+      1. **Measure first, without touching anything.**
+         - Join `sys.indexes` with `sys.dm_db_index_usage_stats` using a `LEFT JOIN` and compare reads
+           (`user_seeks`, `user_scans`, `user_lookups`) with writes (`user_updates`). An index that is updated
+           a lot and almost never read is a removal candidate. An index with no row in the DMV has not been used
+           since the counters were reset.
+         - The counters are reset when the instance restarts, and the rows of a database are removed when it is
+           detached or shut down (for example with `AUTO_CLOSE`), so collect snapshots over a full business
+           cycle, including month-end close and rare reports.
+         - The write cost per index comes from `sys.dm_db_index_operational_stats` (leaf-level inserts and
+           updates, page allocations, latch waits); the index design guide lists this view in its index
+           metadata section. Query Store shows which write statements got slower, and its stored plans (plan
+           XML) let you find the queries whose plans reference a given index.
+      2. **Classify the indexes.**
+         - Unused.
+         - Duplicates with the same key columns.
+         - Overlapping: the key of one is a leading prefix of the key of another. These can often be merged into
+           one index by combining their `INCLUDE` columns.
+         - Really needed.
+
+         Separately check what must not be removed based on statistics alone: indexes behind primary keys and
+         unique constraints (they enforce data rules), indexes supporting foreign keys, `WITH (INDEX(...))` hints
+         in code, and forced plans in Query Store that reference the index.
+      3. **Change in staged, reversible steps.**
+         - Keep the definitions of all indexes in the repository as migration scripts.
+         - Rehearse the changes on a copy with production-sized data.
+         - Remove one index or a small group at a time, off peak: disable the nonclustered index with
+           `ALTER INDEX ... DISABLE` (its definition stays in the metadata), or drop it with a restore script
+           ready.
+         - After each step watch Query Store for read regressions and for the write gain. To bring an index
+           back, use `ALTER INDEX ... REBUILD` or `CREATE INDEX` from the saved script. On a large table this is
+           a full index build, so estimate the restore time in advance.
+      4. **Set up a process for new indexes.**
+         - Indexes on this table are created only through migrations, with code review by the table owner or DBA.
+         - A request includes the query and how often it runs, the actual plan before and after, a check whether
+           an existing index can be extended instead, and an estimate of the write cost.
+         - Missing-index suggestions are input for analysis, not a ready decision.
+         - A regular review of usage statistics and a dashboard with the table's write latency and index count,
+           so that every team sees the cost.
+      5. **Ask whether this load belongs here.** Heavy reports can move to a readable replica or a separate
+         analytical store instead of being served by indexes on the main OLTP table.
+    explanation: |
+      Index sprawl is a classic shared-resource problem. Each index helps its own query, while the cost is spread
+      over every write: `INSERT` and `DELETE` update every nonclustered index (a filtered one only when the row
+      matches its filter), and `UPDATE` updates every index that contains a changed column. That means more
+      transaction log, more locks, more page splits, more buffer pool memory and longer maintenance. No team owns
+      the total cost, so without an owner and rules indexes only accumulate.
+
+      The decision must rest on data, not opinions: usage and operational statistics show what an index costs and
+      what it gives, and Query Store ties changes to specific queries and shows a regression right after a step.
+      The main traps are counters reset by a restart (an index looks "unused" because the statistics cover two
+      days) and rare but critical queries, which is why the observation window and staged reversible changes
+      matter more than the speed of the cleanup.
+
+      Missing-index suggestions come from the optimization of individual queries and consider neither the overall
+      workload nor the cost of maintaining the index. Accepting them without analysis produces exactly the
+      overlapping indexes seen here. The lead's job is not only technical: make the cost visible, agree on an
+      owner for the table, and put a simple but mandatory gate in front of every new index.
+    linkTitles:
+      - "sys.dm_db_index_usage_stats"
+      - "SQL Server index architecture and design guide"
+      - "Monitor performance by using the Query Store"
+      - "Tune nonclustered indexes with missing index suggestions"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

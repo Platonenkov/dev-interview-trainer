@@ -1,0 +1,100 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WR29CPVHAJVEZ8AQSY
+slug: signalr-hub-instance-field-state
+stack: dotnet
+topic: web-api
+level: senior
+type: find-bug
+grading: auto
+tags: [signalr, hub, state, dependency-injection]
+code:
+  language: csharp
+  harness: none
+  source: |
+    using Microsoft.AspNetCore.SignalR;
+
+    public class ChatHub : Hub
+    {
+        private readonly Dictionary<string, int> _sentByUser = new();
+
+        public async Task SendMessage(string message)
+        {
+            string user = Context.UserIdentifier ?? Context.ConnectionId;
+            _sentByUser.TryGetValue(user, out int sent);
+            sent++;
+            _sentByUser[user] = sent;
+            await Clients.All.SendAsync("ReceiveMessage", user, message, sent);
+        }
+    }
+bugLineSets: [[5]]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/signalr/hubs
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/signalr/scale
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему счётчик сообщений в хабе SignalR всегда равен 1?
+    prompt: |
+      Хаб SignalR должен рассылать каждое сообщение вместе с номером: сколько сообщений этот пользователь
+      отправил всего. На практике у каждого сообщения номер `1`, сколько бы пользователь ни писал.
+      Щёлкните по строке, из-за которой теряется состояние между вызовами.
+    hint: Сколько экземпляров `ChatHub` живёт между двумя вызовами `SendMessage` одного клиента?
+    answer: Строка 5, словарь `_sentByUser` хранится в поле экземпляра хаба.
+    explanation: |
+      Хабы в ASP.NET Core SignalR временные (transient): контейнер DI создаёт новый экземпляр хаба для
+      каждого вызова метода хаба и освобождает его после вызова. Поэтому при каждом `SendMessage` словарь
+      `_sentByUser` создаётся заново и пуст, `TryGetValue` возвращает `0`, и номер всегда равен `1`.
+      Документация прямо требует не хранить состояние в свойствах и полях класса хаба.
+
+      Состояние нужно вынести из хаба:
+
+      - для одного экземпляра сервера - в отдельный сервис, зарегистрированный как singleton
+        (`AddSingleton<MessageCounter>()`), и внедрить его в конструктор хаба. Внутри сервиса нужна
+        потокобезопасная структура, например `ConcurrentDictionary<string, int>` с `AddOrUpdate`:
+        вызовы разных клиентов выполняются параллельно, и обычный `Dictionary` привёл бы к состоянию гонки;
+      - для нескольких экземпляров сервера или если счётчик должен пережить перезапуск - во внешнее
+        хранилище, например Redis или базу данных.
+
+      Сделать поле `static` - плохое исправление: состояние привязывается к процессу, `Dictionary` остаётся
+      непотокобезопасным, а при масштабировании на несколько серверов у каждого будет свой счётчик.
+      `Context.Items` тоже не подходит: эта коллекция живёт в рамках одного соединения, а у пользователя
+      их может быть несколько.
+    linkTitles:
+      - "Использование хабов в ASP.NET Core SignalR"
+      - "Масштабирование ASP.NET Core SignalR"
+  en:
+    title: Why is the message counter in a SignalR hub always 1?
+    prompt: |
+      A SignalR hub should broadcast every message together with a number: how many messages this user
+      has sent in total. In practice every message carries the number `1`, no matter how much the user writes.
+      Click the line that makes the state get lost between calls.
+    hint: How many `ChatHub` instances live between two `SendMessage` calls from the same client?
+    answer: Line 5, the dictionary `_sentByUser` is stored in an instance field of the hub.
+    explanation: |
+      Hubs in ASP.NET Core SignalR are transient: the DI container creates a new hub instance for each hub
+      method call and disposes it after the call. So on every `SendMessage` the `_sentByUser` dictionary is
+      created again and is empty, `TryGetValue` returns `0`, and the number is always `1`. The documentation
+      explicitly says not to store state in properties or fields of the hub class.
+
+      The state must move out of the hub:
+
+      - for a single server instance, into a separate service registered as a singleton
+        (`AddSingleton<MessageCounter>()`) and injected into the hub constructor. The service needs a
+        thread-safe structure such as `ConcurrentDictionary<string, int>` with `AddOrUpdate`: calls from
+        different clients run in parallel, and a plain `Dictionary` would cause a race condition;
+      - for several server instances, or if the counter must survive a restart, into an external store such
+        as Redis or a database.
+
+      Making the field `static` is a poor fix: the state is tied to the process, `Dictionary` is still not
+      thread-safe, and after scaling out to several servers each one has its own counter. `Context.Items`
+      does not fit either: that collection lives for one connection, and a user may have several.
+    linkTitles:
+      - "Use hubs in ASP.NET Core SignalR"
+      - "ASP.NET Core SignalR production hosting and scaling"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  noRunReason: An ASP.NET Core SignalR hub needs the ASP.NET Core shared framework, a running host and connected clients, which the console sandbox does not provide.

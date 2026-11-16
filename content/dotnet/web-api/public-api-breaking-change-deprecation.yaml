@@ -1,0 +1,116 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WR2G57G5YTA5SQNRHQ
+slug: public-api-breaking-change-deprecation
+stack: dotnet
+topic: web-api
+level: lead
+type: situation
+grading: self
+tags: [api-versioning, deprecation, sunset-header, breaking-changes]
+links:
+  - url: https://www.rfc-editor.org/rfc/rfc8594
+    lang: en
+    kind: spec
+  - url: https://learn.microsoft.com/en-us/azure/architecture/best-practices/api-design
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как выпустить ломающее изменение в публичном API, которым пользуются внешние партнёры?
+    prompt: |
+      Вы ведёте команду, которая поддерживает публичный REST API. Им пользуются около 40 внешних партнёров,
+      часть из них обновляет интеграцию раз в год. Продукт требует изменить ответ `GET /orders/{id}`:
+      поле `amount` из числа становится объектом `{ value, currency }`, а набор значений `status` меняется.
+      Старые клиенты при таком ответе упадут на десериализации или неверно обработают статусы.
+
+      Как команда выпустит это изменение, не сломав партнёров, и когда можно будет убрать старый контракт?
+    hint: Партнёры обновляют свои интеграции по своему графику, а не по вашему. Как дать им время и как узнать, что старым контрактом уже никто не пользуется?
+    answer: |
+      1. **Убедиться, что ломающее изменение неизбежно.** Можно ли сделать его аддитивным: добавить поле
+         `money` рядом с `amount`, а не менять тип? Если нет - зафиксировать решение и его цену: команда
+         какое-то время поддерживает две версии контракта.
+      2. **Выпустить v2 рядом с v1.** Новый контракт доступен по отдельной версии (путь, заголовок или тип
+         содержимого - по уже принятой в API схеме версионирования). Поведение v1 не меняется: бизнес-логика
+         общая, а v1 получает свой маппинг ответа. Контрактные тесты на обе версии, чтобы v1 не сломался случайно.
+      3. **Объявить окно депрекации и договориться о сроках.** Changelog, руководство по миграции,
+         тестовая среда с v2, адресная рассылка партнёрам. Срок отключения согласуется с договорными
+         обязательствами (SLA) и с самыми медленными партнёрами, а не только назначается.
+      4. **Добавить машиночитаемые сигналы.** В ответах v1 - заголовок `Deprecation` (RFC 9745) и заголовок
+         `Sunset` с датой отключения (RFC 8594), плюс `Link` на страницу с описанием миграции. В OpenAPI
+         операции v1 помечаются `deprecated: true`.
+      5. **Измерять использование.** Метрики запросов по версии и по клиенту (ключ API, client id). Список
+         партнёров, которые всё ещё ходят в v1, разбирается регулярно, с ними связываются напрямую.
+      6. **Отключать по данным, а не только по календарю.** Перед датой можно провести короткие плановые
+         отключения v1 (brownout), чтобы выявить забытые интеграции. Удалять v1 после наступления даты и когда
+         трафик близок к нулю; оставшимся клиентам отвечать понятной ошибкой (например, `410 Gone` со ссылкой
+         на миграцию), а не непредсказуемым сбоем.
+      7. **Закрепить процесс.** Политика версионирования и депрекации в документации API, правило
+         «только аддитивные изменения внутри версии», проверка ломающих изменений контракта в CI и на code review.
+    explanation: |
+      Внешние клиенты разворачиваются независимо от вас, поэтому одновременный переход невозможен: любое
+      изменение контракта «на месте» сломает тех, кто не успел обновиться. Отсюда главный принцип - старая и
+      новая версии живут параллельно, а старая убирается только после миграции клиентов.
+
+      `Deprecation` и `Sunset` означают разное. Депрекация говорит, что ресурс не рекомендуется к
+      использованию, но продолжает работать. `Sunset` (RFC 8594) сообщает момент, после которого ресурс,
+      скорее всего, перестанет отвечать. Это подсказка для клиентов и инструментов, а не гарантия: многие
+      интеграции заголовки не читают, поэтому прямое общение с партнёрами и мониторинг использования остаются
+      основными инструментами.
+
+      Для лида важна цена решения: каждая параллельная версия - это код, тесты и поддержка. Поэтому сначала
+      ищут аддитивный вариант, окно депрекации делают конечным и согласованным, а решение об отключении
+      принимают по реальному трафику, а не только по дате.
+    linkTitles:
+      - "RFC 8594: заголовок Sunset в HTTP"
+      - "Рекомендации по проектированию веб-API"
+  en:
+    title: How do you ship a breaking change to a public API used by external partners?
+    prompt: |
+      You lead the team that maintains a public REST API. About 40 external partners use it, and some of them
+      update their integration once a year. Product needs to change the response of `GET /orders/{id}`:
+      the `amount` field changes from a number to an object `{ value, currency }`, and the set of `status`
+      values changes. Old clients will fail to deserialize such a response or handle the statuses wrongly.
+
+      How does the team ship this change without breaking partners, and when can the old contract be removed?
+    hint: Partners update their integrations on their schedule, not yours. How do you give them time, and how do you find out that nobody uses the old contract any more?
+    answer: |
+      1. **Make sure the breaking change is unavoidable.** Can it be made additive: add a `money` field next
+         to `amount` instead of changing the type? If not, record the decision and its cost: the team will
+         support two versions of the contract for a while.
+      2. **Ship v2 alongside v1.** The changed contract is available as a separate version (path, header or
+         media type, following the versioning scheme the API already uses). The behaviour of v1 does not change:
+         the business logic is shared and v1 gets its own response mapping. Contract tests for both versions keep
+         v1 from breaking by accident.
+      3. **Announce a deprecation window and agree on dates.** A changelog, a migration guide, a sandbox with
+         v2 and direct messages to partners. The shutdown date is aligned with contractual obligations (SLA) and
+         with the slowest partners, not just announced.
+      4. **Add machine-readable signals.** v1 responses carry the `Deprecation` header (RFC 9745) and the
+         `Sunset` header with the shutdown date (RFC 8594), plus a `Link` to the migration page. In OpenAPI the
+         v1 operations are marked `deprecated: true`.
+      5. **Measure usage.** Request metrics per version and per client (API key, client id). The list of
+         partners still calling v1 is reviewed regularly, and they are contacted directly.
+      6. **Retire by data, not only by calendar.** Before the date you can run short planned v1 outages
+         (brownouts) to surface forgotten integrations. Remove v1 after the date has passed and traffic is close
+         to zero; answer remaining clients with a clear error (for example `410 Gone` with a link to the
+         migration guide), not an unpredictable failure.
+      7. **Lock in the process.** A versioning and deprecation policy in the API documentation, an
+         "additive changes only within a version" rule, and checks for breaking contract changes in CI and code review.
+    explanation: |
+      External clients deploy independently of you, so a simultaneous switch is impossible: any in-place change
+      of the contract breaks everyone who has not updated yet. Hence the main principle: the old and the new
+      version run in parallel, and the old one is removed only after clients have migrated.
+
+      `Deprecation` and `Sunset` mean different things. Deprecation says the resource is discouraged but still
+      works. `Sunset` (RFC 8594) announces the point in time after which the resource is likely to become
+      unresponsive. It is a hint for clients and tools, not a guarantee: many integrations never read these
+      headers, so direct communication with partners and usage monitoring stay the main tools.
+
+      For a lead the cost of the decision matters: every parallel version means code, tests and support. That
+      is why you look for an additive option first, keep the deprecation window finite and agreed, and decide on
+      the shutdown from real traffic, not only from the date.
+    linkTitles:
+      - "RFC 8594: The Sunset HTTP Header Field"
+      - "Web API design best practices"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

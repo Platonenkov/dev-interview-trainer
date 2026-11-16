@@ -1,0 +1,96 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WPRV0YM7SAA017ZDHB
+slug: jwt-algorithm-confusion
+stack: dotnet
+topic: security
+level: senior
+type: single
+grading: auto
+tags: [jwt, jws, algorithm-confusion]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://www.rfc-editor.org/rfc/rfc8725
+    lang: en
+    kind: spec
+  - url: https://learn.microsoft.com/en-us/dotnet/api/microsoft.identitymodel.tokens.tokenvalidationparameters
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как подделать JWT, если валидатор доверяет заголовку alg?
+    prompt: |
+      API выдаёт токены, подписанные RS256: закрытый ключ RSA есть только у сервера, открытый ключ опубликован в JWKS.
+      Валидатор берёт алгоритм из заголовка `alg` входящего токена и проверяет подпись этим алгоритмом с настроенным
+      ключом проверки. Как атакующий может подделать токен с произвольными claims?
+    hint: Валидатор позволяет токену выбрать алгоритм. Все ли алгоритмы JWS используют пару ключей?
+    options:
+      a: 'Поставить в заголовке `"alg": "HS256"` и подписать токен HMAC, используя опубликованный открытый ключ RSA как секрет.'
+      b: 'Вычислить закрытый ключ RSA по открытому ключу из JWKS и подписать токен RS256.'
+      c: 'Изменить claims в payload, оставив исходный заголовок и подпись RS256 настоящего токена.'
+      d: 'Поставить в заголовке `"alg": "RS512"` и оставить исходную подпись RS256.'
+    optionExplanations:
+      b: Восстановить закрытый ключ RSA достаточной длины по открытому вычислительно невозможно, и эта атака закрытый ключ вообще не требует.
+      c: Подпись JWS вычисляется над заголовком и payload вместе, поэтому после изменения claims старая подпись не пройдёт проверку.
+      d: RS512 хеширует входные данные SHA-512, поэтому подпись, созданная с SHA-256, не пройдёт проверку, а новую без закрытого ключа не создать.
+    answer: |
+      Поставить `"alg": "HS256"` и подписать токен HMAC, используя открытый ключ RSA как секрет.
+    explanation: |
+      HS256 - симметричный алгоритм: один и тот же секрет подписывает и проверяет. Если валидатор позволяет токену
+      выбрать алгоритм, он передаст в HMAC тот ключ, который у него настроен, то есть байты открытого ключа RSA.
+      Открытый ключ известен всем, поэтому атакующий вычисляет такую же HMAC-подпись и получает токен, который
+      проходит проверку. Это и есть атака подмены алгоритма (algorithm confusion). Атака `"alg": "none"` имеет ту
+      же причину: решение о проверке принимает сам токен.
+
+      RFC 8725 требует, чтобы библиотека позволяла вызывающему коду задать допустимые алгоритмы и не использовала
+      другие, проверяла соответствие `alg` фактически используемому алгоритму, а каждый ключ применялся ровно с
+      одним алгоритмом. В .NET не стоит полагаться на то, какие проверки библиотека делает сама: допустимые
+      алгоритмы задают явно в `TokenValidationParameters` через `ValidAlgorithms = new[] { SecurityAlgorithms.RsaSha256 }`
+      (или собственный `AlgorithmValidator`), а в качестве ключа проверки указывают только ключ RSA.
+    linkTitles:
+      - "RFC 8725: JSON Web Token Best Current Practices"
+      - "Класс TokenValidationParameters"
+  en:
+    title: How can an attacker forge a JWT when the validator trusts the alg header?
+    prompt: |
+      An API issues tokens signed with RS256: only the server has the RSA private key, and the public key is published
+      in a JWKS. The validator takes the algorithm from the `alg` header of the incoming token and verifies the
+      signature with that algorithm and the configured verification key. How can an attacker forge a token with
+      arbitrary claims?
+    hint: The validator lets the token choose the algorithm. Does every JWS algorithm use a key pair?
+    options:
+      a: 'Set `"alg": "HS256"` in the header and sign the token with HMAC, using the published RSA public key as the secret.'
+      b: 'Derive the RSA private key from the public key in the JWKS and sign the token with RS256.'
+      c: 'Change the claims in the payload and keep the original header and RS256 signature of a real token.'
+      d: 'Set `"alg": "RS512"` in the header and keep the original RS256 signature.'
+    optionExplanations:
+      b: Recovering a private key of adequate length from an RSA public key is computationally infeasible, and this attack does not need the private key at all.
+      c: The JWS signature covers the header and the payload together, so after the claims change the old signature fails verification.
+      d: RS512 hashes the input with SHA-512, so a signature created with SHA-256 fails verification, and a new one cannot be made without the private key.
+    answer: |
+      Set `"alg": "HS256"` and sign the token with HMAC, using the RSA public key as the secret.
+    explanation: |
+      HS256 is a symmetric algorithm: the same secret signs and verifies. If the validator lets the token choose the
+      algorithm, it passes its configured key into HMAC, which here means the bytes of the RSA public key. The public
+      key is known to everyone, so the attacker computes the same HMAC signature and gets a token that passes
+      verification. This is the algorithm confusion attack. The `"alg": "none"` attack has the same root cause: the
+      token itself decides how it is verified.
+
+      RFC 8725 requires libraries to let the caller specify the allowed algorithms and not to use any others, to
+      check that `alg` matches the algorithm actually used, and to use each key with exactly one algorithm. In .NET,
+      do not rely on whatever checks the library performs on its own: set the allowed algorithms explicitly in
+      `TokenValidationParameters` with `ValidAlgorithms = new[] { SecurityAlgorithms.RsaSha256 }` (or a custom
+      `AlgorithmValidator`), and configure only the RSA key as the verification key.
+    linkTitles:
+      - "RFC 8725: JSON Web Token Best Current Practices"
+      - "TokenValidationParameters class"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14

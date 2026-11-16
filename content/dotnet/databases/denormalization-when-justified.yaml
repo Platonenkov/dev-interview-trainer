@@ -1,0 +1,97 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNCS0RWGJ2CKYBFR2T
+slug: denormalization-when-justified
+stack: dotnet
+topic: databases
+level: middle
+type: open
+grading: self
+tags: [normalization, denormalization, schema-design, performance]
+links:
+  - url: https://learn.microsoft.com/en-us/office/troubleshoot/access/database-normalization-description
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/sql/relational-databases/views/create-indexed-views
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Когда оправдана денормализация реляционной схемы и чем за неё приходится платить?
+    prompt: |
+      В каких случаях разумно денормализовать реляционную схему, то есть намеренно хранить одни и те же данные
+      в нескольких местах? С чем вы при этом соглашаетесь и что обязательно должны предусмотреть?
+    hint: Что вы выигрываете на чтении и во что обходится каждая лишняя копия данных при записи?
+    answer: |
+      - **Когда.** Только при измеренной проблеме чтения: запрос с тяжёлыми соединениями или агрегатами
+        выполняется слишком часто или слишком долго, и это видно в планах запросов и метриках. Перед этим
+        стоит исчерпать более дешёвые средства: индексы, в том числе покрывающие, переписывание запроса,
+        индексированное (материализованное) представление, кэш.
+      - **С чем соглашаетесь.** Данные дублируются: больше места, дороже запись, а копии могут разойтись.
+        Возвращаются аномалии обновления, от которых защищала нормализация: изменили значение в одном месте
+        и забыли в другом.
+      - **Что предусмотреть.**
+        - Один источник истины: нормализованные данные остаются главными, денормализованная копия считается
+          производной и при необходимости пересчитывается из них.
+        - Явный способ синхронизации: обновление в той же транзакции, индексированное представление, которое
+          поддерживает сама СУБД, или фоновое обновление по событиям с заранее согласованной допустимой
+          задержкой.
+        - Проверку расхождений (сверку копии с источником) и описание решения, чтобы следующий разработчик
+          знал, откуда берутся данные и кто их обновляет.
+    explanation: |
+      Нормализация хранит каждый факт один раз, поэтому запись проста и согласованность обеспечивает сама схема.
+      Цена - соединения и агрегаты при чтении. Денормализация переносит работу с чтения на запись: запрос
+      становится дешевле, но каждое изменение исходных данных должно обновить и все копии. Если механизм
+      синхронизации не определён, копии рано или поздно расходятся, и уже нельзя сказать, какое значение верное.
+
+      Поэтому решение принимают по измерениям, а не заранее «для скорости»: часто индекс или переписанный запрос
+      дают тот же выигрыш без дублирования. Индексированное представление - промежуточный вариант: результат
+      соединения или агрегата хранится физически, но поддерживается самой СУБД в той же транзакции, что и
+      изменение базовых таблиц, хотя и замедляет запись в них.
+
+      Не всякое повторение данных - денормализация. Цена товара или адрес доставки в момент оформления заказа -
+      это отдельный исторический факт, а не копия текущего значения, и хранить его в заказе правильно даже в
+      нормализованной схеме.
+    linkTitles:
+      - "Основы нормализации баз данных"
+      - "Создание индексированных представлений в SQL Server"
+  en:
+    title: When is denormalizing a relational schema justified, and what does it cost?
+    prompt: |
+      When is it reasonable to denormalize a relational schema, that is, to deliberately store the same data
+      in more than one place? What do you accept when you do it, and what must you put in place?
+    hint: What do you gain on reads, and what does every extra copy of the data cost on writes?
+    answer: |
+      - **When.** Only for a measured read problem: a query with heavy joins or aggregates runs too often or too
+        slowly, and execution plans and metrics show it. Exhaust the cheaper tools first: indexes, including
+        covering ones, rewriting the query, an indexed (materialized) view, a cache.
+      - **What you accept.** Data is duplicated: more storage, more expensive writes, and copies that can
+        diverge. The update anomalies that normalization prevented come back: a value is changed in one place
+        and forgotten in another.
+      - **What you put in place.**
+        - One source of truth: the normalized data stays primary, and the denormalized copy is derived from it
+          and can be rebuilt from it when needed.
+        - A defined way to keep copies in sync: an update in the same transaction, an indexed view that the
+          database engine maintains itself, or a background update driven by events with an agreed acceptable
+          delay.
+        - A check for divergence (reconciling the copy with the source) and a written record of the decision,
+          so the next developer knows where the data comes from and who updates it.
+    explanation: |
+      Normalization stores each fact once, so writes are simple and the schema itself keeps the data consistent.
+      The price is joins and aggregates on reads. Denormalization moves work from reads to writes: the query
+      gets cheaper, but every change to the source data must also update every copy. Without a defined sync
+      mechanism the copies drift apart sooner or later, and nobody can tell which value is correct.
+
+      That is why the decision is based on measurements, not made up front "for speed": an index or a rewritten
+      query often gives the same gain without duplication. An indexed view is a middle ground: the result of a
+      join or aggregate is stored physically, but the engine maintains it in the same transaction as the change
+      to the base tables, at the cost of slower writes to them.
+
+      Not every repetition of data is denormalization. The product price or the shipping address at the moment
+      an order was placed is a separate historical fact, not a copy of the current value, and storing it on the
+      order is correct even in a normalized schema.
+    linkTitles:
+      - "Description of database normalization basics"
+      - "Create indexed views in SQL Server"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13

@@ -1,0 +1,83 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNT5GK641B401AEKVZ
+slug: asnotracking-read-only-queries
+stack: dotnet
+topic: ef-core
+level: junior
+type: open
+grading: self
+tags: [ef-core, change-tracking, asnotracking, performance]
+links:
+  - url: https://learn.microsoft.com/en-us/ef/core/querying/tracking
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что меняет AsNoTracking в запросе EF Core и когда его использовать?
+    prompt: |
+      Что меняется, если добавить `AsNoTracking()` в запрос EF Core, например
+      `db.Products.AsNoTracking().Where(p => p.IsActive).ToList()`? В каких случаях его стоит применять, а в
+      каких нет?
+    hint: Что контекст делает с каждой сущностью, которую вернул обычный запрос, и зачем ему это нужно?
+    answer: |
+      - **Что меняется.** Запрос возвращает сущности, которые контекст не отслеживает: они не попадают в трекер
+        изменений, EF Core не сохраняет снимок их исходных значений и не ведёт учёт идентичности.
+      - **Выигрыш.** Запрос выполняется быстрее и расходует меньше памяти, особенно на больших выборках,
+        потому что не нужно готовить данные для отслеживания изменений.
+      - **Цена.** Изменения таких сущностей `SaveChanges` не сохранит: контекст о них не знает. Чтобы сохранить
+        правку, сущность нужно снова присоединить (`Attach`, `Update`) или загрузить отслеживающим запросом.
+        Кроме того, одна и та же строка, встретившаяся в результате дважды, превращается в два разных
+        объекта (если не использовать `AsNoTrackingWithIdentityResolution()`).
+      - **Когда применять.** Для данных только на чтение: списки, отчёты, ответы GET-эндпоинтов, данные для
+        отображения. Если весь контекст работает только на чтение, можно включить режим по умолчанию через
+        `UseQueryTrackingBehavior(QueryTrackingBehavior.NoTracking)`.
+      - **Когда не применять.** Когда загруженные сущности будут изменены и сохранены в том же контексте.
+    explanation: |
+      По умолчанию запрос, возвращающий сущности, отслеживающий: контекст регистрирует каждую сущность в
+      трекере изменений и запоминает её исходные значения, чтобы при `SaveChanges` понять, что изменилось.
+      Эта работа нужна только тогда, когда данные будут меняться. Для чтения она лишняя, и `AsNoTracking()`
+      её отключает.
+
+      Типичная ошибка - загрузить сущность с `AsNoTracking()`, поменять свойство, вызвать `SaveChanges` и
+      удивиться, что в базе ничего не изменилось: трекер эту сущность не видел, поэтому и сохранять нечего.
+
+      Проекции в DTO через `Select` сами по себе не создают отслеживаемых сущностей, поэтому для них
+      `AsNoTracking()` обычно ничего не добавляет. Поведение описано для EF Core 10.
+    linkTitles:
+      - "Отслеживающие и неотслеживающие запросы"
+  en:
+    title: What does AsNoTracking change in an EF Core query, and when should you use it?
+    prompt: |
+      What changes when you add `AsNoTracking()` to an EF Core query, for example
+      `db.Products.AsNoTracking().Where(p => p.IsActive).ToList()`? When should you use it, and when not?
+    hint: What does the context do with every entity returned by a regular query, and why does it need that?
+    answer: |
+      - **What changes.** The query returns entities that the context does not track: they are not added to
+        the change tracker, EF Core keeps no snapshot of their original values and does no identity bookkeeping.
+      - **The gain.** The query runs faster and uses less memory, especially for large results, because no
+        change tracking information has to be set up.
+      - **The cost.** `SaveChanges` does not save changes to these entities: the context does not know about
+        them. To save an edit you must attach the entity again (`Attach`, `Update`) or load it with a tracking
+        query. Also, the same row that appears twice in the result becomes two different objects (unless you
+        use `AsNoTrackingWithIdentityResolution()`).
+      - **When to use it.** For read-only data: lists, reports, GET endpoint responses, data for display. If a
+        whole context is read-only, you can make it the default with
+        `UseQueryTrackingBehavior(QueryTrackingBehavior.NoTracking)`.
+      - **When not to use it.** When the loaded entities will be changed and saved in the same context.
+    explanation: |
+      By default a query that returns entities is a tracking query: the context registers every entity in the
+      change tracker and remembers its original values, so that `SaveChanges` can find out what changed. That
+      work is needed only when the data will change. For reading it is wasted, and `AsNoTracking()` turns it off.
+
+      A common mistake is to load an entity with `AsNoTracking()`, change a property, call `SaveChanges` and
+      be surprised that nothing changed in the database: the tracker never saw the entity, so there is
+      nothing to save.
+
+      Projections into DTOs with `Select` do not produce tracked entities by themselves, so `AsNoTracking()`
+      usually adds nothing there. The behavior is described for EF Core 10.
+    linkTitles:
+      - "Tracking vs. no-tracking queries"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"

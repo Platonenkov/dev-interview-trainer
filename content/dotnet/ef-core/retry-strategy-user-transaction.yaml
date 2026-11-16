@@ -1,0 +1,124 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WN4RW95K7669R9S4RE
+slug: retry-strategy-user-transaction
+stack: dotnet
+topic: ef-core
+level: senior
+type: single
+grading: auto
+tags: [ef-core, transactions, connection-resiliency, execution-strategy]
+code:
+  language: csharp
+  harness: none
+  source: |
+    // Startup configuration
+    builder.Services.AddDbContext<ShopContext>(options =>
+        options.UseSqlServer(connectionString, sql => sql.EnableRetryOnFailure()));
+
+    // OrderService.PlaceAsync
+    await using var transaction = await db.Database.BeginTransactionAsync();
+
+    db.Orders.Add(order);
+    await db.SaveChangesAsync();
+
+    var stock = await db.Stock.SingleAsync(s => s.ProductId == order.ProductId);
+    stock.Quantity -= order.Quantity;
+    await db.SaveChangesAsync();
+
+    await transaction.CommitAsync();
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/ef/core/miscellaneous/connection-resiliency
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/ef/core/saving/transactions
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что произойдёт с BeginTransaction при включённом EnableRetryOnFailure?
+    prompt: |
+      Контекст настроен с `EnableRetryOnFailure()`. Сервис сохраняет заказ и списывает остаток в одной явной
+      транзакции, как показано в коде. Что произойдёт в EF Core 10 и как правильно написать этот блок?
+    hint: Какую единицу работы стратегия выполнения может повторить и что она знает о транзакции, которую открыл ваш код?
+    options:
+      a: "Код работает: при временной ошибке стратегия повторит только упавший `SaveChangesAsync`, а транзакция продолжится."
+      b: "Код упадёт с `InvalidOperationException`: стратегия с повторами не поддерживает транзакции, начатые пользователем. Весь блок от `BeginTransactionAsync` до `CommitAsync` нужно передать делегатом в `db.Database.CreateExecutionStrategy().ExecuteAsync(...)`."
+      c: "Код работает: при временной ошибке стратегия сама перезапустит весь блок, начиная с `BeginTransactionAsync`."
+      d: "Код упадёт с `InvalidOperationException`. Исправление - обернуть в `strategy.ExecuteAsync` каждый вызов `SaveChangesAsync` по отдельности, а транзакцию оставить снаружи."
+    optionExplanations:
+      a: "Повторять одну команду внутри открытой транзакции небезопасно: после обрыва соединения транзакция уже откатана вместе с первой вставкой. Поэтому EF Core не повторяет такие операции, а отказывается их выполнять и выбрасывает исключение."
+      c: "Стратегия видит только операции, которые ей передали, то есть отдельные вызовы `SaveChangesAsync`. О коде между ними и о начале транзакции она не знает и перезапустить его не может, поэтому блок нужно передать ей явно."
+      d: "Транзакция по-прежнему открыта вне стратегии, поэтому каждый вложенный `ExecuteAsync` увидит её и выбросит то же исключение. К тому же повтор одного шага не восстановит транзакцию, которую откатил сбой."
+    answer: "Код упадёт с `InvalidOperationException`: стратегия с повторами не поддерживает транзакции, начатые пользователем. Весь блок от `BeginTransactionAsync` до `CommitAsync` нужно передать делегатом в `db.Database.CreateExecutionStrategy().ExecuteAsync(...)`."
+    explanation: |
+      Стратегия выполнения с повторами повторяет переданную ей операцию целиком. Отдельный `SaveChangesAsync`
+      внутри транзакции, открытой кодом, она безопасно повторить не может: после временной ошибки, например обрыва
+      соединения, транзакция на сервере уже откатана, и повтор одной команды привёл бы к частично сохранённым
+      данным. Поэтому EF Core, обнаружив открытую пользователем транзакцию в момент выполнения операции через
+      стратегию (здесь - на первом `SaveChangesAsync`), выбрасывает `InvalidOperationException`. Сообщение
+      говорит, что настроенная стратегия не поддерживает транзакции, начатые пользователем, и советует
+      использовать стратегию из `CreateExecutionStrategy()`.
+
+      Правильный шаблон: `var strategy = db.Database.CreateExecutionStrategy();`, затем
+      `await strategy.ExecuteAsync(async () => { ... });`, и внутри делегата открывается транзакция, выполняются
+      оба `SaveChangesAsync` и вызывается `CommitAsync`. Тогда единицей повтора становится вся транзакция.
+
+      Делегат должен быть безопасен для повторного запуска с начала: не полагаться на состояние, оставшееся от
+      упавшей попытки, например создавать контекст внутри делегата или заново читать данные. Отдельный риск -
+      обрыв соединения во время фиксации: неизвестно, зафиксирована ли транзакция, поэтому документация советует
+      проверять результат (например, через `ExecuteInTransaction` с делегатом проверки) или делать операцию
+      идемпотентной. Поведение описано для EF Core 10.
+    linkTitles:
+      - "Устойчивость подключений в EF Core"
+      - "Транзакции в EF Core"
+  en:
+    title: What happens to BeginTransaction when EnableRetryOnFailure is enabled?
+    prompt: |
+      The context is configured with `EnableRetryOnFailure()`. The service saves an order and decrements stock in
+      one explicit transaction, as shown in the code. What happens in EF Core 10, and how should this block be written?
+    hint: What unit of work can the execution strategy retry, and what does it know about the transaction your code opened?
+    options:
+      a: "The code works: on a transient error the strategy retries only the failed `SaveChangesAsync`, and the transaction continues."
+      b: "The code fails with `InvalidOperationException`: a retrying strategy does not support user-initiated transactions. The whole block from `BeginTransactionAsync` to `CommitAsync` must be passed as a delegate to `db.Database.CreateExecutionStrategy().ExecuteAsync(...)`."
+      c: "The code works: on a transient error the strategy itself restarts the whole block from `BeginTransactionAsync`."
+      d: "The code fails with `InvalidOperationException`. The fix is to wrap each `SaveChangesAsync` call separately in `strategy.ExecuteAsync` and keep the transaction outside."
+    optionExplanations:
+      a: "Retrying a single command inside an open transaction is unsafe: after a connection drop the transaction is already rolled back together with the first insert. So EF Core does not retry such operations; it refuses to run them and throws an exception."
+      c: "The strategy sees only the operations passed to it, that is, the individual `SaveChangesAsync` calls. It knows nothing about the code between them or about the start of the transaction and cannot rerun it, so the block must be handed to it explicitly."
+      d: "The transaction is still opened outside the strategy, so each nested `ExecuteAsync` sees it and throws the same exception. Besides, retrying one step cannot restore a transaction that the failure rolled back."
+    answer: "The code fails with `InvalidOperationException`: a retrying strategy does not support user-initiated transactions. The whole block from `BeginTransactionAsync` to `CommitAsync` must be passed as a delegate to `db.Database.CreateExecutionStrategy().ExecuteAsync(...)`."
+    explanation: |
+      A retrying execution strategy retries the operation passed to it as a whole. It cannot safely retry a single
+      `SaveChangesAsync` inside a transaction opened by your code: after a transient error such as a connection
+      drop, the transaction on the server is already rolled back, and retrying one command would leave partially
+      saved data. So when EF Core finds a user-opened transaction at the moment an operation runs through the
+      strategy (here, at the first `SaveChangesAsync`), it throws `InvalidOperationException`. The message says
+      that the configured strategy does not support user-initiated transactions and suggests using the strategy
+      returned by `CreateExecutionStrategy()`.
+
+      The correct pattern: `var strategy = db.Database.CreateExecutionStrategy();`, then
+      `await strategy.ExecuteAsync(async () => { ... });`, and inside the delegate you begin the transaction, run
+      both `SaveChangesAsync` calls and call `CommitAsync`. The whole transaction then becomes the unit of retry.
+
+      The delegate must be safe to run again from the start: it must not rely on state left by the failed attempt,
+      for example it creates the context inside the delegate or reads the data again. A separate risk is a
+      connection drop during commit: it is unknown whether the transaction was committed, so the documentation
+      advises verifying the result (for example with `ExecuteInTransaction` and a verification delegate) or making
+      the operation idempotent. The behavior is described for EF Core 10.
+    linkTitles:
+      - "Connection resiliency in EF Core"
+      - "Transactions in EF Core"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"
+  noRunReason: The snippet uses EF Core types and needs a SQL Server provider and database, which the sandbox does not have.

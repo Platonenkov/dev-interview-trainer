@@ -1,0 +1,113 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WM4XFPHZA68GTXAPSA
+slug: response-header-set-after-next
+stack: dotnet
+topic: aspnet-core
+level: middle
+type: find-bug
+grading: auto
+tags: [middleware, http-response, headers]
+code:
+  language: csharp
+  harness: none
+  source: |
+    using System.Diagnostics;
+
+    public class TimingHeaderMiddleware
+    {
+        private readonly RequestDelegate _next;
+
+        public TimingHeaderMiddleware(RequestDelegate next)
+        {
+            _next = next;
+        }
+
+        public async Task InvokeAsync(HttpContext context)
+        {
+            var stopwatch = Stopwatch.StartNew();
+
+            await _next(context);
+
+            stopwatch.Stop();
+            context.Response.Headers["X-Elapsed-Ms"] = stopwatch.ElapsedMilliseconds.ToString();
+        }
+    }
+bugLineSets: [[19]]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/best-practices
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/middleware/write
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строку middleware, которая меняет заголовки уже начатого ответа
+    prompt: |
+      Middleware должен добавлять к каждому ответу заголовок `X-Elapsed-Ms` со временем обработки запроса.
+      Он подключён через `app.UseMiddleware<TimingHeaderMiddleware>()` перед конечными точками, которые
+      возвращают JSON. На таких запросах в логе появляется `InvalidOperationException` с сообщением
+      "Headers are read-only, response has already started.", а заголовок до клиента не доходит.
+      Щёлкните по строке с дефектом.
+    hint: Что уже отправлено клиенту к моменту, когда `await _next(context)` вернул управление?
+    answer: Строка 19, запись заголовка `X-Elapsed-Ms` после `await _next(context)`.
+    explanation: |
+      Конечная точка, которая пишет тело ответа, тем самым начинает ответ: при первой записи в `Response.Body`
+      сервер отправляет клиенту строку состояния и заголовки, а `Response.HasStarted` становится `true`. После
+      этого коллекция `Response.Headers` доступна только для чтения, и попытка изменить её в строке 19
+      выбрасывает `InvalidOperationException`. Заголовки уже ушли клиенту, поэтому добавить к ним что-то
+      задним числом нельзя.
+
+      Дефект проявляется не на всех запросах: если конечная точка не пишет тело (например, возвращает 204),
+      ответ ещё не начат, и заголовок успевает добавиться. Поэтому ошибку легко пропустить в тестах.
+
+      Исправление - менять заголовки до того, как ответ начнётся:
+
+      - до `await _next(context)` зарегистрировать колбэк через `context.Response.OnStarting(...)`, который
+        запишет заголовок непосредственно перед отправкой заголовков; время тогда измеряется до начала
+        ответа, а не до его окончания;
+      - или выставить заголовок до вызова `_next`, если его значение известно заранее.
+
+      Проверка `context.Response.HasStarted` перед записью убирает исключение, но заголовок в этом случае
+      всё равно не будет отправлен.
+    linkTitles:
+      - "Рекомендации по производительности и надёжности ASP.NET Core"
+      - "Написание собственного middleware ASP.NET Core"
+  en:
+    title: Find the middleware line that modifies headers of a response that has already started
+    prompt: |
+      The middleware should add an `X-Elapsed-Ms` header with the request processing time to every response.
+      It is registered with `app.UseMiddleware<TimingHeaderMiddleware>()` before endpoints that return JSON.
+      On those requests the log shows an `InvalidOperationException` with the message
+      "Headers are read-only, response has already started.", and the header never reaches the client.
+      Click the line that contains the defect.
+    hint: What has already been sent to the client by the time `await _next(context)` returns?
+    answer: Line 19, writing the `X-Elapsed-Ms` header after `await _next(context)`.
+    explanation: |
+      An endpoint that writes the response body starts the response: on the first write to `Response.Body`
+      the server sends the status line and headers to the client, and `Response.HasStarted` becomes `true`.
+      From then on `Response.Headers` is read-only, and the attempt to change it on line 19 throws
+      `InvalidOperationException`. The headers are already on their way to the client, so nothing can be
+      added to them afterwards.
+
+      The defect does not show up on every request: if the endpoint writes no body (for example, it returns
+      204), the response has not started yet and the header is still added. That is why the bug is easy to
+      miss in tests.
+
+      The fix is to change headers before the response starts:
+
+      - before `await _next(context)` register a callback with `context.Response.OnStarting(...)` that writes
+        the header right before the headers are sent; the time then covers the period until the response
+        starts, not until it ends;
+      - or set the header before calling `_next` if its value is known up front.
+
+      Checking `context.Response.HasStarted` before writing avoids the exception, but in that case the header
+      is still not sent.
+    linkTitles:
+      - "ASP.NET Core best practices"
+      - "Write custom ASP.NET Core middleware"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"
+  noRunReason: ASP.NET Core middleware needs the web host and the Microsoft.AspNetCore.App shared framework, which the sandbox console project does not reference.

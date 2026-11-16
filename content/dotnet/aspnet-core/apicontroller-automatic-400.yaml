@@ -1,0 +1,119 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMNT7QAYQBBKWQXWMJ
+slug: apicontroller-automatic-400
+stack: dotnet
+topic: aspnet-core
+level: middle
+type: single
+grading: auto
+tags: [apicontroller, model-validation, problem-details]
+code:
+  language: csharp
+  harness: none
+  source: |
+    using System.ComponentModel.DataAnnotations;
+    using Microsoft.AspNetCore.Mvc;
+
+    [ApiController]
+    [Route("api/orders")]
+    public class OrdersController : ControllerBase
+    {
+        [HttpPost]
+        public IActionResult Create([FromBody] CreateOrderRequest request)
+        {
+            // No ModelState.IsValid check here
+            return Ok(request);
+        }
+    }
+
+    public class CreateOrderRequest
+    {
+        [Required]
+        public string ProductId { get; set; }
+
+        [Range(1, 100)]
+        public int Quantity { get; set; }
+    }
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/web-api/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/mvc/models/validation
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему действие контроллера не вызывается при невалидной модели, хотя ModelState.IsValid нигде не проверяется?
+    prompt: |
+      Контроллеры зарегистрированы через `builder.Services.AddControllers()`. Клиент отправляет
+      `{"productId": null, "quantity": 0}` и получает ответ 400 с телом, в котором есть поле `errors`.
+      Точка останова в `Create` при этом не срабатывает, а проверки `ModelState.IsValid` в коде нет.
+      Что из показанного кода объясняет такое поведение?
+    hint: Какой элемент меняет соглашения для всего контроллера, а не только для одного параметра, и что происходит с ошибками валидации без него?
+    options:
+      a: "Атрибут `[ApiController]` на контроллере"
+      b: "Вызов `AddControllers()`, который включает такую проверку для всех контроллеров"
+      c: "`System.Text.Json`, который проверяет `[Required]` и `[Range]` при десериализации"
+      d: "Атрибут `[FromBody]` на параметре действия"
+    optionExplanations:
+      b: "`AddControllers()` регистрирует MVC, но не прерывает запрос при невалидной модели. В контроллере без `[ApiController]` действие вызывается, ошибки лежат в `ModelState`, и проверять `ModelState.IsValid` нужно самому."
+      c: "`System.Text.Json` не учитывает атрибуты `System.ComponentModel.DataAnnotations`. `[Required]` и `[Range]` проверяет валидация модели MVC после привязки, а её результат попадает в `ModelState`."
+      d: "`[FromBody]` только указывает источник привязки - тело запроса. Без `[ApiController]` ошибки валидации такого параметра записываются в `ModelState`, и действие всё равно вызывается."
+    answer: "Атрибут `[ApiController]`: он добавляет фильтр, который при невалидном `ModelState` возвращает 400 до вызова действия."
+    explanation: |
+      `[ApiController]` включает набор соглашений для web API, в том числе автоматические ответы HTTP 400. Для
+      таких контроллеров MVC добавляет action-фильтр, который выполняется после привязки и валидации модели, но
+      до действия. Если `ModelState.IsValid` равно `false`, фильтр возвращает 400 с телом
+      `ValidationProblemDetails` (тип содержимого `application/problem+json`), а действие не вызывается.
+
+      Поведение можно отключить через `ConfigureApiBehaviorOptions` и свойство
+      `SuppressModelStateInvalidFilter = true` или изменить формат ответа через `InvalidModelStateResponseFactory`.
+      Атрибут можно применить и ко всей сборке: `[assembly: ApiController]`. Описание соответствует
+      ASP.NET Core в .NET 10.
+    linkTitles:
+      - "Создание web API в ASP.NET Core"
+      - "Валидация модели в ASP.NET Core MVC"
+  en:
+    title: Why is a controller action not called for an invalid model even though ModelState.IsValid is never checked?
+    prompt: |
+      Controllers are registered with `builder.Services.AddControllers()`. A client sends
+      `{"productId": null, "quantity": 0}` and gets a 400 response whose body has an `errors` field.
+      A breakpoint in `Create` is never hit, and the code has no `ModelState.IsValid` check.
+      What in the code shown explains this behaviour?
+    hint: Which element changes conventions for the whole controller rather than for one parameter, and what happens to validation errors without it?
+    options:
+      a: "The `[ApiController]` attribute on the controller"
+      b: "The `AddControllers()` call, which turns this check on for all controllers"
+      c: "`System.Text.Json`, which checks `[Required]` and `[Range]` during deserialization"
+      d: "The `[FromBody]` attribute on the action parameter"
+    optionExplanations:
+      b: "`AddControllers()` registers MVC but does not stop the request when the model is invalid. In a controller without `[ApiController]` the action is called, the errors sit in `ModelState`, and you must check `ModelState.IsValid` yourself."
+      c: "`System.Text.Json` ignores the `System.ComponentModel.DataAnnotations` attributes. `[Required]` and `[Range]` are checked by MVC model validation after binding, and the result goes to `ModelState`."
+      d: "`[FromBody]` only names the binding source, the request body. Without `[ApiController]` validation errors for such a parameter are written to `ModelState`, and the action is still called."
+    answer: "The `[ApiController]` attribute: it adds a filter that returns 400 before the action runs when `ModelState` is invalid."
+    explanation: |
+      `[ApiController]` turns on a set of web API conventions, including automatic HTTP 400 responses. For such
+      controllers MVC adds an action filter that runs after model binding and validation but before the action.
+      If `ModelState.IsValid` is `false`, the filter returns 400 with a `ValidationProblemDetails` body (content
+      type `application/problem+json`), and the action is not called.
+
+      You can turn this off with `ConfigureApiBehaviorOptions` and `SuppressModelStateInvalidFilter = true`, or
+      change the response format with `InvalidModelStateResponseFactory`. The attribute can also be applied to the
+      whole assembly: `[assembly: ApiController]`. The description matches ASP.NET Core in .NET 10.
+    linkTitles:
+      - "Create web APIs with ASP.NET Core"
+      - "Model validation in ASP.NET Core MVC"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  dotnetVersion: "10"
+  noRunReason: "ASP.NET Core controller code: needs the ASP.NET Core shared framework and an HTTP request, which the console sandbox does not provide."

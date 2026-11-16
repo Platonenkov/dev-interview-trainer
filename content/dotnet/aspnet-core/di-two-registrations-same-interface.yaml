@@ -1,0 +1,124 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WM9CF27HCEWZRQV8CK
+slug: di-two-registrations-same-interface
+stack: dotnet
+topic: aspnet-core
+level: middle
+type: single
+grading: auto
+tags: [dependency-injection, service-registration, tryadd]
+code:
+  language: csharp
+  harness: none
+  source: |
+    using Microsoft.Extensions.DependencyInjection;
+
+    var services = new ServiceCollection();
+    services.AddSingleton<IClock, SystemClock>();
+    services.AddSingleton<IClock, FakeClock>();
+    services.AddTransient<ReportService>();
+
+    using var provider = services.BuildServiceProvider();
+    var report = provider.GetRequiredService<ReportService>();
+    Console.WriteLine(report.Clock.Name);
+
+    public interface IClock { string Name { get; } }
+    public class SystemClock : IClock { public string Name => "system"; }
+    public class FakeClock : IClock { public string Name => "fake"; }
+
+    public class ReportService
+    {
+        public ReportService(IClock clock) => Clock = clock;
+        public IClock Clock { get; }
+    }
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/core/extensions/dependency-injection/overview
+    lang: en
+    kind: docs
+  - url: https://github.com/dotnet/runtime/blob/main/src/libraries/Microsoft.Extensions.DependencyInjection/src/ServiceLookup/CallSiteFactory.cs
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/microsoft.extensions.dependencyinjection.extensions.servicecollectiondescriptorextensions.tryaddsingleton
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какая реализация внедряется, если интерфейс зарегистрирован дважды?
+    prompt: |
+      Интерфейс `IClock` зарегистрирован двумя вызовами `AddSingleton` с разными реализациями, а конструктор
+      `ReportService` принимает один `IClock`. Что выведет программа на .NET 10?
+    hint: Подумайте, что делает контейнер со второй регистрацией того же типа сервиса - заменяет ли он первую или добавляет к ней?
+    options:
+      a: "`fake`"
+      b: "`system`"
+      c: "`InvalidOperationException` при разрешении `ReportService`, потому что у `IClock` две регистрации"
+      d: "Исключение в `BuildServiceProvider`, потому что тип сервиса нельзя зарегистрировать дважды"
+    optionExplanations:
+      b: "Второй вызов `AddSingleton` не игнорируется: он добавляет ещё один дескриптор. Пропускает регистрацию при уже зарегистрированном типе только `TryAddSingleton`."
+      c: "Для контейнера несколько регистраций не являются неоднозначностью: при запросе одного сервиса берётся последняя, а все вместе доступны через `IEnumerable<IClock>`."
+      d: "`ServiceCollection` - это список дескрипторов, он принимает сколько угодно регистраций одного типа сервиса. Именно на этом построено внедрение `IEnumerable<T>`."
+    answer: "`fake`"
+    explanation: |
+      Регистрации добавляются в `IServiceCollection` - упорядоченный список `ServiceDescriptor`. Вторая регистрация
+      не удаляет первую, а дописывается после неё. Когда конструктор запрашивает один `IClock`, контейнер берёт
+      последнюю регистрацию этого типа: в `CallSiteFactory` встроенного контейнера для одиночного сервиса
+      используется последний дескриптор. Поэтому `ReportService` получает `FakeClock`. Если бы конструктор
+      принимал `IEnumerable<IClock>`, он получил бы оба экземпляра в порядке регистрации, сначала `SystemClock`,
+      потом `FakeClock`.
+
+      Правило "побеждает последняя" позволяет приложению переопределить реализацию, зарегистрированную
+      библиотекой, добавив свою после неё. Обратная сторона - случайная повторная регистрация молча меняет
+      поведение. Если вторая регистрация не должна ничего заменять, используют `TryAddSingleton`: он добавляет
+      сервис, только если этот тип сервиса ещё не зарегистрирован, и в этом примере остался бы `SystemClock`.
+      Поведение описано для Microsoft.Extensions.DependencyInjection в .NET 10.
+    linkTitles:
+      - "Внедрение зависимостей в .NET"
+      - "Исходный код CallSiteFactory в dotnet/runtime"
+      - "Метод ServiceCollectionDescriptorExtensions.TryAddSingleton"
+  en:
+    title: Which implementation is injected when an interface is registered twice?
+    prompt: |
+      The `IClock` interface is registered by two `AddSingleton` calls with different implementations, and the
+      `ReportService` constructor takes a single `IClock`. What does the program print on .NET 10?
+    hint: Think about what the container does with a second registration of the same service type - does it replace the first one or add to it?
+    options:
+      a: "`fake`"
+      b: "`system`"
+      c: "`InvalidOperationException` when `ReportService` is resolved, because `IClock` has two registrations"
+      d: "An exception in `BuildServiceProvider`, because a service type cannot be registered twice"
+    optionExplanations:
+      b: "The second `AddSingleton` call is not ignored: it adds another descriptor. Only `TryAddSingleton` skips a registration when the service type is already registered."
+      c: "Several registrations are not an ambiguity for the container: resolving a single service takes the last one, and all of them are available through `IEnumerable<IClock>`."
+      d: "`ServiceCollection` is a list of descriptors and accepts any number of registrations for one service type. Injection of `IEnumerable<T>` is built on exactly that."
+    answer: "`fake`"
+    explanation: |
+      Registrations are appended to the `IServiceCollection`, an ordered list of `ServiceDescriptor` entries. The
+      second registration does not remove the first, it is added after it. When a constructor asks for one
+      `IClock`, the container takes the last registration of that type: the `CallSiteFactory` of the built-in
+      container uses the last descriptor for a single service. So `ReportService` receives `FakeClock`. If the
+      constructor took `IEnumerable<IClock>`, it would receive both instances in registration order,
+      `SystemClock` first, then `FakeClock`.
+
+      The "last one wins" rule lets an application override an implementation registered by a library by
+      adding its own afterwards. The downside is that an accidental duplicate registration silently changes
+      behaviour. When a second registration must not replace anything, use `TryAddSingleton`: it adds the service
+      only if the service type has not been registered yet, and in this example `SystemClock` would remain.
+      The behaviour is described for Microsoft.Extensions.DependencyInjection in .NET 10.
+    linkTitles:
+      - "Dependency injection in .NET"
+      - "CallSiteFactory source code in dotnet/runtime"
+      - "ServiceCollectionDescriptorExtensions.TryAddSingleton method"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"
+  noRunReason: "The snippet uses Microsoft.Extensions.DependencyInjection, which is not part of the base shared framework available to the sandbox console project."

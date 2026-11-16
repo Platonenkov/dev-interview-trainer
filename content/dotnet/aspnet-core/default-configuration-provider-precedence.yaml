@@ -1,0 +1,111 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WMF2DXHKB7CK97CBGH
+slug: default-configuration-provider-precedence
+stack: dotnet
+topic: aspnet-core
+level: middle
+type: open
+grading: self
+tags: [configuration, configuration-providers, user-secrets, environment-variables]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/configuration/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/security/app-secrets
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: В каком порядке WebApplication.CreateBuilder подключает источники конфигурации и какое значение побеждает?
+    prompt: |
+      Перечислите источники конфигурации, которые `WebApplication.CreateBuilder` подключает по умолчанию (.NET 10),
+      в порядке их добавления. Какое значение получит приложение, если один и тот же ключ, например
+      `Logging:LogLevel:Default`, задан сразу в нескольких источниках?
+    hint: Провайдеры конфигурации образуют упорядоченный список. Если два провайдера задают один и тот же ключ, какой из них будет опрошен первым?
+    answer: |
+      Порядок добавления провайдеров конфигурации приложения:
+
+      1. `appsettings.json`.
+      2. `appsettings.{Environment}.json`, например `appsettings.Development.json`.
+      3. User secrets - только в окружении `Development`.
+      4. Переменные окружения без префикса (разделитель уровней `__` вместо `:`).
+      5. Аргументы командной строки.
+
+      Источники конфигурации хоста (переменные окружения с префиксами `DOTNET_` и `ASPNETCORE_`) добавляются
+      раньше этих источников, поэтому их приоритет ниже, чем у источников приложения. Подробности - в разделе
+      "Default host configuration sources" документации по конфигурации.
+
+      Побеждает последний добавленный провайдер, в котором есть ключ. Если `Logging:LogLevel:Default` задан в
+      `appsettings.json`, в `appsettings.Development.json` и в переменной `Logging__LogLevel__Default`, приложение
+      увидит значение из переменной окружения, а аргумент `--Logging:LogLevel:Default=Error` перекроет и её.
+    explanation: |
+      Каждый провайдер превращает свой источник в плоский набор пар «ключ - значение». При чтении ключа
+      конфигурация просматривает провайдеры от последнего добавленного к первому и берёт первое найденное значение.
+      Поэтому порядок добавления и есть порядок приоритета: файлы задают значения по умолчанию, окружение
+      переопределяет их на конкретной машине или в контейнере, а командная строка - для конкретного запуска.
+
+      Из этого следуют практические ловушки:
+
+      - Источник, добавленный через `builder.Configuration.AddJsonFile(...)` после `CreateBuilder`, окажется
+        в конце списка и перекроет и переменные окружения, и командную строку.
+      - Значения сливаются по ключам, а не заменяются секциями целиком: `appsettings.Development.json`
+        переопределяет только те ключи, которые в нём есть, остальные берутся из `appsettings.json`. Ловушка -
+        массивы: массив превращается в ключи `Section:0`, `Section:1` и так далее, поэтому более короткий массив в
+        `appsettings.Development.json` переопределит только элементы с теми же индексами, а лишние элементы из
+        `appsettings.json` останутся.
+      - User secrets не подключаются вне `Development`, поэтому в production секреты надо брать из переменных
+        окружения или хранилища секретов.
+
+      Порядок описан для .NET 10.
+    linkTitles:
+      - "Конфигурация в ASP.NET Core"
+      - "Безопасное хранение секретов приложения при разработке"
+  en:
+    title: In what order does WebApplication.CreateBuilder add configuration sources, and which value wins?
+    prompt: |
+      List the configuration sources that `WebApplication.CreateBuilder` adds by default (.NET 10), in the order
+      they are added. Which value does the application get if the same key, for example
+      `Logging:LogLevel:Default`, is set in several sources?
+    hint: Configuration providers form an ordered list. When two providers set the same key, which one is consulted first?
+    answer: |
+      The order in which the application configuration providers are added:
+
+      1. `appsettings.json`.
+      2. `appsettings.{Environment}.json`, for example `appsettings.Development.json`.
+      3. User secrets, only in the `Development` environment.
+      4. Environment variables without a prefix (`__` instead of `:` as the level separator).
+      5. Command-line arguments.
+
+      The host configuration sources (environment variables with the `DOTNET_` and `ASPNETCORE_` prefixes) are
+      added before these, so they have lower priority than the application sources. The details are in the
+      "Default host configuration sources" section of the configuration docs.
+
+      The last added provider that contains the key wins. If `Logging:LogLevel:Default` is set in
+      `appsettings.json`, in `appsettings.Development.json` and in the variable `Logging__LogLevel__Default`, the
+      application sees the value from the environment variable, and the argument `--Logging:LogLevel:Default=Error`
+      overrides that too.
+    explanation: |
+      Each provider turns its source into a flat set of key-value pairs. When a key is read, configuration
+      walks the providers from the last added to the first and takes the first value it finds. So the order of
+      addition is the order of precedence: files set the defaults, the environment overrides them on a specific
+      machine or container, and the command line overrides them for a specific run.
+
+      Practical traps follow from this:
+
+      - A source added with `builder.Configuration.AddJsonFile(...)` after `CreateBuilder` ends up at the end of
+        the list and overrides both environment variables and the command line.
+      - Values are merged key by key, not replaced as whole sections: `appsettings.Development.json` overrides
+        only the keys it defines, and the rest come from `appsettings.json`. Arrays are the surprising case: an
+        array becomes keys `Section:0`, `Section:1` and so on, so a shorter array in `appsettings.Development.json`
+        overrides only the elements with the same indexes, and the extra elements from `appsettings.json` remain.
+      - User secrets are not loaded outside `Development`, so in production secrets must come from environment
+        variables or a secret store.
+
+      The order is described for .NET 10.
+    linkTitles:
+      - "Configuration in ASP.NET Core"
+      - "Safe storage of app secrets in development"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-14
+  dotnetVersion: "10"

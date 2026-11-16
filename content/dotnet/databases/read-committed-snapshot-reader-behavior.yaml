@@ -1,0 +1,106 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7AXR1WNVS6WBJ8PZWTP7168
+slug: read-committed-snapshot-reader-behavior
+stack: dotnet
+topic: databases
+level: middle
+type: single
+grading: auto
+tags: [sql-server, isolation-levels, row-versioning, locks]
+code:
+  language: sql
+  harness: none
+  source: |
+    -- Database setting
+    ALTER DATABASE Shop SET READ_COMMITTED_SNAPSHOT ON;
+
+    -- Session 1
+    BEGIN TRANSACTION;
+    UPDATE Accounts SET Balance = 500 WHERE Id = 1; -- the committed value was 1000
+    -- no COMMIT yet
+
+    -- Session 2, default READ COMMITTED isolation level
+    SELECT Balance FROM Accounts WHERE Id = 1;
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/sql/relational-databases/sql-server-transaction-locking-and-row-versioning-guide
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/sql/t-sql/statements/set-transaction-isolation-level-transact-sql
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что прочитает запрос READ COMMITTED в SQL Server при включённом READ_COMMITTED_SNAPSHOT?
+    prompt: |
+      В базе SQL Server включён параметр `READ_COMMITTED_SNAPSHOT`. Сеанс 1 изменил строку и ещё не
+      зафиксировал транзакцию. Сеанс 2 на уровне изоляции `READ COMMITTED` читает эту же строку.
+      Что произойдёт с запросом сеанса 2?
+    hint: Откуда читатель может взять значение строки, если не ставит разделяемую блокировку?
+    options:
+      a: Запрос будет ждать, пока сеанс 1 не зафиксирует или не откатит транзакцию.
+      b: Запрос сразу вернёт `1000` - последнюю зафиксированную версию строки из хранилища версий.
+      c: Запрос сразу вернёт `500` - незафиксированное значение сеанса 1.
+      d: Запрос завершится ошибкой конфликта обновления, потому что строку изменяет другая транзакция.
+    optionExplanations:
+      a: Так ведёт себя `READ COMMITTED` на блокировках, когда параметр выключен. При включённом `READ_COMMITTED_SNAPSHOT` чтение не запрашивает разделяемую блокировку и не ждёт монопольной блокировки сеанса 1.
+      c: Чтение незафиксированных данных (грязное чтение) допускает только `READ UNCOMMITTED` или подсказка `NOLOCK`. Версионирование строк, наоборот, гарантирует, что читатель видит только зафиксированные данные.
+      d: Ошибка конфликта обновления возможна на уровне `SNAPSHOT`, когда транзакция пытается изменить строку, уже изменённую другой транзакцией. Здесь сеанс 2 только читает, и чтение конфликтов не вызывает.
+    answer: Запрос сразу вернёт `1000` - последнюю зафиксированную версию строки из хранилища версий.
+    explanation: |
+      При включённом `READ_COMMITTED_SNAPSHOT` уровень `READ COMMITTED` использует версионирование строк.
+      Когда сеанс 1 изменяет строку, SQL Server сохраняет её прежнюю зафиксированную версию в хранилище версий
+      (обычно в `tempdb`). Сеанс 2 не запрашивает разделяемую блокировку, поэтому не конфликтует с монопольной
+      блокировкой сеанса 1 и сразу получает версию строки, зафиксированную на момент начала его инструкции, то
+      есть `1000`.
+
+      Снимок берётся на уровне инструкции, а не транзакции: следующий `SELECT` в той же транзакции сеанса 2
+      увидит уже то, что будет зафиксировано к его началу. Читатели не блокируют писателей и наоборот, но
+      писатели по-прежнему блокируют друг друга. Вернуть поведение на блокировках для отдельного запроса можно
+      подсказкой `READCOMMITTEDLOCK`.
+    linkTitles:
+      - "Руководство по блокировкам и управлению версиями строк в SQL Server"
+      - "SET TRANSACTION ISOLATION LEVEL (Transact-SQL)"
+  en:
+    title: What does a READ COMMITTED query read in SQL Server with READ_COMMITTED_SNAPSHOT on?
+    prompt: |
+      A SQL Server database has the `READ_COMMITTED_SNAPSHOT` option turned on. Session 1 updated a row and
+      has not committed yet. Session 2, at the `READ COMMITTED` isolation level, reads the same row.
+      What happens to the query in session 2?
+    hint: Where can a reader get the value of a row from if it does not take a shared lock?
+    options:
+      a: The query waits until session 1 commits or rolls back its transaction.
+      b: The query immediately returns `1000`, the last committed version of the row from the version store.
+      c: The query immediately returns `500`, the uncommitted value of session 1.
+      d: The query fails with an update conflict error because another transaction is modifying the row.
+    optionExplanations:
+      a: That is how locking `READ COMMITTED` behaves when the option is off. With `READ_COMMITTED_SNAPSHOT` on, the read takes no shared lock and does not wait for the exclusive lock of session 1.
+      c: Reading uncommitted data (a dirty read) is allowed only by `READ UNCOMMITTED` or the `NOLOCK` hint. Row versioning, on the contrary, guarantees that the reader sees only committed data.
+      d: An update conflict error can happen under `SNAPSHOT` isolation when a transaction tries to modify a row that another transaction has already modified. Here session 2 only reads, and reads do not cause conflicts.
+    answer: The query immediately returns `1000`, the last committed version of the row from the version store.
+    explanation: |
+      With `READ_COMMITTED_SNAPSHOT` on, the `READ COMMITTED` level uses row versioning. When session 1
+      modifies the row, SQL Server keeps its previous committed version in the version store (usually in
+      `tempdb`). Session 2 takes no shared lock, so it does not conflict with the exclusive lock of session 1
+      and immediately gets the version of the row that was committed when its statement started, which is
+      `1000`.
+
+      The snapshot is taken per statement, not per transaction: the next `SELECT` in the same transaction of
+      session 2 sees whatever is committed by the time that statement starts. Readers do not block writers and
+      writers do not block readers, but writers still block each other. The `READCOMMITTEDLOCK` hint restores
+      the locking behavior for a single query.
+    linkTitles:
+      - "SQL Server transaction locking and row versioning guide"
+      - "SET TRANSACTION ISOLATION LEVEL (Transact-SQL)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-13
+  noRunReason: The snippet is T-SQL for two concurrent SQL Server sessions, and the sandbox has no database server.

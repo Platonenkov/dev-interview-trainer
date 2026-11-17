@@ -21,4 +21,6 @@ public static class ApiErrorCodes
     public const string UnsupportedMediaType = "unsupported-media-type";
     public const string PayloadTooLarge = "payload-too-large";
     public const string ServerError = "server-error";
+    public const string QuestionNotFound = "question-not-found";
+    public const string ReportLimit = "report-limit";
 }

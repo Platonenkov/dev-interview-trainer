@@ -1,6 +1,8 @@
 @using Trainer.Domain.Keys
+@using Trainer.Web.OpenGraph
 @using Trainer.Web.Seo
 @inject SiteUrls Urls
+@inject OgImageLinks ImageLinks
 @inject PageLinks Links
 @inject IStringLocalizer<SharedResource> L
 
@@ -22,6 +24,11 @@
     <meta property="og:url" content="@Canonical" />
     <meta property="og:site_name" content="@L["Site.Name"]" />
     <meta property="og:locale" content="@OgLocale()" />
+    <meta property="og:image" content="@ImageUrl()" />
+    <meta property="og:image:width" content="@OgCardRenderer.Width" />
+    <meta property="og:image:height" content="@OgCardRenderer.Height" />
+    <meta property="og:image:alt" content="@Title" />
+    <meta name="twitter:card" content="summary_large_image" />
     @if (NoIndex)
     {
         <meta name="robots" content="noindex" />
@@ -52,12 +59,21 @@
     [Parameter]
     public string OgType { get; set; } = "website";
 
+    /// <summary>Absolute URL of the card image. Unset, the page advertises the site card of its culture.</summary>
+    [Parameter]
+    public string? OgImageUrl { get; set; }
+
     [CascadingParameter]
     private HttpContext? HttpContext { get; set; }
 
     protected override void OnParametersSet() => Links.Set(AvailableCultures, PathForCulture);
 
     private string Canonical => Absolute(CanonicalPathAndQuery);
+
+    private string ImageUrl() => OgImageUrl ?? ImageLinks.SiteUrl(CurrentCulture(), HttpContext?.Request);
+
+    private static CultureKey CurrentCulture() =>
+        CultureKey.TryCreate(CultureInfo.CurrentUICulture.TwoLetterISOLanguageName, out CultureKey culture) ? culture : CultureKey.Default;
 
     private string Absolute(string pathAndQuery) => Urls.Absolute(HttpContext?.Request, pathAndQuery);
 

@@ -1,5 +1,7 @@
 using System.Net;
 using System.Text.RegularExpressions;
+using Microsoft.AspNetCore.Mvc.Testing;
+using Trainer.Web.Routing;
 
 namespace Trainer.Web.Tests;
 
@@ -104,5 +106,22 @@ public sealed partial class CatalogPageTests(WebSiteFixture site) : IClassFixtur
         Assert.Contains("Лицензии", ruBody, StringComparison.Ordinal);
         Assert.Contains("CC BY-SA 4.0", enBody, StringComparison.Ordinal);
         Assert.Contains("How to contribute", enBody, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("/en/about", "sets no tracking or analytics cookies", "sign-in cookie")]
+    [InlineData("/ru/about", "не устанавливает читателям cookie для отслеживания или аналитики", "cookie входа")]
+    public async Task About_PrivacyStatement_NamesTheOnlyReaderCookieTheCodeSets(string path, string noTrackingClaim, string signInClaim)
+    {
+        (HttpResponseMessage page, string body) = await GetAsync(path);
+        using HttpResponseMessage _1 = page;
+        using HttpClient client = site.Factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false, HandleCookies = false });
+        using HttpResponseMessage switched = await client.GetAsync("/lang/en?return=%2Fen", TestContext.Current.CancellationToken);
+
+        Assert.Contains(noTrackingClaim, body, StringComparison.Ordinal);
+        Assert.Contains(signInClaim, body, StringComparison.Ordinal);
+        Assert.Contains($"{RootRedirectEndpoint.CookieName} ", body, StringComparison.Ordinal);
+        string cookie = Assert.Single(switched.Headers.GetValues("Set-Cookie"));
+        Assert.StartsWith(RootRedirectEndpoint.CookieName + "=", cookie, StringComparison.Ordinal);
     }
 }

@@ -1,0 +1,48 @@
+@using Microsoft.Extensions.Options
+@using Trainer.Web.Analytics
+@using Trainer.Web.Seo
+@inject IOptions<AnalyticsOptions> Analytics
+@inject SiteUrls Site
+
+@if (_websiteId is not null)
+{
+    @* A same-origin external script needs no nonce, so the cached HTML is identical for every visitor (ADR 0012, ADR 0018).
+       data-host-url is required: the tracker posts to <host>/api/send, and the app owns /api. *@
+    <script defer src="/stats/script.js" data-website-id="@_websiteId" data-host-url="@_hostUrl"
+            data-do-not-track="true" data-exclude-search="true" data-exclude-hash="true"></script>
+}
+
+@code {
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    private string? _websiteId;
+    private string? _hostUrl;
+
+    protected override void OnInitialized()
+    {
+        string? id = Analytics.Value.GetNormalizedWebsiteId();
+        if (id is null || IsExcluded(HttpContext?.Request.Path.Value))
+        {
+            return;
+        }
+
+        _websiteId = id;
+        _hostUrl = Site.Origin(HttpContext?.Request) + "/stats";
+    }
+
+    // The admin, sign-in and per-user profile pages are not public reading; counting them would only add noise to the page-view numbers.
+    private static bool IsExcluded(string? path)
+    {
+        if (string.IsNullOrEmpty(path))
+        {
+            return false;
+        }
+
+        string[] segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return segments.Length >= 2
+            && (string.Equals(segments[1], "admin", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(segments[1], "signin", StringComparison.OrdinalIgnoreCase))
+            || (segments.Length >= 3 && string.Equals(segments[2], "profile", StringComparison.OrdinalIgnoreCase));
+    }
+}

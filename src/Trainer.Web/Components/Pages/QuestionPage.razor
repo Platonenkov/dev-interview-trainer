@@ -2,16 +2,21 @@
 @using Microsoft.AspNetCore.OutputCaching
 @attribute [OutputCache(PolicyName = "public")]
 @using Trainer.Application.Catalog
+@using Trainer.Application.Feedback
 @using Trainer.Application.Progress
 @using Trainer.Application.Questions
+@using Trainer.Domain.Feedback
 @using Trainer.Domain.Keys
 @using Trainer.Domain.Questions
 @using Trainer.Web.Auth
+@using Trainer.Web.OpenGraph
 @using Trainer.Web.Seo
 @inject IStringLocalizer<SharedResource> L
 @inject IQuestionQueries Questions
 @inject IProgressQueries Progress
+@inject IQuestionFeedbackQueries FeedbackQueries
 @inject NavigationManager Navigation
+@inject OgImageLinks ImageLinks
 
 @if (_model is not null)
 {
@@ -21,7 +26,8 @@
              AvailableCultures="_model.AvailableCultures"
              PathForCulture="c => PathFor(c.Value)"
              NoIndex="@_model.IsRetired"
-             OgType="article" />
+             OgType="article"
+             OgImageUrl="@OgImage()" />
     <BreadcrumbJsonLd Items="Breadcrumbs()" />
     <article class="question">
         @if (_model.IsRetired)
@@ -114,6 +120,14 @@
                 <IslandLink Class="btn" Href="@($"/{Culture}/{Stack}/practice?first={_model.Id.Value}")" PreloadRuntime="true">@L["Question.Practise"]</IslandLink>
             </p>
         }
+        @if (_feedbackOpen)
+        {
+            <QuestionFeedbackForms QuestionId="_model.Id" Current="_rating" ReturnPath="@PathFor(Culture)" Culture="@(Culture!)" NoticeCode="@Feedback" />
+        }
+        else if (_signedIn && string.Equals(Feedback, QuestionFeedbackForms.UnavailableCode, StringComparison.Ordinal))
+        {
+            <p class="feedback-forms__notice feedback-forms__notice--warn" role="status">@L["QuestionFeedback.Notice.Unavailable"]</p>
+        }
         <p class="question__meta">
             <time datetime="@_model.Verified.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)">@L["Question.Verified", _model.Verified.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)]</time>
             @if (_model.DotnetVersion is not null)
@@ -123,7 +137,7 @@
         </p>
         @if (!_model.TopicIsRetired)
         {
-            <p><a href="/@Culture/@Stack/topics/@_model.Topic.Value">← @L["Question.BackToTopic"]</a></p>
+            <p class="question__back"><a href="/@Culture/@Stack/topics/@_model.Topic.Value">← @L["Question.BackToTopic"]</a></p>
         }
         @if (_related.Count > 0)
         {
@@ -150,12 +164,18 @@
     [Parameter]
     public string? Slug { get; set; }
 
+    // Read only for a signed-in request: an anonymous render never looks at it, so cached HTML cannot depend on it.
+    [SupplyParameterFromQuery(Name = "feedback")]
+    public string? Feedback { get; set; }
+
     [CascadingParameter]
     private HttpContext? HttpContext { get; set; }
 
     private QuestionPageModel? _model;
     private bool _signedIn;
+    private bool _feedbackOpen;
     private QuestionStatus? _status;
+    private QuestionRating? _rating;
     private IReadOnlyList<CatalogRow> _related = [];
     private IReadOnlyDictionary<QuestionId, QuestionStatus>? _statuses;
 
@@ -163,6 +183,10 @@
     private const int RelatedLimit = 5;
 
     private string PathFor(string? culture) => $"/{culture}/{Stack}/questions/{_model!.Slug}";
+
+    // A retired question has no card of its own: the image endpoint answers 404 for it, so the page advertises the site card.
+    private string? OgImage() =>
+        _model!.IsRetired ? null : ImageLinks.QuestionUrl(new CultureKey(Culture!), _model, HttpContext?.Request);
 
     private string Description()
     {
@@ -228,6 +252,12 @@
             _signedIn = true;
             _statuses = await Progress.GetStatusesAsync(user, [_model.Id, .. _related.Select(r => r.Id)], ct);
             _status = _statuses.GetValueOrDefault(_model.Id);
+            IReadOnlyDictionary<QuestionId, QuestionRating> ratings = await FeedbackQueries.GetMyRatingsAsync(user, [_model.Id], ct);
+            _rating = ratings.TryGetValue(_model.Id, out QuestionRating rating) ? rating : null;
+            // A post must still find its form handler: a page that went stale (the question was retired since it was
+            // rendered) then reaches the service, which answers with the unavailable notice instead of a bare 400.
+            _feedbackOpen = HttpMethods.IsPost(HttpContext.Request.Method)
+                || await FeedbackQueries.IsOpenForFeedbackAsync(_model.Id, ct);
         }
     }
 }

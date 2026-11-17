@@ -43,6 +43,7 @@ public static class ApiRateLimits
         ArgumentNullException.ThrowIfNull(limits);
 
         services.AddSingleton(Options.Create(limits));
+        services.AddSingleton<FormWriteRateLimiter>();
         services.AddRateLimiter(options =>
         {
             options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;

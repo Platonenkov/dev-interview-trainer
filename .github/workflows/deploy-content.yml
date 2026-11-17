@@ -1,0 +1,185 @@
+name: deploy-content
+
+# Publishes the content/ tree of main to the production server without restarting the application: the tree becomes an
+# immutable release under content/releases/<sha>, current is switched to it and the running application imports it
+# (receive-content.sh). Automatic on a push to main that touches content/, or by hand. The checks in content-checks.yml
+# gate the delivery; the server decides the outcome through the import endpoint.
+#
+# Things to know before running it by hand:
+#  - The deploy/ scripts come from the commit this workflow runs at (a manual run must be on main). Without rollback the
+#    content is that of the tip of main as fetched at the start of the run; a ref input only has to be a commit on main
+#    and serves as a lower bound. With rollback the content is exactly the commit named by ref, even if it is older than
+#    the live release (without rollback a tip older than the live release is skipped with a notice).
+#  - GitHub keeps one pending run per concurrency group; a newer queued run replaces the pending one whatever commit it
+#    names. Because every non-rollback run delivers the newest content on main, a replaced run loses nothing.
+#  - Content whose schema-version is newer than the running application supports is not switched (the script exits 5);
+#    a run without rollback ends with a warning, because deploy-app delivers it after the application that supports it.
+#    A rollback run, and content older than the application supports, fail instead: nothing would deliver them later.
+#
+# Variables of the production environment: APP_DIR, DEPLOY_HOST, DEPLOY_USER, DEPLOY_KNOWN_HOSTS. Secret of the production environment:
+# DEPLOY_SSH_KEY. The import token already lives in the server's .env.
+on:
+  push:
+    branches: [main]
+    paths:
+      - content/**
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit SHA on main whose content/ to publish; empty means the tip of main.
+        type: string
+        required: false
+        default: ""
+      rollback:
+        description: Allow publishing the content of a commit older than the live release (the stale-run guard is skipped).
+        type: boolean
+        default: false
+
+permissions: {}
+
+# One delivery at a time, never cancelled half-way.
+concurrency:
+  group: production-content
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+    steps:
+      # The branch by name, so origin/main is its tip as of the start of this run and not the commit of the triggering push.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Resolve the commit to publish
+        id: resolve
+        env:
+          REF_NAME: ${{ github.ref }}
+          DISPATCH_REF: ${{ inputs.ref }}
+          ROLLBACK: ${{ inputs.rollback }}
+        run: |
+          set -euo pipefail
+          # The trusted deploy/ scripts come from the commit this workflow runs at, so a manual run must be on main.
+          if [ "$REF_NAME" != "refs/heads/main" ]; then
+            echo "::error::Run this workflow from main."
+            exit 1
+          fi
+          if [ -n "$DISPATCH_REF" ]; then
+            if ! [[ "$DISPATCH_REF" =~ ^[0-9a-f]{40}$ ]] || ! git cat-file -e "$DISPATCH_REF^{commit}" 2>/dev/null || ! git merge-base --is-ancestor "$DISPATCH_REF" origin/main; then
+              echo "::error::The ref input must be a full SHA of a commit on main."
+              exit 1
+            fi
+          fi
+          # A run replaced in the concurrency group must lose nothing, so without rollback every run delivers the newest
+          # content on main; only a rollback delivers exactly the commit it names.
+          if [ "$ROLLBACK" = "true" ]; then
+            if [ -z "$DISPATCH_REF" ]; then
+              echo "::error::A rollback needs the ref input."
+              exit 1
+            fi
+            sha="$DISPATCH_REF"
+          else
+            sha="$(git rev-parse origin/main)"
+          fi
+          if ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::The commit must be a full 40-character lowercase SHA."
+            exit 1
+          fi
+          if ! git cat-file -e "$sha^{commit}" 2>/dev/null || ! git merge-base --is-ancestor "$sha" origin/main; then
+            echo "::error::$sha is not a commit on main."
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+  checks:
+    needs: resolve
+    permissions:
+      contents: read
+    uses: ./.github/workflows/content-checks.yml
+    with:
+      ref: ${{ needs.resolve.outputs.sha }}
+
+  deploy:
+    needs: [resolve, checks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    permissions:
+      contents: read
+    env:
+      APP_DIR: ${{ vars.APP_DIR }}
+      SHA: ${{ needs.resolve.outputs.sha }}
+      ROLLBACK: ${{ inputs.rollback }}
+      STAGE_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      # The workflow's own commit, not the content commit: the scripts that run on the server must be trusted ones.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/ssh-setup
+        with:
+          ssh-key: ${{ secrets.DEPLOY_SSH_KEY }}
+          known-hosts: ${{ vars.DEPLOY_KNOWN_HOSTS }}
+          host: ${{ vars.DEPLOY_HOST }}
+          user: ${{ vars.DEPLOY_USER }}
+          port: ${{ vars.DEPLOY_SSH_PORT || '22' }}
+      - name: Validate the values that reach the server
+        run: |
+          set -euo pipefail
+          [[ "$APP_DIR" =~ ^/[A-Za-z0-9._/-]*$ ]] || { echo "::error::The APP_DIR variable must be an absolute path."; exit 1; }
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::The commit must be a full SHA."; exit 1; }
+          echo "STAGE=$APP_DIR/staging/$STAGE_ID" >> "$GITHUB_ENV"
+      # Decided here, on the runner: runs of this workflow are serialised by the concurrency group and nothing else switches
+      # current, so the live release cannot change between this check and the delivery. Only rollback overrides it.
+      - name: Skip content older than the live release
+        run: |
+          set -euo pipefail
+          target="$(ssh -F "$RUNNER_TEMP/ssh/ssh_config" dit "readlink '$APP_DIR/content/current' || true")"
+          live="${target##*/}"
+          if [[ "$live" =~ ^[0-9a-f]{40}$ ]] && [ "$ROLLBACK" != "true" ] && [ "$SHA" != "$live" ] && git merge-base --is-ancestor "$SHA" "$live" 2>/dev/null; then
+            echo "::notice::$SHA is older than the live content release $live; nothing published (use rollback to force)."
+            echo "STALE=true" >> "$GITHUB_ENV"
+          fi
+      - name: Upload the bundle into the staging directory
+        if: ${{ env.STALE != 'true' }}
+        run: |
+          set -euo pipefail
+          ssh_cmd=(ssh -F "$RUNNER_TEMP/ssh/ssh_config" dit)
+          "${ssh_cmd[@]}" "mkdir -p '$APP_DIR/staging' && mkdir -m 700 '$STAGE' '$STAGE/bundle'"
+          tar -czf - -C deploy --exclude='./tests' . | "${ssh_cmd[@]}" "tar -xzpf - -C '$STAGE/bundle'"
+      - name: Deliver the content
+        if: ${{ env.STALE != 'true' }}
+        run: |
+          set -euo pipefail
+          ssh_cmd=(ssh -F "$RUNNER_TEMP/ssh/ssh_config" dit)
+          code=0
+          git archive --format=tar.gz "$SHA" content | "${ssh_cmd[@]}" "APP_DIR='$APP_DIR' bash '$STAGE/bundle/remote/receive-content.sh' '$STAGE' '$SHA'" || code=$?
+          case "$code" in
+            0) echo "Content $SHA is imported and current." ;;
+            5)
+              if [ "$ROLLBACK" = "true" ]; then
+                echo "::error::The content schema is newer than the running application supports and no later deployment delivers a rollback."
+                exit 1
+              fi
+              echo "::warning::The content schema is newer than the running application supports; deploy-app delivers it after the application that supports it."
+              ;;
+            7) echo "::error::The content schema is older than the running application supports; no later deployment can deliver it."; exit 1 ;;
+            6) echo "::error::The import gave no definitive answer; current is on the new release and .import-pending is set. The next delivery settles it; read the log of the server's import before relying on this release."; exit 1 ;;
+            4) echo "::error::The deployment lock was not obtained in time (a deployment is still running); nothing changed. Run this workflow again."; exit 1 ;;
+            *) echo "::error::receive-content.sh exited with $code (1 failed, rejected or refused and switched back, 2 invalid input, 3 a guard file refuses deliveries)."; exit 1 ;;
+          esac
+      - name: Clean up
+        if: always()
+        run: |
+          # The staging directory goes unless the server script still runs: it keeps writing import.json there.
+          if [ -f "$RUNNER_TEMP/ssh/ssh_config" ] && [ -n "${STAGE:-}" ]; then
+            ssh -F "$RUNNER_TEMP/ssh/ssh_config" dit "if ! pgrep -f '$STAGE/bundle/remote/[r]eceive-content.sh' >/dev/null; then rm -rf '$STAGE'; fi" || true
+          fi
+          rm -rf "$RUNNER_TEMP/ssh" "$RUNNER_TEMP/env"

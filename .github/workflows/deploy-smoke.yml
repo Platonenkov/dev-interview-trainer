@@ -1,0 +1,161 @@
+name: deploy-smoke
+
+# The deployment bundle checked as a whole: static checks of the scripts, the nginx templates in a container, and the
+# real Compose project driven through deploy-app.sh (first install, rollback, kills, guards).
+#
+# Two tiers (DIT_SMOKE_MODE of deploy/tests/smoke.sh): "quick" stops after the rollback section; "full" runs every section.
+# A pull request gets "full" only when it changes the deployment itself (see the mode step), a call from deploy-app.yml asks
+# for "quick" because the scripts on main already passed "full" on their pull request, and a manual run chooses.
+on:
+  pull_request:
+    paths:
+      - deploy/**
+      - Dockerfile
+      - .dockerignore
+      - src/**
+      - .github/workflows/deploy-*.yml
+      - .github/workflows/deploy-smoke.yml
+      - .github/actions/**
+  workflow_call:
+    inputs:
+      image:
+        description: Application image to test; the Dockerfile is built when empty.
+        type: string
+        required: false
+        default: ""
+      mode:
+        description: Smoke tier, quick or full.
+        type: string
+        required: false
+        default: full
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Smoke tier, quick or full.
+        type: choice
+        options:
+          - quick
+          - full
+        default: full
+
+# A called workflow cannot raise these, so a caller must grant the same permissions on its calling job.
+permissions:
+  contents: read
+  packages: read
+
+# A pull request replaces its own earlier run; every other run (including a call from a deploy workflow) gets a group of
+# its own, so this workflow never cancels or blocks the workflow that calls it.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('deploy-smoke-pr-{0}', github.event.pull_request.number) || format('deploy-smoke-run-{0}-{1}', github.run_id, github.run_attempt) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: ShellCheck
+        run: |
+          find deploy -name '*.sh' -not -path 'deploy/tests/content/*' -print0 | xargs -0 shellcheck -x -P SCRIPTDIR
+          bash -n deploy/bootstrap/remote/provision.sh
+      - name: Shell tests
+        run: |
+          bash deploy/tests/render-env.test.sh
+          bash deploy/tests/lib.test.sh
+          bash deploy/tests/backup-lib.test.sh
+          bash deploy/tests/rotate.test.sh
+      - name: nginx templates
+        run: bash deploy/tests/nginx-check.sh
+      # provision.sh in an Ubuntu container: the /srv layout (nginx must stat flags/maintenance) and the sshd drop-in
+      # against a 50-cloud-init.conf that allows password login.
+      - name: Bootstrap server script
+        run: bash deploy/tests/provision-check.sh
+      # The Test-AgeIdentity tests run the real age; they are skipped when it is missing.
+      - name: Install age
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends age
+      - name: Bootstrap tests
+        shell: pwsh
+        run: Invoke-Pester deploy/bootstrap/tests -CI
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          global-json-file: global.json
+      - name: Deploy project tests
+        run: dotnet test --project tests/Trainer.Deploy.Tests
+
+  smoke:
+    runs-on: ubuntu-latest
+    # The smoke step measured about 16 minutes on a hosted runner in the full tier with 20 random kills (run 44078578375);
+    # the full tier now draws 4 kills and the quick tier skips the kills and everything after the rollback section. The job
+    # also builds the image and installs tools, so the limit leaves room for a slow runner.
+    timeout-minutes: 45
+    env:
+      IMAGE_INPUT: ${{ inputs.image }}
+      MODE_INPUT: ${{ inputs.mode }}
+      EVENT_NAME: ${{ github.event_name }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      DIT_SMOKE_KILL_ITERATIONS: "4"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The mode step diffs the pull request against its merge base, which a depth-1 checkout of the merge commit lacks.
+          fetch-depth: ${{ github.event_name == 'pull_request' && 0 || 1 }}
+      - name: Choose the smoke mode
+        run: |
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            mode="${MODE_INPUT:-full}"
+            case "$mode" in
+              quick | full) ;;
+              *)
+                echo "mode must be quick or full, got '$mode'" >&2
+                exit 1
+                ;;
+            esac
+            echo "smoke mode: $mode (requested by the $EVENT_NAME event)"
+          elif ! changed="$(git diff --name-only "$BASE_SHA...$HEAD_SHA")"; then
+            mode=full
+            echo "smoke mode: full (the list of changed files could not be read)"
+          else
+            mode=quick
+            reason="no deployment file changed"
+            while IFS= read -r file; do
+              case "$file" in
+                deploy/* | .github/workflows/deploy-*.yml | .github/actions/* | Dockerfile | .dockerignore)
+                  mode=full
+                  reason="$file changed"
+                  break
+                  ;;
+              esac
+            done <<<"$changed"
+            echo "smoke mode: $mode ($reason)"
+          fi
+          echo "DIT_SMOKE_MODE=$mode" >> "$GITHUB_ENV"
+      - name: Log in to GHCR
+        if: inputs.image != ''
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      # The backup scripts run on the host, so the smoke test needs the same tools the server has.
+      - name: Install age and rclone
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends age rclone
+      - name: Get the image under test
+        run: |
+          if [ -n "$IMAGE_INPUT" ]; then
+            docker pull "$IMAGE_INPUT"
+            echo "IMAGE=$IMAGE_INPUT" >> "$GITHUB_ENV"
+          else
+            docker build -t dit:smoke .
+            echo "IMAGE=dit:smoke" >> "$GITHUB_ENV"
+          fi
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          global-json-file: global.json
+      # Runs the migration bundle shipped in the image against a real database; without the variable the test skips.
+      - name: Migration bundle of the image
+        run: DIT_MIGRATE_IMAGE="$IMAGE" dotnet test --project tests/Trainer.Infrastructure.Tests --filter-class Trainer.Infrastructure.Tests.MigrationBundleTests
+      - name: Deployment smoke test
+        run: bash deploy/tests/smoke.sh

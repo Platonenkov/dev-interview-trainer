@@ -51,6 +51,10 @@ public sealed class ContractsJsonTests
         new MockHistoryDto("01KBZ3Q8N9V2K3M4P5R6S7T8WD", "middle", 20, At, 10, 5, 3, 2),
         new AntiforgeryTokenDto("token", "X-CSRF-TOKEN"),
         new ApiErrorDto(ApiErrorCodes.Antiforgery, null),
+        new RatingRequest("like"),
+        new RatingDto(null),
+        new ReportRequest("en", "wrong-answer", "typo"),
+        new ReportResponse(ReportResponse.Created),
         new TopicDto("csharp", "C#"),
         new MeDto(123456789012L, 4, 7, [TopicProgress]),
         new PracticeFiltersDto(["junior"], [], ["open"], "all", null),
@@ -85,6 +89,19 @@ public sealed class ContractsJsonTests
             Assert.Equal(json, JsonSerializer.Serialize(copy, typeInfo));
             AssertCamelCase(json);
         }
+    }
+
+    [Fact]
+    public void ContractsJson_SessionRatings_KeepQuestionIdsAsDictionaryKeys()
+    {
+        SessionDto session = new([Question], 41, new Dictionary<string, string> { ["01KBZ3Q8N9V2K3M4P5R6S7T8WA"] = "like" });
+
+        string json = JsonSerializer.Serialize(session, TrainerJsonContext.Default.SessionDto);
+        SessionDto? copy = JsonSerializer.Deserialize(json, TrainerJsonContext.Default.SessionDto);
+
+        // The id is data, not a property name, so the camel-case policy must leave it alone.
+        Assert.Contains("\"myRatings\":{\"01KBZ3Q8N9V2K3M4P5R6S7T8WA\":\"like\"}", json, StringComparison.Ordinal);
+        Assert.Equal("like", copy!.MyRatings!["01KBZ3Q8N9V2K3M4P5R6S7T8WA"]);
     }
 
     [Fact]

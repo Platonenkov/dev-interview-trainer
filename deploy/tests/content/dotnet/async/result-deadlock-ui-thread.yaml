@@ -1,0 +1,78 @@
+id: 01KBZ3Q8N9V2K3M4P5R6S7T8WC
+slug: result-deadlock-ui-thread
+stack: dotnet
+topic: async
+level: middle
+type: single
+grading: auto
+tags: [synchronization-context, deadlock, winforms]
+code:
+  language: csharp
+  harness: none
+  source: |
+    private void Button_Click(object sender, EventArgs e)
+    {
+        string text = LoadAsync().Result;
+        label.Text = text;
+    }
+
+    private static async Task<string> LoadAsync()
+    {
+        await Task.Delay(100);
+        return "done";
+    }
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/archive/msdn-magazine/2013/march/async-await-best-practices-in-asynchronous-programming
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Что произойдёт при вызове .Result в обработчике кнопки WinForms?
+    prompt: |
+      Что произойдёт при нажатии кнопки в этом обработчике WinForms?
+    hint: Где должно выполниться продолжение после `await Task.Delay`?
+    options:
+      a: Обработчик вернёт "done" и обновит метку
+      b: Приложение зависнет из-за взаимной блокировки
+      c: Будет выброшено исключение `InvalidOperationException`
+    optionExplanations:
+      a: Так было бы без блокирующего `.Result`. Здесь UI-поток заблокирован ожиданием задачи.
+      c: Исключения нет, поток просто ждёт задачу бесконечно.
+    answer: Приложение зависнет из-за взаимной блокировки.
+    explanation: |
+      `.Result` блокирует UI-поток до завершения задачи, а продолжение после `await` должно выполниться
+      именно в этом потоке через захваченный `SynchronizationContext`. Каждая сторона ждёт другую.
+      Решение: `await LoadAsync()` в асинхронном обработчике.
+    linkTitles:
+      - Рекомендации по async/await
+  en:
+    title: What happens when you call .Result in a WinForms button handler?
+    prompt: |
+      What happens when the button is clicked and this WinForms handler runs?
+    hint: Where must the continuation after `await Task.Delay` run?
+    options:
+      a: The handler returns "done" and updates the label
+      b: The application hangs because of a deadlock
+      c: An `InvalidOperationException` is thrown
+    optionExplanations:
+      a: That would be true without the blocking `.Result`. Here the UI thread is blocked waiting for the task.
+      c: There is no exception; the thread simply waits for the task forever.
+    answer: The application hangs because of a deadlock.
+    explanation: |
+      `.Result` blocks the UI thread until the task completes, while the continuation after `await` must run
+      on that same thread through the captured `SynchronizationContext`. Each side waits for the other.
+      The fix is to `await LoadAsync()` in an async handler.
+    linkTitles:
+      - Async/await best practices
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-11
+  dotnetVersion: "10"
+  noRunReason: Needs a WinForms message loop, which the sandbox does not provide.

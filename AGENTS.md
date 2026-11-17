@@ -35,16 +35,17 @@ tests/                       xUnit v3 projects; Trainer.TestSupport holds shared
                              Trainer.Web.E2E holds the Playwright browser checks,
                              Trainer.Web.Release smoke-tests and times the published Release build,
                              Trainer.ContentCli.Tests covers the CLI (link checker on a local Kestrel server)
+Dockerfile                   production image: the published Trainer.Web and the EF Core migration bundle (/app/migrate/efbundle)
 content/                     question bank (CC BY-SA 4.0), deployed separately from the app
-.github/workflows/           ci.yml (build-test, content, e2e, release), link-check.yml (weekly dead-link report)
-docs/                        architecture.md, content-guide.md, design mockups, specs and plans,
+deploy/                      what the workflows upload to the server: compose/ (Compose project, pg_hba.conf), remote/ (server
+                             scripts), scripts/ (render-env.sh), nginx/ and systemd/ (host assets), bootstrap/ (Bootstrap.ps1
+                             and provision.sh for first-time VPS provisioning), tests/ (shell tests, the smoke test)
+.github/workflows/           ci.yml (build-test, content, e2e, release, schema-base, schema-compat, workflow-lint), deploy-app.yml, deploy-content.yml, rotate-db-password.yml,
+                             ops-check.yml (the production server), deploy-smoke.yml (quick and full tier, `DIT_SMOKE_MODE`; a pull request gets full only when it changes the deployment files), schema-compat.yml, content-checks.yml
+                             (called by the others), link-check.yml (weekly dead-link report); .github/actions/ssh-setup and postgres-from-compose
+docs/                        architecture.md, content-guide.md, deployment.md, design mockups, specs and plans,
                              adr/ (architecture decision records, one file per decision)
 ```
-
-Not created yet:
-
-- Plan 3: `deploy/` (compose files, bootstrap script for first-time VPS
-  provisioning), `deploy-app.yml`, `deploy-content.yml` and `docs/deployment.md`.
 
 Dependencies point inward: Domain and Contracts reference nothing; Application
 references Domain and Contracts (ADR 0006); Content references Domain; Snippets references Content; Infrastructure references
@@ -169,6 +170,36 @@ untrusted snippet code must not be reachable from the web process.
 - `output` questions must pass snippet execution in CI.
 - Set `meta.verified` to the date you checked the content.
 
+## Migrations
+
+- A migration must keep the previous release working (expand, then contract in a
+  later release with `[ContractMigration]` after the release that stopped using the
+  structure is deployed): a failed deploy rolls the image back after migrations ran,
+  and every deploy runs the previous image against the migrated schema.
+  `MigrationSafetyTests.NewMigrations_AreExpandOnly` enforces the static half.
+
+## Deployment
+
+The procedures are in `docs/deployment.md`; the design is in "Deployment topology" in `docs/architecture.md`. Rules
+for a change that touches `deploy/`, `.github/workflows/` or a configuration value:
+
+- A new configuration value is added to `deploy/scripts/render-env.sh`, `deploy/compose/compose.yaml`,
+  `Get-ProductionSettingNames` in `deploy/bootstrap/BootstrapLib.psm1`, `docs/deployment.md` (the configuration
+  reference) and the configuration table of `docs/architecture.md`, all in one change.
+  `DocsTests` fails when a name is missing from the reference.
+- A new published port binds to `127.0.0.1`. Nothing but nginx listens on a public address.
+- A change under `deploy/nginx`, `deploy/systemd` or `deploy/bootstrap` takes effect only through a bootstrap re-run
+  after the merge: say so in the pull request description.
+- Umami is upgraded only through the procedure "Umami upgrade" in `docs/deployment.md`.
+- Migrations are expand-only (see Migrations).
+- A new workflow pins every action by full commit SHA, declares the minimum `permissions:` on the workflow and on each
+  job, passes secrets and inputs only through `env:` (never interpolated into `run:`), uploads only into the
+  per-run staging directory, and, when it calls a reusable workflow, grants that workflow's permissions on the
+  calling job (a called workflow cannot raise them). The deploy-bundle tests in `Trainer.Deploy.Tests` check these
+  rules for the existing workflows.
+- A new page that should not be counted by analytics opts out in `AnalyticsScript`.
+- Never use `set -x` or `bash -x` in a deploy script: they handle secrets and the repository tests forbid tracing.
+
 ## Testing
 
 - xUnit v3 with built-in `Assert`. Do not add FluentAssertions; Moq only if
@@ -218,7 +249,7 @@ Report failures as they are; do not skip or weaken tests to make them pass.
 ## Documentation
 
 - Keep `README.md`, `docs/architecture.md` and `docs/content-guide.md` current in
-  the same change that alters behaviour. `docs/deployment.md` joins them in Plan 3.
+  the same change that alters behaviour. `docs/deployment.md` is part of that set.
 - Docs are English, plain and specific: headings, numbered procedures, code in
   code font.
 

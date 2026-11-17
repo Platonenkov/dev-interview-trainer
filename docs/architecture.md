@@ -2,8 +2,9 @@
 
 How Dev Interview Trainer is put together: the content pipeline, the public,
 read-only site (Plan 1), and Telegram sign-in, the `/api`, the WebAssembly islands
-(Practice, Mock, Review, profile) and the admin page (Plan 2). Deployment arrives in
-Plan 3. The reasons behind the design are in
+(Practice, Mock, Review, profile) and the admin page (Plan 2), and, from Plan 3, question
+feedback, Open Graph images, cookieless analytics and the deployment topology; the procedures
+for running it are in [deployment.md](deployment.md). The reasons behind the design are in
 `docs/superpowers/specs/2026-11-11-dev-interview-trainer-design.md`.
 
 ## Contents
@@ -31,11 +32,14 @@ Plan 3. The reasons behind the design are in
 21. [Security headers](#security-headers)
 22. [Startup, readiness and health](#startup-readiness-and-health)
 23. [Configuration](#configuration)
-24. [Migrations policy](#migrations-policy)
-25. [Snippet sandbox and the content CLI](#snippet-sandbox-and-the-content-cli)
-26. [Tests and CI](#tests-and-ci)
-27. [Line endings and formatting](#line-endings-and-formatting)
-28. [Decision records](#decision-records)
+24. [Internal endpoints](#internal-endpoints)
+25. [Question feedback](#question-feedback)
+26. [Migrations policy](#migrations-policy)
+27. [Snippet sandbox and the content CLI](#snippet-sandbox-and-the-content-cli)
+28. [Tests and CI](#tests-and-ci)
+29. [Line endings and formatting](#line-endings-and-formatting)
+30. [Deployment topology](#deployment-topology)
+31. [Decision records](#decision-records)
 
 ## Layers and allowed references
 
@@ -92,6 +96,19 @@ content/*.yaml
 The content directory is not part of the application image. The app reads
 `App:ContentRoot` at startup, so a content fix does not need an image rebuild.
 The CLI runs the first three stages in CI without a database.
+
+Production content is delivered by `deploy-content.yml` through `deploy/remote/receive-content.sh`
+(see `## Tests and CI`). Each commit becomes an immutable release `content/releases/<sha>` on the
+server and `content/current` points at the live one; the running application imports it through
+`POST /internal/content/import`, whose answer (200 or 422) is the only source of truth for the
+outcome. A transport failure or a 5xx is not an answer: the script calls the endpoint once more, and
+the second call queues on the importer's advisory lock, which is taken before the files are read, behind
+an import that is still running. Two non-answers end the delivery with exit 6 and leave `.import-pending`
+(the release sha and the release `current` pointed to before); the next delivery settles it first by
+importing what `current` points to. A 422, or a 401, 403 or 404 (the endpoint refused the call, so no
+import started), switches `current` back to the previous release, or removes it on a first delivery,
+which is the fresh-install state. The importer's advisory lock key is `0x4449_5443_4F4E_5431`; pg_locks reports it
+as `classid = 0x44495443`, `objid = 0x4F4E5431`, `objsubid = 1`.
 
 ## Reading and validating content
 
@@ -167,11 +184,16 @@ Content arrives through public pull requests, so every text field is untrusted.
 ## Import
 
 `ContentImportService.ImportAsync(contentRoot)` reads, validates and stores the
-content in one transaction.
+content in one transaction (the advisory lock is the first statement).
 
-1. Read the content.
-2. Begin a transaction and take `pg_advisory_xact_lock`, which serialises
+1. Begin a transaction and take `pg_advisory_xact_lock`, which serialises
    concurrent imports from any process.
+2. Read the content. The lock is taken first on purpose: a second import queues
+   behind one that is still reading. `ContentReader` resolves the link target of
+   the content root once, at the start of the read, and reads every file from
+   that release directory, so a deployment that switches `content/current` while
+   an import is reading cannot mix two releases; the next, queued import picks
+   up the new one.
 3. If the active `content_imports` row has the same hash and render version,
    return `Unchanged`.
 4. Collect issues: read issues, validator issues, and, only when those are
@@ -219,8 +241,10 @@ mark lines). Joining the lines with a newline gives the body of `codeHtml`. The 
 | `answers` | Append-only answer history: `id` (server ULID), unique `client_answer_id` (client ULID, makes retries idempotent), `user_id` (deleted with the user), `question_id` (questions are retired, never deleted), `grade`, `used_hint`, `mode`, `mock_session_id` (no foreign key: answers usually arrive before the mock summary, and anonymous mocks never send one), `answered_at` (client time after the time policy), `received_at`. Indexed on (`user_id`, `answered_at`); `ix_answers_question_id` is EF's convention index for the foreign key (questions are never deleted, so no FK check needs it; it is kept for per-question statistics, at the cost of one more index on every insert). |
 | `review_states` | One row per user and question (composite key): `due_at`, `interval_days`, `ease` (`numeric(4,2)`), `repetitions`, `lapses`, `last_grade`, `last_answered_at`. PostgreSQL's `xmin` system column is the optimistic concurrency token (the "version" of spec 8.6; nothing to maintain). Indexed on (`user_id`, `due_at`); the foreign-key index on `question_id` is EF's convention, kept for the same reason. |
 | `mock_sessions` | One row per finished mock interview: `id` (client ULID), `user_id` (deleted with the user), `stack_key`, `level`, `question_count`, `timed`, `started_at`, `finished_at`, and `summary` JSONB with the per-topic counts (`{"topics":[{"topic","knew","partial","didntKnow","unanswered"}]}`). |
+| `question_ratings` | One row per user and question (composite key): `value` (`smallint`, `1` like, `-1` dislike), `updated_at`. `user_id` is deleted with the user; `question_id` references questions, which are retired, never deleted. A cleared rating is a deleted row. Indexed on `question_id` for per-question totals. |
+| `question_reports` | One row per report: `id` (server ULID), `user_id` (deleted with the user), `question_id`, `culture` (the page the report came from), `reason` (`smallint`), `comment` (nullable text, at most 1000 characters), `created_at`, `resolved_at` and `resolved_by` (both null while open; `resolved_by` is cleared if the admin account is deleted). Indexed on (`user_id`, `created_at`) for the quota and on (`resolved_at`, `created_at` descending) for the admin list. |
 
-Level, type, grading, grade and answer mode are stored as `smallint` with pinned numeric values (`PersistedEnumValuesTests` guards them).
+Level, type, grading, grade, answer mode, rating and report reason are stored as `smallint` with pinned numeric values (`PersistedEnumValuesTests` guards them).
 
 ## Review scheduling
 
@@ -324,7 +348,7 @@ and accepted outputs and bug line sets for the client graders. A count outside t
 | `/{culture}/{stack}` | Stack home. Its canonical URL for the default stack is `/{culture}`. |
 | `/{culture}/{stack}/questions` | Catalog. Query: `level`, `topic`, `type`, `page`, and the search term `q` (ADR 0011): at most 100 characters, whitespace collapsed, matched as a case-insensitive substring of the title in the culture or as an exact tag (spaces become hyphens), LIKE wildcards escaped. A request with a term is `noindex` and never output-cached; the search box is a `GET` form without token or cookie. |
 | `/{culture}/{stack}/topics/{topic}` | Topic page. |
-| `/{culture}/{stack}/questions/{slug}` | Question page. |
+| `/{culture}/{stack}/questions/{slug}` | Question page. Query `feedback` (a notice code after a feedback form post, see [Question feedback](#question-feedback)); it is read only for a signed-in request and is no part of the output-cache key. A `POST` to this URL is a feedback form handler (`question-rating`, `question-report`), which exists only in a signed-in render. |
 | `/{culture}/about` | About the project. |
 | `/signin` | Culture-neutral sign-in path (the library's `LoginPath` and the cookie handler's target). 302 to `/{culture}/signin`, keeping `denied=1` / `error=1` and the return path (`returnUrl` or `ReturnUrl`) validated like `/lang/`. The culture comes from the return path, then the `lang` cookie, then `Accept-Language`. `no-store`, `X-Robots-Tag: noindex`. |
 | `/{culture}/signin` | Sign-in page; `noindex`, never output-cached. |
@@ -332,11 +356,12 @@ and accepted outputs and bug line sets for the client graders. A count outside t
 | `/{culture}/{stack}/mock` | Mock island page (`[InteractiveIslandPage]`). Query `level` and `topic`, normalised like the catalog's (the first level preselects the setup form; types are dropped, a mock mixes them). Same culture constraint and the same rules as Practice: `noindex`, never output-cached, never compressed. See [Mock island](#mock-island). |
 | `/{culture}/{stack}/review` | Review island page (`[InteractiveIslandPage]`, `[Authorize]`): anonymous requests get 302 to `/signin?ReturnUrl=...`. No query. Same culture constraint and island rules as Practice. See [Review island](#review-island). |
 | `/{culture}/{stack}/profile` | Profile island page (ADR 0010; `[InteractiveIslandPage]`, `[Authorize]`): statistics per stack and the anonymous import (`#import`). No query. Same rules as Review. See [Profile and anonymous import](#profile-and-anonymous-import). |
-| `/{culture}/admin` | Admin page (ADR 0007): policy `Admin` (anonymous: 302 to `/signin?ReturnUrl=...`; signed in without the role: 302 to `/signin?denied=1&ReturnUrl=...`). Shows readiness, database reachability, the last 10 content imports and a user list (50 per page, GET search `q` by Telegram id or a case-insensitive name/username substring under the ICU collation `und-x-icu`, as the catalog search, `page`). Each row has a `POST` form (`block-{userId}`, hidden `userId` and `blocked`) with an antiforgery token: 400 without one. A configured admin cannot be blocked (`ProtectedAdmin` message). `noindex`, never output-cached, `private, no-store`, not compressed, not in `robots.txt`. |
+| `/{culture}/admin` | Admin page (ADR 0007): policy `Admin` (anonymous: 302 to `/signin?ReturnUrl=...`; signed in without the role: 302 to `/signin?denied=1&ReturnUrl=...`). Shows readiness, database reachability, the last 10 content imports and a user list (50 per page, GET search `q` by Telegram id or a case-insensitive name/username substring under the ICU collation `und-x-icu`, as the catalog search, `page`). Each row has a `POST` form (`block-{userId}`, hidden `userId` and `blocked`) with an antiforgery token: 400 without one. Also lists feedback reports (`reports`, `reportsPage`, a resolve button per open row) and the most disliked questions, see [Question feedback](#question-feedback). A configured admin cannot be blocked (`ProtectedAdmin` message). `noindex`, never output-cached, `private, no-store`, not compressed, not in `robots.txt`. |
 | `/signin-telegram/challenge?returnUrl=` | Starts the Telegram OIDC flow; 503 while `TelegramOidc:ClientId` or `ClientSecret` is empty. |
 | `/signin-telegram` | OIDC callback, handled by the authentication middleware. |
 | `/signin-telegram/logout` | `POST` with an antiforgery token: signs out and answers 302 to `/signin` (ADR 0003); 400 without a valid token. |
 | `/sitemap.xml`, `/sitemap-{lang}.xml`, `/robots.txt` | Sitemap index, one sitemap per culture, robots. |
+| `/og/{lang}/{stackKey}/{slug}/{fingerprint}.png`, `/og/{lang}/site/{fingerprint}.png` | Open Graph card, see [SEO](#seo) and ADR 0017. The route values are deliberately not named `culture` or `stack`, which `CultureAndStackMiddleware` judges. Every miss is an empty 404. |
 | `/health/live`, `/health/ready` | Liveness and readiness. |
 | `/not-found` | Target of the status-code re-execution; `noindex`. A re-executed request is rendered as `GET` (`StatusPageAsGetMiddleware`), so a `POST` to an unknown path is 404 too, not 400 for a missing antiforgery token. |
 | `/api/...` | The JSON API of the islands, see [API](#api). Never re-executed into the not-found page. |
@@ -397,6 +422,12 @@ the output cache runs after authentication so it sees the signed-in user.
   no POST `<form>` or antiforgery token, and no `Set-Cookie` in anonymous
   responses. The catalog's search box is the one `<form method="get">` (ADR 0011).
   Tests enforce the form and cookie rules because the output cache depends on them.
+- The question page is the one public page that also holds POST forms, and only in a
+  signed-in render: the rate and report forms of `QuestionFeedbackForms` (ADR 0016). The
+  page renders them after `HttpContext.User` is known to be signed in, and a signed-in
+  request is never served from or stored in the output cache, so the cached anonymous HTML
+  stays free of forms, tokens and cookies (`QuestionFeedbackPageTests` checks the anonymous
+  page, and that it is still a cache hit after a signed-in post).
 - The header's account controls follow the same rule: anonymous visitors get a
   plain "Sign in" link whose `returnUrl` is the page's canonical path from
   `PageLinks`, never the raw request, so cached HTML is the same for everyone.
@@ -1183,6 +1214,39 @@ serve an answer still pending, layout at 320-1920 px with
 screenshots `review-recall-{width}-{theme}.png` and `review-{width}-{theme}.png`,
 44 px targets at 375 px).
 
+### Question feedback bar
+
+`Components/QuestionFeedbackBar.razor` (ADR 0016) sits below `FeedbackPanel` in Practice and
+Review, only when the page has a signed-in user (`Me`) and the attempt is done; Mock shows
+none, and an anonymous visitor never sees it. Its parameters are the question, the user's
+stored rating (`InitialRating`), the owner id and the culture.
+
+- `SessionDto.MyRatings` carries the signed-in user's rating keys by question id for the
+  questions of the session (one extra query in `SessionQueries`); it is null for an
+  anonymous session. The islands hand the matching key to the bar.
+- Like and Dislike are `aria-pressed` toggle buttons; pressing the active one clears the
+  rating (`DELETE`), anything else sets it (`PUT`). A pressed button also gets an inset edge
+  and shows a check mark, so the state never rests on colour alone; the box never changes
+  (the check's space is reserved in both states), so pressing does not reflow the row.
+- "Report a problem" is a native `<details>` with five radio reasons, an optional
+  `<textarea maxlength="1000">` and Send, which stays disabled until a reason is chosen. The
+  browser owns whether the `<details>` is open; a stored report replaces the element (a new
+  `@key`), which closes it and clears its fields, so no toggle event can reopen it.
+- `QuestionFeedbackModel` holds the state and makes the calls through
+  `TrainerApiClient.SetRatingAsync` and `ReportAsync` (both writes, so they carry the token and
+  the owner). A call while another runs is ignored (the controls use `aria-disabled`, never `disabled`, while
+  saving, so keyboard focus stays put; the reasons and the comment are frozen then, so nothing typed during a
+  save is wiped, and a stored report moves focus to the status line); a failed write keeps the stored rating. The
+  status line is a live region: saving, saved or sent, failed (try again), or the report limit,
+  shown as "You can send more reports later" and not as an error.
+- `shortcuts.js` ignores keys inside `.feedback-bar__form`, so Enter and N in the form do not skip
+  the question.
+- At 1440 px the card spans two grid rows so the bar sits directly under the feedback terminal.
+  The signed-in answered state (form open) is a swept page (`practice-feedback-signed-in`), and
+  `FeedbackIslandTests` checks the bar at 375, 768, 1280 and 1440 px in both cultures.
+- Component key: the bar is keyed by the question id (not the answer id, which `QuestionCard`
+  already uses among the same siblings).
+
 ### Profile and anonymous import
 
 `Islands/ProfileIsland.razor` on `/{culture}/{stack}/profile` (ADR 0010).
@@ -1252,10 +1316,38 @@ Every public page writes through `SeoHead`:
 - `noindex` for retired questions, catalogs with more than one level, more than
   one topic, any type filter or `page > 1`, and the 404 page.
 - `BreadcrumbList` JSON-LD on every public page.
+- `og:image` (1200 by 630, with `og:image:width`, `og:image:height` and `og:image:alt`) and
+  `twitter:card` `summary_large_image`: a question page advertises its own card, every other
+  page the site card of its culture (the localised tagline).
 
 The sitemap is generated from the database, one file per culture, with
 `xhtml:link` alternates. The default stack home is left out because its canonical
 is the bare culture home. Absolute URLs are built by `SiteUrls`.
+
+### Open Graph images
+
+`OgCardRenderer` (SkiaSharp, ADR 0017) draws the card as a PNG: dark theme colours from
+`tokens.css` (`OgPalette`, checked against the stylesheet by a test), a monospace
+`~/dotnet/<topic>` header, a level chip, the title in Inter SemiBold 60 px wrapped on spaces to
+at most four lines (a word wider than a line breaks between characters, the last line ends
+with an ellipsis) and a footer with the localised site name and the public host. The same
+card always renders to the same bytes. The fonts are embedded resources (OFL, `OpenGraph/Fonts`).
+
+- The URL carries a fingerprint: the first 16 hex characters of SHA-256 over
+  `OgFingerprint.Version`, the culture and every card field. A request with another
+  fingerprint gets 301 to the current URL (`Cache-Control: public, max-age=3600`); the current
+  one gets 200 `image/png` with `Cache-Control: public, max-age=31536000, immutable` and no
+  cookie (`OgResponseHeadersMiddleware` strips `Set-Cookie` and restores the policy after the cookie handler, so a signed-in visitor cannot make a shared cache store a cookie). Only `GET` and `HEAD` serve images. An unknown slug, a missing locale, a retired question or an unsupported culture is an
+  empty 404 (status-code pages are switched off under `/og`).
+- `OgImageLinks` builds the card and the URL for both the page and the endpoint, so they
+  agree on the fingerprint. A page without a card of its own gets the site card of its culture
+  from `SeoHead`.
+- `OgImageCache` keeps the rendered files in `App:OpenGraph:CacheDirectory` as
+  `<culture>.<stack>.<slug>.<fingerprint>.png` (site cards `<culture>.site.<fingerprint>.png`; the dot cannot occur in a stack key or slug, so names are unambiguous),
+  written under a temp name and moved. At most two renders run at once; a request that finds both busy for two seconds gets 503 with `Retry-After: 5` and `Cache-Control: no-store`. A missing or unwritable
+  directory only disables caching: the image is still served and one warning is logged.
+- After every committed import `CompositeContentCacheInvalidator` clears the page cache and
+  then this directory; a changed title therefore gets a new URL and a new file.
 
 ## Output cache
 
@@ -1438,7 +1530,7 @@ is covered by `BreachGuardMiddleware` alone; all other `/api` JSON is untouched.
   `ReleaseSmokeTests.FingerprintedAssets_AreImmutable_AnonymousAndSignedIn` asserts
   literally on the published build; the unpublished test host does not, so the web
   tests compare signed-in with anonymous).
-- The reverse proxy must not compress application responses either (Plan 3).
+- The reverse proxy must not compress application responses either (the nginx site sets `gzip off`).
 
 Admins are the Telegram ids in `App:AdminTelegramIds`, read once at startup into
 `AccessOptions`. The Admin role is computed, never stored, so a change takes
@@ -1503,6 +1595,9 @@ interface and map the result.
 | `POST /api/answers/batch` | signed in | `X-CSRF-TOKEN`, `X-Outbox-Owner`, optional `X-Client-Utc-Offset` | `api-writes` | `AnswerBatch` → `AnswerBatchResponse`; more than 500 answers ⇒ 400 `batch-too-large`; `version` ≠ 1 ⇒ 400 `validation` |
 | `PUT /api/mock-sessions/{id}` | signed in | `X-CSRF-TOKEN`, `X-Outbox-Owner` | `api-writes` | `MockSummaryDto` → 204; an id that is not a ULID or belongs to another user ⇒ 404 `not-found`; an invalid summary ⇒ 400 `validation` |
 | `GET /api/profile?culture=&stack=` | signed in | optional `X-Outbox-Owner` | `api-reads` | → `ProfileDto`; unknown culture or stack ⇒ 400 `validation` |
+| `PUT /api/questions/{id}/rating` | signed in | `X-CSRF-TOKEN`, `X-Outbox-Owner` | `api-writes` | `RatingRequest` → `RatingDto`; a value other than `like` or `dislike`, or an id that is not a ULID ⇒ 400 `validation`; a retired or unknown question ⇒ 404 `question-not-found` |
+| `DELETE /api/questions/{id}/rating` | signed in | `X-CSRF-TOKEN`, `X-Outbox-Owner` | `api-writes` | → 200 `RatingDto` with a null value, also when nothing was rated or the question is retired; a bad id ⇒ 400 `validation` |
+| `POST /api/questions/{id}/reports` | signed in | `X-CSRF-TOKEN`, `X-Outbox-Owner` | `api-writes` | `ReportRequest` → `ReportResponse`: 201 `created`, 200 `updated` (an open report of the same reason was edited); 429 `report-limit` with `Retry-After` in whole seconds until the oldest counted report leaves the window; a bad id, unknown reason, unsupported culture or a comment over 1000 characters ⇒ 400 `validation`; a retired or unknown question ⇒ 404 `question-not-found` |
 
 **Reads and the owner.** Session reads and the profile run `ReadOwnerCheckFilter`:
 when the request carries `X-Outbox-Owner` (a Telegram user id, or `anon`) that is
@@ -1621,6 +1716,9 @@ Referrer-Policy: strict-origin-when-cross-origin
   above. Nothing on an island page may use inline styles, so dynamic sizes are
   drawn with `<progress>`, `<meter>` or SVG attributes; the E2E fixture fails a
   test on any CSP violation.
+- The optional analytics script (`/stats/script.js`, ADR 0018) is same-origin, so it needs no CSP
+  entry and no nonce, and the cached HTML stays identical for every visitor. Its `POST /stats/api/send`
+  is covered by `default-src 'self'`.
 
 ## Startup, readiness and health
 
@@ -1656,6 +1754,20 @@ the snapshot again.
 - `/health/ready` runs the `ReadinessHealthCheck`: 200 only in `Ready`, 503
   otherwise.
 
+Before importing, the importer checks that `<root>/schema-version` exists. When it
+does not (the root is missing, or `current` is not created yet), there is nothing to
+import, and the outcome depends on what the database holds
+(`IContentStatusQueries.GetActiveHashAsync`):
+
+| Active import | Result |
+|---|---|
+| None (a fresh install) | A warning, "No content release yet", and `Ready`: the site serves an empty stack list until `deploy-content` runs and calls `POST /internal/content/import`. |
+| One exists | An error and `Failed`, after the stored snapshot is loaded: the previous content keeps serving, but the probe stays red because the checkout that should hold it is gone. |
+
+A transient database error in this query follows the same retry loop as the import.
+
+A content root that exists but has no `schema-version` file counts the same way: on a database with no active import it reports `Ready` with no content (and the warning above), instead of a rejected import, so a broken checkout on a fresh install is visible only in the log and the empty site.
+
 A relative `App:ContentRoot` is resolved against the application content root
 (the `src/Trainer.Web` directory in development), not the working directory.
 
@@ -1680,10 +1792,16 @@ A relative `App:ContentRoot` is resolved against the application content root
 | `App:RateLimits:WritesPerMinute` | `/api` writes per signed-in user per minute. Default `60`. Must be positive, or startup fails. |
 | `App:RateLimits:ReadsPerMinute` | `/api` session and profile reads per signed-in user, else per client address, per minute. Default `30`. Must be positive, or startup fails. |
 | `App:RateLimits:SearchPerMinute` | Catalog requests with a search term (`q`) per client address per minute (ADR 0011); a request over the limit gets 429 with `Retry-After` and a localised HTML page. Cached catalog pages without a term are never limited. Default `30`. Must be positive, or startup fails. |
+| `App:Feedback:ReportsPerDay` | New question reports one signed-in user may file within a rolling 24 hours (ADR 0016); editing an open report does not count. Default `10`. Must be positive, or startup fails. |
+| `App:Analytics:WebsiteId` | Umami website id (a GUID) for cookieless page-view counting (ADR 0018). Unset or empty: no script is rendered anywhere. A value that is not a GUID fails startup. |
 | `App:ApplyMigrationsOnStartup` | Applies EF Core migrations at startup. Allowed only when `ASPNETCORE_ENVIRONMENT` is `Development`; in any other environment startup throws. |
+| `App:MaintenanceFlagPath` | Path of a flag file. While it exists, `MaintenanceGateMiddleware` (registered right after `UseForwardedHeaders`, before routing) answers 503 with `Retry-After: 60` and an empty body to every request whose method is not `GET`, `HEAD` or `OPTIONS` and to everything under `/signin-telegram`, so no form post, `/api` write or sign-in callback reaches a handler. The check is cached for one second. Only the `/internal` path prefix on the internal port is exempt (the pages and `/api` are also served on that port and stay gated), and the startup import is not an HTTP request, so content still loads during a restore. This is the second layer: nginx answers 503 to every request, GET included, while the flag exists, so the application lets a read through only when it does not arrive via nginx. An unreadable flag (a missing mount, a permission error) counts as absent: the gate fails open, so a broken mount never takes the site down. The 503 carries `Cache-Control: no-store` and the security headers. Unset (the default) leaves the gate off; Compose sets `/flags/maintenance`, the read-only mount of `${APP_DIR}/flags`. The gate is in the application because nginx buffers a request body before proxying, so a request admitted before the flag appeared can still arrive after it. |
+| `App:OpenGraph:CacheDirectory` | Directory of the rendered Open Graph PNG cache (ADR 0017). Unset: a `dit-og` directory under the system temp path. Compose sets `/var/cache/dit/og`, a volume. A missing or unwritable directory disables caching only (one warning is logged); the directory is emptied after every committed import. |
+| `App:Internal:Port` | Local port of the internal endpoints (`/internal/...`, see [Internal endpoints](#internal-endpoints)). `0` (the default) does not map them. Required positive in Production, or startup fails. Env var form: `App__Internal__Port`. |
+| `ContentImport:Token` | Bearer token of `POST /internal/content/import`: at least 32 characters whenever `App:Internal:Port` is positive, and required in Production, or startup fails. Only from environment variables (`ContentImport__Token`) or user secrets, never `appsettings*.json`. It is never logged. |
 
 `StartupMigrations.EnsureAllowed`, `PublicBaseUrlValidation.EnsureValid`,
-`ForwardedHeadersSetup.Parse` and `AllowedHostsDefault.Apply` run before the host is built.
+`ForwardedHeadersSetup.Parse`, `AllowedHostsDefault.Apply` and `InternalStartupCheck.EnsureValid` run before the host is built.
 
 ### Behind the reverse proxy
 
@@ -1699,16 +1817,170 @@ also safe.
 Because the scheme is correct behind the proxy, the `lang` cookie gets its `Secure` flag
 in production. The application itself neither redirects to HTTPS nor sends HSTS; configure both at the proxy.
 
+The nginx templates in `deploy/nginx/` implement the proxy side (the `${DOMAIN}` and `${APP_DIR}` placeholders are filled by
+`envsubst` during bootstrap). The site overwrites `X-Forwarded-For` with `$remote_addr` and sets `X-Forwarded-Proto`, so a
+client-supplied chain never reaches the application. It redirects port 80 to HTTPS, sends HSTS without `preload`, answers
+`/internal/` with 404, turns compression off for proxied responses and returns 503 while `${APP_DIR}/flags/maintenance`
+exists. Umami is reachable only through two exact paths, `/stats/script.js` and `/stats/api/send` (rate limited, 16 KiB body
+limit); any other `/stats/` path is 404. Other host names get no response, and the TLS server uses the `http2` parameter of
+`listen` because the nginx 1.24 that Ubuntu 24.04 ships predates the standalone directive. `nginx.conf.template` switches the
+error log and the default access log off for every server, and the site's own access log records only the method, path,
+protocol, status, size and duration: no address and no query string ([ADR 0007](adr/0007-admin-url.md)).
+`deploy/tests/nginx-check.sh` renders the templates in an `ubuntu:24.04` container, runs `nginx -t`, drives the cases above and
+asserts that no log file contains a request query or `127.0.0.1`; it is skipped when Docker is unavailable.
+
+The server is IPv4-only: the templates have no `listen [::]` lines, so the domain must have no AAAA record. The reason is that
+a container without IPv6 cannot bind `[::]` in nginx, which would make `nginx-check.sh` fail on runners without it. Umami is
+pinned to `X-Forwarded-For` through `CLIENT_IP_HEADER`, and the proxy also blanks the other client-IP headers Umami knows
+(`CF-Connecting-IP`, `X-Real-IP`, `Forwarded` and the rest), so a visitor cannot choose the hash input. Rate-limited requests
+to `/stats/api/send` get 429, which keeps them distinct from the 503 of maintenance mode.
+
+## Internal endpoints
+
+Two endpoints serve the deployment, not visitors (ADR 0015). They are mapped only
+when `App:Internal:Port` is positive, and the production host listens on that port
+through a second Kestrel endpoint (`http://+:8081`, published on the server's
+loopback only).
+
+| Endpoint | Auth | Result |
+|---|---|---|
+| `GET /internal/version` | none: the port is the boundary and the values are not secret | `InternalVersionDto`: `appVersion` (the Web assembly informational version, `dev` when absent), `contentSchemaMin`, `contentSchemaMax`, `renderVersion` (from `ContentSchema`) and `activeContentHash` (the `content_imports` row with `is_active`, null when none). The hash lets a deploy script tell whether an import call that failed on the wire had committed. |
+| `POST /internal/content/import` (no body) | `Authorization: Bearer <ContentImport:Token>` | Imports `App:ContentRoot` and answers `InternalImportDto`: `status` (`imported`, `unchanged` or `rejected`), `hash`, `imported`, `retired` and `issues` (`path`, `code`, `message`). 200 for `imported` and `unchanged`; 422 for `rejected` and for a content root that is not configured or does not exist (one issue with code `content-root-missing`). The output cache and the content snapshot are refreshed exactly as after a startup import. |
+
+Rules that hold for both:
+
+- `InternalPortFilter` answers an empty 404 unless `HttpContext.Connection.LocalPort`
+  equals `App:Internal:Port`. The check is on the socket, never on the `Host` header,
+  so `Host: x:8081` through nginx on the public port cannot reach the routes. The
+  filter switches the status-code pages feature off for the request, so a 404 or 401
+  stays empty instead of becoming the HTML not-found page.
+- `ImportTokenFilter` compares the UTF-8 bytes of the presented token with
+  `CryptographicOperations.FixedTimeEquals`; a token of another length is compared
+  against a same-length dummy, so timing does not reveal the length. A missing or wrong
+  token is 401 with `WWW-Authenticate: Bearer` and an empty body, and nothing imported.
+  The header is never logged.
+- The import runs under `IHostApplicationLifetime.ApplicationStopping`, not
+  `RequestAborted`: a client that disconnects or times out never cancels an import
+  half-way. A retry queues behind the running one on the importer's advisory lock and
+  gets a definitive answer (200 or 422). An import cut short by the host shutting down
+  answers 503, which is retryable on the next process.
+- Any other path under `/internal/`, with any method, answers an empty 404 on every port
+  (a catch-all behind the same `InternalPortFilter`), so it never reaches the HTML pages.
+- Bodies are serialised through the source-generated `InternalJsonContext` (camelCase).
+- `InternalStartupCheck.EnsureValid` fails startup when the port is positive and the
+  token is shorter than 32 characters, and in Production when the port is not positive
+  or the token is missing or blank, or when it starts or ends with whitespace (the bearer
+  comparison does not trim).
+- The in-memory test server has no sockets: `LocalPortFromHeaderStartupFilter`
+  (registered only by `TrainerWebFactory`) copies `X-Test-Local-Port` into
+  `Connection.LocalPort`, and `TrainerWebFactory.InternalPort` sets the port the host
+  maps the endpoints on. The `Release` suite runs the published build with a real second URL.
+
+## Question feedback
+
+Signed-in users like or dislike a question and report it with a reason (ADR 0016). The
+domain types are in `Trainer.Domain/Feedback`: `QuestionRating` (`like`, `dislike`),
+`ReportReason` (`wrong-answer`, `unclear-wording`, `outdated`, `broken-link`, `other`)
+with their wire keys, `ReportComment` and `ReportId`. `IQuestionFeedbackService` writes
+and `IQuestionFeedbackQueries` reads; both are scoped services over `TrainerDbContext`.
+
+- A rating is one `INSERT ... ON CONFLICT (user_id, question_id) DO UPDATE`, so a double
+  click stores one row; `null` deletes it. A retired question, or one in a retired topic
+  or stack, answers `QuestionNotFound` for setting a rating and for reports; clearing a
+  rating always works.
+- `ReportComment.TryNormalise` runs at the edge: it turns `\r\n` and `\r` into `\n`,
+  drops control characters other than `\n` and `\t`, trims, maps blank to no comment and
+  rejects more than 1000 characters. It also drops zero-width characters and bidirectional
+  overrides. `ReportAsync` runs it itself (an over-long comment throws `ArgumentException`)
+  and stores the result; the service never
+  logs it.
+- A report takes `pg_advisory_xact_lock(hashtextextended('feedback:' || user_id, 0))`.
+  Under the lock, an open report of the same user, question and reason is updated (comment
+  and culture; `Updated`, not counted). Otherwise the user's reports newer than 24 hours are
+  counted with the server `TimeProvider`: `App:Feedback:ReportsPerDay` or more gives
+  `LimitReached` with `RetryAt` = the oldest counted report plus 24 hours; fewer inserts
+  the report (`Created`).
+- `ResolveReportAsync` closes an open report once, storing the time and the admin.
+- The queries return a user's ratings for a set of questions, reports newest first
+  (25 per page, open or resolved; a page out of range is clamped) with the reporter's
+  Telegram id and name, and the live questions with at least one dislike, most disliked first.
+- Feedback is not queued in the browser outbox: a failed write shows an error and can be
+  repeated.
+
+### Question page forms
+
+`Components/Shared/QuestionFeedbackForms.razor` renders a `<section id="feedback">` on the
+question page, only when the request is signed in and the question is not retired. It holds
+two static SSR `POST` forms with an antiforgery token each (no JavaScript, no island):
+
+- `question-rating`: submit buttons `name="value"` with `like`, `dislike` and (only while
+  a rating is stored) `clear`. The stored rating shows as `aria-pressed="true"` with the
+  same check mark as the island bar; pressing a pressed rating again stores it again, which
+  is harmless.
+- `question-report` inside a `<details>`: radio `reason` (five required options),
+  `<textarea name="comment" maxlength="1000">`.
+
+The handler reads the form, calls `IQuestionFeedbackService` with the question id and
+culture the component was given (never a posted id), and answers with post-redirect-get: a
+`302` to the page path plus `?feedback=<code>#feedback`. Codes: `rated`, `cleared`,
+`reported`, `report-updated`, `report-limit`, `rate-limited` and `invalid` (an unknown value, an over-long
+comment, a retired question). Both handlers first take a permit from `FormWriteRateLimiter`: the
+per-user write limit of the `/api` writes (`App:RateLimits:WritesPerMinute`, same partition) in its own
+window, because a page POST never passes the `/api` limiter. The page maps the code to a localised notice inside the
+section; an unknown code shows nothing. A post without a valid token is answered 400 by
+the framework before the handler runs, and a post from an anonymous visitor finds no form
+of that name on the page and is refused. `feedback` is not in the output-cache key and an
+anonymous render never reads it.
+
+The stored rating comes from `IQuestionFeedbackQueries.GetMyRatingsAsync` in the same
+signed-in branch of `QuestionPage` that loads the statuses. The `.feedback-bar` rules the
+forms share with the island bar live in `site.css`, because the question page does not load
+`islands.css`.
+
+### Admin: reports and most disliked
+
+The admin page lists two more sections, read through `IQuestionFeedbackQueries`:
+
+- **Reports**: open reports by default, resolved ones with `?reports=resolved`, 25 per page
+  with `reportsPage`. Columns: date (formatted like the users table), the question as a
+  link in the culture of the report, reason, comment, reporter name with Telegram id, and a
+  `POST` button per open row that points (`form="resolve-report"`, `name="reportId"`, value the report id) at one
+  stable form `resolve-report` with the antiforgery token. The form exists on every render, so a
+  resubmit of a report resolved meanwhile still reaches the handler. The handler redirects (post-redirect-get)
+  to the admin page with `?notice=report-resolved` or `report-not-found`, keeping the filter and page numbers. The
+  comment is user text: it is HTML-encoded by Razor and shown with `white-space: pre-wrap`.
+  `ResolveReportAsync` closes an open report once; a report that is not open gives the
+  "already resolved" warning notice and changes nothing.
+- **Most disliked**: the top 20 questions by dislikes (`GetMostDislikedAsync`).
+
+Both are loaded in the same guarded block as the user list, so an unreachable database
+shows empty sections instead of an error. The page keeps the user search, both page numbers
+and the report filter in its links.
+
 ## Migrations policy
 
 - Production never applies migrations at startup. A schema change is a deliberate
-  deployment step (Plan 3 documents the procedure).
+  deployment step (`deploy-app` runs the migration bundle; see [deployment.md](deployment.md)).
 - Local development may set `App:ApplyMigrationsOnStartup=true` in the
   Development environment only.
 - Tests apply migrations once into a template database (`PostgresFixture`) and
   give each test a private copy.
 - Migrations live in `Trainer.Infrastructure/Persistence/Migrations` and are
   marked as generated code in `.editorconfig`.
+- A migration must keep the previous release working. A failed deploy rolls the image
+  back after migrations ran, and every deploy runs the previous image against the
+  migrated schema, so a migration expands first (new tables, nullable or defaulted
+  columns, non-unique indexes) and the release after the one that stopped using a
+  structure contracts it. `MigrationSafetyTests.NewMigrations_AreExpandOnly` rejects,
+  for every migration later than `20261115000000`, drops and renames, a column made
+  non-nullable, narrowed or stripped of its default, a non-nullable column added without
+  a default, a unique index, foreign key, check or unique constraint on a table that
+  existed before the migration, and any raw SQL. `[ContractMigration("reason")]`
+  (`ContractMigrationAttribute`) lifts only this static check; the deploy still runs the
+  deployed release's own `Release` suite on the migrated database.
+- The production image carries the migrations as a framework-dependent EF Core bundle at
+  `/app/migrate/efbundle`. It reads the connection string from `TRAINER_DB` through
+  `TrainerDbContextFactory`, never from an argument.
 
 ## Snippet sandbox and the content CLI
 
@@ -1755,8 +2027,9 @@ infrastructure failure separately from a content defect.
 | `Trainer.Infrastructure.Tests` | Import, queries, user accounts, answer recording (idempotency, time policy, ordering, concurrent batches, `xmin` conflict retry), mock sessions and the session queries (filters, first question, due and review order, constant query count) over PostgreSQL (Testcontainers). |
 | `Trainer.Web.Tests` | Pages, routing, SEO, cache, readiness, island hosting (where the runtime and the WebAssembly CSP may appear, bootstrap JSON, serialised auth state) and the `/api` endpoints (antiforgery, owner checks, JSON errors, rate limits, request parsing) through `WebApplicationFactory` and PostgreSQL. |
 | `Trainer.Web.Client.Tests` | The WebAssembly client: RU/EN key parity of `ClientResource` and that every key resolves in its culture; browser storage, server clock, API client, outbox sync and account watcher against in-memory fakes; the question session model (attempts, grading eligibility, snapshots, island states, keyboard shortcut resolution). |
-| `Trainer.Web.E2E` | Playwright and Chromium against the real site on Kestrel at `http://localhost:{port}` with a fake Telegram provider; `Category=E2E`. Each test class gets its own host, but the run shares one Chromium (`BrowserFixture`, an assembly fixture; tests isolate themselves in browser contexts): a browser and Playwright driver per class kept the machine CPU-bound at startup long enough for navigations to time out. `AppHostFixture.NewPageAsync` records CSP violations of every document a tab shows (`AssertNoCspViolations`) and counts `/api/sessions/` requests; `SignInAsync` signs a browser context in through the real OIDC flow. The island sweep (`IslandLayoutTests`, `IslandAccessibilityTests`, one shared `IslandSweepFixture` host) renders Practice (question and feedback), Mock (answering and summary), Review, profile, sign-in, admin and the 429 page of a rate-limited catalog search (its host allows one search a minute) at 375, 768, 1280 and 1920 px (dark), 375 and 1280 px (light) and 320 px (sign-in, the 429 page, Practice feedback and profile also in Russian), measures each rendering once and checks overflow, the primary action, overlapping key elements, words broken in the header, code font size, CSP violations, 44 px targets for a touch screen, a mouse and a mouse with a touch screen, accessible names and one language per page in both cultures, the project's focus ring (a 2 px `--accent` outline) on every Tab stop of every swept page, and a single verdict announcement. Writes screenshots to `TestResults/screenshots`. |
+| `Trainer.Web.E2E` | Playwright and Chromium against the real site on Kestrel at `http://localhost:{port}` with a fake Telegram provider; `Category=E2E`. Each test class gets its own host, but the run shares one Chromium (`BrowserFixture`, an assembly fixture; tests isolate themselves in browser contexts): a browser and Playwright driver per class kept the machine CPU-bound at startup long enough for navigations to time out. `AppHostFixture.NewPageAsync` records CSP violations of every document a tab shows (`AssertNoCspViolations`) and counts `/api/sessions/` requests; `SignInAsync` signs a browser context in through the real OIDC flow. The island sweep (`IslandLayoutTests`, `IslandAccessibilityTests`, one shared `IslandSweepFixture` host) renders Practice (question and feedback), the signed-in question page with its feedback forms, Mock (answering and summary), Review, profile, sign-in, admin (with seeded report rows) and the 429 page of a rate-limited catalog search (its host allows one search a minute) at 375, 768, 1280 and 1920 px (dark), 375 and 1280 px (light) and 320 px (sign-in, the 429 page, Practice feedback, the question page feedback forms and profile also in Russian), measures each rendering once and checks overflow, the primary action, overlapping key elements, words broken in the header, code font size, CSP violations, 44 px targets for a touch screen, a mouse and a mouse with a touch screen, accessible names and one language per page in both cultures, the project's focus ring (a 2 px `--accent` outline) on every Tab stop of every swept page, and a single verdict announcement. Writes screenshots to `TestResults/screenshots`. |
 | `Trainer.Web.Release` | The published Release build (`dotnet publish -c Release`, `DIT_RELEASE_PUBLISH_DIR`) started as a child process on `http://localhost:5080` over a migrated database (`DIT_RELEASE_CONNECTION`) and the repository `content/`, with a fake Telegram provider and Chromium; `Category=Release`, skipped when the two variables are unset (`PublishedAppFixture`). `ReleaseSmokeTests`: every island boots (Practice, Mock, Review, profile); Practice in RU and EN with the real DTOs (request and response bodies deserialised through `TrainerJsonContext`, acknowledged ids equal to stored rows), Mock and Review, public pages without `_framework/` requests, prefetched runtime URLs equal to what the island requests, every `_framework/` file requested once per cold load under its fingerprinted name (`Trainer.Web.staticwebassets.endpoints.json` labels), no CSP violation or failed runtime request, a signed-in warm visit loading the runtime from the browser cache, `X-Client-Utc-Offset: 420` from a device in `Asia/Novosibirsk`, the import map nonce and no development scripts in the HTML, and `Cache-Control: max-age=31536000, immutable` on fingerprinted assets for anonymous and signed-in requests. `IslandPerformanceTests`: the runtime transfer budget and Practice cold and warm timings under the phone profile (`docs/performance.md`); measurements go to `TestResults/perf/perf.json`. |
+| `Trainer.Deploy.Tests` | The Compose file (loopback ports, digests, hardening, bounded logs), `pg_hba.conf`, the shell conventions of `deploy/` (strict mode, no xtrace, postgres commands as the `postgres` user), `deploy/tests/render-env.test.sh`, `lib.test.sh`, `backup-lib.test.sh` and `rotate.test.sh` (the exit codes of the rotation script against a stand-in for docker), `LinkCheckScriptTests` (the two `run:` scripts of `link-check.yml` under bash with a recording `gh` and a scripted `dotnet`: which exit codes may open, edit or close the issue), the systemd units and the conventions of the backup scripts (credentials never on a command line, only the rotation and umami-recovery guards allowed over a trainer backup, no automatic rename back), the structure of `deploy-smoke.yml`, `schema-compat.yml`, `content-checks.yml` and the `ci.yml` calls (permissions, pinned actions, inputs through `env`, the check list of `smoke.sh`) and that `deploy/tests/content` is a copy of the Web test content. |
 | `Trainer.TestSupport` | Shared helpers: `PostgresFixture`, `TrainerWebFactory`, `ContentWorkspace`, and the sign-in doubles: `FakeTelegramOidcServer` (a loopback OIDC provider), `TelegramSignInDriver`, `SessionCookieReader`, `CapturingLoggerProvider`. |
 
 xUnit v3 with the built-in `Assert` on Microsoft.Testing.Platform. Commands are in
@@ -1767,22 +2040,147 @@ xUnit v3 with the built-in `Assert` on Microsoft.Testing.Platform. Commands are 
 | Job | Steps |
 |---|---|
 | `build-test` | Restore, `dotnet format --verify-no-changes`, build with warnings as errors, unit and integration tests (without `Docker`, `E2E` and `Release`). |
-| `content` | Build, `validate`, pull the pinned sandbox image, Docker tests, `run-snippets`. No secrets, read-only permissions; exit code 3 is annotated as an infrastructure failure. |
+| `content` | Calls `content-checks.yml` (read-only permissions, no secrets): build, `validate`, pull the pinned sandbox image, Docker tests, `run-snippets`; exit code 3 is annotated as an infrastructure failure. |
 | `e2e` | Build, install Playwright Chromium, E2E tests, upload `TestResults/screenshots` as an artifact. |
-| `release` | A PostgreSQL 17 service, build, `dotnet publish -c Release`, `dotnet tool restore`, `dotnet ef database update` against the service, install Playwright Chromium, the `Release` tests, upload `TestResults/perf` and `TestResults/release` (the measurements and the app log). Timings are held to regression budgets (8 500 ms cold, 4 750 ms warm, ADR 0014) and fail the job only when the workflow is dispatched by hand with `enforce = true` (`DIT_PERF_ENFORCE=1`); see `docs/performance.md`. |
+| `release` | PostgreSQL started by `.github/actions/postgres-from-compose` from the image `deploy/compose/compose.yaml` pins (the only place its digest is written), build, `dotnet publish -c Release`, `dotnet tool restore`, `dotnet ef database update` against the service, install Playwright Chromium, the `Release` tests, upload `TestResults/perf` and `TestResults/release` (the measurements and the app log). Timings are held to regression budgets (8 500 ms cold, 4 750 ms warm, ADR 0014) and fail the job only when the workflow is dispatched by hand with `enforce = true` (`DIT_PERF_ENFORCE=1`); see `docs/performance.md`. |
+| `schema-base` | Resolves the two commits the schema check compares: for a pull request `GITHUB_SHA` (the merge commit of the pull request merge branch) and the pull request base commit, for a push to `main` the pushed commit and `github.event.before`, for a manual run the optional `previous` input, which defaults to the parent of the dispatched commit (`HEAD^`). |
+| `schema-compat` | Calls `schema-compat.yml` with those commits (read-only permissions). |
+| `workflow-lint` | Downloads actionlint at a pinned version, checks the archive against a pinned SHA-256 before extracting it, and lints every workflow under `.github/workflows` (ShellCheck runs over each `run:` script; read-only permissions, no `needs`). |
 
-`content`, `e2e` and `release` start after `build-test` succeeds. The workflow can also
+`content`, `e2e`, `release` and `schema-compat` start after `build-test` succeeds; `workflow-lint` and `schema-base` start at once. The workflow can also
 be started by hand (`workflow_dispatch`), which is how the enforced performance run is made. A newer push cancels the
 running job of the same pull request. Every push to `main` has its own concurrency group
 (the commit SHA), so no run on `main` is cancelled or replaced by a later one.
 
+`.github/workflows/schema-compat.yml` is a reusable workflow (`workflow_call`, inputs `previous` and `current`, both full commit
+SHAs, read-only permissions) with one job `check`. It proves that the release that is running still reads and writes on the
+schema the next release migrates to, which is what makes a rollback after a migration safe (expand-only migrations, ADR 0020).
+It skips with a notice when `git diff --quiet` finds no change under `src/Trainer.Infrastructure/Persistence/Migrations`.
+Otherwise it checks out `current` by SHA (for a pull request the merge commit, `refs/pull/N/merge`; the `ref` is always `inputs.current`) and adds `previous` as a worktree, starts PostgreSQL from the compose pin (`.github/actions/postgres-from-compose`) and migrates it to `previous`, publishes `previous` and runs its own
+`Release` suite once (the suite signs in through the fake provider and leaves users, answers, review states and mock sessions
+behind), applies the migrations of `current`, and runs the `previous` suite again on the migrated, non-empty database. The
+suite must run at least ten tests (`--minimum-expected-tests`), so a run that executes nothing fails. The
+second run happens only when the previous commit carries `tests/Trainer.Web.Release/RERUNNABLE`, which says that its suite
+tolerates a non-empty database; the one commit without the marker is skipped with the log line `previous Release suite is not
+re-runnable; second run skipped`. The `previous` commit of a deployment is the commit running in production.
+
+`.github/workflows/deploy-smoke.yml` checks the deployment bundle on pull requests that touch `deploy/`, the `Dockerfile` or
+`src/`, when a deploy workflow calls it with the image it is about to ship (`workflow_call`, inputs `image` and `mode`) and on
+demand (`workflow_dispatch`, input `mode`). It declares `contents: read` and `packages: read` statically; a caller must grant
+the same on its calling job.
+
+The smoke has two tiers (`DIT_SMOKE_MODE`, `quick` or `full`, default `full`; any other value exits 2). `quick` stops after the
+rollback section; `full` runs everything with `DIT_SMOKE_KILL_ITERATIONS=4`. The `smoke` job picks the tier in its first step
+after the checkout: a pull request gets `full` when `git diff --name-only <base>...<head>` names a path under `deploy/`, a
+`deploy-*.yml` workflow, anything under `.github/actions/`, the `Dockerfile` or `.dockerignore` (or the list cannot be
+read), `quick` otherwise; a call or a manual run uses its `mode` input, validated against the two values. `deploy-app.yml`
+calls with `mode: quick`, because the scripts on `main` already passed `full` on their pull request. The step receives every
+event value through `env`. The checkout uses `fetch-depth: 0` on a pull request, with `persist-credentials: false`. The job
+limit is 45 minutes; the smoke step measured about 16 minutes in the full tier with 20 kills on a hosted runner.
+
+| Job | Steps |
+|---|---|
+| `checks` | ShellCheck over `deploy/**/*.sh`, `render-env.test.sh`, `lib.test.sh`, `backup-lib.test.sh`, `rotate.test.sh`, `nginx-check.sh` (the nginx templates in an Ubuntu container), `provision-check.sh` (the `/srv` layout, its owners and modes, and the sshd drop-in of the bootstrap script in an Ubuntu container), the Pester tests of `deploy/bootstrap` (they run the bootstrap logic against mocked `ssh`, `scp` and `gh`) and `Trainer.Deploy.Tests`. |
+| `smoke` | Gets the image (pull with a `docker login --password-stdin` from `github.token` when one is passed, else a build), runs `MigrationBundleTests` against it (`DIT_MIGRATE_IMAGE`), after installing `age` and `rclone` (the backup scripts run on the host), then `deploy/tests/smoke.sh`. |
+
+`deploy/tests/smoke.sh` drives the real Compose project through `deploy-app.sh` in a temporary `APP_DIR`, using the same staging
+upload protocol as the workflows and a throw-away local registry for the application image. Each named check prints `ok <name>`
+or stops the run: first install without content, a failed and re-run first install, the internal port, content switches
+without a restart, forwarded protocol, anonymous caching, Open Graph rendering, the image's user and relinked runtime, guard
+files, a stale password, an untraversable flags path, rollback after a failed readiness check, after a terminated run and after
+a `pg_hba.conf` that locks the application out (everything up to here is the `quick` tier, which then prints the skipped sections and stops), serialisation of concurrent runs, kills at every step boundary of activation and
+publication (`DIT_TEST_KILL_AT`, honoured only with `DIT_TEST_HOOKS=1`) plus random kills, pruning, and the Umami guard, then backups and restores: the encrypted dump and its key ring, the sidecars, scratch restores, a wrong identity, a replace that migrates an older schema, the maintenance gate against a half-sent POST while the restored application runs (`DIT_TEST_PAUSE_FILE` holds `restore.sh` before it lifts the flag), a failure after the swap, a rebuild of an empty server from the bucket, an off-site outage, retention, the daily check, content delivery (`receive-content.sh`: a schema outside the supported range, a rejected import, a rejected first delivery, a lost import response retried and decided by the second call, an import that stays unresolved and is settled by the next delivery (also when the settled import is rejected), a release uploaded twice with the same and with different content, a release with a missing file but an intact manifest, unsafe archives (parent paths, absolute paths, links, FIFOs, a reserved name, an unpacked-size bomb), retention of five releases, kills after the guard, the switch and the import, a refused endpoint, a missing token, a `current` outside the releases and a lock timeout; `deploy/tests/import-proxy.py` drops the client connection once the importer holds its advisory lock, which now covers the read phase too; `DIT_TEST_IMPORT_URL` and `DIT_TEST_KILL_AT` are honoured only with `DIT_TEST_HOOKS=1`) and the second half of the Umami recovery, then password rotation (`rotate-db-password.sh`: a completed rotation of each role with the process list of the runner and of the postgres container sampled for the value, kills after the journal, after `ALTER ROLE` (the password in `.env` no longer logs in and a restarted application logs the authentication failure), after `.env` and after `last-good.env`, with the `finish` that converges each time, a failing `ALTER ROLE` (exit 1, the value absent from the PostgreSQL log), the refusal of a deployment, a content delivery and the daily check while the journal exists, `finish` and `commit` for the other role, and a deployment with the new secrets once committed). The
+smoke project is named `dit-smoke`; the proxy listens on loopback port 8082 and needs `python3`; `DIT_SMOKE_KILL_ITERATIONS` shortens the random kill loop for local runs (the workflow sets 4).
+
 `.github/workflows/link-check.yml` has one job `check-links`, which runs the CLI's
 `check-links` every Monday at 06:00 UTC and on demand (`workflow_dispatch`), with
-read-only permissions and no secrets. The job failing is the report: it means at least one source link is dead, and the log and the
-job summary list the URL and the question files that cite it. A green run can still list
+`contents: read` and `issues: write` and no secrets other than the job's own `GITHUB_TOKEN`, passed to `gh` through `env:`
+(`GH_TOKEN`). Runs are serialised by the concurrency group `link-check` (never cancelled), so two runs cannot each open an issue. Two steps share the job: `Check source links` runs the CLI with `--report`, which writes the same Markdown as the job summary to a file, and has no token in its environment, because it fetches URLs taken from the content; it records the CLI exit code in the step output `code`. `Update the tracking issue` holds `GH_TOKEN` and acts only on `0` and `1`, and only when the report file is non-empty (the file is deleted before the run, so a build failure or a crash, which also exit non-zero, never reads as a verdict). With dead links (`1`) it updates the oldest open issue labelled `dead-links` (label created with `--force`) or opens "Dead source links", closes any further open `dead-links` issues as duplicates, then fails the job so the owner also gets the workflow notification. With none (`0`) it closes every open `dead-links` issue with the comment "All source links resolve as of <date>". The body is always passed with `--body-file`, never on a command line, because it holds URLs taken from the content; the table cells are escaped, and the report is cut to GitHub's 65536-character limit, with a closing line that counts the omitted rows and points to
+the full table in the job summary. Any other exit code fails the job and leaves the issue as it is. A green run can still list
 `unknown` links (blocked, throttled or timed out), for example when a publisher refuses
 runner addresses, so read the job summary, not only the status. GitHub disables scheduled
 workflows after 60 days without repository activity; re-enable it from the Actions tab.
+
+`.github/workflows/deploy-app.yml` ships one release to the production server. It runs after `ci` succeeds on a push to `main`
+(`workflow_run`) or by hand (`workflow_dispatch`, inputs `ref`, a commit on `main`, and `rollback`), under the workflow-level
+concurrency group `production-app` with `permissions: {}` at the top. A running deployment is never cancelled, but GitHub keeps one pending run per group, so a newer queued run replaces the pending one. That loses nothing, because a run does not deploy the commit that triggered it: `resolve` deploys the newest commit on `main` (by ancestry) whose `ci` push run concluded successfully (`gh api` over `actions/workflows/ci.yml/runs?branch=main&event=push&status=success`, with `actions: read` on that job), and `prepare` never goes older than the deployed commit. A late `ci` of an older commit therefore deploys the newest green commit or nothing, and a manual run with an empty `ref` resolves the same way. Only a manual run with an explicit `ref` deploys a commit whose `ci` was not checked, and a rollback ships the `deploy/` bundle of the tip of `main` with the older image. A rollback by dispatch also sets a hold: after a successful run the deploy job writes `flags/deploy-hold` on the server over ssh (`GITHUB_TOKEN` has no permission that writes environment variables), `prepare` ends every `workflow_run` run with a notice while the file exists (and, also for an automatic run, when the resolved commit already runs, so out-of-order `ci` runs do not repeat a deployment), and only a manual run without `rollback` removes it (the `keep_hold` input exists for the run that `rotate-db-password` dispatches, is accepted only with `ref` equal to the deployed commit, and otherwise fails the run early; `ops-check` fails `deploy-hold` daily while the file exists; if writing the hold fails after a successful rollback the job says so and the owner creates the file by hand). Do not add required reviewers to the `production` environment: they would gate the scheduled `ops-check`, the content deliveries and the follow-up dispatch, and a waiting run is replaced by the next one, so the daily alert would stop silently. The branch policy (`main` only) is the boundary.
+`workflow_run` carries the repository's secrets even when the triggering run was not privileged, so `resolve` re-checks the
+conclusion, the event (`push`), the head branch, the head repository and that the commit is an ancestor of `origin/main`
+before anything else runs. The server's `last-good.env` is the only record of what runs (`DIT_COMMIT`, `APP_IMAGE`); no job
+asks the GitHub API which run deployed last. SSH goes through the composite action `.github/actions/ssh-setup`: the key and
+the pinned host key are written to `$RUNNER_TEMP/ssh` from `env`, `StrictHostKeyChecking yes`, `BatchMode yes`, the `Port` of the `port` input (every caller passes the `DEPLOY_SSH_PORT` variable, default 22), host alias
+`dit`, and every calling job ends with an `always()` step that removes `$RUNNER_TEMP/ssh` and `$RUNNER_TEMP/env`.
+
+| Job | Steps |
+|---|---|
+| `resolve` | Picks the commit: after the provenance checks of a `workflow_run`, or for a manual run with an empty `ref`, the newest commit on `main` with a successful `ci` push run (`newest_green`: candidates that are not on `origin/main` are ignored and the one that descends from the others wins); for a manual run with `ref`, that SHA validated as 40 digits and an ancestor of `origin/main` (`rollback` requires `ref`). A run of `ci` that does not qualify ends here with a notice. |
+| `prepare` | Production environment. Reads `DIT_COMMIT` and the presence of `flags/deploy-hold` from the server and sets `deploy` to false for a `workflow_run` while the hold exists, for a `workflow_run` push whose diff to the deployed commit is non-empty and touches only `content/`, and for a commit that is a strict ancestor of the deployed one unless `rollback` is set. A manual run of the deployed commit always deploys, which re-renders `.env` after a setting changed. |
+| `build` | The only job with `packages: write`. Builds the image at the commit with `APP_VERSION=<sha>` and pushes `ghcr.io/<owner>/dev-interview-trainer:<sha>` unless that tag exists (`deploy/scripts/manifest-missing.sh` classifies the lookup: "manifest unknown", "not found" and "denied", which GHCR answers for a package never pushed, mean missing; any other error fails the job); outputs the digest reference every later step uses. |
+| `compat` | Calls `schema-compat.yml` with the deployed commit as `previous` and the new one as `current`; for a rollback to an ancestor of the deployed commit the arguments are swapped (the older release on the schema already in production). Skipped on the first deployment. |
+| `smoke` | Calls `deploy-smoke.yml` with the digest reference and `mode: quick` (`contents: read`, `packages: read`). |
+| `deploy` | Runs when `prepare` said so, `smoke` succeeded and `compat` succeeded or was skipped (`!cancelled()`, because a skipped `needs` job would otherwise skip it). Repeats the stale-commit check, renders `.env` with `deploy/scripts/render-env.sh` (secrets and variables through `env`, `APP_IMAGE` and `APP_DIR` the same values the script receives), uploads the bundle and `.env.new` into `staging/<run>-<attempt>/`, logs the server in to the registry through stdin into a Docker config inside that directory, and starts `deploy-app.sh` under `setsid` with every descriptor redirected so an SSH drop cannot signal it. A wrapper records the exit status in `deploy.exit`; the job polls it, prints the end of `deploy-app.log` and fails unless the status is 0. After the wait step a rollback run writes `flags/deploy-hold` and a manual run without `rollback` or `keep_hold` removes it (both only after a successful deployment). Its last step checks out the tip of `main` as it is then (path `main-tip`) and dispatches `deploy-content.yml` for that tip, without `rollback`, when the `content` tree of the live release (`readlink content/current`) differs from the tip's: that delivers content held back because its schema was newer than the previous application, and content whose own delivery failed on the lock (exit 4) or was replaced. `actions: write` is granted to this job only. |
+
+`.github/workflows/ops-check.yml` has one job `check`, which runs every day at 07:00 UTC and on demand under the concurrency
+group `production-ops` with the production environment and `contents: read`: it uploads the bundle into a staging directory,
+waits up to 20 minutes while a `deploy-app.sh`, `receive-content.sh` or `rotate-db-password.sh` process is alive (so `.import-pending` and `.rotation-pending` of a running operation do not alert; a marker without a live process still fails the check; the job timeout is 30 minutes, longer than the wait), runs
+`remote/ops-check.sh` from there and removes the directory. The job failing is the owner's daily alert.
+
+`.github/workflows/rotate-db-password.yml` has one job `rotate`, started by hand only (`workflow_dispatch`, inputs `role`: `trainer` or
+`umami`, and `mode`: `rotate` or `finish`), under the workflow-level concurrency group `production-rotate` with `permissions: {}` at the
+top and `contents: read` plus `actions: write` on the job (the production environment). It rolls forward only; there is no revert. The
+first steps check that the run is on `main` and, before anything is changed, that the secret `SECRETS_ADMIN_TOKEN` (a fine-grained
+token for this repository with the Environments permission "read and write", because `GITHUB_TOKEN` cannot write secrets) can set and
+delete a probe secret `DIT_TOKEN_CHECK`. Mode `rotate` generates 48 hex characters with `openssl rand -hex 24` into a mode 600 file
+under `$RUNNER_TEMP/env` and pipes it on stdin to `rotate-db-password.sh <role> begin`; mode `finish` (after an interrupted run) first
+compares the role input with the journal's (`pending-role`), runs `finish` and reads the pending value back over the SSH channel.
+In both modes the secret name is derived from the role alone (`trainer` is `DB_PASSWORD`, `umami` is `UMAMI_DB_PASSWORD`), `gh secret
+set` reads the value from the file on stdin with three attempts, and only a confirmed update lets `commit` delete the journal; then
+`deploy-app.yml` is dispatched with `GITHUB_TOKEN` for the commit that runs (`DIT_COMMIT` read from `last-good.env`, validated as a full SHA, with `keep_hold=true` so a rollback hold survives), not for the tip of `main`, whose `ci` may have failed and which an explicit `ref` does not check; a newer green commit refused meanwhile waits for the next `ci` completion or a manual run.
+Only the commit that runs is redeployed, which is what retries the refused re-render of `.env`. A failed or ambiguous update keeps the journal and the deployment block until the owner runs mode `finish` for the same
+role, which is safe to repeat. The value is never an argument on the runner or the server, never printed and never in `run:` text.
+
+`.github/workflows/content-checks.yml` is a reusable workflow (`workflow_call`, input `ref`, empty by default, meaning the commit of the
+caller) with one job `content` and `contents: read` at the top, no secrets and no environment. It checks out `ref`, builds, runs the
+CLI's `validate`, pulls the pinned sandbox image (`SANDBOX_IMAGE`, which `CiWorkflowDriftTests` keeps equal to the runner's default),
+runs the Docker-trait tests and `run-snippets`. `ci.yml` calls it for the commit under test, `deploy-content.yml` for the commit it is
+about to publish.
+
+`.github/workflows/deploy-content.yml` publishes the `content/` tree of one commit to the production server without restarting the
+application. It runs on a push to `main` that touches `content/**` and by hand (`workflow_dispatch`, inputs `ref`, a commit on `main`,
+and `rollback`), under the workflow-level concurrency group `production-content` with `permissions: {}` at the top. GitHub keeps one pending run per
+group, whatever commit it names, so every run without `rollback` publishes the newest tree on `main`: a replaced run loses nothing.
+
+| Job | Steps |
+|---|---|
+| `resolve` | Checks out `main` by name and picks one immutable commit. Without `rollback` that is the tip of `main` as fetched at the start of the run; a `ref` input is validated (40-digit SHA, ancestor of `origin/main`) and only serves as a lower bound. With `rollback` it is exactly `ref` (required). A manual run must be on `main`, because the server scripts come from the workflow's own commit. |
+| `checks` | Calls `content-checks.yml` with that commit (`contents: read`). |
+| `deploy` | Production environment. Checks out the workflow's own commit (never the content commit) and sets up SSH. Stale guard, on the runner: it reads the live release from `readlink content/current` and ends with a notice when the commit is a strict ancestor of it, unless `rollback` is set; only `rollback` overrides it, so the follow-up of `deploy-app` can never move content backwards. Uploads `deploy/` into `staging/<run>-<attempt>/bundle` and pipes `git archive --format=tar.gz <sha> content` into `receive-content.sh <staging> <sha>`. Exit 0 is success. Exit 5 (the content schema is newer than the running application; nothing was switched) ends with a warning, because `deploy-app` delivers it after the application that supports it, except for a `rollback` run, which fails; exit 7 (older than the application supports), 6, 4 (lock timeout) and every other status fail the job. A final `always()` step removes the staging directory (unless `receive-content.sh` still runs) and the SSH material. |
+
+`deploy/remote/receive-content.sh` runs under the deployment lock and refuses on the guards of `dit_refuse_guards` (exit 3). It settles an
+`.import-pending` left by an earlier delivery first (exit 6 when that import still gives no answer). It spools the archive and accepts only
+regular files and directories under `content/` (no absolute path, no `..`, no link, no reserved `.manifest`, at most 256 MiB unpacked and 20000 entries; exit 2),
+extracts it into the run's staging directory, writes a manifest and creates `content/releases/<sha>` through a temporary directory and a
+rename. A release is immutable: an existing `<sha>` is reused only when its stored `.manifest`, the manifest recomputed from the files on
+disk and the new delivery's manifest are all equal, otherwise the delivery fails. Leftover `*.tmp` and `*.del.*` directories of an
+interrupted run are swept at the start of a run. It then reads `schema-version` and compares it with `contentSchemaMin` and
+`contentSchemaMax` of `GET /internal/version` (exit 5 above the range, exit 7 below it, both before switching), refuses a `current` that
+is not a release path (exit 2), writes `.import-pending`, switches `current` (`ln -sfn` and `mv -T`) and calls the import endpoint with the
+token piped on stdin (no `-f`, no client timeout; the token is checked before anything is switched). The deployment lock timing out is
+exit 4. After a definitive answer it removes the guard; on 200 it keeps the five newest releases and the one `current` points to, and a
+release is removed by renaming it to `<sha>.del.<pid>` first. A release whose import was rejected (422, direct or settled by a later run) is removed the same way after the switch-back, unless it is the previous target; a release held back by exit 5 stays. `deploy-app.sh` does not refuse on `.import-pending`, but it settles it before it starts the application: `dit_revert_import_pending` switches `current` back to the previous target recorded on the file's second line (only while `current` still names the pending release) and removes the file, so the startup import reads a release an earlier delivery had accepted; `restore.sh --replace <dump> trainer` does the same. A malformed file is exit 2.
+
+`.github/dependabot.yml` updates `github-actions` (the SHA pins), `nuget`, the `Dockerfile` and `deploy/compose` weekly, and
+ignores PostgreSQL major versions (a dump and restore is needed) and every update of the Umami image (pinned exactly; upgrades
+follow the manual Umami procedure).
+
+`WorkflowHardeningTests` in `Trainer.Deploy.Tests` parse every workflow and composite action: remote actions pinned by full SHA,
+top-level `permissions` and no `write-all`, `packages: write` only in the image build job, callers granting what a called
+workflow declares, no `pull_request_target`, no secrets in pull request workflows, secrets only under `env` (or as an input of
+`ssh-setup`), no inputs, event data, outputs or secrets interpolated into `run`, the deploy workflow's provenance, stale and
+`compat` rules, uploads only into staging, the `always()` cleanup, a detached start with a recorded exit status, that no
+production workflow names `DIT_TEST_HOOKS`, `DIT_TEST_KILL_AT` or `DIT_TEST_IMPORT_URL`, that `content-checks.yml` stays read-only and
+secret-free and that `ci.yml` calls it, the triggers, resolution (the tip of `main` without `rollback`), stale guard, wiring, exit-code mapping and cleanup of `deploy-content.yml`, and the
+content dispatch at the end of `deploy-app.yml` (`actions: write` on the deploy job only, no `rollback`, the comparison with a fresh checkout of the tip). The same file pins the newest-green resolution, the rollback hold (file on the server, set only after success, cleared only by a manual run without `rollback`, kept by `rotate-db-password`), the `ops-check` wait (all three scripts, a job timeout above the wait), that PostgreSQL comes from the compose pin only, and the deploy set: it is derived from the files, so a workflow that uses `ssh-setup` or an `environment` without being listed fails, a job has the `production` environment exactly when it uses `ssh-setup`, and the pull request secret check follows called reusable workflows. Each rule has a mutation case that must fail.
 
 ## Line endings and formatting
 
@@ -1794,6 +2192,76 @@ workflows after 60 days without repository activity; re-enable it from the Actio
   that the build enforces as warnings (which are errors).
 - The content hash ignores CRLF and BOM, so a Windows checkout and a Linux
   checkout produce the same hash.
+
+## Deployment topology
+
+`deploy/` is the bundle that workflows upload to the server; nothing in it is edited by hand there.
+The operating procedures (first-time setup, the configuration reference, restore, rollback, rotation and the
+guard files) are in [deployment.md](deployment.md).
+
+- `compose/compose.yaml` (project `dev-interview-trainer`) runs `postgres`, `app` and `umami` on one network with the fixed
+  subnet `172.30.0.0/24`. Every published port is bound to `127.0.0.1`, PostgreSQL publishes none, and every image except the
+  application's is pinned by digest. The `app` service is read-only, drops all capabilities, forbids new privileges and trusts
+  only the network gateway (`172.30.0.1`) as a forwarded-headers proxy. Its health check is `/health/ready`.
+- `compose/postgres/pg_hba.conf` allows `postgres` only over the local socket (peer) and the `trainer` and `umami` roles only
+  from the Compose subnet, with `scram-sha-256` ([ADR 0019](adr/0019-database-roles.md)).
+- `scripts/render-env.sh` turns environment variables (GitHub secrets and variables) into the server `.env` and exits 2
+  naming the first missing or invalid variable, never its value.
+- `remote/lib.sh` is sourced by every server script: `dit_compose`, `dit_psql` and `dit_pg_dump` (always as the operating-system
+  user `postgres`), `dit_lock`, `dit_env_get`, `dit_env_set`, `dit_apply_hba`, `dit_refuse_guards` (the guard files, exit 3 and the `docs/deployment.md` section to follow) and `dit_check_traversable` (every directory down to the
+  flags directory needs the `o+x` bit, because nginx runs as `www-data` and treats a permission error on the maintenance flag as "absent"). `remote/deploy-lib.sh` holds the pure helpers of `deploy-app.sh` (Umami image parsing and comparison, bundle hashing over content, modes and links, the list of good bundles and fail-closed bundle pruning) and is covered by `deploy/tests/deploy-lib.test.sh`; an entry script takes the lock itself, because only a script that inherited the lock holder's open descriptor may skip it. `remote/ensure-databases.sh` creates the two
+  roles and databases, setting a password only when the role is created.
+- `remote/rotate-db-password.sh <staging-dir> <trainer|umami> begin|finish|commit` (and `<staging-dir> pending-role`) rolls the
+  password of one database role forward under the deploy lock. `begin` takes the new value on stdin, refuses over any guard file
+  (exit 3), writes `.rotation-pending` (role and value, mode 600, temp file and rename) before anything else changes and then runs
+  `finish`: `ALTER ROLE ... PASSWORD :'pw'` through psql's `\getenv` (the value travels in the exec environment; `log_min_error_statement`
+  and `log_statement` are switched off in the same session first, because the server would log a failing statement with the value), the one line in
+  `.env` and in `last-good.env` through `dit_env_set`, `compose up -d --wait --no-deps` for `app` or `umami` (`--no-deps` because the
+  postgres service renders `DB_PASSWORD` too and is not recreated by a rotation), then a login as the role with the journaled value (from inside the postgres container, the same way `pg_hba.conf` admits the
+  application roles) and `/health/ready` or Umami's `/api/heartbeat` as a liveness wait. A failing step exits 1 whatever the failing
+  command returned (psql says 3, `dit_env_set` 2), because the workflow reads 2 and 3 as "nothing changed".
+  Every step moves towards "new password everywhere", so `finish` converges from a crash at any point; `finish` and `commit` exit 2
+  without a change when the given role differs from the journal's, and `commit` also refuses (exit 1) while `.env` does not yet hold
+  the journaled value. The journal blocks `deploy-app.sh`, `receive-content.sh` and `restore.sh` (guard `rotation`; `backup.sh` proceeds over it, so the `trainer` backup is not stopped) and
+  fails the `guards` check of `ops-check.sh`; the script switches xtrace off before any variable holds the value.
+  `DIT_TEST_KILL_AT` (honoured only with `DIT_TEST_HOOKS=1`) stops it after the journal, `ALTER ROLE`, `.env` or `last-good.env`.
+- `remote/deploy-app.sh <staging-dir> <image-ref> <commit-sha>` deploys one release under the deploy lock: it refuses to start
+  while a guard file exists (`flags/maintenance`, `.rotation-pending`, `.umami-recovery`; exit 3) or when the new `.env`
+  carries different database passwords or the flags path is not traversable by nginx (exit 2), takes a pre-deploy backup (required
+  whenever a previous good state exists: a failed dump stops the run before anything is touched, a first install skips it), activates the bundle and `.env` (a `.deploy-in-progress` marker brackets the activation and records whether Umami's image changes, which is decided from the two bundles' compose files before anything is changed; an unparseable image refuses the deployment with exit 2),
+  runs `ensure-databases.sh` and the migration bundle, starts the stack, waits for `/health/ready` and publishes
+  `last-good.env` with one rename. `backup.sh predeploy` prints the path of the umami dump it wrote as the last line of stdout, which the recovery guard names; `deploy-app.sh` refuses to continue when that path is not an existing file. The script ignores `SIGPIPE`, logs to `$APP_DIR/logs/deploy-app.log` (mode 600, one 5 MiB generation kept) and must be started detached (`setsid`, output redirected). Any failure after activation, or a signal, restores `last-good.env`, its bundle and its
+  `pg_hba.conf` and exits 1; a run killed without the chance to do that is repaired by the next run before it deploys. A failed
+  first install stops `app` and `umami` and keeps PostgreSQL. When a failed deployment changed the Umami image, Umami stays
+  stopped and `.umami-recovery` blocks further deployments until the pre-deploy dump is restored with `restore.sh --replace <dump> umami`, which proceeds over `.umami-recovery` and over a leftover
+  `.deploy-in-progress` (a double failure) and then clears the guard with `dit_clear_umami_recovery`, which first resets the marker's Umami fields so the next run does not write the guard again; the next `deploy-app` then repairs the interrupted state first ([ADR 0020](adr/0020-deploy-serialisation.md)
+  describes the serialisation around it).
+- `remote/backup.sh daily|predeploy` writes `$APP_DIR/backups/<db>-<UTC yyyyMMddTHHmmssZ>-<kind>.dump.age` for `trainer` and
+  `umami` (`pg_dump -Fc | age -R backup/recipients.txt`, mode 600, a `.partial` file renamed only after a successful
+  pipeline) with a plain-text `.meta` sidecar (`trainer`: image, commit, last row of `ef_migrations_history`, active content
+  hash, content release; `umami`: image only), copies every dump without a `.uploaded` marker to `offsite:$BACKUP_S3_BUCKET`
+  with `rclone` configured by `RCLONE_CONFIG_OFFSITE_*` variables of a subshell (never on a command line), and prunes to 14
+  daily and 5 pre-deploy files per database without ever deleting an un-uploaded file. It takes the deploy lock itself and
+  skips it only when called by `deploy-app.sh`, which holds it; it refuses `flags/maintenance` and `.deploy-in-progress` (a backup of a mixed or
+  half-restored state is worse than none) but proceeds over `.rotation-pending` and `.umami-recovery`, which leave the `trainer` database consistent, and skips the `umami` dump while `.umami-recovery` exists and exits 4 without `backup/recipients.txt`. `daily` fails when a dump or the
+  upload fails, `predeploy` (which uploads only its own two files, never a backlog) only when a dump fails, so an off-site outage never stops a deployment. `last-success`,
+  `last-offsite` and the markers are the records `ops-check.sh` reads. The pure rules (names, retention, sidecar text, record
+  age, restart counts, the table list of a dump) are in `remote/backup-lib.sh` and covered by `deploy/tests/backup-lib.test.sh`.
+  [ADR 0021](adr/0021-encrypted-offsite-backups.md) records the decision.
+- `remote/restore.sh <dump> <db>` restores into a scratch database `<db>_restore_<ts>` and validates it (row counts for every
+  table in the dump; for `trainer` the migration history and a non-empty key ring) without touching the live database;
+  `--replace` additionally swaps it in under `flags/maintenance`, the migration bundle and a restart of the writers, and any
+  failure after the flag was written keeps it, stops the writers and prints the rename commands for each state the three names in the flag can be
+  in. The age identity is read from stdin before anything else runs (tracing is switched off first, CRLF is stripped, the variable is unset after the second decryption); after the start only the key ring is compared with the dump, because a newer migration may drop or rename any other table. `--drop-old` and `--drop-scratch` remove the databases it
+  leaves behind. `restore.sh --replace <dump> umami` is the only restore that proceeds over `.umami-recovery` and an
+  interrupted-deploy marker.
+- `remote/ops-check.sh` prints `ok|fail <check> <detail>` for readiness, the recipient file, the age of the last backup and of the
+  last off-site copy (26 h), disk (85 %), the TLS certificate (14 days), container restarts (more than 3), guard files (including a leftover `.deploy-in-progress`, which also stops the nightly backup) and `flags/deploy-hold` (the `deploy-hold` check).
+  `systemd/dit-backup.timer` starts `dit-backup.service` daily at 03:30 UTC (`Persistent=true`, up to 10 minutes of random delay);
+  the service runs the bundled `backup.sh daily` as `deploy` once the file exists, so bootstrap can enable the timer before the
+  first deployment.
+- On the server, `bundles/<sha>/` holds an unpacked bundle, `current-bundle` and `compose.yaml` are symlinks switched under the
+  deploy lock, and `postgres/` (mounted as a directory, so a renamed `pg_hba.conf` is seen) receives the active bundle's rules.
 
 ## Decision records
 
@@ -1817,3 +2285,10 @@ recorded one per file in `docs/adr/` (Status, Context, Decision, Consequences).
 | [0012](adr/0012-import-map-nonce.md) | The import map carries a per-request CSP nonce. |
 | [0013](adr/0013-invariant-globalization-in-the-client.md) | The WebAssembly client runs with invariant globalization. |
 | [0014](adr/0014-lab-regression-budgets-and-phone-targets.md) | Lab timings are regression budgets; spec 8.2's phone targets are a Plan 3 acceptance criterion. |
+| [0015](adr/0015-internal-endpoint-and-content-mount.md) | The internal endpoints listen on a separate port, and the content directory is mounted read-only from its parent so symlink switches are seen. |
+| [0016](adr/0016-question-feedback.md) | Question feedback is two plain tables with a per-user report quota; it is not queued in the outbox. |
+| [0017](adr/0017-open-graph-images.md) | Open Graph images are rendered lazily with SkiaSharp and cached on a volume under fingerprinted URLs. |
+| [0018](adr/0018-cookieless-analytics.md) | Page views are counted by self-hosted Umami, served same-origin under `/stats`, without cookies. |
+| [0019](adr/0019-database-roles.md) | Least-privilege database roles and `pg_hba`; the superuser is reachable only through `docker compose exec --user postgres` on the server. |
+| [0020](adr/0020-deploy-serialisation.md) | Deploy workflows serialise per workflow and on the server lock, never deploy an older commit over a newer one automatically, and `deploy-app` starts after a green `ci` run on `main`. |
+| [0021](adr/0021-encrypted-offsite-backups.md) | Database backups are encrypted with `age`, copied to a Backblaze B2 bucket with a key that cannot delete, and restored only through a guarded script that stops for the operator on any failure. |

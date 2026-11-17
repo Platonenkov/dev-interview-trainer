@@ -30,6 +30,8 @@ public sealed class IslandLayoutTests(IslandSweepFixture sweep)
         }
 
         data.Add("practice-feedback", 320, "dark");
+        data.Add("practice-feedback-signed-in", 320, "dark");
+        data.Add("question-feedback", 320, "dark");
         data.Add("profile", 320, "dark");
         data.Add("signin", 320, "dark");
         data.Add("search-429", 320, "dark");
@@ -41,6 +43,10 @@ public sealed class IslandLayoutTests(IslandSweepFixture sweep)
     {
         { "practice-feedback", "en" },
         { "practice-feedback", "ru" },
+        { "practice-feedback-signed-in", "en" },
+        { "practice-feedback-signed-in", "ru" },
+        { "question-feedback", "en" },
+        { "question-feedback", "ru" },
         { "profile", "en" },
         { "profile", "ru" },
         { "signin", "en" },

@@ -8,9 +8,12 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Microsoft.Playwright;
 using Trainer.Application.Answers;
+using Trainer.Application.Feedback;
 using Trainer.Application.Users;
+using Trainer.Domain.Feedback;
 using Trainer.Domain.Grading;
 using Trainer.Domain.Ids;
+using Trainer.Domain.Keys;
 using Trainer.Domain.Questions;
 using Trainer.Infrastructure.Persistence;
 using Trainer.TestSupport;
@@ -156,6 +159,26 @@ public sealed class AppHostFixture(PostgresFixture postgres, BrowserFixture brow
         ];
         AnswerBatchResult result = await services.GetRequiredService<IAnswerRecorder>().RecordAsync(user.UserId, reported, null, CancellationToken.None);
         Assert.Equal(answers.Length, result.Accepted.Count);
+    }
+
+    /// <summary>
+    /// Files a report, and optionally a dislike, as <paramref name="telegramUserId"/> through the app's own services, so
+    /// the admin page has rows to show. Repeating a call edits the open report instead of adding one.
+    /// </summary>
+    public async Task SeedFeedbackAsync(
+        long telegramUserId, string displayName, string questionId, string culture, ReportReason reason, string? comment, bool dislike)
+    {
+        await using AsyncServiceScope scope = Services.CreateAsyncScope();
+        IServiceProvider services = scope.ServiceProvider;
+        UserAccess user = await services.GetRequiredService<IUserAccountService>()
+            .SignInAsync(new TelegramProfile(telegramUserId, "seed_" + telegramUserId, displayName), CancellationToken.None);
+        IQuestionFeedbackService feedback = services.GetRequiredService<IQuestionFeedbackService>();
+        ReportResult report = await feedback.ReportAsync(user.UserId, new QuestionId(questionId), new CultureKey(culture), reason, comment, CancellationToken.None);
+        Assert.True(report.Outcome is ReportOutcome.Created or ReportOutcome.Updated, $"The report was not stored: {report.Outcome}.");
+        if (dislike)
+        {
+            await feedback.SetRatingAsync(user.UserId, new QuestionId(questionId), QuestionRating.Dislike, CancellationToken.None);
+        }
     }
 
     /// <summary>How many answer rows the server holds for <paramref name="telegramUserId"/>.</summary>

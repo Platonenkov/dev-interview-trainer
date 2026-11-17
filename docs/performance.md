@@ -254,7 +254,7 @@ The Plan 3 production image must do the same in its build stage, before
 `dotnet publish`:
 
 ```dockerfile
-FROM mcr.microsoft.com/dotnet/sdk:10.0.303 AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0.302@sha256:<digest> AS build
 RUN dotnet workload install wasm-tools --version 10.0.303
 ```
 

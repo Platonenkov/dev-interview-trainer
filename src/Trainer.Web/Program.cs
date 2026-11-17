@@ -9,18 +9,22 @@ using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Telegram.OpenIdConnect.AspNetCore;
 using Trainer.Application.Abstractions;
 using Trainer.Application.Content;
+using Trainer.Application.Feedback;
 using Trainer.Infrastructure.Content;
 using Trainer.Domain.Keys;
 using Trainer.Infrastructure;
 using Trainer.Infrastructure.Persistence;
 using Trainer.Contracts;
+using Trainer.Web.Analytics;
 using Trainer.Web.Api;
 using Trainer.Web.Auth;
 using Trainer.Web.Caching;
 using Trainer.Web.Components;
 using Trainer.Web.Components.Layout;
 using Trainer.Web.Endpoints;
+using Trainer.Web.Internal;
 using Trainer.Web.Islands;
+using Trainer.Web.OpenGraph;
 using Trainer.Web.Seo;
 using Trainer.Web.ContentState;
 using Trainer.Web.Routing;
@@ -35,6 +39,10 @@ PublicBaseUrlValidation.EnsureValid(appOptions, builder.Environment);
 TrustedProxies trustedProxies = ForwardedHeadersSetup.Parse(appOptions.ForwardedHeaders);
 string? defaultedAllowedHost = AllowedHostsDefault.Apply(builder.Configuration, appOptions, builder.Environment);
 RateLimitOptions rateLimits = ApiRateLimits.Read(builder.Configuration);
+FeedbackOptions feedbackOptions = FeedbackSetup.Read(builder.Configuration);
+AnalyticsOptions analyticsOptions = AnalyticsSetup.Read(builder.Configuration);
+InternalOptions internalOptions = builder.Configuration.GetSection(InternalOptions.SectionName).Get<InternalOptions>() ?? new InternalOptions();
+InternalStartupCheck.EnsureValid(internalOptions, builder.Configuration[InternalOptions.TokenKey], builder.Environment);
 
 string connectionString = builder.Configuration.GetConnectionString("Trainer")
     ?? throw new InvalidOperationException("ConnectionStrings:Trainer is not configured.");
@@ -43,15 +51,24 @@ string connectionString = builder.Configuration.GetConnectionString("Trainer")
 builder.Logging.AddSignInLogRules();
 
 builder.Services.Configure<AppOptions>(builder.Configuration.GetSection(AppOptions.SectionName));
+builder.Services.Configure<InternalOptions>(builder.Configuration.GetSection(InternalOptions.SectionName));
+builder.Services.Configure<OpenGraphOptions>(builder.Configuration.GetSection(OpenGraphOptions.SectionName));
 builder.Services.Configure<ForwardedHeadersOptions>(options => ForwardedHeadersSetup.Apply(options, trustedProxies));
 builder.Services.AddTrainerInfrastructure(connectionString);
+builder.Services.AddTrainerFeedback(feedbackOptions);
+builder.Services.AddTrainerAnalytics(analyticsOptions);
 builder.Services.AddScoped<IContentImportService>(provider => new ReadinessReportingImportService(
     ActivatorUtilities.CreateInstance<ContentImportService>(provider),
     provider.GetRequiredService<ReadinessState>(),
     provider.GetRequiredService<ContentSnapshotProvider>(),
     provider.GetRequiredService<ILogger<ReadinessReportingImportService>>()));
 builder.Services.AddSingleton<ContentSnapshotProvider>();
-builder.Services.AddSingleton<IContentCacheInvalidator, OutputCacheInvalidator>();
+builder.Services.AddSingleton<OutputCacheInvalidator>();
+builder.Services.AddSingleton<OgImageCache>();
+builder.Services.AddSingleton<OgCardRenderer>();
+builder.Services.AddSingleton<OgImageLinks>();
+// Importing clears the page cache and the rendered Open Graph images together.
+builder.Services.AddSingleton<IContentCacheInvalidator, CompositeContentCacheInvalidator>();
 builder.Services.AddSingleton<ReadinessState>();
 builder.Services.AddSingleton<SiteUrls>();
 builder.Services.AddScoped<PageLinks>();
@@ -109,6 +126,8 @@ if (appOptions.ApplyMigrationsOnStartup)
 // First: everything after it (cookie flags, redirects, logging) must see the client address and scheme, not the proxy's.
 app.UseForwardedHeaders();
 app.UseMiddleware<SecurityHeadersMiddleware>();
+// After the security headers so its 503 carries them, and still before routing, so no write endpoint is reachable.
+app.UseMiddleware<MaintenanceGateMiddleware>();
 // Outside the output cache: entries are stored uncompressed and encoded per request.
 app.UseResponseCompression();
 app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
@@ -117,6 +136,10 @@ app.UseMiddleware<StatusPageAsGetMiddleware>();
 app.UseWhen(
     context => context.Request.Path.StartsWithSegments(ApiEndpoints.Prefix, StringComparison.OrdinalIgnoreCase),
     api => api.UseMiddleware<ApiErrorMiddleware>());
+// Before authentication, so its start-of-response callback runs after the cookie handler's and can strip a renewed cookie.
+app.UseWhen(
+    context => context.Request.Path.StartsWithSegments(OgImageLinks.Prefix, StringComparison.OrdinalIgnoreCase),
+    og => og.UseMiddleware<OgResponseHeadersMiddleware>());
 app.UseRouting();
 // Before authentication on purpose: its OnStarting callback must be registered earlier than the cookie handler's, so it
 // runs after it and the handler's own no-cache headers on a reissued cookie cannot replace private, no-store.
@@ -149,6 +172,9 @@ SignInRedirectEndpoint.Map(app);
 app.MapTelegramOidcEndpoints();
 app.MapTrainerApi();
 SitemapEndpoints.Map(app);
+OgImageEndpoints.Map(app);
+InternalEndpoints.Map(app, mapEndpoints: internalOptions.Port > 0);
+
 app.MapHealthChecks("/health/live", new() { Predicate = _ => false });
 app.MapHealthChecks("/health/ready", new() { Predicate = check => check.Tags.Contains(ReadinessHealthCheck.Tag) });
 RazorComponentsEndpointConventionBuilder pages = app.MapRazorComponents<App>()

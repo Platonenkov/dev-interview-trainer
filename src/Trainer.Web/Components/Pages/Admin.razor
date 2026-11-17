@@ -4,7 +4,9 @@
 @using Microsoft.AspNetCore.Authorization
 @using Microsoft.AspNetCore.Components.Forms
 @using Trainer.Application.Admin
+@using Trainer.Application.Feedback
 @using Trainer.Application.Users
+@using Trainer.Domain.Feedback
 @using Trainer.Domain.Keys
 @using Trainer.Domain.Users
 @using Trainer.Web.Auth
@@ -13,10 +15,13 @@
 @inject IStringLocalizer<SharedResource> L
 @inject IAdminQueries Queries
 @inject IUserAccountService Users
+@inject IQuestionFeedbackQueries FeedbackQueries
+@inject IQuestionFeedbackService FeedbackService
+@inject NavigationManager Navigation
 @inject ReadinessState Readiness
 
 @* No output cache: the page is private to an admin and carries antiforgery tokens, so it is also never compressed. *@
-@if (_culture is { } culture && _overview is { } overview && _users is { } users)
+@if (_culture is { } culture && _overview is { } overview && _users is { } users && _reports is { } reports)
 {
     <SeoHead Title="@L["Admin.Title"]"
              Description="@L["Admin.Description"]"
@@ -57,6 +62,131 @@
                     <dd>@overview.AnswersLast24Hours.ToString(CultureInfo.CurrentCulture)</dd>
                 </div>
             </dl>
+        </section>
+
+        <section aria-labelledby="admin-reports">
+            <h2 id="admin-reports">@L["Admin.Reports.Heading"]</h2>
+            <nav class="admin__filter" aria-label="@L["Admin.Reports.Filter"]">
+                <a class="btn" href="@ReportsHref(culture, resolved: false, 1)" aria-current="@(ShowResolved ? null : "true")">@L["Admin.Reports.Open"]</a>
+                <a class="btn" href="@ReportsHref(culture, resolved: true, 1)" aria-current="@(ShowResolved ? "true" : null)">@L["Admin.Reports.Resolved"]</a>
+            </nav>
+            @* One form for every resolve button (they point at it with the form attribute), so it exists on every render: a
+               resubmit of a report that was resolved meanwhile still finds its handler and gets a notice, not a 400. *@
+            <form id="resolve-report" method="post" @formname="resolve-report" @onsubmit="OnResolveSubmitAsync">
+                <AntiforgeryToken />
+            </form>
+            @if (reports.Rows.Count == 0)
+            {
+                <p>@L[ShowResolved ? "Admin.Reports.EmptyResolved" : "Admin.Reports.EmptyOpen"]</p>
+            }
+            else
+            {
+                <div class="table-scroll">
+                    <table class="admin-table admin-table--reports" role="table">
+                        <thead role="rowgroup">
+                            <tr role="row">
+                                <th scope="col" role="columnheader">@L["Admin.Reports.Date"]</th>
+                                <th scope="col" role="columnheader">@L["Admin.Reports.Question"]</th>
+                                <th scope="col" role="columnheader">@L["Admin.Reports.Reason"]</th>
+                                <th scope="col" role="columnheader">@L["Admin.Reports.Comment"]</th>
+                                <th scope="col" role="columnheader">@L["Admin.Reports.Reporter"]</th>
+                                <th scope="col" role="columnheader">@L["Admin.Reports.Action"]</th>
+                            </tr>
+                        </thead>
+                        <tbody role="rowgroup">
+                            @foreach (ReportRow report in reports.Rows)
+                            {
+                                <tr role="row">
+                                    <td role="cell" data-label="@L["Admin.Reports.Date"]"><time datetime="@Iso(report.CreatedAt)">@Iso(report.CreatedAt)</time></td>
+                                    <td role="cell" data-label="@L["Admin.Reports.Question"]"><a href="/@report.Culture.Value/@report.Stack/questions/@report.Slug">@report.Title</a></td>
+                                    <td role="cell" data-label="@L["Admin.Reports.Reason"]">@L["QuestionFeedback.Reason." + ReportReasonKeys.ToKey(report.Reason)]</td>
+                                    <td role="cell" data-label="@L["Admin.Reports.Comment"]">
+                                        @if (report.Comment is { } comment)
+                                        {
+                                            <span class="admin-report__comment">@comment</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="admin-user__handle">@L["Admin.Reports.NoComment"]</span>
+                                        }
+                                    </td>
+                                    <td role="cell" data-label="@L["Admin.Reports.Reporter"]">
+                                        <span class="admin-user__name">@(report.ReporterName ?? L["Account.TelegramUser"])</span>
+                                        <code>@report.ReporterTelegramId.ToString(CultureInfo.InvariantCulture)</code>
+                                    </td>
+                                    <td role="cell" data-label="@L["Admin.Reports.Action"]">
+                                        @if (report.ResolvedAt is { } resolvedAt)
+                                        {
+                                            <span class="admin-user__handle">@L["Admin.Reports.ResolvedAt", Iso(resolvedAt)]</span>
+                                        }
+                                        else
+                                        {
+                                            <button type="submit" form="resolve-report" name="@ReportIdField" value="@report.Id.Value" class="btn">
+                                                @L["Admin.Reports.Resolve"]<span class="visually-hidden"> @L["Admin.Reports.ResolveDetail", report.Title, report.ReporterName ?? L["Account.TelegramUser"], Iso(report.CreatedAt)]</span>
+                                            </button>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+
+                @if (reports.PageCount > 1)
+                {
+                    <nav class="pager" aria-label="@L["Pager.Label"]">
+                        @if (reports.Page > 1)
+                        {
+                            <a rel="prev" href="@ReportsHref(culture, ShowResolved, reports.Page - 1)">← @L["Pager.Prev"]</a>
+                        }
+                        else
+                        {
+                            <span class="pager__off">← @L["Pager.Prev"]</span>
+                        }
+                        <span>@L["Pager.Status", reports.Page, reports.PageCount]</span>
+                        @if (reports.Page < reports.PageCount)
+                        {
+                            <a rel="next" href="@ReportsHref(culture, ShowResolved, reports.Page + 1)">@L["Pager.Next"] →</a>
+                        }
+                        else
+                        {
+                            <span class="pager__off">@L["Pager.Next"] →</span>
+                        }
+                    </nav>
+                }
+            }
+        </section>
+
+        <section aria-labelledby="admin-disliked">
+            <h2 id="admin-disliked">@L["Admin.Disliked.Heading"]</h2>
+            @if (_disliked.Count == 0)
+            {
+                <p>@L["Admin.Disliked.Empty"]</p>
+            }
+            else
+            {
+                <div class="table-scroll">
+                    <table class="admin-table" role="table">
+                        <thead role="rowgroup">
+                            <tr role="row">
+                                <th scope="col" role="columnheader">@L["Admin.Disliked.Question"]</th>
+                                <th scope="col" role="columnheader">@L["Admin.Disliked.Likes"]</th>
+                                <th scope="col" role="columnheader">@L["Admin.Disliked.Dislikes"]</th>
+                            </tr>
+                        </thead>
+                        <tbody role="rowgroup">
+                            @foreach (RatingTotals totals in _disliked)
+                            {
+                                <tr role="row">
+                                    <td role="cell" data-label="@L["Admin.Disliked.Question"]"><a href="/@culture.Value/@totals.Stack/questions/@totals.Slug">@totals.Title</a></td>
+                                    <td role="cell" data-label="@L["Admin.Disliked.Likes"]">@totals.Likes.ToString(CultureInfo.CurrentCulture)</td>
+                                    <td role="cell" data-label="@L["Admin.Disliked.Dislikes"]">@totals.Dislikes.ToString(CultureInfo.CurrentCulture)</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
         </section>
 
         <section aria-labelledby="admin-imports">
@@ -203,9 +333,16 @@
 
 @code {
     private static readonly UserPage EmptyUsers = new([], 0, 1, 1);
+    private static readonly ReportPage EmptyReports = new([], 1, 1);
+
+    private const int MostDislikedCount = 20;
 
     private const string UserIdField = "userId";
     private const string BlockedField = "blocked";
+    private const string ReportIdField = "reportId";
+    private const string ResolvedFilter = "resolved";
+    private const string ResolvedNotice = "report-resolved";
+    private const string MissingNotice = "report-not-found";
 
     private enum AdminNotice
     {
@@ -214,6 +351,8 @@
         Unblocked,
         ProtectedAdmin,
         NotFound,
+        ReportResolved,
+        ReportNotFound,
     }
 
     [Parameter]
@@ -225,13 +364,27 @@
     [SupplyParameterFromQuery(Name = "page")]
     public int? PageNumber { get; set; }
 
+    // The notice of the redirect that follows a resolve post (post-redirect-get); an unknown value shows nothing.
+    [SupplyParameterFromQuery(Name = "notice")]
+    public string? NoticeCode { get; set; }
+
+    [SupplyParameterFromQuery(Name = "reports")]
+    public string? ReportsFilter { get; set; }
+
+    [SupplyParameterFromQuery(Name = "reportsPage")]
+    public int? ReportsPageNumber { get; set; }
+
     [CascadingParameter]
     private HttpContext? HttpContext { get; set; }
 
     private CultureKey? _culture;
     private AdminOverview? _overview;
     private UserPage? _users;
+    private ReportPage? _reports;
+    private IReadOnlyList<RatingTotals> _disliked = [];
     private AdminNotice _notice;
+
+    private bool ShowResolved => string.Equals(ReportsFilter, ResolvedFilter, StringComparison.Ordinal);
 
     private CancellationToken RequestAborted => HttpContext?.RequestAborted ?? CancellationToken.None;
 
@@ -240,6 +393,12 @@
         _culture = CultureKey.TryCreate(Culture, out CultureKey culture) ? culture : null;
         if (_culture is not null)
         {
+            _notice = NoticeCode switch
+            {
+                ResolvedNotice => AdminNotice.ReportResolved,
+                MissingNotice => AdminNotice.ReportNotFound,
+                _ => AdminNotice.None,
+            };
             await LoadAsync();
         }
     }
@@ -248,6 +407,8 @@
     {
         _overview = await Queries.GetOverviewAsync(RequestAborted);
         _users = EmptyUsers;
+        _reports = EmptyReports;
+        _disliked = [];
         if (!_overview.DatabaseReachable)
         {
             return;
@@ -256,6 +417,8 @@
         try
         {
             _users = await Queries.GetUsersAsync(Search, PageNumber ?? 1, RequestAborted);
+            _reports = await FeedbackQueries.GetReportsAsync(ShowResolved, ReportsPageNumber ?? 1, RequestAborted);
+            _disliked = await FeedbackQueries.GetMostDislikedAsync(MostDislikedCount, _culture ?? CultureKey.Default, RequestAborted);
         }
         catch (DbException)
         {
@@ -287,7 +450,19 @@
         await LoadAsync();
     }
 
-    private bool NoticeIsWarning => _notice is AdminNotice.ProtectedAdmin or AdminNotice.NotFound;
+    private async Task OnResolveSubmitAsync()
+    {
+        HttpContext http = HttpContext ?? throw new InvalidOperationException("The admin page needs an HTTP request.");
+        UserId admin = http.User.GetUserId() ?? throw new InvalidOperationException("The admin page needs a signed-in user.");
+        IFormCollection form = await http.Request.ReadFormAsync(http.RequestAborted);
+        bool resolved = ReportId.TryCreate(form[ReportIdField].ToString(), out ReportId report)
+            && await FeedbackService.ResolveReportAsync(report, admin, http.RequestAborted);
+
+        // Redirecting also means a browser refresh repeats a harmless GET, not the resolve.
+        Navigation.NavigateTo(Href(_culture!.Value, PageNumber ?? 1, ShowResolved, ReportsPageNumber ?? 1, resolved ? ResolvedNotice : MissingNotice) + "#admin-reports");
+    }
+
+    private bool NoticeIsWarning => _notice is AdminNotice.ProtectedAdmin or AdminNotice.NotFound or AdminNotice.ReportNotFound;
 
     private string? NoticeText() => _notice switch
     {
@@ -295,6 +470,8 @@
         AdminNotice.Unblocked => L["Admin.Notice.Unblocked"].Value,
         AdminNotice.ProtectedAdmin => L["Admin.Notice.ProtectedAdmin"].Value,
         AdminNotice.NotFound => L["Admin.Notice.NotFound"].Value,
+        AdminNotice.ReportResolved => L["Admin.Notice.ReportResolved"].Value,
+        AdminNotice.ReportNotFound => L["Admin.Notice.ReportNotFound"].Value,
         _ => null,
     };
 
@@ -323,8 +500,8 @@
 
     private static string PathFor(CultureKey culture) => $"/{culture.Value}/admin";
 
-    // The search text is the only query state to carry along; the first page needs no page parameter.
-    private string PageHref(CultureKey culture, int page)
+    // Each list carries the state of the other: the user search, both page numbers and the report filter.
+    private string Href(CultureKey culture, int usersPage, bool resolved, int reportsPage, string? notice = null)
     {
         List<string> query = [];
         if (!string.IsNullOrWhiteSpace(Search))
@@ -332,11 +509,30 @@
             query.Add("q=" + Uri.EscapeDataString(Search));
         }
 
-        if (page > 1)
+        if (usersPage > 1)
         {
-            query.Add("page=" + page.ToString(CultureInfo.InvariantCulture));
+            query.Add("page=" + usersPage.ToString(CultureInfo.InvariantCulture));
+        }
+
+        if (resolved)
+        {
+            query.Add("reports=" + ResolvedFilter);
+        }
+
+        if (reportsPage > 1)
+        {
+            query.Add("reportsPage=" + reportsPage.ToString(CultureInfo.InvariantCulture));
+        }
+
+        if (notice is not null)
+        {
+            query.Add("notice=" + notice);
         }
 
         return query.Count == 0 ? PathFor(culture) : PathFor(culture) + "?" + string.Join('&', query);
     }
+
+    private string PageHref(CultureKey culture, int page) => Href(culture, page, ShowResolved, ReportsPageNumber ?? 1);
+
+    private string ReportsHref(CultureKey culture, bool resolved, int page) => Href(culture, PageNumber ?? 1, resolved, page);
 }

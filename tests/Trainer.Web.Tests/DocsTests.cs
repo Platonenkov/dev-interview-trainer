@@ -2,10 +2,14 @@ using System.Reflection;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Trainer.Application.Feedback;
+using Trainer.Web.Analytics;
 using Trainer.Web.Api;
 using Trainer.Web.Auth;
 using Trainer.Web.Caching;
 using Trainer.Web.Client.Storage;
+using Trainer.Web.Internal;
+using Trainer.Web.OpenGraph;
 using Trainer.Web.Security;
 using Trainer.Web.Startup;
 
@@ -25,7 +29,7 @@ public sealed partial class DocsTests(WebSiteFixture site) : IClassFixture<WebSi
     [GeneratedRegex(@"^# ADR (?<number>\d{4}): \S", RegexOptions.Multiline)]
     private static partial Regex AdrTitle();
 
-    [GeneratedRegex(@"^\| `(?<key>(?:App|TelegramOidc|ConnectionStrings):[A-Za-z:]+)`", RegexOptions.Multiline)]
+    [GeneratedRegex(@"^\| `(?<key>(?:App|TelegramOidc|ConnectionStrings|ContentImport):[A-Za-z:]+)`", RegexOptions.Multiline)]
     private static partial Regex ConfigurationRow();
 
     [GeneratedRegex(@"^```bash\r?\n(?<body>.*?)^```", RegexOptions.Multiline | RegexOptions.Singleline)]
@@ -42,6 +46,45 @@ public sealed partial class DocsTests(WebSiteFixture site) : IClassFixture<WebSi
 
     [GeneratedRegex(@"\s+")]
     private static partial Regex Whitespace();
+
+    [GeneratedRegex(@"^(?:required|optional)=\((?<names>[^)]*)\)", RegexOptions.Multiline)]
+    private static partial Regex RenderEnvNames();
+
+    [GeneratedRegex(@"(?:Secrets|Variables)\s*=\s*@\((?<names>[^)]*)\)")]
+    private static partial Regex ProductionSettingList();
+
+    [GeneratedRegex(@"`(?<name>[a-z][A-Za-z]*): [^`]*`")]
+    private static partial Regex InputMention();
+
+    [GeneratedRegex(@"^\s{6}(?<name>[a-z][A-Za-z]*):\s*$")]
+    private static partial Regex WorkflowInputName();
+
+    [GeneratedRegex(@"^\s{8}type:\s*(?<type>\w+)\s*$")]
+    private static partial Regex WorkflowInputType();
+
+    [GeneratedRegex(@"^\s{10}-\s*(?<option>\S+)\s*$")]
+    private static partial Regex WorkflowInputOption();
+
+    [GeneratedRegex(@"restore\.sh""?\s+(?<mode>--[a-z]+(?:-[a-z]+)*)")]
+    private static partial Regex RestoreMode();
+
+    [GeneratedRegex(@"(?<![\w-])-(?<name>[A-Z][A-Za-z]+)\b")]
+    private static partial Regex PowerShellSwitch();
+
+    [GeneratedRegex(@"`(?<file>\.[a-z]+(?:-[a-z]+)*-(?:pending|recovery|progress))`")]
+    private static partial Regex GuardFileMention();
+
+    [GeneratedRegex(@"dit_guard_check ""\$APP_DIR/(?<file>[^""]+)""")]
+    private static partial Regex GuardFile();
+
+    [GeneratedRegex(@"\bdit-[a-z]+\.(?:service|timer)\b")]
+    private static partial Regex SystemdUnitMention();
+
+    [GeneratedRegex(@"dit_guard_check ""[^""]+"" ""(?<section>[^""]+)""")]
+    private static partial Regex GuardSection();
+
+    [GeneratedRegex(@"""[^""|]+\|(?<section>[A-Z][A-Za-z ]+)""")]
+    private static partial Regex OpsCheckSection();
 
     private static string FindRepositoryRoot()
     {
@@ -144,6 +187,214 @@ public sealed partial class DocsTests(WebSiteFixture site) : IClassFixture<WebSi
         }
 
         throw new InvalidOperationException($"No bash block with '{marker}' was found.");
+    }
+
+    private static readonly string[] DeploymentSections =
+    [
+        "Overview and topology",
+        "Prerequisites",
+        "First-time setup",
+        "First deployment",
+        "Updating host assets",
+        "Interrupted restore",
+        "Interrupted rotation",
+        "Umami upgrade",
+        "Configuration reference",
+        "Changing a setting",
+        "Rotating credentials",
+        "Backups and restore",
+        "Rebuilding a lost server",
+        "Rolling back",
+        "Daily ops check",
+        "Hardening checklist before the repository goes public",
+        "Troubleshooting",
+    ];
+
+    private static readonly string[] DocumentedWorkflows = ["deploy-app", "deploy-content", "rotate-db-password"];
+
+    private static string Deployment() => Read("docs", "deployment.md");
+
+    private static string[] SectionTitles(string markdown) =>
+        [.. SectionHeading().Matches(markdown).Select(m => m.Groups["title"].Value)];
+
+    /// <summary>
+    /// Names listed in a shell array or a PowerShell list, so the documentation is checked against the files that define
+    /// the settings and not against a copy of them in this test.
+    /// </summary>
+    private static string[] SettingNames()
+    {
+        string renderEnv = Read("deploy", "scripts", "render-env.sh");
+        string library = Read("deploy", "bootstrap", "BootstrapLib.psm1");
+
+        string[] fromScript = [.. RenderEnvNames().Matches(renderEnv)
+            .SelectMany(m => m.Groups["names"].Value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))];
+        string[] fromBootstrap = [.. ProductionSettingList().Matches(library)
+            .SelectMany(m => Regex.Matches(m.Groups["names"].Value, @"'(?<name>[A-Z][A-Z0-9_]*)'").Select(n => n.Groups["name"].Value))];
+
+        return [.. fromScript.Concat(fromBootstrap).Distinct(StringComparer.Ordinal)];
+    }
+
+    private sealed record InputSpec(string Type, string[] Options);
+
+    /// <summary>The inputs under <c>workflow_dispatch: inputs:</c> of a workflow file, with their type and choice options.</summary>
+    private static Dictionary<string, InputSpec> DispatchInputs(string workflow)
+    {
+        string[] lines = workflow.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        Dictionary<string, InputSpec> inputs = new(StringComparer.Ordinal);
+        int dispatch = Array.FindIndex(lines, line => line.StartsWith("  workflow_dispatch:", StringComparison.Ordinal));
+        int start = dispatch < 0 ? -1 : Array.FindIndex(lines, dispatch + 1, line => line.StartsWith("    inputs:", StringComparison.Ordinal));
+        if (start < 0)
+        {
+            return inputs;
+        }
+
+        string? name = null;
+        string type = "string";
+        List<string> options = [];
+        for (int i = start + 1; i < lines.Length; i++)
+        {
+            if (lines[i].Trim().Length > 0 && lines[i].Length - lines[i].TrimStart().Length <= 4)
+            {
+                break;
+            }
+
+            Match input = WorkflowInputName().Match(lines[i]);
+            if (input.Success)
+            {
+                if (name is not null)
+                {
+                    inputs[name] = new InputSpec(type, [.. options]);
+                }
+
+                name = input.Groups["name"].Value;
+                type = "string";
+                options = [];
+                continue;
+            }
+
+            Match typeMatch = WorkflowInputType().Match(lines[i]);
+            if (typeMatch.Success)
+            {
+                type = typeMatch.Groups["type"].Value;
+            }
+
+            Match option = WorkflowInputOption().Match(lines[i]);
+            if (option.Success)
+            {
+                options.Add(option.Groups["option"].Value);
+            }
+        }
+
+        if (name is not null)
+        {
+            inputs[name] = new InputSpec(type, [.. options]);
+        }
+
+        return inputs;
+    }
+
+    /// <summary>
+    /// Every <c>`input: value`</c> span of the documentation is checked against the workflow named closest before it in the
+    /// same item: the input must exist there and its value must fit its type (a choice option, <c>true</c> or <c>false</c>).
+    /// </summary>
+    private static (List<string> Problems, Dictionary<string, int> Mentions) InputProblems(string markdown, IReadOnlyDictionary<string, Dictionary<string, InputSpec>> workflows)
+    {
+        List<string> problems = [];
+        Dictionary<string, int> mentions = workflows.Keys.ToDictionary(workflow => workflow, _ => 0, StringComparer.Ordinal);
+        foreach (string item in LogicalItems(markdown))
+        {
+            (int Index, string Workflow)[] named = [.. workflows.Keys
+                .Select(workflow => (Index: item.IndexOf($"`{workflow}`", StringComparison.Ordinal), Workflow: workflow))
+                .Where(entry => entry.Index >= 0)
+                .OrderBy(entry => entry.Index)];
+            if (named.Length == 0)
+            {
+                continue;
+            }
+
+            foreach (Match mention in InputMention().Matches(item))
+            {
+                string workflow = named.LastOrDefault(entry => entry.Index < mention.Index).Workflow ?? named[0].Workflow;
+                string input = mention.Groups["name"].Value;
+                string value = mention.Value.Trim('`')[(input.Length + 2)..].Trim();
+                if (!workflows[workflow].TryGetValue(input, out InputSpec? spec))
+                {
+                    problems.Add($"`{input}` is not an input of {workflow}: {item.Trim()}");
+                    continue;
+                }
+
+                mentions[workflow]++;
+                bool valueFits = spec.Type switch
+                {
+                    "choice" => spec.Options.Contains(value, StringComparer.Ordinal) || value.StartsWith('<'),
+                    "boolean" => value is "true" or "false",
+                    _ => true,
+                };
+                if (!valueFits)
+                {
+                    problems.Add($"`{input}: {value}` is not a valid value for {workflow} ({spec.Type} {string.Join('/', spec.Options)}): {item.Trim()}");
+                }
+            }
+        }
+
+        return (problems, mentions);
+    }
+
+    /// <summary>
+    /// The options in the case labels of restore.sh's argument parser (the first <c>case "${1:-}" in</c> up to its
+    /// <c>esac</c>), so a mode that is only mentioned in a comment or a message is not "accepted".
+    /// </summary>
+    private static string[] RestoreOptionLabels(string script)
+    {
+        int start = script.IndexOf("case \"${1:-}\" in", StringComparison.Ordinal);
+        if (start < 0)
+        {
+            return [];
+        }
+
+        int end = script.IndexOf("esac", start, StringComparison.Ordinal);
+        string parser = script[start..(end < 0 ? script.Length : end)];
+        return [.. parser.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n')
+            .Select(line => Regex.Match(line, @"^\s*(?<labels>--[a-z-]+(?:\s*\|\s*--[a-z-]+)*)\)"))
+            .Where(match => match.Success)
+            .SelectMany(match => match.Groups["labels"].Value.Split('|', StringSplitOptions.TrimEntries))];
+    }
+
+    private static string[] BootstrapSwitchMentions(string markdown) =>
+        [.. markdown.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n')
+            .Where(line => line.Contains("Bootstrap.ps1", StringComparison.Ordinal) || Regex.IsMatch(line, @"^\s*-[A-Z]") || line.Contains("`-", StringComparison.Ordinal))
+            .SelectMany(line => PowerShellSwitch().Matches(line).Select(m => m.Groups["name"].Value))
+            .Distinct(StringComparer.Ordinal)];
+
+    /// <summary>
+    /// Paragraphs, list items and table rows as single strings, so a sentence wrapped over several lines is one unit
+    /// when a workflow name and its inputs are looked for in it.
+    /// </summary>
+    private static string[] LogicalItems(string markdown)
+    {
+        List<string> items = [];
+        System.Text.StringBuilder current = new();
+        foreach (string raw in markdown.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n'))
+        {
+            bool startsItem = raw.Trim().Length == 0 || Regex.IsMatch(raw, @"^\s*(\d+\.|-|\||#)");
+            if (startsItem && current.Length > 0)
+            {
+                items.Add(current.ToString());
+                current.Clear();
+            }
+
+            if (raw.Trim().Length > 0)
+            {
+                current.Append(raw).Append(' ');
+            }
+        }
+
+        if (current.Length > 0)
+        {
+            items.Add(current.ToString());
+        }
+
+        return [.. items];
     }
 
     private (string Method, string Path)[] ApiEndpoints()
@@ -279,13 +530,14 @@ public sealed partial class DocsTests(WebSiteFixture site) : IClassFixture<WebSi
     [Fact]
     public void Agents_TestCommandsMatchCi()
     {
-        HashSet<string> workflow = WorkflowCommands(Read(".github", "workflows", "ci.yml"));
+        // The content job's steps live in content-checks.yml, which ci.yml calls.
+        HashSet<string> workflow = WorkflowCommands(Read(".github", "workflows", "ci.yml") + "\n" + Read(".github", "workflows", "content-checks.yml"));
         string[] commands = DotnetCommands(Read("AGENTS.md"), "dotnet build -warnaserror");
 
         Assert.Equal(5, commands.Length);
         foreach (string command in commands)
         {
-            Assert.True(workflow.Contains(Normalise(command)), $"ci.yml must run exactly the AGENTS.md command: {command}");
+            Assert.True(workflow.Contains(Normalise(command)), $"ci.yml or content-checks.yml must run exactly the AGENTS.md command: {command}");
         }
 
         string release = "dotnet test --filter-trait \"Category=Release\" --ignore-exit-code 8";
@@ -363,9 +615,14 @@ public sealed partial class DocsTests(WebSiteFixture site) : IClassFixture<WebSi
             "TelegramOidc:ClientSecret",
             "TelegramOidc:MetadataAddress",
             AdminTelegramIds.Key,
+            InternalOptions.SectionName + ":" + nameof(InternalOptions.Port),
+            InternalOptions.TokenKey,
         ];
         AddProperties(expected, typeof(AppOptions), AppOptions.SectionName);
         AddProperties(expected, typeof(RateLimitOptions), RateLimitOptions.SectionName);
+        AddProperties(expected, typeof(FeedbackOptions), FeedbackOptions.SectionName);
+        AddProperties(expected, typeof(OpenGraphOptions), OpenGraphOptions.SectionName);
+        AddProperties(expected, typeof(AnalyticsOptions), AnalyticsOptions.SectionName);
 
         Assert.Equal(expected.Order(StringComparer.Ordinal), documented.Order(StringComparer.Ordinal));
 
@@ -466,6 +723,180 @@ public sealed partial class DocsTests(WebSiteFixture site) : IClassFixture<WebSi
     }
 
     [Fact]
+    public void Deployment_DocumentsEverySecretAndVariable()
+    {
+        string[] names = SettingNames();
+        string reference = Section(Deployment(), "Configuration reference");
+
+        // The lists are parsed from the files that define them; a parser that stops matching must not turn this into a no-op.
+        Assert.True(names.Length >= 25, $"Only {names.Length} setting names were read from render-env.sh and BootstrapLib.psm1.");
+        foreach (string name in names)
+        {
+            Assert.True(
+                reference.Contains($"| `{name}` |", StringComparison.Ordinal),
+                $"docs/deployment.md must have a row for `{name}` under '## Configuration reference'.");
+        }
+    }
+
+    [Fact]
+    public void Deployment_HasRequiredSections()
+    {
+        string[] titles = SectionTitles(Deployment());
+
+        int previous = -1;
+        foreach (string required in DeploymentSections)
+        {
+            int index = Array.IndexOf(titles, required);
+            Assert.True(index >= 0, $"docs/deployment.md is missing the section '## {required}'.");
+            Assert.True(index > previous, $"docs/deployment.md has '## {required}' out of order.");
+            previous = index;
+        }
+    }
+
+    [Fact]
+    public void Deployment_HasEverySectionTheScriptsPointTo()
+    {
+        string[] titles = SectionTitles(Deployment());
+        string[] referenced =
+        [
+            .. GuardSection().Matches(Read("deploy", "remote", "lib.sh")).Select(m => m.Groups["section"].Value),
+            .. OpsCheckSection().Matches(Read("deploy", "remote", "ops-check.sh")).Select(m => m.Groups["section"].Value),
+            "Umami upgrade",
+        ];
+
+        Assert.True(referenced.Length >= 8, "The section names of lib.sh and ops-check.sh were not read.");
+        foreach (string section in referenced.Distinct(StringComparer.Ordinal))
+        {
+            Assert.True(titles.Contains(section), $"The server scripts tell the operator to follow '{section}' in docs/deployment.md, which has no such section.");
+        }
+    }
+
+    [Fact]
+    public void Agents_DescribesDeployDirectory()
+    {
+        string agents = Read("AGENTS.md");
+
+        Assert.DoesNotContain("Not created yet", agents, StringComparison.Ordinal);
+        Assert.DoesNotContain("joins them in Plan 3", agents, StringComparison.Ordinal);
+        Assert.Matches(@"(?m)^deploy/ ", agents);
+        Assert.Contains("docs/deployment.md", agents, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Deployment_DocumentedWorkflowInputsExist()
+    {
+        Dictionary<string, Dictionary<string, InputSpec>> workflows = DocumentedWorkflows.ToDictionary(
+            workflow => workflow,
+            workflow => DispatchInputs(Read(".github", "workflows", workflow + ".yml")),
+            StringComparer.Ordinal);
+        foreach (string workflow in DocumentedWorkflows)
+        {
+            Assert.NotEmpty(workflows[workflow]);
+        }
+
+        Assert.Equal(["rotate", "finish"], workflows["rotate-db-password"]["mode"].Options);
+        (List<string> problems, Dictionary<string, int> mentions) = InputProblems(Deployment(), workflows);
+
+        Assert.True(problems.Count == 0, string.Join(Environment.NewLine, problems));
+        foreach (string workflow in DocumentedWorkflows)
+        {
+            Assert.True(mentions[workflow] > 0, $"docs/deployment.md must show at least one input of {workflow}.");
+        }
+    }
+
+    private static readonly Dictionary<string, Dictionary<string, InputSpec>> SampleWorkflows = new(StringComparer.Ordinal)
+    {
+        ["deploy-app"] = new(StringComparer.Ordinal) { ["ref"] = new("string", []), ["rollback"] = new("boolean", []) },
+        ["rotate-db-password"] = new(StringComparer.Ordinal)
+        {
+            ["role"] = new("choice", ["trainer", "umami"]),
+            ["mode"] = new("choice", ["rotate", "finish"]),
+        },
+    };
+
+    [Theory]
+    [InlineData("Run `rotate-db-password` with `role: trainer` and `mode: finish`.", 0)]
+    [InlineData("Dispatch `rotate-db-password` with `role: <that role>`, then `deploy-app` with `ref: <sha>` and `rollback: true`.", 0)]
+    [InlineData("Run `rotate-db-password` with `mode: finnish`.", 1)]
+    [InlineData("Run `deploy-app` with `rolback: true`.", 1)]
+    [InlineData("Run `deploy-app` with `mode: finish`.", 1)]
+    [InlineData("Run `deploy-app` with `rollback: yes`.", 1)]
+    [InlineData("Run `deploy-app`, then `rotate-db-password` with `rollback: true`.", 1)]
+    public void InputProblems_ChecksNamesValuesAndTheWorkflowTheyFollow(string markdown, int expectedProblems)
+    {
+        Assert.Equal(expectedProblems, InputProblems(markdown, SampleWorkflows).Problems.Count);
+    }
+
+    [Fact]
+    public void Deployment_CommandsMatchTheScripts()
+    {
+        string deployment = Deployment();
+        string restore = Read("deploy", "remote", "restore.sh");
+        string bootstrap = Read("deploy", "bootstrap", "Bootstrap.ps1");
+        string lib = Read("deploy", "remote", "lib.sh");
+        string guards = lib + Read("deploy", "remote", "receive-content.sh") + Read("deploy", "remote", "ops-check.sh");
+
+        string[] modes = [.. RestoreMode().Matches(deployment).Select(m => m.Groups["mode"].Value).Distinct(StringComparer.Ordinal)];
+        Assert.Contains("--replace", modes);
+        string[] accepted = RestoreOptionLabels(restore);
+        Assert.Contains("--replace", accepted);
+        foreach (string mode in modes)
+        {
+            Assert.True(accepted.Contains(mode), $"docs/deployment.md uses restore.sh {mode}, which the option parser of restore.sh does not accept.");
+        }
+
+        string parameterBlock = bootstrap[bootstrap.IndexOf("param(", StringComparison.Ordinal)..bootstrap.IndexOf("Set-StrictMode", StringComparison.Ordinal)];
+        string[] parameters = [.. Regex.Matches(parameterBlock, @"\]\$(?<name>[A-Za-z]+)").Select(m => m.Groups["name"].Value)];
+        string[] switches = BootstrapSwitchMentions(deployment);
+        Assert.Contains("RotateDeployKey", switches);
+        Assert.Contains("RotateAgeIdentity", switches);
+        Assert.Contains("RotateSecret", switches);
+        foreach (string name in switches)
+        {
+            Assert.True(parameters.Contains(name), $"docs/deployment.md passes -{name} to Bootstrap.ps1, which has no such parameter.");
+        }
+
+        string[] guardFiles = [.. GuardFile().Matches(lib).Select(m => m.Groups["file"].Value), ".import-pending"];
+        Assert.Equal(5, guardFiles.Length);
+        foreach (string file in guardFiles)
+        {
+            Assert.True(deployment.Contains($"`{file}`", StringComparison.Ordinal), $"docs/deployment.md must name the guard file `{file}`.");
+        }
+
+        foreach (Match mention in GuardFileMention().Matches(deployment))
+        {
+            Assert.True(guards.Contains(mention.Groups["file"].Value, StringComparison.Ordinal), $"docs/deployment.md names the guard file {mention.Value}, which no script uses.");
+        }
+
+        string[] units = [.. Directory.GetFiles(Path.Combine(Root, "deploy", "systemd")).Select(Path.GetFileName)!];
+        Assert.NotEmpty(units);
+        MatchCollection unitMentions = SystemdUnitMention().Matches(deployment);
+        Assert.NotEmpty(unitMentions);
+        foreach (Match mention in unitMentions)
+        {
+            Assert.True(units.Contains(mention.Value), $"docs/deployment.md names the systemd unit {mention.Value}, which deploy/systemd does not have.");
+        }
+    }
+
+    [Theory]
+    [InlineData("case \"${1:-}\" in\n  --replace)\n    ;;\n  --drop-old | --drop-scratch)\n    ;;\nesac\n", "--drop-scratch", true)]
+    [InlineData("case \"${1:-}\" in\n  --replace)\n    ;;\nesac\n# --drop-old is mentioned here only\necho \"--drop-old)\"\n", "--drop-old", false)]
+    [InlineData("usage() { echo \"--replace\"; }\n", "--replace", false)]
+    public void RestoreOptionLabels_ReadsOnlyTheCaseLabelsOfTheParser(string script, string option, bool expected)
+    {
+        Assert.Equal(expected, RestoreOptionLabels(script).Contains(option));
+    }
+
+    [Theory]
+    [InlineData("pwsh deploy/bootstrap/Bootstrap.ps1 -HostName h -RotateDeployKee", "RotateDeployKee")]
+    [InlineData("  -AdminTelegramIds 1 -LetsEncryptEmail e [-SshPort 22]", "SshPort")]
+    [InlineData("Bootstrap with `-RotateSecret CONTENT_IMPORT_TOKEN`.", "RotateSecret")]
+    public void BootstrapSwitchMentions_FindsTheSwitchesOfACommand(string markdown, string expected)
+    {
+        Assert.Contains(expected, BootstrapSwitchMentions(markdown));
+    }
+
+    [Fact]
     public void Documentation_UsesNoLongDashes()
     {
         string[] files =
@@ -475,6 +906,7 @@ public sealed partial class DocsTests(WebSiteFixture site) : IClassFixture<WebSi
             Path.Combine("docs", "architecture.md"),
             Path.Combine("docs", "performance.md"),
             Path.Combine("docs", "content-guide.md"),
+            Path.Combine("docs", "deployment.md"),
             .. AdrFiles().Select(file => Path.Combine("docs", "adr", file)),
         ];
 

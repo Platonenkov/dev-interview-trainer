@@ -850,7 +850,10 @@ dotnet run --project tools/Trainer.ContentCli -- dump [root]
   code `1`; `unknown` (401, 403, 429, timeout, server error) is listed but gives `0`.
   A redirect from `https` to plain `http` also counts as dead.
   It needs network access, so run it on demand; CI runs it weekly. Its root is the
-  `--content` option, not a positional argument.
+  `--content` option, not a positional argument. `--report <file>` writes the same
+  Markdown as the GitHub step summary (a totals line, plus a table of the problem links)
+  to a file, also when nothing is wrong; the options may come in either order. An
+  unwritable report file is exit code `2`.
 - `generate-schemas` rewrites `content/schema/*.schema.json` from the C# model.
   Run it only when the format changes; a test fails if the committed schemas are
   out of date.
@@ -872,7 +875,11 @@ as errors, unit and integration tests), `content` (`validate`, then the Docker
 tests, then `run-snippets`) and `e2e` (browser checks). The `content` job has no
 secrets and read-only permissions. Exit code `3` there is an infrastructure
 failure: re-run the job. A separate weekly workflow (`link-check.yml`) runs
-`check-links` and fails when a source link has died.
+`check-links` and fails when a source link has died. It also keeps one open GitHub issue
+labelled `dead-links` ("Dead source links") in sync with the result: the issue body is the
+report, and it is closed once every link resolves again. To fix a dead link, replace it in
+the question files listed in the issue; the next weekly run, or a manual run from the
+Actions tab, closes the issue.
 
 ## Editor setup
 

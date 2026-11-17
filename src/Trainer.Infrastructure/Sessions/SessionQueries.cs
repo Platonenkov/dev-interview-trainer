@@ -1,6 +1,8 @@
 using Microsoft.EntityFrameworkCore;
+using Trainer.Application.Feedback;
 using Trainer.Application.Sessions;
 using Trainer.Contracts;
+using Trainer.Domain.Feedback;
 using Trainer.Domain.Keys;
 using Trainer.Domain.Levels;
 using Trainer.Domain.Questions;
@@ -13,9 +15,9 @@ namespace Trainer.Infrastructure.Sessions;
 
 /// <summary>
 /// Session queries. Each one runs a constant number of commands whatever the session size: the pool count, one query that
-/// returns the questions with their locale and payload, and the topic titles.
+/// returns the questions with their locale and payload, the topic titles and, for a signed-in user, the user's ratings.
 /// </summary>
-internal sealed class SessionQueries(TrainerDbContext db, TimeProvider clock, MockComposer composer) : ISessionQueries
+internal sealed class SessionQueries(TrainerDbContext db, TimeProvider clock, MockComposer composer, IQuestionFeedbackQueries feedback) : ISessionQueries
 {
     // A parameter-driven status switch keeps one query shape for every status; see PracticePool.
     private const int StatusAll = 0;
@@ -43,7 +45,8 @@ internal sealed class SessionQueries(TrainerDbContext db, TimeProvider clock, Mo
             .Select(SessionRows.Project)
             .ToListAsync(ct);
 
-        return new SessionDto(await ToDtosAsync(rows, criteria.Culture, criteria.Stack, ct), poolSize);
+        IReadOnlyList<QuestionDto> questions = await ToDtosAsync(rows, criteria.Culture, criteria.Stack, ct);
+        return new SessionDto(questions, poolSize, await MyRatingsAsync(user, questions, ct));
     }
 
     public async Task<MockSessionDto> GetMockAsync(MockCriteria criteria, CancellationToken ct)
@@ -105,7 +108,26 @@ internal sealed class SessionQueries(TrainerDbContext db, TimeProvider clock, Mo
             .Select(SessionRows.Project)
             .ToListAsync(ct);
 
-        return new SessionDto(await ToDtosAsync(rows, criteria.Culture, criteria.Stack, ct), poolSize);
+        IReadOnlyList<QuestionDto> questions = await ToDtosAsync(rows, criteria.Culture, criteria.Stack, ct);
+        return new SessionDto(questions, poolSize, await MyRatingsAsync(user, questions, ct));
+    }
+
+    /// <summary>The signed-in user's ratings among the session's questions as wire keys; null for an anonymous session.</summary>
+    private async Task<IReadOnlyDictionary<string, string>?> MyRatingsAsync(UserId? user, IReadOnlyList<QuestionDto> questions, CancellationToken ct)
+    {
+        if (user is not { } signedIn)
+        {
+            return null;
+        }
+
+        if (questions.Count == 0)
+        {
+            return new Dictionary<string, string>();
+        }
+
+        QuestionId[] ids = [.. questions.Select(q => new QuestionId(q.Id))];
+        IReadOnlyDictionary<QuestionId, QuestionRating> ratings = await feedback.GetMyRatingsAsync(signedIn, ids, ct);
+        return ratings.ToDictionary(r => r.Key.Value, r => QuestionRatingKeys.ToKey(r.Value), StringComparer.Ordinal);
     }
 
     /// <summary>

@@ -69,6 +69,10 @@
                             </QuestionCard>
                             @* Rendered before the answer too: its live region must exist, empty, for the verdict to be announced. *@
                             <FeedbackPanel Attempt="attempt" />
+                            @if (attempt.IsDone && _owner is { } owner)
+                            {
+                                <QuestionFeedbackBar @key="attempt.Question.Id" Question="attempt.Question" Owner="owner" Culture="@bootstrap.Culture" InitialRating="@RatingOf(attempt.Question.Id)" />
+                            }
                         </div>
                         @if (attempt.IsDone)
                         {
@@ -131,6 +135,7 @@
     private TimeSpan? _retryAfter;
     private ReviewSession? _session;
     private IReadOnlyList<PracticeTopicSummary> _summary = [];
+    private IReadOnlyDictionary<string, string>? _myRatings;
     private QuestionCard? _card;
     private ElementReference _main;
     private ElementReference _next;
@@ -277,6 +282,7 @@
         IslandStateKind kind = IslandState.FromResult(result, result.Value is not null && due.Count == 0);
         if (kind == IslandStateKind.Ready)
         {
+            _myRatings = result.Value?.MyRatings;
             _session = new ReviewSession(due, Ids, Random.Shared, Clock);
             _phase = Phase.Question;
             _focusTitle = moveFocus;
@@ -299,6 +305,8 @@
 
     private async Task<HashSet<string>> ReadPendingQuestionIdsAsync() =>
         new((await Outbox.ReadAsync(StorageKeys.UserOutbox(_owner!.Value))).Select(a => a.QuestionId), StringComparer.Ordinal);
+
+    private string? RatingOf(string questionId) => _myRatings is not null && _myRatings.TryGetValue(questionId, out string? rating) ? rating : null;
 
     private void ShowOptions()
     {

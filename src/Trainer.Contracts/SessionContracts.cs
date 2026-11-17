@@ -24,7 +24,11 @@ public sealed record MockSessionRequest(string Culture, string Stack, string Lev
 public sealed record ReviewSessionRequest(string Culture, string Stack, int Count);
 
 /// <param name="PoolSize">How many questions matched before the count limit was applied.</param>
-public sealed record SessionDto(IReadOnlyList<QuestionDto> Questions, int PoolSize);
+/// <param name="MyRatings">
+/// The signed-in user's rating keys by question id, for rated questions only; null for an anonymous session and for
+/// mock sessions, which show no feedback controls.
+/// </param>
+public sealed record SessionDto(IReadOnlyList<QuestionDto> Questions, int PoolSize, IReadOnlyDictionary<string, string>? MyRatings = null);
 
 /// <param name="PoolSize">Questions available at the level and the level below, before composing the session.</param>
 /// <param name="RepeatsLikely">True when the pool is smaller than about three times the requested count (spec: warn before the session starts).</param>

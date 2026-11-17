@@ -21,6 +21,10 @@ public sealed class PublishedAppFixture : IAsyncLifetime
     public const string ConnectionVariable = "DIT_RELEASE_CONNECTION";
 
     private const int Port = 5080;
+
+    /// <summary>The second Kestrel URL the internal endpoints answer on; the browser tests never use it.</summary>
+    private const int InternalPort = 5081;
+
     private static readonly TimeSpan ReadyTimeout = TimeSpan.FromSeconds(90);
     private static readonly TimeSpan SignInTimeout = TimeSpan.FromSeconds(30);
 
@@ -42,6 +46,9 @@ public sealed class PublishedAppFixture : IAsyncLifetime
     }
 
     public Uri BaseAddress { get; } = new($"http://localhost:{Port.ToString(CultureInfo.InvariantCulture)}/");
+
+    /// <summary>The second Kestrel endpoint, the only one the internal endpoints answer on.</summary>
+    public Uri InternalAddress { get; } = new($"http://localhost:{InternalPort.ToString(CultureInfo.InvariantCulture)}/");
 
     public string? PublishDirectory { get; }
 
@@ -114,7 +121,9 @@ public sealed class PublishedAppFixture : IAsyncLifetime
         env.Remove("DOTNET_STARTUP_HOOKS");
         env.Remove("DOTNET_MODIFIABLE_ASSEMBLIES");
         env["ASPNETCORE_ENVIRONMENT"] = "Testing";
-        env["ASPNETCORE_URLS"] = BaseAddress.GetLeftPart(UriPartial.Authority);
+        env["ASPNETCORE_URLS"] = BaseAddress.GetLeftPart(UriPartial.Authority) + ";http://localhost:" + InternalPort.ToString(CultureInfo.InvariantCulture);
+        env["App__Internal__Port"] = InternalPort.ToString(CultureInfo.InvariantCulture);
+        env["ContentImport__Token"] = TrainerWebFactory.ImportToken;
         env["ConnectionStrings__Trainer"] = ConnectionString;
         env["App__ContentRoot"] = Path.Combine(ContentWorkspace.RepositoryRoot(), "content");
         env["App__PublicBaseUrl"] = BaseAddress.GetLeftPart(UriPartial.Authority);

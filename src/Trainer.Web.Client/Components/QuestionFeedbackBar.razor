@@ -1,0 +1,145 @@
+@using Trainer.Domain.Feedback
+@using Trainer.Web.Client.Api
+@implements IDisposable
+@inject TrainerApiClient Api
+@inject IStringLocalizer<ClientResource> L
+
+@* Rate a question and report a problem with it (ADR 0016), for a signed-in user once the attempt is done. The rating
+   buttons are toggles: pressing the active one clears it. The status line is rendered empty first so its live region
+   exists when a result arrives. *@
+<section class="feedback-bar" aria-label="@L["QuestionFeedback.Label"]">
+    <div class="feedback-bar__row">
+        <button type="button" class="btn feedback-bar__rate" aria-pressed="@Pressed("like")" aria-disabled="@Saving" @onclick="@(() => RateAsync("like"))">@L["QuestionFeedback.Like"]</button>
+        <button type="button" class="btn feedback-bar__rate" aria-pressed="@Pressed("dislike")" aria-disabled="@Saving" @onclick="@(() => RateAsync("dislike"))">@L["QuestionFeedback.Dislike"]</button>
+    </div>
+    <details class="feedback-bar__report" @key="_formGeneration">
+        <summary class="feedback-bar__summary">@L["QuestionFeedback.Report"]</summary>
+        <form class="feedback-bar__form" @onsubmit="ReportAsync">
+            <fieldset class="feedback-bar__reasons">
+                <legend class="feedback-bar__legend">@L["QuestionFeedback.Report.Reason"]</legend>
+                @foreach (ReportReason reason in ReportReasonKeys.All)
+                {
+                    string key = ReportReasonKeys.ToKey(reason);
+                    <label class="feedback-bar__reason">
+                        <input type="radio" name="@ReasonName" value="@key" checked="@(_reason == key)" aria-disabled="@Saving" @onchange="@(() => ChooseReason(key))" />
+                        <span>@L["QuestionFeedback.Reason." + key]</span>
+                    </label>
+                }
+            </fieldset>
+            <label class="feedback-bar__label" for="@CommentId">@L["QuestionFeedback.Report.Comment"]</label>
+            <textarea id="@CommentId" class="feedback-bar__comment" rows="3" maxlength="@ReportComment.MaxLength" readonly="@_model.IsSaving" @bind="_comment" @bind:event="oninput"></textarea>
+            <button type="submit" class="btn btn--primary feedback-bar__send" disabled="@(_reason is null)" aria-disabled="@Saving">@L["QuestionFeedback.Report.Send"]</button>
+        </form>
+    </details>
+    <p class="feedback-bar__status feedback-bar__status--@StatusClass" role="status" tabindex="-1" @ref="_status">@StatusText</p>
+</section>
+
+@code {
+    private readonly CancellationTokenSource _lifetime = new();
+
+    private QuestionFeedbackModel _model = null!;
+    // The browser owns whether the details is open. A stored report replaces the element (a new key), which closes
+    // it and clears its fields, so no open state is mirrored here and no toggle event can reopen it.
+    private int _formGeneration;
+    private ElementReference _status;
+    private bool _focusStatus;
+    private string? _reason;
+    private string _comment = "";
+
+    /// <summary>The question that was just answered; its id is what the server stores the feedback under.</summary>
+    [Parameter, EditorRequired]
+    public QuestionDto Question { get; set; } = null!;
+
+    /// <summary>The user's stored rating key (<c>like</c> or <c>dislike</c>), or null when unrated.</summary>
+    [Parameter]
+    public string? InitialRating { get; set; }
+
+    /// <summary>The Telegram user id the page was rendered for (ADR 0008).</summary>
+    [Parameter, EditorRequired]
+    public long Owner { get; set; }
+
+    /// <summary>The culture of the text the user read, sent with a report.</summary>
+    [Parameter, EditorRequired]
+    public string Culture { get; set; } = "";
+
+    // Islands key this component per question, so the ids are unique on the page.
+    private string ReasonName => "report-reason-" + Question.Id;
+
+    private string CommentId => "report-comment-" + Question.Id;
+
+    protected override void OnInitialized()
+    {
+        _model = new QuestionFeedbackModel(Api, Owner, Question.Id, Culture, InitialRating);
+        _model.Changed += OnChanged;
+    }
+
+    public void Dispose()
+    {
+        _model.Changed -= OnChanged;
+        _lifetime.Cancel();
+        _lifetime.Dispose();
+    }
+
+    private void OnChanged() => _ = InvokeAsync(StateHasChanged);
+
+    // aria-pressed needs the literal strings: a bool attribute would be dropped when false.
+    private string Pressed(string value) => string.Equals(_model.Rating, value, StringComparison.Ordinal) ? "true" : "false";
+
+    // Controls stay enabled while saving so keyboard focus is not lost; the model ignores overlapping calls. The reason
+    // and the comment are frozen then (aria-disabled, read-only), so nothing typed in that window is wiped on success.
+    private string? Saving => _model.IsSaving ? "true" : null;
+
+    private void ChooseReason(string key)
+    {
+        if (!_model.IsSaving)
+        {
+            _reason = key;
+        }
+    }
+
+    // The replaced form drops the focus it held; the status line announces the result and takes focus.
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_focusStatus)
+        {
+            _focusStatus = false;
+            await _status.FocusAsync();
+        }
+    }
+
+    private Task RateAsync(string value) => _model.RateAsync(value, _lifetime.Token);
+
+    private async Task ReportAsync()
+    {
+        if (_reason is null)
+        {
+            return;
+        }
+
+        if (await _model.ReportAsync(_reason, _comment, _lifetime.Token))
+        {
+            _formGeneration++;
+            _focusStatus = true;
+            _reason = null;
+            _comment = "";
+        }
+    }
+
+    private string StatusClass => _model.Status switch
+    {
+        FeedbackStatus.Failed => "failed",
+        FeedbackStatus.Limit => "limit",
+        _ => "ok",
+    };
+
+    private string StatusText => _model.Status switch
+    {
+        FeedbackStatus.Saving => L["QuestionFeedback.Saving"].Value,
+        FeedbackStatus.RatingSaved => L["QuestionFeedback.RatingSaved"].Value,
+        FeedbackStatus.ReportCreated => L["QuestionFeedback.ReportSent"].Value,
+        FeedbackStatus.ReportUpdated => L["QuestionFeedback.ReportUpdated"].Value,
+        FeedbackStatus.Failed => L["QuestionFeedback.Failed"].Value,
+        FeedbackStatus.Limit => L["QuestionFeedback.Limit"].Value,
+        _ => "",
+    };
+}

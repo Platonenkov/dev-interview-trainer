@@ -24,12 +24,29 @@ public sealed class ContentReader : IContentReader
 
     private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
+    private readonly Func<CancellationToken, Task>? _afterRootResolved;
+
+    public ContentReader()
+    {
+    }
+
+    /// <summary>Test seam: runs right after the root is resolved, before any file is listed or read.</summary>
+    internal ContentReader(Func<CancellationToken, Task> afterRootResolved)
+    {
+        _afterRootResolved = afterRootResolved;
+    }
+
     public async Task<ContentSet> ReadAsync(string rootPath, CancellationToken ct)
     {
-        string root = Path.GetFullPath(rootPath);
+        string root = ResolveRoot(Path.GetFullPath(rootPath));
         if (!Directory.Exists(root))
         {
             throw new DirectoryNotFoundException($"Content root '{root}' does not exist.");
+        }
+
+        if (_afterRootResolved is not null)
+        {
+            await _afterRootResolved(ct);
         }
 
         List<ContentIssue> issues = [];
@@ -67,6 +84,16 @@ public sealed class ContentReader : IContentReader
 
         string hash = ContentHasher.Compute(files.Select(f => (f.Key, f.Value)));
         return new ContentSet(schemaVersion, stacks, topicsByStack, questions, redirectsByStack, hash, issues);
+    }
+
+    /// <summary>
+    /// The deployment switches <c>/content/current</c> to a new release directory; resolving the link once pins this read
+    /// to a single release, so the files read, their hash and the enumeration can never mix two releases.
+    /// </summary>
+    private static string ResolveRoot(string root)
+    {
+        FileSystemInfo? target = Directory.ResolveLinkTarget(root, returnFinalTarget: true);
+        return target is null ? root : target.FullName;
     }
 
     private static bool IsQuestionPath(string path)

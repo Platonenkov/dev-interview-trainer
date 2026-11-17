@@ -3,8 +3,14 @@ using System.Net;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.EntityFrameworkCore;
 using Trainer.Application.Admin;
+using Trainer.Application.Feedback;
 using Trainer.Application.Users;
+using Trainer.Domain.Feedback;
+using Trainer.Domain.Keys;
+using Trainer.Domain.Questions;
+using Trainer.Infrastructure.Persistence;
 using Trainer.TestSupport;
 using static Trainer.Web.Tests.SignInTestHelpers;
 
@@ -373,6 +379,244 @@ public sealed partial class AdminPageTests(SignInSiteFixture site, PostgresFixtu
         Assert.Contains("no-store", cacheControl, StringComparison.Ordinal);
         Assert.False(response.Headers.Contains("Age"));
         Assert.Contains("name=\"__RequestVerificationToken\"", body, StringComparison.Ordinal);
+    }
+
+    /// <summary>The hidden fields of the single resolve form plus the id carried by the clicked button, as a browser submits them.</summary>
+    private static Dictionary<string, string> ResolveFields(string html, string reportId)
+    {
+        Dictionary<string, string> fields = FormFieldsFor(html, "value=\"resolve-report\"");
+        Assert.Contains($"name=\"reportId\" value=\"{reportId}\"", html, StringComparison.Ordinal);
+        fields["reportId"] = reportId;
+        return fields;
+    }
+
+    private const string ClosureQuestionId = "01KBZ3Q8N9V2K3M4P5R6S7T8WA";
+
+    private async Task<string> SeedReportAsync(UserAccess reporter, string culture, ReportReason reason, string? comment)
+    {
+        await using (AsyncServiceScope scope = site.Factory.Services.CreateAsyncScope())
+        {
+            ReportResult result = await scope.ServiceProvider.GetRequiredService<IQuestionFeedbackService>()
+                .ReportAsync(reporter.UserId, new QuestionId(ClosureQuestionId), new CultureKey(culture), reason, comment, Ct);
+            Assert.Equal(ReportOutcome.Created, result.Outcome);
+        }
+
+        await using TrainerDbContext db = PostgresFixture.CreateContext(site.Factory.ConnectionString);
+        string userId = reporter.UserId.Value;
+        return await db.Database
+            .SqlQuery<string>($"SELECT id AS \"Value\" FROM question_reports WHERE user_id = {userId}")
+            .SingleAsync(Ct);
+    }
+
+    private async Task<bool> IsResolvedAsync(string reportId)
+    {
+        await using TrainerDbContext db = PostgresFixture.CreateContext(site.Factory.ConnectionString);
+        return await db.Database
+            .SqlQuery<bool>($"SELECT resolved_at IS NOT NULL AS \"Value\" FROM question_reports WHERE id = {reportId}")
+            .SingleAsync(Ct);
+    }
+
+    private static string SectionOf(string html, string id)
+    {
+        string tail = html[html.IndexOf($"id=\"{id}\"", StringComparison.Ordinal)..];
+        return tail[..tail.IndexOf("</section>", StringComparison.Ordinal)];
+    }
+
+    [Fact]
+    public async Task Admin_ListsOpenReportsEncodesCommentAndResolves()
+    {
+        UserAccess reporter = await CreateUserAsync(NextTelegramId(), "Careful Reporter");
+        string reportId = await SeedReportAsync(reporter, "ru", ReportReason.WrongAnswer, "<script>x</script>\nsecond line");
+        using HttpClient client = await SignedInAsync(SignInSiteFixture.AdminTelegramId, "Site Admin");
+
+        (HttpStatusCode status, string body, HttpResponseMessage response) = await GetAsync(client, "/en/admin");
+        using (response)
+        {
+            Assert.Equal(HttpStatusCode.OK, status);
+            Assert.Contains("&lt;script&gt;x&lt;/script&gt;", body, StringComparison.Ordinal);
+            Assert.DoesNotContain("<script>x</script>", body, StringComparison.Ordinal);
+            Assert.Contains("<span class=\"admin-report__comment\">", body, StringComparison.Ordinal);
+            // The question opens in the culture the reporter read it in, whatever culture the admin page is in.
+            Assert.Contains("href=\"/ru/dotnet/questions/closure-for-loop\"", body, StringComparison.Ordinal);
+            Assert.Contains("Wrong answer", body, StringComparison.Ordinal);
+            Assert.Contains("Careful Reporter", body, StringComparison.Ordinal);
+            Assert.Contains(reporter.TelegramUserId.ToString(CultureInfo.InvariantCulture), body, StringComparison.Ordinal);
+        }
+
+        Dictionary<string, string> fields = ResolveFields(body, reportId);
+        Assert.Contains("__RequestVerificationToken", fields.Keys);
+        using HttpResponseMessage resolved = await PostAsync(client, "/en/admin", fields);
+
+        // Post-redirect-get: a refresh repeats a GET, not the resolve.
+        Assert.Equal(HttpStatusCode.Found, resolved.StatusCode);
+        Assert.Contains("/en/admin?notice=report-resolved", resolved.Headers.Location?.OriginalString, StringComparison.Ordinal);
+        Assert.True(await IsResolvedAsync(reportId));
+        (_, string afterBody, HttpResponseMessage afterResponse) = await GetAsync(client, resolved.Headers.Location!.PathAndQuery);
+        using (afterResponse)
+        {
+            Assert.Contains("Report resolved.", afterBody, StringComparison.Ordinal);
+            Assert.DoesNotContain("<script>x</script>", afterBody, StringComparison.Ordinal);
+            Assert.DoesNotContain($"value=\"{reportId}\"", afterBody, StringComparison.Ordinal);
+        }
+
+        // The resolved list keeps it as history, without a resolve button.
+        (_, string history, HttpResponseMessage historyResponse) = await GetAsync(client, "/en/admin?reports=resolved");
+        using (historyResponse)
+        {
+            Assert.Contains("&lt;script&gt;x&lt;/script&gt;", history, StringComparison.Ordinal);
+            Assert.Contains("aria-current=\"true\"", history, StringComparison.Ordinal);
+            Assert.DoesNotContain($"value=\"{reportId}\"", history, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public async Task Admin_DoubleSubmitOfTheSameResolveForm_RedirectsWithAnAlreadyResolvedNotice()
+    {
+        UserAccess first = await CreateUserAsync(NextTelegramId(), "Double Submitter");
+        UserAccess second = await CreateUserAsync(NextTelegramId(), "Bystander");
+        string reportId = await SeedReportAsync(first, "en", ReportReason.Other, "closed once");
+        string otherId = await SeedReportAsync(second, "en", ReportReason.Other, "stays open");
+        using HttpClient client = await SignedInAsync(SignInSiteFixture.AdminTelegramId, "Site Admin");
+        (_, string page, HttpResponseMessage response) = await GetAsync(client, "/en/admin");
+        response.Dispose();
+        Dictionary<string, string> fields = ResolveFields(page, reportId);
+
+        using HttpResponseMessage firstPost = await PostAsync(client, "/en/admin", fields);
+        using HttpResponseMessage secondPost = await PostAsync(client, "/en/admin", fields);
+
+        Assert.Equal(HttpStatusCode.Found, firstPost.StatusCode);
+        Assert.Contains("/en/admin?notice=report-resolved", firstPost.Headers.Location?.OriginalString, StringComparison.Ordinal);
+        Assert.Equal(HttpStatusCode.Found, secondPost.StatusCode);
+        Assert.Contains("/en/admin?notice=report-not-found", secondPost.Headers.Location?.OriginalString, StringComparison.Ordinal);
+        (_, string body, HttpResponseMessage followed) = await GetAsync(client, secondPost.Headers.Location!.PathAndQuery);
+        using (followed)
+        {
+            Assert.Contains("Report not found or already resolved.", body, StringComparison.Ordinal);
+        }
+
+        Assert.True(await IsResolvedAsync(reportId));
+        Assert.False(await IsResolvedAsync(otherId));
+    }
+
+    [Fact]
+    public async Task Admin_ReportsPaging_KeepsStateAndClampsThePage()
+    {
+        // 25 per page: a 26th open report makes a second page, whatever other tests left open.
+        for (int i = 0; i < 26; i++)
+        {
+            await SeedReportAsync(await CreateUserAsync(NextTelegramId(), "Pager Reporter " + i), "en", ReportReason.Other, "paging " + i);
+        }
+
+        using HttpClient client = await SignedInAsync(SignInSiteFixture.AdminTelegramId, "Site Admin");
+
+        (_, string first, HttpResponseMessage firstResponse) = await GetAsync(client, "/en/admin?q=nobody-matches-this");
+        using (firstResponse)
+        {
+            Assert.Contains("rel=\"next\" href=\"/en/admin?q=nobody-matches-this&amp;reportsPage=2\"", first, StringComparison.Ordinal);
+            Assert.DoesNotContain("rel=\"prev\"", first, StringComparison.Ordinal);
+            Assert.Equal(25, Regex.Count(first, "form=\"resolve-report\" name=\"reportId\"", RegexOptions.CultureInvariant));
+        }
+
+        (HttpStatusCode secondStatus, string second, HttpResponseMessage secondResponse) = await GetAsync(client, "/en/admin?reportsPage=2");
+        using (secondResponse)
+        {
+            Assert.Equal(HttpStatusCode.OK, secondStatus);
+            Assert.Contains("rel=\"prev\" href=\"/en/admin\"", second, StringComparison.Ordinal);
+            Assert.DoesNotContain("rel=\"next\"", second, StringComparison.Ordinal);
+        }
+
+        // Out of range is clamped to the last page instead of showing an empty list.
+        (HttpStatusCode farStatus, string far, HttpResponseMessage farResponse) = await GetAsync(client, "/en/admin?reportsPage=999");
+        using (farResponse)
+        {
+            Assert.Equal(HttpStatusCode.OK, farStatus);
+            Assert.Contains("rel=\"prev\"", far, StringComparison.Ordinal);
+            Assert.DoesNotContain("rel=\"next\"", far, StringComparison.Ordinal);
+        }
+
+        // The filter survives the pager links.
+        (_, string resolved, HttpResponseMessage resolvedResponse) = await GetAsync(client, "/en/admin?reports=resolved");
+        using (resolvedResponse)
+        {
+            Assert.DoesNotContain("reportsPage=2", resolved, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public async Task Admin_ResolveButtons_OfTwoReportsOnOneQuestion_HaveDifferentAccessibleNames()
+    {
+        await SeedReportAsync(await CreateUserAsync(NextTelegramId(), "Namer Alpha"), "en", ReportReason.Other, "a");
+        await SeedReportAsync(await CreateUserAsync(NextTelegramId(), "Namer Beta"), "en", ReportReason.Other, "b");
+        using HttpClient client = await SignedInAsync(SignInSiteFixture.AdminTelegramId, "Site Admin");
+
+        (_, string body, HttpResponseMessage response) = await GetAsync(client, "/en/admin");
+        using (response)
+        {
+            string[] names = [.. Regex.Matches(body, "form=\"resolve-report\"[^>]*>\\s*Resolve<span class=\"visually-hidden\">(?<n>[^<]*)</span>", RegexOptions.CultureInvariant)
+                .Select(m => WebUtility.HtmlDecode(m.Groups["n"].Value).Trim())];
+            Assert.Contains(names, n => n.Contains("reported by Namer Alpha", StringComparison.Ordinal));
+            Assert.Contains(names, n => n.Contains("reported by Namer Beta", StringComparison.Ordinal));
+            Assert.Equal(names.Length, names.Distinct(StringComparer.Ordinal).Count());
+        }
+    }
+
+    [Fact]
+    public async Task Admin_ReportsAndMostDisliked_AreLocalised()
+    {
+        UserAccess reporter = await CreateUserAsync(NextTelegramId(), "Russian Reader");
+        await SeedReportAsync(reporter, "en", ReportReason.BrokenLink, null);
+        await using (AsyncServiceScope scope = site.Factory.Services.CreateAsyncScope())
+        {
+            await scope.ServiceProvider.GetRequiredService<IQuestionFeedbackService>()
+                .SetRatingAsync(reporter.UserId, new QuestionId(ClosureQuestionId), QuestionRating.Dislike, Ct);
+        }
+
+        using HttpClient client = await SignedInAsync(SignInSiteFixture.AdminTelegramId, "Site Admin");
+
+        (_, string ru, HttpResponseMessage ruResponse) = await GetAsync(client, "/ru/admin");
+        using (ruResponse)
+        {
+            Assert.Contains("Жалобы", ru, StringComparison.Ordinal);
+            Assert.Contains("Не работает ссылка", ru, StringComparison.Ordinal);
+            Assert.Contains("Без комментария", ru, StringComparison.Ordinal);
+            Assert.Contains("Вопросы с наибольшим числом дизлайков", ru, StringComparison.Ordinal);
+            Assert.Contains("href=\"/ru/dotnet/questions/closure-for-loop\"", SectionOf(ru, "admin-disliked"), StringComparison.Ordinal);
+            Assert.Contains("Что выведет код с лямбдами", SectionOf(ru, "admin-disliked"), StringComparison.Ordinal);
+            Assert.DoesNotContain("What does the code print", SectionOf(ru, "admin-disliked"), StringComparison.Ordinal);
+        }
+
+        (_, string en, HttpResponseMessage enResponse) = await GetAsync(client, "/en/admin");
+        using (enResponse)
+        {
+            Assert.Contains(">Reports<", en, StringComparison.Ordinal);
+            Assert.Contains("Broken link", en, StringComparison.Ordinal);
+            Assert.Contains("Most disliked questions", en, StringComparison.Ordinal);
+            Assert.DoesNotContain("Жалобы", en, StringComparison.Ordinal);
+            Assert.Contains("href=\"/en/dotnet/questions/closure-for-loop\"", SectionOf(en, "admin-disliked"), StringComparison.Ordinal);
+            Assert.Contains("What does the code print when lambdas capture", SectionOf(en, "admin-disliked"), StringComparison.Ordinal);
+            Assert.DoesNotContain("Что выведет код", SectionOf(en, "admin-disliked"), StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public async Task Admin_NonAdminCannotResolve()
+    {
+        UserAccess reporter = await CreateUserAsync(NextTelegramId(), "Pending Reporter");
+        string reportId = await SeedReportAsync(reporter, "en", ReportReason.Outdated, "still open");
+        using HttpClient admin = await SignedInAsync(SignInSiteFixture.AdminTelegramId, "Site Admin");
+        (_, string page, HttpResponseMessage first) = await GetAsync(admin, "/en/admin");
+        first.Dispose();
+        Dictionary<string, string> fields = ResolveFields(page, reportId);
+
+        using HttpClient reader = await SignedInAsync(NextTelegramId(), "Plain Reader");
+        (_, string readerPage, HttpResponseMessage readerGet) = await GetAsync(reader, "/en");
+        readerGet.Dispose();
+        fields["__RequestVerificationToken"] = AntiforgeryToken(readerPage);
+        using HttpResponseMessage response = await PostAsync(reader, "/en/admin", fields);
+
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        Assert.Equal("/signin?denied=1&ReturnUrl=%2Fen%2Fadmin", response.Headers.Location?.OriginalString);
+        Assert.False(await IsResolvedAsync(reportId));
     }
 
     private async Task<AdminOverview> WithOverviewAsync()

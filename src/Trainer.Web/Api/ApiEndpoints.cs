@@ -24,6 +24,7 @@ public static class ApiEndpoints
         AnswerEndpoints.Map(api);
         MockSessionEndpoints.Map(api);
         ProfileEndpoints.Map(api);
+        FeedbackEndpoints.Map(api);
     }
 
     /// <summary>Signed-in writes: rate limited per user, then the antiforgery token, then the outbox owner (ADR 0008).</summary>

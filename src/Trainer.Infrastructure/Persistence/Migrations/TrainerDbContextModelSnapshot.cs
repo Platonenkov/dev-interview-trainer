@@ -325,6 +325,93 @@ namespace Trainer.Infrastructure.Persistence.Migrations
                     b.ToTable("question_locales", (string)null);
                 });
 
+            modelBuilder.Entity("Trainer.Infrastructure.Persistence.Entities.QuestionRatingEntity", b =>
+                {
+                    b.Property<string>("UserId")
+                        .HasColumnType("character(26)")
+                        .HasColumnName("user_id");
+
+                    b.Property<string>("QuestionId")
+                        .HasColumnType("character(26)")
+                        .HasColumnName("question_id");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<short>("Value")
+                        .HasColumnType("smallint")
+                        .HasColumnName("value");
+
+                    b.HasKey("UserId", "QuestionId")
+                        .HasName("pk_question_ratings");
+
+                    b.HasIndex("QuestionId")
+                        .HasDatabaseName("ix_question_ratings_question_id");
+
+                    b.ToTable("question_ratings", (string)null);
+                });
+
+            modelBuilder.Entity("Trainer.Infrastructure.Persistence.Entities.QuestionReportEntity", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("character(26)")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Comment")
+                        .HasColumnType("text")
+                        .HasColumnName("comment");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Culture")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("culture");
+
+                    b.Property<string>("QuestionId")
+                        .IsRequired()
+                        .HasColumnType("character(26)")
+                        .HasColumnName("question_id");
+
+                    b.Property<short>("Reason")
+                        .HasColumnType("smallint")
+                        .HasColumnName("reason");
+
+                    b.Property<DateTimeOffset?>("ResolvedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("resolved_at");
+
+                    b.Property<string>("ResolvedBy")
+                        .HasColumnType("character(26)")
+                        .HasColumnName("resolved_by");
+
+                    b.Property<string>("UserId")
+                        .IsRequired()
+                        .HasColumnType("character(26)")
+                        .HasColumnName("user_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_question_reports");
+
+                    b.HasIndex("QuestionId")
+                        .HasDatabaseName("ix_question_reports_question_id");
+
+                    b.HasIndex("ResolvedBy")
+                        .HasDatabaseName("ix_question_reports_resolved_by");
+
+                    b.HasIndex("ResolvedAt", "CreatedAt")
+                        .IsDescending(false, true)
+                        .HasDatabaseName("ix_question_reports_resolved_at_created_at");
+
+                    b.HasIndex("UserId", "CreatedAt")
+                        .HasDatabaseName("ix_question_reports_user_id_created_at");
+
+                    b.ToTable("question_reports", (string)null);
+                });
+
             modelBuilder.Entity("Trainer.Infrastructure.Persistence.Entities.RedirectEntity", b =>
                 {
                     b.Property<string>("StackKey")
@@ -612,6 +699,46 @@ namespace Trainer.Infrastructure.Persistence.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_question_locales_questions_question_id");
+                });
+
+            modelBuilder.Entity("Trainer.Infrastructure.Persistence.Entities.QuestionRatingEntity", b =>
+                {
+                    b.HasOne("Trainer.Infrastructure.Persistence.Entities.QuestionEntity", null)
+                        .WithMany()
+                        .HasForeignKey("QuestionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_question_ratings_questions_question_id");
+
+                    b.HasOne("Trainer.Infrastructure.Persistence.Entities.UserEntity", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_question_ratings_users_user_id");
+                });
+
+            modelBuilder.Entity("Trainer.Infrastructure.Persistence.Entities.QuestionReportEntity", b =>
+                {
+                    b.HasOne("Trainer.Infrastructure.Persistence.Entities.QuestionEntity", null)
+                        .WithMany()
+                        .HasForeignKey("QuestionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_question_reports_questions_question_id");
+
+                    b.HasOne("Trainer.Infrastructure.Persistence.Entities.UserEntity", null)
+                        .WithMany()
+                        .HasForeignKey("ResolvedBy")
+                        .OnDelete(DeleteBehavior.SetNull)
+                        .HasConstraintName("fk_question_reports_users_resolved_by");
+
+                    b.HasOne("Trainer.Infrastructure.Persistence.Entities.UserEntity", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_question_reports_users_user_id");
                 });
 
             modelBuilder.Entity("Trainer.Infrastructure.Persistence.Entities.RedirectEntity", b =>

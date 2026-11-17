@@ -1,0 +1,54 @@
+name: content-checks
+
+# The checks every content change must pass: schema and semantic validation, the snippet sandbox tests and the snippets
+# themselves. Called by ci (the commit under test) and by deploy-content (the commit about to be published). Snippets
+# come from pull requests and are untrusted code: the workflow has no secrets and read-only permissions, and the code runs
+# only inside the throw-away sandbox containers.
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Commit to check; empty means the commit of the calling workflow.
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  content:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      # Must match SandboxOptions.Image so the pull below is the one the runner would otherwise do inside its build deadline.
+      SANDBOX_IMAGE: mcr.microsoft.com/dotnet/sdk@sha256:fe0fd4e93bd2fbb47c883b7a6369e5c8d3db8bf01cdc5981f6ee35fbdf3ff4fb
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          global-json-file: global.json
+      - name: Restore
+        run: dotnet restore
+      - name: Build
+        run: dotnet build -warnaserror --no-restore
+      - name: Validate content
+        run: dotnet run --no-build --project tools/Trainer.ContentCli -- validate
+      - name: Pull sandbox image
+        run: docker pull "$SANDBOX_IMAGE"
+      - name: Snippet sandbox tests
+        run: dotnet test --no-build --filter-trait "Category=Docker" --ignore-exit-code 8
+      - name: Run content snippets
+        run: |
+          set +e
+          dotnet run --no-build --project tools/Trainer.ContentCli -- run-snippets
+          code=$?
+          if [ "$code" -eq 3 ]; then
+            echo "::error title=Snippet sandbox failure::The sandbox (Docker) failed. This is an infrastructure problem, not a content defect; re-run the job."
+          fi
+          exit "$code"

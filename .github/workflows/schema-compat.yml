@@ -1,0 +1,132 @@
+name: schema-compat
+
+# Proves that the previous release still reads and writes on the schema the new release migrates to (expand-only
+# migrations, ADR 0020 and the Task 8 safety tests): the previous commit's own Release suite runs against a database
+# migrated to the previous commit, then again after the current commit's migrations were applied.
+on:
+  workflow_call:
+    inputs:
+      previous:
+        description: Commit of the release that is running (or about to be replaced); its Release suite is the test.
+        type: string
+        required: true
+      current:
+        description: Commit whose migrations are applied before the second run.
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      PREVIOUS: ${{ inputs.previous }}
+      CURRENT: ${{ inputs.current }}
+      DIT_RELEASE_CONNECTION: Host=localhost;Port=5432;Database=trainer;Username=postgres;Password=release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Always the commit under test, by SHA: for a pull request that is the merge commit (refs/pull/N/merge), which
+          # GitHub serves by SHA. The previous commit is added as a worktree below.
+          ref: ${{ inputs.current }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Skip when the migrations did not change
+        id: diff
+        run: |
+          for sha in "$PREVIOUS" "$CURRENT"; do
+            if ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::Not a full commit SHA: $sha"
+              exit 1
+            fi
+          done
+          if git diff --quiet "$PREVIOUS" "$CURRENT" -- src/Trainer.Infrastructure/Persistence/Migrations; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No migration differs between $PREVIOUS and $CURRENT; the schema check is skipped."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Check out the previous commit
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/previous" "$PREVIOUS"
+          echo "PREVIOUS_DIR=$RUNNER_TEMP/previous" >> "$GITHUB_ENV"
+      # The relink in the publish needs a workload set of the SDK's feature band (see the release job of ci.yml). The pin
+      # is written into both trees before any dotnet command and is never committed.
+      - name: Pin the SDK to 10.0.303
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          for dir in "$GITHUB_WORKSPACE" "$PREVIOUS_DIR"; do
+            jq '.sdk = {version: "10.0.303", rollForward: "disable"}' "$dir/global.json" > "$dir/global.json.tmp"
+            mv "$dir/global.json.tmp" "$dir/global.json"
+          done
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        if: steps.diff.outputs.changed == 'true'
+        with:
+          dotnet-version: 10.0.303
+      - name: Install wasm-tools
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          version="$(dotnet --version)"
+          case "$version" in
+            10.0.3??) ;;
+            *) echo "::error::The wasm-tools pin needs an SDK in the 10.0.3xx band, got $version"; exit 1 ;;
+          esac
+          dotnet workload install wasm-tools --version 10.0.303
+      - name: Build and publish the previous commit
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          cd "$PREVIOUS_DIR"
+          dotnet restore
+          dotnet build src/Trainer.Infrastructure --no-restore
+          dotnet build tests/Trainer.Web.Release --no-restore
+          dotnet publish src/Trainer.Web -c Release -o "$RUNNER_TEMP/publish-previous"
+          dotnet tool restore
+      # The image is the one deploy/compose/compose.yaml pins, read from the commit under test (the same pin as the
+      # release job of ci.yml).
+      - name: Start PostgreSQL
+        if: steps.diff.outputs.changed == 'true'
+        uses: ./.github/actions/postgres-from-compose
+      - name: Migrate the database to the previous commit
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          cd "$PREVIOUS_DIR"
+          TRAINER_DB="$DIT_RELEASE_CONNECTION" dotnet ef database update --no-build --project src/Trainer.Infrastructure
+      - name: Install Playwright Chromium
+        if: steps.diff.outputs.changed == 'true'
+        run: pwsh "$PREVIOUS_DIR/tests/Trainer.Web.Release/bin/Debug/net10.0/playwright.ps1" install --with-deps chromium
+      - name: Run the previous Release suite on its own schema
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          cd "$PREVIOUS_DIR"
+          DIT_RELEASE_PUBLISH_DIR="$RUNNER_TEMP/publish-previous" \
+            dotnet test --project tests/Trainer.Web.Release --no-build --filter-trait "Category=Release" --minimum-expected-tests 10
+      - name: Apply the current migrations
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          dotnet restore src/Trainer.Infrastructure
+          dotnet tool restore
+          TRAINER_DB="$DIT_RELEASE_CONNECTION" dotnet ef database update --project src/Trainer.Infrastructure
+      - name: Run the previous Release suite on the migrated, non-empty database
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          cd "$PREVIOUS_DIR"
+          if [ ! -f tests/Trainer.Web.Release/RERUNNABLE ]; then
+            echo "previous Release suite is not re-runnable; second run skipped"
+            exit 0
+          fi
+          DIT_RELEASE_PUBLISH_DIR="$RUNNER_TEMP/publish-previous" \
+            dotnet test --project tests/Trainer.Web.Release --no-build --filter-trait "Category=Release" --minimum-expected-tests 10
+      - name: Upload the app log
+        if: always() && steps.diff.outputs.changed == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: schema-compat-logs
+          path: ${{ runner.temp }}/previous/TestResults/release/**
+          if-no-files-found: ignore

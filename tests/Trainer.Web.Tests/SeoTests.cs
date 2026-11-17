@@ -49,6 +49,42 @@ public sealed partial class SeoTests(WebSiteFixture site, PostgresFixture postgr
     private static Dictionary<string, string> HreflangMap(string body) =>
         Alternates().Matches(body).ToDictionary(m => m.Groups[1].Value, m => m.Groups[2].Value, StringComparer.Ordinal);
 
+    [GeneratedRegex(@"<meta (?:property|name)=""(?<key>og:image(?::[a-z]+)?|twitter:card)"" content=""(?<value>[^""]*)""", RegexOptions.CultureInvariant)]
+    private static partial Regex ImageMeta();
+
+    private static Dictionary<string, string> ImageTags(string body) =>
+        ImageMeta().Matches(body).ToDictionary(m => m.Groups["key"].Value, m => m.Groups["value"].Value, StringComparer.Ordinal);
+
+    [Fact]
+    public async Task QuestionPage_HasAbsoluteOgImageWithDimensionsAndTwitterCard()
+    {
+        (HttpResponseMessage response, string body) = await GetAsync("/ru/dotnet/questions/closure-for-loop");
+        using HttpResponseMessage _ = response;
+
+        Dictionary<string, string> tags = ImageTags(body);
+        Assert.Matches(@"^https://trainer\.test/og/ru/dotnet/closure-for-loop/[0-9a-f]{16}\.png$", tags["og:image"]);
+        Assert.Equal("1200", tags["og:image:width"]);
+        Assert.Equal("630", tags["og:image:height"]);
+        Assert.Contains("лямбдами", tags["og:image:alt"], StringComparison.Ordinal);
+        Assert.Equal("summary_large_image", tags["twitter:card"]);
+    }
+
+    [Theory]
+    [InlineData("/ru", "ru")]
+    [InlineData("/en/dotnet/topics/async", "en")]
+    [InlineData("/en/about", "en")]
+    [InlineData("/ru/dotnet/questions", "ru")]
+    public async Task PublicPages_AdvertiseTheSiteCardOfTheirCulture(string path, string culture)
+    {
+        (HttpResponseMessage response, string body) = await GetAsync(path);
+        using HttpResponseMessage _ = response;
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Dictionary<string, string> tags = ImageTags(body);
+        Assert.Matches($@"^https://trainer\.test/og/{culture}/site/[0-9a-f]{{16}}\.png$", tags["og:image"]);
+        Assert.Equal("summary_large_image", tags["twitter:card"]);
+    }
+
     [Fact]
     public async Task QuestionPage_HasAbsoluteCanonicalAndHreflangPair()
     {

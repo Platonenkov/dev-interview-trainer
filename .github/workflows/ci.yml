@@ -6,6 +6,11 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
+      previous:
+        description: Full SHA of the release that is running; its Release suite is run on the schema this commit migrates to. Empty means the parent of the dispatched commit.
+        type: string
+        required: false
+        default: ""
       enforce:
         description: Fail the release job when Practice exceeds its cold or warm regression budget (docs/performance.md, ADR 0014)
         type: boolean
@@ -39,43 +44,13 @@ jobs:
       - name: Unit and integration tests
         run: dotnet test --no-build --filter-not-trait "Category=E2E" --filter-not-trait "Category=Docker" --filter-not-trait "Category=Release" --ignore-exit-code 8
 
-  # Snippets come from pull requests and are untrusted code: this job has no secrets and read-only permissions,
-  # and the code runs only inside the throw-away sandbox containers.
+  # Snippets come from pull requests and are untrusted code: content-checks.yml has no secrets and read-only permissions,
+  # and the code runs only inside the throw-away sandbox containers. The same workflow gates deploy-content.
   content:
     needs: build-test
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
     permissions:
       contents: read
-    env:
-      # Must match SandboxOptions.Image so the pull below is the one the runner would otherwise do inside its build deadline.
-      SANDBOX_IMAGE: mcr.microsoft.com/dotnet/sdk@sha256:fe0fd4e93bd2fbb47c883b7a6369e5c8d3db8bf01cdc5981f6ee35fbdf3ff4fb
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
-        with:
-          global-json-file: global.json
-      - name: Restore
-        run: dotnet restore
-      - name: Build
-        run: dotnet build -warnaserror --no-restore
-      - name: Validate content
-        run: dotnet run --no-build --project tools/Trainer.ContentCli -- validate
-      - name: Pull sandbox image
-        run: docker pull "$SANDBOX_IMAGE"
-      - name: Snippet sandbox tests
-        run: dotnet test --no-build --filter-trait "Category=Docker" --ignore-exit-code 8
-      - name: Run content snippets
-        run: |
-          set +e
-          dotnet run --no-build --project tools/Trainer.ContentCli -- run-snippets
-          code=$?
-          if [ "$code" -eq 3 ]; then
-            echo "::error title=Snippet sandbox failure::The sandbox (Docker) failed. This is an infrastructure problem, not a content defect; re-run the job."
-          fi
-          exit "$code"
+    uses: ./.github/workflows/content-checks.yml
 
   # The browser checks start the real site over a throw-away PostgreSQL container (Testcontainers, Docker is preinstalled).
   e2e:
@@ -117,19 +92,6 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
-    services:
-      postgres:
-        # postgres:17-alpine, pinned so timing runs are reproducible.
-        image: postgres@sha256:d3244e8ce3f165ee3c93d9c4a4b1d0fe48b3a89e2287b717fdcbbde92d405065
-        env:
-          POSTGRES_PASSWORD: release
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
     env:
       DIT_RELEASE_PUBLISH_DIR: ${{ github.workspace }}/artifacts/publish
       DIT_RELEASE_CONNECTION: Host=localhost;Port=5432;Database=trainer;Username=postgres;Password=release
@@ -170,6 +132,10 @@ jobs:
         run: dotnet publish src/Trainer.Web -c Release -o "$DIT_RELEASE_PUBLISH_DIR"
       - name: Restore tools
         run: dotnet tool restore
+      # The image comes from deploy/compose/compose.yaml, the single place its digest is pinned, so timing runs are
+      # reproducible and a Dependabot bump of the compose pin reaches the tests.
+      - name: Start PostgreSQL
+        uses: ./.github/actions/postgres-from-compose
       - name: Migrate the database
         run: TRAINER_DB="$DIT_RELEASE_CONNECTION" dotnet ef database update --no-build --project src/Trainer.Infrastructure
       - name: Install Playwright Chromium
@@ -185,3 +151,93 @@ jobs:
             TestResults/perf/**
             TestResults/release/**
           if-no-files-found: warn
+
+  # The commits the schema check compares. A pull request is tested at GITHUB_SHA, the merge commit of the pull request
+  # merge branch (refs/pull/N/merge; GitHub's events documentation: "GITHUB_SHA for this event is the last merge commit of
+  # the pull request merge branch"), against the base commit of the pull request. A push to main compares the pushed commit
+  # with the one before it. A manual run uses the previous input, or the parent of the dispatched commit when it is empty.
+  schema-base:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      previous: ${{ steps.base.outputs.previous }}
+      current: ${{ steps.base.outputs.current }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Resolve the commits
+        id: base
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_BEFORE: ${{ github.event.before }}
+          PULL_REQUEST_BASE: ${{ github.event.pull_request.base.sha }}
+          DISPATCH_PREVIOUS: ${{ inputs.previous }}
+          TESTED_SHA: ${{ github.sha }}
+        run: |
+          current="$TESTED_SHA"
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            previous="$PULL_REQUEST_BASE"
+          elif [ "$EVENT_NAME" = "push" ]; then
+            previous="$EVENT_BEFORE"
+            # A push that creates the branch has no before commit; comparing the commit with itself skips the check.
+            if [ "$previous" = "0000000000000000000000000000000000000000" ]; then
+              previous="$current"
+            fi
+          else
+            previous="$DISPATCH_PREVIOUS"
+            if [ -z "$previous" ]; then
+              previous="$(git rev-parse HEAD^)"
+              echo "No previous input; using the parent of the dispatched commit: $previous"
+            else
+              echo "Using the previous input: $previous"
+            fi
+          fi
+          if ! [[ "$previous" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::The previous commit must be a full commit SHA (check the previous input)."
+            exit 1
+          fi
+          echo "previous=$previous" >> "$GITHUB_OUTPUT"
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+
+  # The release that is running must keep working on the schema the new release migrates to (ADR 0020, schema-compat.yml).
+  schema-compat:
+    needs: [build-test, schema-base]
+    permissions:
+      contents: read
+    uses: ./.github/workflows/schema-compat.yml
+    with:
+      previous: ${{ needs.schema-base.outputs.previous }}
+      current: ${{ needs.schema-base.outputs.current }}
+
+  # Lints every workflow with actionlint (which runs ShellCheck over each run: script). The release archive is pinned by
+  # version and SHA-256 instead of the docker image because it needs no docker pull, and the checksum is verified before
+  # the archive is extracted. The checksum is the linux_amd64 line of actionlint_1.7.12_checksums.txt on the release page.
+  # pyflakes is not installed on the runner, so the Python check is switched off (-pyflakes=); ShellCheck ships with
+  # ubuntu-latest. To upgrade, change both values from the checksums file of the new release.
+  workflow-lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Lint the workflows
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          set -euo pipefail
+          archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl --fail --silent --show-error --location --output "$RUNNER_TEMP/$archive" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/$archive"
+          echo "$ACTIONLINT_SHA256  $RUNNER_TEMP/$archive" | sha256sum --check --strict -
+          mkdir "$RUNNER_TEMP/actionlint"
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP/actionlint" actionlint
+          # Without file arguments actionlint lints every workflow under .github/workflows of the checkout.
+          "$RUNNER_TEMP/actionlint/actionlint" -color -pyflakes=

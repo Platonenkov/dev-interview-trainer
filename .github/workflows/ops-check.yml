@@ -1,0 +1,73 @@
+name: ops-check
+
+# The daily operations check of the production server (ops-check.sh: readiness, backups, disk, certificate, restarts and
+# guard files). The job failing is the owner's alert; the log lists one ok or fail line per check.
+on:
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: production-ops
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    # Longer than the 20 minute deployment wait below plus the upload and the checks; a timeout inside the wait would
+    # cancel the job before the "running the checks anyway" branch could be reached.
+    timeout-minutes: 30
+    environment: production
+    permissions:
+      contents: read
+    env:
+      APP_DIR: ${{ vars.APP_DIR }}
+      STAGE_ID: ops-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/ssh-setup
+        with:
+          ssh-key: ${{ secrets.DEPLOY_SSH_KEY }}
+          known-hosts: ${{ vars.DEPLOY_KNOWN_HOSTS }}
+          host: ${{ vars.DEPLOY_HOST }}
+          user: ${{ vars.DEPLOY_USER }}
+          port: ${{ vars.DEPLOY_SSH_PORT || '22' }}
+      - name: Upload the bundle into the staging directory
+        run: |
+          set -euo pipefail
+          [[ "$APP_DIR" =~ ^/[A-Za-z0-9._/-]*$ ]] || { echo "::error::The APP_DIR variable must be an absolute path."; exit 1; }
+          STAGE="$APP_DIR/staging/$STAGE_ID"
+          echo "STAGE=$STAGE" >> "$GITHUB_ENV"
+          ssh_cmd=(ssh -F "$RUNNER_TEMP/ssh/ssh_config" dit)
+          "${ssh_cmd[@]}" "mkdir -p '$APP_DIR/staging' && mkdir -m 700 '$STAGE' '$STAGE/bundle'"
+          tar -czf - -C deploy --exclude='./tests' . | "${ssh_cmd[@]}" "tar -xzpf - -C '$STAGE/bundle'"
+      # Readiness and the guard files are in flux while deploy-app.sh, receive-content.sh (.import-pending) or
+      # rotate-db-password.sh (.rotation-pending) runs, so a check that starts during one would page the owner for nothing.
+      # A marker without a live process (an interrupted operation) still fails the check. The production-app concurrency
+      # group is not used: it keeps one pending run and could drop a queued deployment.
+      - name: Wait for a running deployment
+        run: |
+          set -euo pipefail
+          ssh_cmd=(ssh -F "$RUNNER_TEMP/ssh/ssh_config" dit)
+          deadline=$((SECONDS + 1200))
+          while "${ssh_cmd[@]}" "pgrep -f '/bundle/remote/([d]eploy-app|[r]eceive-content|[r]otate-db-password).sh' >/dev/null"; do
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::warning::A deployment, content delivery or rotation is still running after 20 minutes; running the checks anyway."
+              break
+            fi
+            echo "A deployment, content delivery or rotation is running; waiting."
+            sleep 30
+          done
+      - name: Run the checks
+        run: ssh -F "$RUNNER_TEMP/ssh/ssh_config" dit "APP_DIR='$APP_DIR' bash '$STAGE/bundle/remote/ops-check.sh'"
+      - name: Clean up
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/ssh/ssh_config" ] && [ -n "${STAGE:-}" ]; then
+            ssh -F "$RUNNER_TEMP/ssh/ssh_config" dit "rm -rf '$STAGE'" || true
+          fi
+          rm -rf "$RUNNER_TEMP/ssh" "$RUNNER_TEMP/env"

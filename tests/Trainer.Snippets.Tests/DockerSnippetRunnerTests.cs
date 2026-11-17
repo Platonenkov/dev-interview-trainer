@@ -15,6 +15,10 @@ public sealed class DockerSnippetRunnerTests : IAsyncLifetime
 {
     private static readonly SandboxOptions FastOptions = new() { RunDeadline = TimeSpan.FromSeconds(4) };
 
+    // Tests that expect output or an exception must not race the deadline: a cold container start under a parallel
+    // full-solution run has taken longer than FastOptions allows. Only the tests that expect a timeout use FastOptions.
+    private static readonly SandboxOptions CompletingOptions = new() { RunDeadline = TimeSpan.FromSeconds(30) };
+
     public async ValueTask InitializeAsync() => await new DockerSnippetRunner(FastOptions).PrepareAsync(CancellationToken.None);
 
     public async ValueTask DisposeAsync() => await RemoveSandboxContainersAsync();
@@ -23,7 +27,7 @@ public sealed class DockerSnippetRunnerTests : IAsyncLifetime
 
     private static async Task<SnippetResult> BuildAndRunAsync(string source, SandboxOptions? options = null)
     {
-        DockerSnippetRunner runner = new(options ?? FastOptions);
+        DockerSnippetRunner runner = new(options ?? CompletingOptions);
         await using SnippetBuild build = await runner.BuildAsync(Statements(source), CancellationToken.None);
         return await runner.RunAsync(build, CancellationToken.None);
     }
@@ -168,7 +172,8 @@ public sealed class DockerSnippetRunnerTests : IAsyncLifetime
             using var intr = PosixSignalRegistration.Create(PosixSignal.SIGINT, ctx => ctx.Cancel = true);
             AppDomain.CurrentDomain.ProcessExit += (_, _) => { while (true) { } };
             while (true) { }
-            """);
+            """,
+            FastOptions);
         Assert.Equal("timeout", result.Kind);
         Assert.Empty(await SandboxContainerNamesAsync());
     }

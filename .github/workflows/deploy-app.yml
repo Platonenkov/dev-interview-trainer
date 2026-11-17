@@ -1,0 +1,556 @@
+name: deploy-app
+
+# Ships one release of the application to the production server. Automatic after ci succeeds on a push to main, or by
+# hand (rollback = true allows an older commit). The server's last-good.env is the only record of what runs. Settings live
+# in the variables and secrets of the production environment: edit one there and re-run this workflow with ref set to the
+# deployed commit (DIT_COMMIT in last-good.env) to re-render .env.
+#
+# Which commit ships: an automatic run, and a manual run with an empty ref, deploy the newest commit on main whose ci
+# push run succeeded (never one without a green ci run, and prepare never goes older than the deployed commit). A ci run
+# of an older commit that finishes late therefore deploys the newest green commit or nothing, so a run that GitHub
+# replaces in the pending slot loses nothing. Only a manual run with an explicit ref deploys a commit whose ci was not
+# checked.
+#
+# Things to know before running it by hand:
+#  - A manual run with an explicit ref does not check that ci succeeded for the commit. Only a user with write access can
+#    start it, the production environment's branch rule applies, and build, smoke and compat still gate the run; a direct
+#    push to main whose ci failed is the case that skips the unit and integration suites.
+#  - A rollback holds: a successful rollback run writes flags/deploy-hold on the server (a file written over ssh, because
+#    GITHUB_TOKEN cannot write environment variables), and every automatic run then ends with a notice instead of
+#    deploying. Only a later manual run without rollback clears the hold; keep_hold keeps it for the runs that
+#    rotate-db-password dispatches.
+#  - A rollback (rollback = true) ships the deploy/ bundle (compose, nginx, scripts, the Umami pin) of the tip of main with
+#    the older image: infrastructure moves forward while the application moves back. Its compat check runs the older
+#    release (previous) on the schema already in production (current).
+#  - Do not add required reviewers to the production environment: they would also gate the scheduled ops-check and the
+#    content deliveries, and a waiting run is replaced by the next one (one pending run per group), so the alert would
+#    stop silently. The main-only branch policy is the boundary.
+#  - GitHub keeps one pending run per concurrency group: while a deployment runs, a newer queued run replaces the pending
+#    one, so a rollback waiting behind a deployment is dropped silently if a push to main finishes ci before it starts.
+#    Re-run the rollback when that happens.
+#
+# Variables of the production environment: APP_DIR, DEPLOY_HOST, DEPLOY_USER, DEPLOY_KNOWN_HOSTS, PUBLIC_BASE_URL, ADMIN_TELEGRAM_IDS,
+# TELEGRAM_OIDC_CLIENT_ID, BACKUP_S3_PROVIDER, BACKUP_S3_ENDPOINT, BACKUP_S3_BUCKET and the optional UMAMI_WEBSITE_ID,
+# RATE_LIMIT_*, FEEDBACK_REPORTS_PER_DAY. Secrets of the production environment: DEPLOY_SSH_KEY, TELEGRAM_OIDC_CLIENT_SECRET,
+# DB_PASSWORD, CONTENT_IMPORT_TOKEN, UMAMI_DB_PASSWORD, UMAMI_APP_SECRET, BACKUP_S3_ACCESS_KEY_ID, BACKUP_S3_SECRET_ACCESS_KEY.
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit SHA on main to deploy; empty means the newest commit on main whose ci push run succeeded. ci success is not checked for an explicit ref.
+        type: string
+        required: false
+        default: ""
+      rollback:
+        description: Allow deploying a commit older than the one that runs (the stale-run guard is skipped) and hold automatic deployments until a manual run without rollback.
+        type: boolean
+        default: false
+      keep_hold:
+        description: Leave a deployment hold in place (set by rotate-db-password, which redeploys the commit that runs).
+        type: boolean
+        default: false
+
+permissions: {}
+
+# One deployment at a time. A running deployment is never cancelled; of the runs queued behind it only the newest is kept,
+# which loses nothing because every run resolves the newest green commit itself.
+concurrency:
+  group: production-app
+  cancel-in-progress: false
+
+jobs:
+  # workflow_run runs with the secrets of this repository even when the triggering run was not privileged, and its
+  # "branches" filter matches a head branch name that a fork's pull request can also call "main". Every property is
+  # therefore checked again before anything else runs.
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Resolve the commit to deploy
+        id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_EVENT: ${{ github.event.workflow_run.event }}
+          RUN_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          RUN_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          DISPATCH_REF: ${{ inputs.ref }}
+          ROLLBACK: ${{ inputs.rollback }}
+          KEEP_HOLD: ${{ inputs.keep_hold }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          skip() {
+            echo "::notice::Nothing to deploy: $1"
+            echo "sha=" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+          # The newest commit on main (by ancestry, not by run order) whose ci push run succeeded. A deployment must not
+          # depend on which ci run happens to finish last: GitHub keeps one pending run per group and drops the others.
+          # It runs inside a command substitution, so its annotations go to stderr or they would be captured into sha.
+          newest_green() {
+            local candidates candidate best=""
+            if ! candidates="$(gh api "repos/$REPOSITORY/actions/workflows/ci.yml/runs?branch=main&event=push&status=success&per_page=30" --jq '.workflow_runs[].head_sha')"; then
+              echo "::error::Could not list the successful ci runs of main." >&2
+              exit 1
+            fi
+            for candidate in $candidates; do
+              if [[ "$candidate" =~ ^[0-9a-f]{40}$ ]] && git cat-file -e "$candidate^{commit}" 2>/dev/null && git merge-base --is-ancestor "$candidate" origin/main; then
+                if [ -z "$best" ] || git merge-base --is-ancestor "$best" "$candidate"; then
+                  best="$candidate"
+                fi
+              fi
+            done
+            echo "$best"
+          }
+          if [ "$EVENT_NAME" = "workflow_run" ]; then
+            [ "$RUN_CONCLUSION" = "success" ] || skip "ci concluded with '$RUN_CONCLUSION'."
+            [ "$RUN_EVENT" = "push" ] || skip "ci was started by '$RUN_EVENT', not by a push."
+            [ "$RUN_BRANCH" = "main" ] || skip "ci ran for branch '$RUN_BRANCH'."
+            [ "$RUN_REPOSITORY" = "$REPOSITORY" ] || skip "ci ran for the repository '$RUN_REPOSITORY'."
+            sha="$(newest_green)"
+            [ -n "$sha" ] || skip "no commit on main has a successful ci run."
+            echo "The ci run of $RUN_SHA succeeded; the newest commit on main with a successful ci run is $sha."
+          else
+            # The trusted deploy/ scripts come from the commit this workflow runs at, so a manual run must be on main.
+            if [ "$REF_NAME" != "refs/heads/main" ]; then
+              echo "::error::Run this workflow from main."
+              exit 1
+            fi
+            # keep_hold means "redeploy what runs and leave the hold alone", so it needs the deployed commit as ref
+            # (prepare compares them); an empty ref would ship the newest green commit under a hold.
+            if [ "$KEEP_HOLD" = "true" ] && [ -z "$DISPATCH_REF" ]; then
+              echo "::error::keep_hold needs the ref input: the deployed commit (DIT_COMMIT of last-good.env)."
+              exit 1
+            fi
+            if [ -n "$DISPATCH_REF" ]; then
+              sha="$DISPATCH_REF"
+            elif [ "$ROLLBACK" = "true" ]; then
+              echo "::error::A rollback needs the ref input."
+              exit 1
+            else
+              sha="$(newest_green)"
+              if [ -z "$sha" ]; then
+                echo "::error::No commit on main has a successful ci run; pass the ref input."
+                exit 1
+              fi
+            fi
+          fi
+          if ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::The commit must be a full 40-character lowercase SHA."
+            exit 1
+          fi
+          if ! git cat-file -e "$sha^{commit}" 2>/dev/null || ! git merge-base --is-ancestor "$sha" origin/main; then
+            if [ "$EVENT_NAME" = "workflow_run" ]; then
+              skip "$sha is not on main any more."
+            fi
+            echo "::error::$sha is not a commit on main."
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+  prepare:
+    needs: resolve
+    if: ${{ needs.resolve.outputs.sha != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    permissions:
+      contents: read
+    outputs:
+      deployed_commit: ${{ steps.decide.outputs.deployed_commit }}
+      deploy: ${{ steps.decide.outputs.deploy }}
+      compat_previous: ${{ steps.decide.outputs.compat_previous }}
+      compat_current: ${{ steps.decide.outputs.compat_current }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/ssh-setup
+        with:
+          ssh-key: ${{ secrets.DEPLOY_SSH_KEY }}
+          known-hosts: ${{ vars.DEPLOY_KNOWN_HOSTS }}
+          host: ${{ vars.DEPLOY_HOST }}
+          user: ${{ vars.DEPLOY_USER }}
+          port: ${{ vars.DEPLOY_SSH_PORT || '22' }}
+      - name: Read the deployed commit and decide
+        id: decide
+        env:
+          APP_DIR: ${{ vars.APP_DIR }}
+          SHA: ${{ needs.resolve.outputs.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          ROLLBACK: ${{ inputs.rollback }}
+          KEEP_HOLD: ${{ inputs.keep_hold }}
+        run: |
+          set -euo pipefail
+          [[ "$APP_DIR" =~ ^/[A-Za-z0-9._/-]*$ ]] || { echo "::error::The APP_DIR variable must be an absolute path."; exit 1; }
+          # Only the two non-secret lines are read; the file also holds every secret of the release.
+          record="$(ssh -F "$RUNNER_TEMP/ssh/ssh_config" dit "if [ -f '$APP_DIR/flags/deploy-hold' ]; then echo hold; fi; if [ -f '$APP_DIR/last-good.env' ]; then echo present; grep -E '^(DIT_COMMIT|APP_IMAGE)=' '$APP_DIR/last-good.env' || true; fi")"
+          deployed=""
+          if grep -qx present <<<"$record"; then
+            line="$(grep -m1 '^DIT_COMMIT=' <<<"$record" || true)"
+            deployed="${line#DIT_COMMIT=}"
+            deployed="${deployed#\'}"
+            deployed="${deployed%\'}"
+            if ! [[ "$deployed" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::last-good.env on the server has no valid DIT_COMMIT."
+              exit 1
+            fi
+            image_line="$(grep -m1 '^APP_IMAGE=' <<<"$record" || true)"
+            echo "The server runs commit $deployed (${image_line:-no APP_IMAGE recorded})."
+          else
+            echo "The server has no last-good.env: first deployment."
+          fi
+
+          if [ "$KEEP_HOLD" = "true" ] && [ "$SHA" != "$deployed" ]; then
+            echo "::error::keep_hold is accepted only for the deployed commit (${deployed:-none}); $SHA would ship new code under the hold."
+            exit 1
+          fi
+
+          deploy=true
+          # A rollback by hand holds automatic deployments (the deploy job writes the file); without the hold the next push
+          # to main would ship again the tip that was rolled back.
+          if [ "$EVENT_NAME" = "workflow_run" ] && grep -qx hold <<<"$record"; then
+            deploy=false
+            echo "::notice::A rollback holds automatic deployments (flags/deploy-hold on the server); run this workflow by hand without rollback to release the hold."
+          fi
+          if [ "$deploy" = "true" ] && [ -n "$deployed" ]; then
+            if [ "$EVENT_NAME" = "workflow_run" ]; then
+              # A push that changed only content/ is published by the content release; a deployment would restart the app for nothing.
+              if files="$(git diff --name-only "$deployed" "$SHA" 2>/dev/null)" && [ -n "$files" ] && ! grep -qv '^content/' <<<"$files"; then
+                deploy=false
+                echo "::notice::Only content/ changed since $deployed; no deployment."
+              fi
+              # ci runs that finish out of order resolve the commit that already runs; a full deployment of it (backup,
+              # migration bundle, restart) would change nothing. A manual run of the deployed commit still deploys.
+              if [ "$deploy" = "true" ] && [ "$deployed" = "$SHA" ]; then
+                deploy=false
+                echo "::notice::$SHA already runs; no deployment (dispatch by hand to redeploy it)."
+              fi
+            fi
+            if [ "$deploy" = "true" ] && [ "$ROLLBACK" != "true" ] && [ "$SHA" != "$deployed" ] && git merge-base --is-ancestor "$SHA" "$deployed" 2>/dev/null; then
+              deploy=false
+              echo "::notice::$SHA is older than the deployed $deployed; no deployment (use rollback to force)."
+            fi
+          fi
+          # compat proves that the release that will run works on the schema that will be in the database. A rollback keeps
+          # the newer schema, so the older release (SHA) is the one under test and the deployed commit supplies the schema.
+          compat_previous="$deployed"
+          compat_current="$SHA"
+          if [ "$ROLLBACK" = "true" ] && [ -n "$deployed" ] && [ "$SHA" != "$deployed" ] && git merge-base --is-ancestor "$SHA" "$deployed" 2>/dev/null; then
+            compat_previous="$SHA"
+            compat_current="$deployed"
+          fi
+          {
+            echo "deployed_commit=$deployed"
+            echo "compat_previous=$compat_previous"
+            echo "compat_current=$compat_current"
+            echo "deploy=$deploy"
+          } >> "$GITHUB_OUTPUT"
+      - name: Remove the ssh material
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/ssh" "$RUNNER_TEMP/env"
+
+  build:
+    needs: [resolve, prepare]
+    if: ${{ needs.prepare.outputs.deploy == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.image.outputs.ref }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
+      - name: Build and push the image, or reuse the one already pushed for this commit
+        id: image
+        env:
+          SHA: ${{ needs.resolve.outputs.sha }}
+          OWNER: ${{ github.repository_owner }}
+          GHCR_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # OWNER is the repository owner from the environment; owner is only its lowercase form for the image name, a
+          # different variable on purpose (image names must be lowercase, the registry login is not).
+          # shellcheck disable=SC2153
+          owner="${OWNER,,}"
+          repository="ghcr.io/$owner/dev-interview-trainer"
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$OWNER" --password-stdin
+          # Only a manifest reported as missing (see manifest-missing.sh) means "not pushed yet"; any other error, a network
+          # failure for one, must not trigger a rebuild that would overwrite the tag.
+          if inspect_output="$(docker manifest inspect "$repository:$SHA" 2>&1)"; then
+            echo "The image for $SHA exists; reusing it."
+            docker pull -q "$repository:$SHA" >/dev/null
+          elif bash deploy/scripts/manifest-missing.sh <<<"$inspect_output"; then
+            docker build --build-arg "APP_VERSION=$SHA" -t "$repository:$SHA" .
+            docker push -q "$repository:$SHA" >/dev/null
+          else
+            echo "::error::Could not look up $repository:$SHA: $inspect_output"
+            exit 1
+          fi
+          ref="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$repository:$SHA" | grep -m1 "^$repository@sha256:" || true)"
+          if ! [[ "$ref" =~ ^ghcr\.io/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Could not resolve the digest of $repository:$SHA."
+            exit 1
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+      - name: Log out of the registry
+        if: always()
+        run: docker logout ghcr.io
+
+  # The release that is actually in production must keep working on the schema the new release migrates to.
+  compat:
+    needs: prepare
+    if: ${{ needs.prepare.outputs.deploy == 'true' && needs.prepare.outputs.deployed_commit != '' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/schema-compat.yml
+    with:
+      previous: ${{ needs.prepare.outputs.compat_previous }}
+      current: ${{ needs.prepare.outputs.compat_current }}
+
+  smoke:
+    needs: build
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/deploy-smoke.yml
+    with:
+      image: ${{ needs.build.outputs.image }}
+      # The deployment scripts on main already passed the full tier on their pull request; this run checks the new image.
+      mode: quick
+
+  # "!cancelled()" and the explicit result checks are needed because GitHub skips a job whose needs job was skipped:
+  # without them the first deployment (no compat job) would never run.
+  deploy:
+    needs: [resolve, prepare, build, smoke, compat]
+    if: ${{ !cancelled() && needs.prepare.outputs.deploy == 'true' && needs.smoke.result == 'success' && (needs.compat.result == 'success' || needs.compat.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: production
+    permissions:
+      actions: write
+      contents: read
+      packages: read
+    env:
+      APP_DIR: ${{ vars.APP_DIR }}
+      SHA: ${{ needs.resolve.outputs.sha }}
+      IMAGE: ${{ needs.build.outputs.image }}
+      OWNER: ${{ github.repository_owner }}
+      STAGE_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/ssh-setup
+        with:
+          ssh-key: ${{ secrets.DEPLOY_SSH_KEY }}
+          known-hosts: ${{ vars.DEPLOY_KNOWN_HOSTS }}
+          host: ${{ vars.DEPLOY_HOST }}
+          user: ${{ vars.DEPLOY_USER }}
+          port: ${{ vars.DEPLOY_SSH_PORT || '22' }}
+      - name: Validate the values that reach the server
+        run: |
+          set -euo pipefail
+          [[ "$APP_DIR" =~ ^/[A-Za-z0-9._/-]*$ ]] || { echo "::error::The APP_DIR variable must be an absolute path."; exit 1; }
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::The commit must be a full SHA."; exit 1; }
+          [[ "$IMAGE" =~ ^ghcr\.io/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$ ]] || { echo "::error::The image must be a digest reference."; exit 1; }
+          [[ "$OWNER" =~ ^[A-Za-z0-9-]+$ ]] || { echo "::error::The repository owner has an unexpected form."; exit 1; }
+          echo "STAGE=$APP_DIR/staging/$STAGE_ID" >> "$GITHUB_ENV"
+      - name: Stop when a newer commit was deployed since the decision
+        env:
+          ROLLBACK: ${{ inputs.rollback }}
+        run: |
+          set -euo pipefail
+          record="$(ssh -F "$RUNNER_TEMP/ssh/ssh_config" dit "if [ -f '$APP_DIR/last-good.env' ]; then grep -E '^DIT_COMMIT=' '$APP_DIR/last-good.env' || true; fi")"
+          deployed="${record#DIT_COMMIT=}"
+          deployed="${deployed#\'}"
+          deployed="${deployed%\'}"
+          if [ -n "$deployed" ] && [ "$ROLLBACK" != "true" ] && [ "$SHA" != "$deployed" ] && git merge-base --is-ancestor "$SHA" "$deployed" 2>/dev/null; then
+            echo "::error::$SHA is older than the deployed $deployed (another deployment ran in the meantime)."
+            exit 1
+          fi
+      - name: Render the server configuration
+        env:
+          APP_IMAGE: ${{ needs.build.outputs.image }}
+          APP_DIR: ${{ vars.APP_DIR }}
+          PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
+          ADMIN_TELEGRAM_IDS: ${{ vars.ADMIN_TELEGRAM_IDS }}
+          TELEGRAM_OIDC_CLIENT_ID: ${{ vars.TELEGRAM_OIDC_CLIENT_ID }}
+          TELEGRAM_OIDC_CLIENT_SECRET: ${{ secrets.TELEGRAM_OIDC_CLIENT_SECRET }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          CONTENT_IMPORT_TOKEN: ${{ secrets.CONTENT_IMPORT_TOKEN }}
+          UMAMI_DB_PASSWORD: ${{ secrets.UMAMI_DB_PASSWORD }}
+          UMAMI_APP_SECRET: ${{ secrets.UMAMI_APP_SECRET }}
+          BACKUP_S3_PROVIDER: ${{ vars.BACKUP_S3_PROVIDER }}
+          BACKUP_S3_ENDPOINT: ${{ vars.BACKUP_S3_ENDPOINT }}
+          BACKUP_S3_BUCKET: ${{ vars.BACKUP_S3_BUCKET }}
+          BACKUP_S3_ACCESS_KEY_ID: ${{ secrets.BACKUP_S3_ACCESS_KEY_ID }}
+          BACKUP_S3_SECRET_ACCESS_KEY: ${{ secrets.BACKUP_S3_SECRET_ACCESS_KEY }}
+          UMAMI_WEBSITE_ID: ${{ vars.UMAMI_WEBSITE_ID }}
+          RATE_LIMIT_WRITES_PER_MINUTE: ${{ vars.RATE_LIMIT_WRITES_PER_MINUTE }}
+          RATE_LIMIT_READS_PER_MINUTE: ${{ vars.RATE_LIMIT_READS_PER_MINUTE }}
+          RATE_LIMIT_SEARCH_PER_MINUTE: ${{ vars.RATE_LIMIT_SEARCH_PER_MINUTE }}
+          FEEDBACK_REPORTS_PER_DAY: ${{ vars.FEEDBACK_REPORTS_PER_DAY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$RUNNER_TEMP/env"
+          bash deploy/scripts/render-env.sh > "$RUNNER_TEMP/env/.env.new"
+      - name: Upload the bundle and the configuration into the staging directory
+        run: |
+          set -euo pipefail
+          ssh_cmd=(ssh -F "$RUNNER_TEMP/ssh/ssh_config" dit)
+          "${ssh_cmd[@]}" "mkdir -p '$APP_DIR/staging' && mkdir -m 700 '$STAGE' '$STAGE/bundle'"
+          tar -czf - -C deploy --exclude='./tests' . | "${ssh_cmd[@]}" "tar -xzpf - -C '$STAGE/bundle'"
+          "${ssh_cmd[@]}" "umask 077; cat > '$STAGE/.env.new'" < "$RUNNER_TEMP/env/.env.new"
+      - name: Let the server pull the image
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The token reaches the server on stdin, into a Docker config that belongs to this run and is removed with its staging directory.
+          printf '%s' "$GHCR_TOKEN" | ssh -F "$RUNNER_TEMP/ssh/ssh_config" dit "mkdir -m 700 '$STAGE/docker' && DOCKER_CONFIG='$STAGE/docker' docker login ghcr.io -u '$OWNER' --password-stdin"
+      - name: Start the deployment on the server, detached
+        run: |
+          set -euo pipefail
+          # setsid and fully redirected descriptors keep an ssh drop from signalling the deployment, which rolls itself back
+          # on failure. The wrapper records the exit status of deploy-app.sh in deploy.exit for the wait step.
+          ssh -F "$RUNNER_TEMP/ssh/ssh_config" dit "APP_DIR='$APP_DIR' DOCKER_CONFIG='$STAGE/docker' setsid bash -c 'exit_file=\$1; shift; bash \"\$@\"; code=\$?; echo \"\$code\" >\"\$exit_file.tmp\" && mv -f \"\$exit_file.tmp\" \"\$exit_file\"' _ '$STAGE/deploy.exit' '$STAGE/bundle/remote/deploy-app.sh' '$STAGE' '$IMAGE' '$SHA' </dev/null >/dev/null 2>&1 &"
+      - name: Wait for the outcome
+        run: |
+          set -euo pipefail
+          ssh_cmd=(ssh -F "$RUNNER_TEMP/ssh/ssh_config" dit)
+          state_cmd="if [ -f '$STAGE/deploy.exit' ]; then echo \"exit:\$(cat '$STAGE/deploy.exit')\"; elif pgrep -f '$STAGE/bundle/remote/[d]eploy-app.sh' >/dev/null; then echo running; else echo gone; fi"
+          ssh_err="$RUNNER_TEMP/ssh/wait.err"
+          deadline=$((SECONDS + 3000))
+          gone=0
+          code=""
+          failing_since=""
+          failures=0
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            # A dropped connection is retried, because the deployment runs on without it, but a connection that stays
+            # down (rotated host key, revoked key, firewall) is reported and ends the wait after ten minutes.
+            if state="$("${ssh_cmd[@]}" "$state_cmd" 2>"$ssh_err")"; then
+              failing_since=""
+              failures=0
+              case "$state" in
+                exit:*)
+                  code="${state#exit:}"
+                  break
+                  ;;
+                gone)
+                  gone=$((gone + 1))
+                  if [ "$gone" -ge 3 ]; then
+                    break
+                  fi
+                  ;;
+                *) gone=0 ;;
+              esac
+            else
+              failures=$((failures + 1))
+              [ -n "$failing_since" ] || failing_since="$SECONDS"
+              if [ "$failures" -eq 1 ] || [ $((failures % 6)) -eq 0 ]; then
+                echo "::warning::ssh to the server failed ($failures in a row): $(tr '\n' ' ' < "$ssh_err")"
+              fi
+              if [ $((SECONDS - failing_since)) -ge 600 ]; then
+                echo "::error::The server has been unreachable over ssh for ten minutes; the deployment may still be running, read deploy-app.log on the server."
+                break
+              fi
+            fi
+            sleep 10
+          done
+          "${ssh_cmd[@]}" "tail -n 60 '$APP_DIR/logs/deploy-app.log' 2>/dev/null || true" || true
+          if [ "$code" = "0" ]; then
+            echo "Deployed $IMAGE at $SHA."
+            exit 0
+          fi
+          if [ -z "$code" ]; then
+            echo "::error::The deployment left no exit status (it ended without one or did not finish in time); read deploy-app.log on the server."
+          else
+            echo "::error::deploy-app.sh exited with $code (1 failed and rolled back where possible, 2 invalid input, 3 a guard file refuses deployments)."
+          fi
+          exit 1
+      # The hold is a file on the server and not a GitHub environment variable: GITHUB_TOKEN has no permission that writes
+      # variables, and a token that could would be one more long-lived secret. The workflow writes and reads it over ssh;
+      # no deploy script knows it. Written only after a successful rollback, so a rollback that failed (and rolled itself
+      # back) does not freeze the pipeline, and removed only by a manual run without rollback (rotate-db-password keeps it).
+      - name: Hold automatic deployments after a rollback
+        if: ${{ inputs.rollback }}
+        run: |
+          if ! ssh -F "$RUNNER_TEMP/ssh/ssh_config" dit "echo '$SHA' > '$APP_DIR/flags/deploy-hold'"; then
+            echo "::error::The rollback succeeded but writing the hold failed: NO HOLD EXISTS, so the next push to main deploys the tip again. Set it by hand: ssh to the server and run: echo $SHA > $APP_DIR/flags/deploy-hold (as the deploy user)."
+            exit 1
+          fi
+      - name: Release the hold after a manual deployment
+        if: ${{ github.event_name == 'workflow_dispatch' && !inputs.rollback && !inputs.keep_hold }}
+        run: ssh -F "$RUNNER_TEMP/ssh/ssh_config" dit "rm -f '$APP_DIR/flags/deploy-hold'"
+      # The tip of main as of now: the content job delivers the tip, and the commit that was deployed may be behind it.
+      - name: Check out the tip of main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          path: main-tip
+          fetch-depth: 0
+          persist-credentials: false
+      # Content that the previous application could not take (its schema was out of range, so deploy-content did not switch
+      # it) is delivered here, after the application that supports it. The comparison is with the tip of main, not with this
+      # commit: deploy-content delivers the tip, and a content push whose delivery failed (the lock was busy, exit 4) or
+      # was replaced is re-delivered by the next deployment through this step. The dispatch never sets rollback, so
+      # deploy-content skips it when the live release is newer: an application rollback cannot move content backwards.
+      - name: Publish the content of this commit when the live release lacks it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if ! target="$(ssh -F "$RUNNER_TEMP/ssh/ssh_config" dit "readlink '$APP_DIR/content/current' || true")"; then
+            echo "::error::The application is deployed; reading the live content release failed. Run deploy-content by hand."
+            exit 1
+          fi
+          live="${target##*/}"
+          tip="$(git -C main-tip rev-parse HEAD)"
+          tip_tree="$(git -C main-tip rev-parse "HEAD:content")"
+          live_tree=""
+          if [[ "$live" =~ ^[0-9a-f]{40}$ ]] && git -C main-tip cat-file -e "$live^{commit}" 2>/dev/null; then
+            live_tree="$(git -C main-tip rev-parse "$live:content" 2>/dev/null || true)"
+          fi
+          if [ -n "$live_tree" ] && [ "$live_tree" = "$tip_tree" ]; then
+            echo "The live content release already has the content of the tip of main ($tip)."
+            exit 0
+          fi
+          if ! gh workflow run deploy-content.yml -f ref="$tip"; then
+            echo "::error::The application is deployed; only dispatching deploy-content failed. Run deploy-content by hand for $tip."
+            exit 1
+          fi
+          echo "Dispatched deploy-content for $tip."
+      - name: Clean up
+        if: always()
+        run: |
+          # The staging directory (and the registry token in it) goes unless the server script still runs.
+          if [ -f "$RUNNER_TEMP/ssh/ssh_config" ] && [ -n "${STAGE:-}" ]; then
+            ssh -F "$RUNNER_TEMP/ssh/ssh_config" dit "if ! pgrep -f '$STAGE/bundle/remote/[d]eploy-app.sh' >/dev/null; then rm -rf '$STAGE'; fi" || true
+          fi
+          rm -rf "$RUNNER_TEMP/ssh" "$RUNNER_TEMP/env"

@@ -16,6 +16,11 @@
       return true;
     }
 
+    // The report form's radios take arrow keys and Enter natively; N or Enter there must not skip to the next question.
+    if (target.closest('.feedback-bar__form')) {
+      return true;
+    }
+
     return target instanceof HTMLInputElement && TEXT_INPUT_TYPES.indexOf(target.type) >= 0;
   }
 

@@ -612,9 +612,8 @@ public sealed class ContentImportServiceTests(PostgresFixture postgres)
         await using TrainerDbContext firstDb = PostgresFixture.CreateContext(connectionString);
         await using TrainerDbContext secondDb = PostgresFixture.CreateContext(connectionString);
         using ContentWorkspace content = ContentWorkspace.CopyOfValid();
-        using Barrier barrier = new(2);
-        ContentImportService first = CreateService(firstDb, new FakeInvalidator(), new BarrierReader(new ContentReader(), barrier));
-        ContentImportService second = CreateService(secondDb, new FakeInvalidator(), new BarrierReader(new ContentReader(), barrier));
+        ContentImportService first = CreateService(firstDb, new FakeInvalidator());
+        ContentImportService second = CreateService(secondDb, new FakeInvalidator());
 
         ContentImportResult[] results = await Task.WhenAll(
             Task.Run(() => first.ImportAsync(content.Root, TestContext.Current.CancellationToken)),
@@ -627,15 +626,52 @@ public sealed class ContentImportServiceTests(PostgresFixture postgres)
         Assert.Equal(6, await check.Questions.CountAsync(TestContext.Current.CancellationToken));
     }
 
-    /// <summary>Holds both importers after reading until each has arrived, so they reach the transaction together.</summary>
-    private sealed class BarrierReader(IContentReader inner, Barrier barrier) : IContentReader
+    // The deployment switches the content directory only after an import has finished or queued behind the running one,
+    // so a second import must not even start reading while the first is still reading.
+    [Fact]
+    public async Task Import_SecondCall_WaitsForTheLockWhileTheFirstIsStillReading()
     {
+        string connectionString = await postgres.CreateDatabaseAsync();
+        await using TrainerDbContext firstDb = PostgresFixture.CreateContext(connectionString);
+        await using TrainerDbContext secondDb = PostgresFixture.CreateContext(connectionString);
+        using ContentWorkspace content = ContentWorkspace.CopyOfValid();
+        GatedReader firstReader = new(new ContentReader(), gated: true);
+        GatedReader secondReader = new(new ContentReader(), gated: false);
+        ContentImportService first = CreateService(firstDb, new FakeInvalidator(), firstReader);
+        ContentImportService second = CreateService(secondDb, new FakeInvalidator(), secondReader);
+
+        Task<ContentImportResult> firstTask = Task.Run(() => first.ImportAsync(content.Root, TestContext.Current.CancellationToken));
+        await firstReader.Entered.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        Task<ContentImportResult> secondTask = Task.Run(() => second.ImportAsync(content.Root, TestContext.Current.CancellationToken));
+
+        await Task.Delay(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken);
+        Assert.False(secondTask.IsCompleted);
+        Assert.False(secondReader.Entered.Task.IsCompleted, "the second import started reading while the first still held the lock");
+
+        firstReader.Release.SetResult();
+        ContentImportResult[] results = await Task.WhenAll(firstTask, secondTask);
+
+        Assert.Equal(ContentImportStatus.Imported, results[0].Status);
+        Assert.Equal(ContentImportStatus.Unchanged, results[1].Status);
+        Assert.True(secondReader.Entered.Task.IsCompleted);
+    }
+
+    /// <summary>Optionally holds the importer inside its read phase until the test releases it.</summary>
+    private sealed class GatedReader(IContentReader inner, bool gated) : IContentReader
+    {
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public async Task<ContentSet> ReadAsync(string rootPath, CancellationToken ct)
         {
-            ContentSet set = await inner.ReadAsync(rootPath, ct);
-            bool bothArrived = await Task.Run(() => barrier.SignalAndWait(TimeSpan.FromSeconds(30)), ct);
-            Assert.True(bothArrived);
-            return set;
+            Entered.TrySetResult();
+            if (gated)
+            {
+                await Release.Task.WaitAsync(TimeSpan.FromSeconds(60), ct);
+            }
+
+            return await inner.ReadAsync(rootPath, ct);
         }
     }
 

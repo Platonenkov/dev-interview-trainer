@@ -35,3 +35,8 @@ encrypts database backups, which include the table.
 - If the app ever runs on several hosts or the database becomes reachable from
   elsewhere, add a key-encryption certificate (`ProtectKeysWithCertificate`) and
   revisit this decision.
+
+## Notes added in Plan 3
+
+Backups are encrypted with `age` and copied off-site, so the key ring in the `trainer` dump is no
+longer readable without the owner's identity: see [ADR 0021](0021-encrypted-offsite-backups.md).

@@ -15,8 +15,9 @@ using Trainer.Infrastructure.Persistence.Entities;
 namespace Trainer.Infrastructure.Content;
 
 /// <summary>
-/// Imports a content root into PostgreSQL. Everything after reading runs in one transaction guarded by an
-/// advisory lock, so two importers (two app instances, or the CLI next to the app) cannot interleave.
+/// Imports a content root into PostgreSQL. Reading and importing run in one transaction guarded by an advisory lock
+/// taken first, so two importers (two app instances, or the CLI next to the app) cannot interleave and a second one
+/// queues behind an import that is still reading files.
 /// </summary>
 public sealed partial class ContentImportService : IContentImportService
 {
@@ -64,13 +65,15 @@ public sealed partial class ContentImportService : IContentImportService
 
     public async Task<ContentImportResult> ImportAsync(string contentRoot, CancellationToken ct)
     {
-        ContentSet content = await _reader.ReadAsync(contentRoot, ct);
-
         ContentImportResult result;
         try
         {
             await using IDbContextTransaction transaction = await _db.Database.BeginTransactionAsync(ct);
+            // Imports are ordered against each other here, and the link target of the content root is resolved once
+            // inside the lock by the reader. A switch of the link by a deployment while this read runs therefore cannot
+            // mix two releases; it only makes the next, queued import the one that picks up the new release.
             await _db.Database.ExecuteSqlAsync($"SELECT pg_advisory_xact_lock({AdvisoryLockKey})", ct);
+            ContentSet content = await _reader.ReadAsync(contentRoot, ct);
             result = await TryImportLockedAsync(content, ct);
             if (result.Status == ContentImportStatus.Imported)
             {

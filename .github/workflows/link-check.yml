@@ -8,10 +8,18 @@ on:
 permissions:
   contents: read
 
+# The issue is found by label and then created or edited; two overlapping runs would each open their own.
+concurrency:
+  group: link-check
+  cancel-in-progress: false
+
 jobs:
   check-links:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
+      issues: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -19,5 +27,55 @@ jobs:
       - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           global-json-file: global.json
+      - name: Build the content CLI
+        run: dotnet build tools/Trainer.ContentCli --configuration Release
+      # This step fetches arbitrary URLs from the content, so the write token is kept out of its environment.
       - name: Check source links
-        run: dotnet run --project tools/Trainer.ContentCli -- check-links
+        id: check
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/links.md"
+          rm -f "$report"
+
+          code=0
+          dotnet run --no-build --configuration Release --project tools/Trainer.ContentCli -- check-links --report "$report" || code=$?
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+      - name: Update the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          CHECK_EXIT: ${{ steps.check.outputs.code }}
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/links.md"
+
+          # Only 0 (no dead links) and 1 (dead links) are verdicts, and only with a report to show for it. Anything else
+          # is a crashed or misused checker, which must neither open nor close the issue.
+          if { [ "$CHECK_EXIT" != "0" ] && [ "$CHECK_EXIT" != "1" ]; } || [ ! -s "$report" ]; then
+            echo "::error::check-links did not produce a verdict (exit code '$CHECK_EXIT')."
+            exit 1
+          fi
+
+          gh label create dead-links --force --color B60205 --description "A source link of the question bank is dead"
+          # Oldest first; more than one means an earlier race or a manually opened issue.
+          numbers="$(gh issue list --label dead-links --state open --limit 100 --json number --jq '[.[].number] | sort | map(tostring) | join(" ")')"
+          read -r -a open <<< "$numbers"
+
+          if [ "$CHECK_EXIT" = "1" ]; then
+            # The body holds URLs taken from the content, so it only ever travels as a file, never on a command line.
+            if [ "${#open[@]}" -gt 0 ]; then
+              primary="${open[0]}"
+              gh issue edit "$primary" --body-file "$report"
+              for extra in "${open[@]:1}"; do
+                gh issue close "$extra" --comment "Duplicate of #$primary, which tracks the dead links."
+              done
+            else
+              gh issue create --title "Dead source links" --label dead-links --body-file "$report"
+            fi
+            # Fail the job as well, so the owner gets the workflow notification besides the issue.
+            exit 1
+          fi
+
+          for number in "${open[@]}"; do
+            gh issue close "$number" --comment "All source links resolve as of $(date -u +%Y-%m-%d)."
+          done

@@ -1,0 +1,111 @@
+# Full site. Placeholders ${DOMAIN} and ${APP_DIR} are filled by envsubst; every other $name is an nginx variable.
+
+# No client address and no query string: $uri is the path only (ADR 0007).
+log_format dit '[$time_local] "$request_method $uri $server_protocol" $status $body_bytes_sent $request_time';
+
+# Memory only; the key is never written to a log.
+limit_req_zone $binary_remote_addr zone=dit_stats:1m rate=10r/s;
+
+# Other host names never reach the application.
+server {
+    listen 80 default_server;
+    listen 443 ssl http2 default_server;
+    server_name _;
+    ssl_reject_handshake on;
+    return 444;
+}
+
+server {
+    listen 80;
+    server_name ${DOMAIN};
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    # The redirect target is not logged; only $uri reaches the access log.
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    # The http2 parameter is the form nginx 1.24 (Ubuntu 24.04) understands; the standalone directive came in 1.25.1.
+    listen 443 ssl http2;
+    server_name ${DOMAIN};
+
+    access_log /var/log/nginx/dev-interview-trainer.access.log dit;
+
+    ssl_certificate /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    add_header Strict-Transport-Security "max-age=31536000" always;
+
+    client_max_body_size 1m;
+    server_tokens off;
+
+    # Not served publicly; the application listens for these on a separate port. The second form catches other letter cases.
+    location ^~ /internal/ {
+        return 404;
+    }
+
+    location ~* ^/internal(/|$) {
+        return 404;
+    }
+
+    location = /stats/script.js {
+        proxy_pass http://127.0.0.1:3001/script.js;
+    }
+
+    location = /stats/api/send {
+        if (-f ${APP_DIR}/flags/maintenance) {
+            return 503;
+        }
+
+        limit_req zone=dit_stats burst=20 nodelay;
+        # 429 keeps rate-limit rejections distinguishable from the 503 of maintenance mode.
+        limit_req_status 429;
+        client_max_body_size 16k;
+        # Umami derives the visitor hash from the forwarded address; overwrite, never append.
+        proxy_set_header X-Forwarded-For $remote_addr;
+        # The other client-IP headers Umami 3.5.0 reads; an empty value drops the header so a visitor cannot choose the hash input.
+        proxy_set_header True-Client-IP "";
+        proxy_set_header CF-Connecting-IP "";
+        proxy_set_header Fastly-Client-IP "";
+        proxy_set_header X-NF-Client-Connection-IP "";
+        proxy_set_header DO-Connecting-IP "";
+        proxy_set_header X-Real-IP "";
+        proxy_set_header X-AppEngine-User-IP "";
+        proxy_set_header Forwarded "";
+        proxy_set_header X-Client-IP "";
+        proxy_set_header X-Cluster-Client-IP "";
+        proxy_set_header X-Forwarded "";
+        proxy_set_header X-Umami-Client-IP "";
+        proxy_pass http://127.0.0.1:3001/api/send;
+    }
+
+    location = /stats {
+        return 404;
+    }
+
+    location /stats/ {
+        return 404;
+    }
+
+    location / {
+        if (-f ${APP_DIR}/flags/maintenance) {
+            return 503;
+        }
+
+        # Responses mix per-user fragments with static markup; compressing them here would expose them to BREACH-style length attacks.
+        gzip off;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        # $remote_addr, not $proxy_add_x_forwarded_for: the app trusts one hop and a client-supplied chain is dropped.
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_pass http://127.0.0.1:8080;
+    }
+}

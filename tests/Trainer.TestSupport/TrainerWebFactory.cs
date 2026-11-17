@@ -43,6 +43,12 @@ public sealed class TrainerWebFactoryOptions
     /// <summary>Receives every log entry the host writes; without it the host logs nowhere.</summary>
     public CapturingLoggerProvider? Logs { get; init; }
 
+    /// <summary>
+    /// The <c>App:Internal:Port</c> the host maps its internal endpoints on; 0 leaves them unmapped. A Production host
+    /// refuses to start without one, so it gets <see cref="TrainerWebFactory.DefaultProductionInternalPort"/> instead.
+    /// </summary>
+    public int InternalPort { get; init; }
+
     /// <summary>The client id tests start a <see cref="FakeTelegramOidcServer"/> with; the factory reads the server's own <c>ClientId</c>.</summary>
     public const string TelegramClientId = "1000";
 }
@@ -58,6 +64,12 @@ public sealed class TrainerWebFactory : WebApplicationFactory<Program>
 
     /// <summary>The per-minute <c>App:RateLimits</c> every test host runs with unless <see cref="TrainerWebFactoryOptions.Settings"/> overrides it.</summary>
     public const string RaisedRateLimit = "100000";
+
+    /// <summary>The <c>ContentImport:Token</c> of every host that maps the internal endpoints.</summary>
+    public const string ImportToken = "test-import-token-0123456789abcdef-0123";
+
+    /// <summary>The internal port of a Production test host that does not choose one.</summary>
+    public const int DefaultProductionInternalPort = 8081;
 
     private readonly TrainerWebFactoryOptions _options;
     private readonly string _connectionString;
@@ -75,6 +87,11 @@ public sealed class TrainerWebFactory : WebApplicationFactory<Program>
     public ContentWorkspace Content { get; }
 
     public string ConnectionString => _connectionString;
+
+    /// <summary>The port requests must claim through <c>X-Test-Local-Port</c> to reach the internal endpoints; 0 when they are not mapped.</summary>
+    public int InternalPort => _options.InternalPort > 0
+        ? _options.InternalPort
+        : string.Equals(_options.Environment, "Production", StringComparison.Ordinal) ? DefaultProductionInternalPort : 0;
 
     public static async Task<TrainerWebFactory> CreateAsync(PostgresFixture postgres, TrainerWebFactoryOptions? options = null)
     {
@@ -182,6 +199,15 @@ public sealed class TrainerWebFactory : WebApplicationFactory<Program>
         builder.UseSetting("App:RateLimits:WritesPerMinute", RaisedRateLimit);
         builder.UseSetting("App:RateLimits:ReadsPerMinute", RaisedRateLimit);
         builder.UseSetting("App:RateLimits:SearchPerMinute", RaisedRateLimit);
+
+        if (InternalPort > 0)
+        {
+            builder.UseSetting("App:Internal:Port", InternalPort.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            builder.UseSetting("ContentImport:Token", ImportToken);
+        }
+
+        // TestServer has no sockets; the filter lets a request choose the local port it arrived on.
+        builder.ConfigureServices(services => services.AddSingleton<IStartupFilter, LocalPortFromHeaderStartupFilter>());
 
         // Production refuses to start without Telegram credentials; Production tests that never sign in get inert ones,
         // which Settings may still override.

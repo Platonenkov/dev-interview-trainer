@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Playwright;
 using Trainer.Application.Users;
+using Trainer.Domain.Feedback;
 using Trainer.TestSupport;
 using Trainer.Web.Auth;
 using Trainer.Web.Caching;
@@ -16,6 +17,7 @@ public sealed class AdminPageTests(AppHostFixture host) : IClassFixture<AppHostF
 {
     private const int SeededUsers = 55;
     private const int MinimumTarget = 44;
+    private const string ClosureQuestionId = "01KBZ3Q8N9V2K3M4P5R6S7T8WA";
 
     private static readonly string ScreenshotDirectory = Path.Combine(ContentWorkspace.RepositoryRoot(), "TestResults", "screenshots");
 
@@ -30,6 +32,12 @@ public sealed class AdminPageTests(AppHostFixture host) : IClassFixture<AppHostF
             string name = i % 3 == 0 ? "A very long display name that has to wrap inside its cell without pushing the page sideways " + i : "Reader " + i;
             await users.SignInAsync(new TelegramProfile(991_000_000L + i, "reader_with_a_long_username_" + i, name), Ct);
         }
+
+        // Report rows with the comment shapes most likely to push the table sideways: many lines and one unbreakable word.
+        await host.SeedFeedbackAsync(
+            991_100_001L, "A reporter with a very long display name that has to wrap inside its cell", ClosureQuestionId, "ru", ReportReason.WrongAnswer,
+            "First line\n" + new string('w', 150) + "\nLast line", dislike: true);
+        await host.SeedFeedbackAsync(991_100_002L, "Short", ClosureQuestionId, "en", ReportReason.Other, null, dislike: false);
     }
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
@@ -89,6 +97,24 @@ public sealed class AdminPageTests(AppHostFixture host) : IClassFixture<AppHostF
         string wide = await tab.EvaluateAsync<string>("[...document.querySelectorAll('*')].filter(e => !e.closest('.table-scroll') && e.getBoundingClientRect().right > window.innerWidth + 1).slice(0, 6).map(e => e.tagName + '.' + e.className).join(' | ')");
         Assert.True(scrollWidth <= innerWidth, $"{wide} admin at {width} px ({theme}): scrollWidth {scrollWidth} > innerWidth {innerWidth}.");
         Assert.True(undersized.Length == 0, $"admin at {width} px ({theme}) has targets below {MinimumTarget} px: {string.Join("; ", undersized)}.");
+    }
+
+    [Fact]
+    public async Task AdminPage_ResolveButton_ClosesTheReportThroughTheForm()
+    {
+        await host.SeedFeedbackAsync(991_100_003L, "Resolver Subject", ClosureQuestionId, "en", ReportReason.Outdated, "Resolve me through the form", dislike: false);
+        await using IBrowserContext context = await NewAdminContextAsync(1280, "dark");
+        IPage tab = await context.NewPageAsync();
+        await tab.GotoAsync("/en/admin");
+
+        ILocator row = tab.Locator(".admin-table--reports tr", new PageLocatorOptions { HasText = "Resolve me through the form" });
+        await row.GetByRole(AriaRole.Button, new LocatorGetByRoleOptions { Name = "Resolve" }).ClickAsync();
+
+        await Assertions.Expect(tab.GetByRole(AriaRole.Status)).ToContainTextAsync("Report resolved.");
+        await Assertions.Expect(tab.Locator(".admin-table--reports tr", new PageLocatorOptions { HasText = "Resolve me through the form" })).ToHaveCountAsync(0);
+
+        await tab.GotoAsync("/en/admin?reports=resolved");
+        await Assertions.Expect(tab.Locator(".admin-table--reports tr", new PageLocatorOptions { HasText = "Resolve me through the form" })).ToHaveCountAsync(1);
     }
 
     [Fact]

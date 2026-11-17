@@ -1,0 +1,60 @@
+name: ssh-setup
+description: Writes the deploy key, the pinned host key and an ssh_config with the host alias "dit" under $RUNNER_TEMP/ssh.
+
+# The caller must end its job with an always() step that removes $RUNNER_TEMP/ssh. Use it as
+#   ssh -F "$RUNNER_TEMP/ssh/ssh_config" dit <command>
+inputs:
+  ssh-key:
+    description: Private key of the deploy user (a secret of the production environment).
+    required: true
+  known-hosts:
+    description: known_hosts line(s) of the server; the host key is pinned, never learned.
+    required: true
+  host:
+    description: Host name or address of the server.
+    required: true
+  port:
+    description: TCP port of the server's sshd (the DEPLOY_SSH_PORT variable; 22 when it is not set).
+    required: false
+    default: "22"
+  user:
+    description: Login user on the server.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Write the key, the host key and the ssh config
+      shell: bash
+      env:
+        SSH_KEY: ${{ inputs.ssh-key }}
+        KNOWN_HOSTS: ${{ inputs.known-hosts }}
+        SSH_HOST: ${{ inputs.host }}
+        SSH_USER: ${{ inputs.user }}
+        SSH_PORT: ${{ inputs.port }}
+      run: |
+        set -euo pipefail
+        # The values land in ssh_config, where a line break or a space would add options.
+        [[ "$SSH_HOST" =~ ^[A-Za-z0-9._:-]+$ ]] || { echo "::error::The host contains characters that are not allowed."; exit 1; }
+        [[ "$SSH_USER" =~ ^[a-z_][a-z0-9_-]*$ ]] || { echo "::error::The user contains characters that are not allowed."; exit 1; }
+        [[ "$SSH_PORT" =~ ^[0-9]{1,5}$ ]] && [ "$SSH_PORT" -ge 1 ] && [ "$SSH_PORT" -le 65535 ] || { echo "::error::The port must be a number between 1 and 65535."; exit 1; }
+        [ -n "$SSH_KEY" ] && [ -n "$KNOWN_HOSTS" ] || { echo "::error::The ssh key and the known hosts are required."; exit 1; }
+        umask 077
+        dir="$RUNNER_TEMP/ssh"
+        mkdir -p "$dir"
+        printf '%s\n' "$SSH_KEY" > "$dir/id"
+        printf '%s\n' "$KNOWN_HOSTS" > "$dir/known_hosts"
+        {
+          echo "Host dit"
+          echo "  HostName $SSH_HOST"
+          echo "  User $SSH_USER"
+          echo "  Port $SSH_PORT"
+          echo "  IdentityFile $dir/id"
+          echo "  IdentitiesOnly yes"
+          echo "  UserKnownHostsFile $dir/known_hosts"
+          echo "  StrictHostKeyChecking yes"
+          echo "  BatchMode yes"
+          echo "  ServerAliveInterval 30"
+          echo "  ServerAliveCountMax 6"
+          echo "  ConnectTimeout 30"
+        } > "$dir/ssh_config"

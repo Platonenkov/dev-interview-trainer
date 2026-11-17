@@ -1,3 +1,4 @@
+using Trainer.Domain.Feedback;
 using Trainer.Domain.Grading;
 using Trainer.Domain.Levels;
 using Trainer.Domain.Questions;
@@ -45,5 +46,21 @@ public sealed class PersistedEnumValuesTests
         Assert.Equal(
             [(AnswerMode.Practice, 1), (AnswerMode.Mock, 2), (AnswerMode.Review, 3)],
             Enum.GetValues<AnswerMode>().Select(v => (v, (int)v)).OrderBy(p => p.Item2));
+    }
+
+    [Fact]
+    public void QuestionRating_NumericValuesArePinned()
+    {
+        Assert.Equal(
+            [(QuestionRating.Dislike, -1), (QuestionRating.Like, 1)],
+            Enum.GetValues<QuestionRating>().Select(v => (v, (int)v)).OrderBy(p => p.Item2));
+    }
+
+    [Fact]
+    public void ReportReason_NumericValuesArePinned()
+    {
+        Assert.Equal(
+            [(ReportReason.WrongAnswer, 1), (ReportReason.UnclearWording, 2), (ReportReason.Outdated, 3), (ReportReason.BrokenLink, 4), (ReportReason.Other, 5)],
+            Enum.GetValues<ReportReason>().Select(v => (v, (int)v)).OrderBy(p => p.Item2));
     }
 }

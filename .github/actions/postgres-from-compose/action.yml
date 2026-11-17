@@ -1,0 +1,32 @@
+name: Start PostgreSQL from the compose pin
+description: >-
+  Starts the PostgreSQL image that deploy/compose/compose.yaml pins (tag and digest) on port 5432 and waits until it is
+  healthy. The compose file is the only place the digest is written, so a Dependabot bump of it reaches every test run.
+
+runs:
+  using: composite
+  steps:
+    - name: Start the container
+      shell: bash
+      env:
+        POSTGRES_PASSWORD: release
+      run: |
+        set -euo pipefail
+        image="$(sed -n 's/^[[:space:]]*image:[[:space:]]*\(postgres:[^[:space:]@]*@sha256:[0-9a-f]\{64\}\)[[:space:]]*$/\1/p' "$GITHUB_WORKSPACE/deploy/compose/compose.yaml" | head -n 1)"
+        if ! [[ "$image" =~ ^postgres:[A-Za-z0-9._-]+@sha256:[0-9a-f]{64}$ ]]; then
+          echo "::error::deploy/compose/compose.yaml has no postgres image pinned by digest."
+          exit 1
+        fi
+        echo "Starting $image"
+        docker run --detach --name release-postgres --publish 5432:5432 --env POSTGRES_PASSWORD \
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 12 "$image"
+        for _ in $(seq 1 60); do
+          status="$(docker inspect --format '{{.State.Health.Status}}' release-postgres)"
+          if [ "$status" = "healthy" ]; then
+            exit 0
+          fi
+          sleep 2
+        done
+        docker logs release-postgres || true
+        echo "::error::PostgreSQL did not become healthy in two minutes."
+        exit 1

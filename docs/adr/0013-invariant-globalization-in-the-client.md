@@ -50,7 +50,12 @@ marker.
   carries the ICU code at 977 KB, which puts a cold load at about 2.44 MB, only about
   60 KB under the 2.5 MB budget. CI pins the workload set (`dotnet workload install
   wasm-tools --version 10.0.303`, matching the SDK feature band) and the Plan 3 image
-  must do the same.
+  does the same. The image's build stage is `sdk:10.0.302` pinned by digest, because
+  MCR publishes no `sdk:10.0.303` tag (the tags go from 10.0.302 to 10.0.400). It is in
+  the same 10.0.3xx band, so the same `wasm-tools` 10.0.303 workload set installs on it
+  and the relinked runtime is identical; the Dockerfile fails the build if the Brotli
+  `dotnet.native.*.wasm.br` is over 600 000 bytes, and the deploy smoke verifies the
+  built image. CI keeps SDK 10.0.303 through `setup-dotnet`.
 - New client code must not use culture-sensitive formatting (`ToString("d")`, `"N0"`,
   culture comparisons) or `TwoLetterISOLanguageName`; dates go through `LocalTime`, the
   language through `UiLanguage`. `CultureFormattingTests` simulate a culture without data,

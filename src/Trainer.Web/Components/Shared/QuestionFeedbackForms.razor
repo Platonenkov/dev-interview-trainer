@@ -1,0 +1,183 @@
+@using Microsoft.AspNetCore.Components.Forms
+@using Trainer.Application.Feedback
+@using Trainer.Domain.Feedback
+@using Trainer.Domain.Keys
+@using Trainer.Domain.Questions
+@using Trainer.Domain.Users
+@using Trainer.Web.Api
+@using Trainer.Web.Auth
+@inject IStringLocalizer<SharedResource> L
+@inject IQuestionFeedbackService Feedback
+@inject FormWriteRateLimiter RateLimiter
+@inject NavigationManager Navigation
+
+@* Rate and report from the question page (ADR 0016). Two plain POST forms and no JavaScript, so the cached anonymous
+   HTML never contains them: the page renders this only for a signed-in request, and a handler answers with a redirect
+   (post-redirect-get) to the page's own address plus a notice code. *@
+<section id="feedback" class="feedback-bar feedback-forms" aria-labelledby="feedback-heading">
+    <h2 id="feedback-heading" class="feedback-forms__heading">@L["QuestionFeedback.Label"]</h2>
+    @if (NoticeText() is { } notice)
+    {
+        <p class="feedback-forms__notice@(NoticeIsWarning ? " feedback-forms__notice--warn" : "")" role="status">@notice</p>
+    }
+    <form method="post" class="feedback-bar__row" @formname="question-rating" @onsubmit="OnRatingSubmitAsync">
+        <AntiforgeryToken />
+        <button type="submit" name="@ValueField" value="like" class="btn feedback-bar__rate" aria-pressed="@Pressed(QuestionRating.Like)">@L["QuestionFeedback.Like"]</button>
+        <button type="submit" name="@ValueField" value="dislike" class="btn feedback-bar__rate" aria-pressed="@Pressed(QuestionRating.Dislike)">@L["QuestionFeedback.Dislike"]</button>
+        @if (Current is not null)
+        {
+            <button type="submit" name="@ValueField" value="clear" class="btn">@L["QuestionFeedback.Clear"]</button>
+        }
+    </form>
+    <details class="feedback-bar__report">
+        <summary class="feedback-bar__summary">@L["QuestionFeedback.Report"]</summary>
+        <form method="post" class="feedback-bar__form" @formname="question-report" @onsubmit="OnReportSubmitAsync">
+            <AntiforgeryToken />
+            <fieldset class="feedback-bar__reasons">
+                <legend class="feedback-bar__legend">@L["QuestionFeedback.Report.Reason"]</legend>
+                @foreach (ReportReason reason in ReportReasonKeys.All)
+                {
+                    string key = ReportReasonKeys.ToKey(reason);
+                    <label class="feedback-bar__reason">
+                        <input type="radio" name="@ReasonField" value="@key" required />
+                        <span>@L["QuestionFeedback.Reason." + key]</span>
+                    </label>
+                }
+            </fieldset>
+            <label class="feedback-bar__label" for="feedback-comment">@L["QuestionFeedback.Report.Comment"]</label>
+            <textarea id="feedback-comment" name="@CommentField" class="feedback-bar__comment" rows="3" maxlength="@ReportComment.MaxLength"></textarea>
+            <button type="submit" class="btn btn--primary feedback-bar__send">@L["QuestionFeedback.Report.Send"]</button>
+        </form>
+    </details>
+</section>
+
+@code {
+    public const string RatedCode = "rated";
+    public const string ClearedCode = "cleared";
+    public const string ReportedCode = "reported";
+    public const string ReportUpdatedCode = "report-updated";
+    public const string ReportLimitCode = "report-limit";
+    public const string InvalidCode = "invalid";
+    public const string RateLimitedCode = "rate-limited";
+    public const string UnavailableCode = "unavailable";
+
+    private const string ValueField = "value";
+    private const string ReasonField = "reason";
+    private const string CommentField = "comment";
+    private const string ClearValue = "clear";
+
+    [Parameter, EditorRequired]
+    public QuestionId QuestionId { get; set; }
+
+    /// <summary>The signed-in user's stored rating; null when the question is unrated.</summary>
+    [Parameter]
+    public QuestionRating? Current { get; set; }
+
+    /// <summary>The page's own path without a query: where a handler redirects to.</summary>
+    [Parameter, EditorRequired]
+    public string ReturnPath { get; set; } = "";
+
+    /// <summary>The culture of the page, stored with a report so an admin opens the text the reporter read.</summary>
+    [Parameter, EditorRequired]
+    public string Culture { get; set; } = "";
+
+    /// <summary>The <c>feedback</c> code of the last redirect; an unknown code shows nothing.</summary>
+    [Parameter]
+    public string? NoticeCode { get; set; }
+
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    private bool NoticeIsWarning => NoticeCode is ReportLimitCode or InvalidCode or RateLimitedCode or UnavailableCode;
+
+    private string? NoticeText() => NoticeCode switch
+    {
+        RatedCode => L["QuestionFeedback.Notice.Rated"].Value,
+        ClearedCode => L["QuestionFeedback.Notice.Cleared"].Value,
+        ReportedCode => L["QuestionFeedback.Notice.Reported"].Value,
+        ReportUpdatedCode => L["QuestionFeedback.Notice.ReportUpdated"].Value,
+        ReportLimitCode => L["QuestionFeedback.Notice.ReportLimit"].Value,
+        InvalidCode => L["QuestionFeedback.Notice.Invalid"].Value,
+        RateLimitedCode => L["QuestionFeedback.Notice.RateLimited"].Value,
+        UnavailableCode => L["QuestionFeedback.Notice.Unavailable"].Value,
+        _ => null,
+    };
+
+    // aria-pressed needs the literal strings: a bool attribute would be dropped when false.
+    private string Pressed(QuestionRating rating) => Current == rating ? "true" : "false";
+
+    private async Task OnRatingSubmitAsync()
+    {
+        (HttpContext http, UserId user) = Request();
+        if (!RateLimiter.TryAcquire(http))
+        {
+            Redirect(RateLimitedCode);
+            return;
+        }
+
+        IFormCollection form = await http.Request.ReadFormAsync(http.RequestAborted);
+        string value = form[ValueField].ToString();
+        bool clear = string.Equals(value, ClearValue, StringComparison.Ordinal);
+        QuestionRating rating = default;
+        string code = InvalidCode;
+        if (clear || QuestionRatingKeys.TryParse(value, out rating))
+        {
+            RatingResult result = await Feedback.SetRatingAsync(user, QuestionId, clear ? null : rating, http.RequestAborted);
+            code = result.Outcome switch
+            {
+                FeedbackOutcome.Saved => clear ? ClearedCode : RatedCode,
+                FeedbackOutcome.QuestionNotFound => UnavailableCode,
+                _ => InvalidCode,
+            };
+        }
+
+        Redirect(code);
+    }
+
+    private async Task OnReportSubmitAsync()
+    {
+        (HttpContext http, UserId user) = Request();
+        if (!RateLimiter.TryAcquire(http))
+        {
+            Redirect(RateLimitedCode);
+            return;
+        }
+
+        IFormCollection form = await http.Request.ReadFormAsync(http.RequestAborted);
+        string comment = form[CommentField].ToString();
+        string code = InvalidCode;
+        if (CultureKey.TryCreate(Culture, out CultureKey culture)
+            && ReportReasonKeys.TryParse(form[ReasonField].ToString(), out ReportReason reason)
+            && ReportComment.TryNormalise(comment, out _))
+        {
+            try
+            {
+                ReportResult result = await Feedback.ReportAsync(user, QuestionId, culture, reason, comment, http.RequestAborted);
+                code = result.Outcome switch
+                {
+                    ReportOutcome.Created => ReportedCode,
+                    ReportOutcome.Updated => ReportUpdatedCode,
+                    ReportOutcome.LimitReached => ReportLimitCode,
+                    ReportOutcome.QuestionNotFound => UnavailableCode,
+                    _ => InvalidCode,
+                };
+            }
+            catch (ArgumentException)
+            {
+                // The comment was checked above; this only guards a changed service contract.
+            }
+        }
+
+        Redirect(code);
+    }
+
+    // The forms exist only in a signed-in render, so a handler without a user means the page was wired wrongly.
+    private (HttpContext Http, UserId User) Request()
+    {
+        HttpContext http = HttpContext ?? throw new InvalidOperationException("The feedback forms need an HTTP request.");
+        UserId user = http.User.GetUserId() ?? throw new InvalidOperationException("The feedback forms need a signed-in user.");
+        return (http, user);
+    }
+
+    private void Redirect(string code) => Navigation.NavigateTo($"{ReturnPath}?feedback={code}#feedback");
+}

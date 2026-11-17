@@ -105,6 +105,61 @@ public sealed class ContentReaderTests
         await Assert.ThrowsAsync<DirectoryNotFoundException>(() => Read(Path.Combine(AppContext.BaseDirectory, "no-such-content")));
     }
 
+    [Fact]
+    public async Task ReadAsync_LinkSwitchedMidRead_ReadsOnlyTheReleaseTheLinkPointedToAtStart()
+    {
+        string workspace = Path.Combine(Path.GetTempPath(), "dit-content-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            string releaseA = Path.Combine(workspace, "releases", "a");
+            string releaseB = Path.Combine(workspace, "releases", "b");
+            CopyDirectory(Fixtures.Valid, releaseA, crlfAndBom: false);
+            CopyDirectory(Fixtures.Valid, releaseB, crlfAndBom: false);
+            File.Delete(Directory.EnumerateFiles(releaseB, "*.yaml", SearchOption.AllDirectories).First(f => !f.EndsWith("topics.yaml", StringComparison.Ordinal) && !f.EndsWith("stacks.yaml", StringComparison.Ordinal)));
+
+            string current = Path.Combine(workspace, "current");
+            try
+            {
+                Directory.CreateSymbolicLink(current, releaseA);
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+            {
+                Assert.Skip("Directory symbolic links are not available on this machine.");
+            }
+
+            ContentSet expectedA = await Read(releaseA);
+            ContentSet expectedB = await Read(releaseB);
+            Assert.NotEqual(expectedA.Hash, expectedB.Hash);
+
+            ContentReader reader = new(_ =>
+            {
+                Directory.Delete(current);
+                Directory.CreateSymbolicLink(current, releaseB);
+                return Task.CompletedTask;
+            });
+            ContentSet actual = await reader.ReadAsync(current, CancellationToken.None);
+
+            Assert.Equal(expectedA.Hash, actual.Hash);
+            Assert.Equal(expectedA.Questions.Count, actual.Questions.Count);
+            Assert.Empty(actual.ReadIssues);
+        }
+        finally
+        {
+            DeleteQuietly(workspace);
+        }
+    }
+
+    private static void DeleteQuietly(string path)
+    {
+        try
+        {
+            Directory.Delete(path, recursive: true);
+        }
+        catch (IOException)
+        {
+        }
+    }
+
     private static void CopyDirectory(string source, string target, bool crlfAndBom)
     {
         Directory.CreateDirectory(target);

@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Reflection;
 using System.Resources;
 using Microsoft.Playwright;
+using Trainer.Domain.Feedback;
 using Trainer.Domain.Grading;
 using Trainer.TestSupport;
 using Trainer.Web.Caching;
@@ -127,6 +128,18 @@ public sealed class IslandSweepFixture(PostgresFixture postgres, BrowserFixture 
             [.. Header, .. Question, ".feedback", ".practice__next"],
             [.. Chrome, SignIn, new(".feedback", "aria-label", true, "Feedback.Label"), new(".feedback__verdict", null, true, "Feedback.Expected")])
         { HasShortcutHints = true },
+        // The signed-in answered state: the feedback terminal plus the rate and report bar, with the report form open.
+        ["practice-feedback-signed-in"] = new(
+            "practice-feedback-signed-in", true, false, ".practice__next", true, true,
+            [.. Header, .. Question, ".feedback", ".feedback-bar", ".practice__next"],
+            [.. Chrome, SignOut, new(".feedback", "aria-label", true, "Feedback.Label"), new(".feedback-bar", "aria-label", true, "QuestionFeedback.Label"), new(".feedback-bar__summary", null, true, "QuestionFeedback.Report")])
+        { HasShortcutHints = true },
+        // A signed-in reader of the static question page: the rate and report forms, with the report form open.
+        ["question-feedback"] = new(
+            "question-feedback", true, false, ".feedback-bar__send", false, true,
+            [.. Header, ".question__title", ".question .editor", "#feedback"],
+            [.. Chrome, SignOut, new(".feedback-forms__heading", null, false, "QuestionFeedback.Label"), new(".feedback-bar__summary", null, false, "QuestionFeedback.Report")])
+        { MinimumControls = 8 },
         ["mock"] = new(
             "mock", false, false, ".mock__finish", true, false,
             [.. Header, .. Question, ".jump", ".mock__finish"],
@@ -169,7 +182,19 @@ public sealed class IslandSweepFixture(PostgresFixture postgres, BrowserFixture 
     // The sweep searches the catalog only to render the 429 page, so its host allows one search a minute.
     public AppHostFixture Host { get; } = new(postgres, browser, new Dictionary<string, string?> { ["App:RateLimits:SearchPerMinute"] = "1" });
 
-    public ValueTask InitializeAsync() => Host.InitializeAsync();
+    public async ValueTask InitializeAsync()
+    {
+        await Host.InitializeAsync();
+        await SeedAdminFeedbackAsync();
+    }
+
+    // The admin page shows its report and dislike tables only when there is something in them: a long unbroken word and
+    // several lines are the comment shapes most likely to push the table sideways.
+    private Task SeedAdminFeedbackAsync() => Task.WhenAll(
+        Host.SeedFeedbackAsync(
+            990_710_001L, "Sweep Reporter With A Long Display Name That Has To Wrap", QuestionWithCodeId, "ru", ReportReason.WrongAnswer,
+            "First line of a comment\n" + new string('w', 120) + "\nLast line", dislike: true),
+        Host.SeedFeedbackAsync(990_710_002L, "Sweep Reporter", OutputQuestionId, "en", ReportReason.BrokenLink, null, dislike: false));
 
     public ValueTask DisposeAsync() => Host.DisposeAsync();
 
@@ -386,6 +411,16 @@ public sealed class IslandSweepFixture(PostgresFixture postgres, BrowserFixture 
             case "practice-feedback":
                 await AnswerWronglyAsync(tab, await OpenPracticeQuestionAsync(tab, culture));
                 break;
+            case "practice-feedback-signed-in":
+                await AnswerWronglyAsync(tab, await OpenPracticeQuestionAsync(tab, culture));
+                await tab.Locator(".feedback-bar__summary").ClickAsync();
+                await tab.Locator(".feedback-bar__reasons").WaitForAsync();
+                break;
+            case "question-feedback":
+                Assert.Equal(200, (await tab.GotoAsync($"/{culture}/dotnet/questions/closure-for-loop"))?.Status);
+                await tab.Locator(".feedback-bar__summary").ClickAsync();
+                await tab.Locator(".feedback-bar__reasons").WaitForAsync();
+                break;
             case "mock":
                 await StartMockAsync(tab, culture);
                 break;
@@ -406,6 +441,7 @@ public sealed class IslandSweepFixture(PostgresFixture postgres, BrowserFixture 
                 break;
             case "admin":
                 Assert.Equal(200, (await tab.GotoAsync($"/{culture}/admin"))?.Status);
+                Assert.True(await tab.Locator(".admin-table--reports").CountAsync() > 0, "The admin sweep has no report rows to measure.");
                 break;
             case "search-429":
                 await OpenRateLimitedSearchAsync(tab, culture);
@@ -556,7 +592,8 @@ public sealed class IslandSweepFixture(PostgresFixture postgres, BrowserFixture 
             '.island-root input:not([type=radio]):not([type=checkbox]):not([type=hidden])', '.island-root label:has(> input)',
             '.site-header a[href]', '.site-header button',
             '.admin a[href]', '.admin button', '.admin select', '.admin input:not([type=hidden])',
-            '.signin a[href]', '.signin button', 'main a[href]', 'main button'
+            '.signin a[href]', '.signin button', 'main a[href]', 'main button',
+            '#feedback a[href]', '#feedback button', '#feedback summary', '#feedback textarea', '#feedback label:has(> input)'
           ].join(', ');
           const targets = [...document.querySelectorAll(selector)].filter(e => e.getClientRects().length > 0);
           const small = targets

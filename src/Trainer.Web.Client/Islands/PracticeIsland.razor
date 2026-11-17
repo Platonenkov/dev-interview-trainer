@@ -56,6 +56,10 @@
                             </QuestionCard>
                             @* Rendered before the answer too: its live region must exist, empty, for the verdict to be announced. *@
                             <FeedbackPanel Attempt="attempt" />
+                            @if (attempt.IsDone && _owner is { } owner)
+                            {
+                                <QuestionFeedbackBar @key="attempt.Question.Id" Question="attempt.Question" Owner="owner" Culture="@bootstrap.Culture" InitialRating="@RatingOf(attempt.Question.Id)" />
+                            }
                         </div>
                         @if (attempt.IsDone)
                         {
@@ -128,6 +132,7 @@
     private TimeSpan? _retryAfter;
     private PracticeSession? _session;
     private IReadOnlyList<PracticeTopicSummary> _summary = [];
+    private IReadOnlyDictionary<string, string>? _myRatings;
     private (PracticeFilterSet Filters, string? First, IReadOnlyList<string> Seen) _lastRequest;
     private ElementReference _main;
     private ElementReference _next;
@@ -316,6 +321,7 @@
         IslandStateKind kind = IslandState.FromResult(result, result.Value is { Questions.Count: 0 });
         if (kind == IslandStateKind.Ready)
         {
+            _myRatings = result.Value!.MyRatings;
             _session = new PracticeSession(result.Value!.Questions, Ids, Random.Shared, Clock);
             _phase = Phase.Question;
         }
@@ -326,6 +332,8 @@
             _phase = Phase.State;
         }
     }
+
+    private string? RatingOf(string questionId) => _myRatings is not null && _myRatings.TryGetValue(questionId, out string? rating) ? rating : null;
 
     private Task SubmitAsync() => _flow.SubmitAsync(_session?.Current);
 

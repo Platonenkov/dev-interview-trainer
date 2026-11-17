@@ -25,6 +25,8 @@ public sealed class TrainerDbContext(DbContextOptions<TrainerDbContext> options)
     internal DbSet<AnswerEntity> Answers => Set<AnswerEntity>();
     internal DbSet<ReviewStateEntity> ReviewStates => Set<ReviewStateEntity>();
     internal DbSet<MockSessionEntity> MockSessions => Set<MockSessionEntity>();
+    internal DbSet<QuestionRatingEntity> QuestionRatings => Set<QuestionRatingEntity>();
+    internal DbSet<QuestionReportEntity> QuestionReports => Set<QuestionReportEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

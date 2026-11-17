@@ -8,6 +8,7 @@ using Trainer.Domain.Keys;
 using Trainer.Domain.Levels;
 using Trainer.Domain.Questions;
 using Trainer.Domain.Users;
+using Trainer.Infrastructure.Feedback;
 using Trainer.Infrastructure.Persistence;
 using Trainer.Infrastructure.Persistence.Entities;
 using Trainer.Infrastructure.Sessions;
@@ -35,7 +36,7 @@ public sealed class SessionQueriesTests(PostgresFixture postgres)
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     private static SessionQueries CreateQueries(TrainerDbContext db, LearningDatabase data) =>
-        new(db, data.Clock, new MockComposer(new Random(11)));
+        new(db, data.Clock, new MockComposer(new Random(11)), new QuestionFeedbackQueries(db));
 
     private static PracticeCriteria Practice(
         CultureKey? culture = null,
@@ -513,10 +514,38 @@ public sealed class SessionQueriesTests(PostgresFixture postgres)
         SessionDto fifty = await queries.GetPracticeAsync(Practice(status: PracticeStatus.New, count: 50, first: data.Questions[Closure]), user, Ct);
         int commandsForFifty = counter.Commands;
 
+        counter.Reset();
+        await queries.GetPracticeAsync(Practice(status: PracticeStatus.New, count: 50, first: data.Questions[Closure]), null, Ct);
+        int anonymousCommands = counter.Commands;
+
         Assert.Single(one.Questions);
         Assert.Equal(50, fifty.Questions.Count);
-        Assert.InRange(commandsForOne, 1, 3);
-        Assert.InRange(commandsForFifty, 1, 3);
+        // An anonymous session has no ratings to look up.
+        Assert.Equal(3, anonymousCommands);
+        // Pool count, rows, titles and one lookup of the session's ratings: the same whatever the session size.
+        Assert.Equal(4, commandsForOne);
+        Assert.Equal(4, commandsForFifty);
+    }
+
+    [Fact]
+    public async Task Practice_EmptySignedInSession_LooksUpNoRatings()
+    {
+        await using LearningDatabase data = await LearningDatabase.CreateAsync(postgres, Ct);
+        UserId user = await data.CreateUserAsync(TelegramId, Ct);
+        CommandCounter counter = new();
+        DbContextOptionsBuilder<TrainerDbContext> builder = new();
+        TrainerDbContextOptions.Configure(builder, data.ConnectionString);
+        builder.AddInterceptors(counter);
+        await using TrainerDbContext db = new(builder.Options);
+        SessionQueries queries = CreateQueries(db, data);
+
+        SessionDto empty = await queries.GetPracticeAsync(Practice(topics: ["no-such-topic"]), user, Ct);
+
+        Assert.Empty(empty.Questions);
+        Assert.NotNull(empty.MyRatings);
+        Assert.Empty(empty.MyRatings);
+        // Pool count, rows and titles; the ratings lookup is skipped because there is nothing to look up.
+        Assert.Equal(3, counter.Commands);
     }
 
     [Fact]

@@ -22,10 +22,11 @@ The project is built in plans:
 - **Plan 1 (done):** the content format and tooling, the question bank seed, and
   the public read-only site: home, catalog, topic and question pages in both
   languages, SEO, caching.
-- **Plan 2 (this state):** Telegram sign-in (including the dev bot), the `/api`,
+- **Plan 2 (done):** Telegram sign-in (including the dev bot), the `/api`,
   and the Practice, Mock, Review and profile islands with spaced repetition and
   progress, plus the admin page.
-- **Plan 3 (not started):** deployment and operations.
+- **Plan 3 (this state):** deployment and operations (`docs/deployment.md`),
+  question feedback, Open Graph images and cookieless analytics.
 
 The design and the reasons behind it:
 `docs/superpowers/specs/2026-11-11-dev-interview-trainer-design.md`.
@@ -49,6 +50,16 @@ server when you are signed in.
   Answers you gave in this browser before signing in are listed here and are
   added to your account only if you choose **Import into my account**; you can
   discard them instead.
+
+## Feedback, sharing and analytics
+
+- **Question feedback:** signed-in users like or dislike a question and report a
+  problem with it; the admin page lists the reports and the most disliked
+  questions (`docs/architecture.md`, "Question feedback").
+- **Open Graph images:** every question page and the site have a generated card
+  for link previews.
+- **Analytics:** page views are counted by a self-hosted Umami, served from the
+  same origin without cookies. It is off until `App:Analytics:WebsiteId` is set.
 
 ## Quick start
 
@@ -182,7 +193,9 @@ languages. The full format, the quality bar and the checklist are in
 
 - `docs/content-guide.md`: how to write a question, field reference, issue codes.
 - `docs/architecture.md`: layers, content flow, caching, sign-in, security
-  headers, migrations policy.
+  headers, migrations policy, deployment topology.
+- `docs/deployment.md`: setting up a server, deploying, backups and restore,
+  rolling back, rotating credentials and the daily checks.
 - `docs/performance.md`: the island performance targets, the throttling profile,
   how to measure and every measurement so far.
 - `docs/adr/`: architecture decision records.

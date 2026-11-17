@@ -22,4 +22,11 @@ public sealed class AppOptions
 
     /// <summary>Applies EF Core migrations at startup. Allowed only in the Development environment.</summary>
     public bool ApplyMigrationsOnStartup { get; init; }
+
+    /// <summary>
+    /// A file whose existence puts the site into maintenance: writes and the sign-in callback answer 503 outside the
+    /// <c>/internal</c> prefix of the internal port (<see cref="MaintenanceGateMiddleware"/>); nginx answers 503 to every
+    /// request on top of that. Unset leaves the gate off.
+    /// </summary>
+    public string? MaintenanceFlagPath { get; init; }
 }

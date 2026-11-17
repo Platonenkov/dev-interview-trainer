@@ -2,7 +2,10 @@ using System.Text.RegularExpressions;
 
 namespace Trainer.Snippets.Tests;
 
-/// <summary>Keeps the image that CI pre-pulls identical to the one the runner would otherwise pull inside its build deadline.</summary>
+/// <summary>
+/// Keeps the image that the content checks pre-pull (content-checks.yml, called by ci and deploy-content) identical to the one the
+/// runner would otherwise pull inside its build deadline.
+/// </summary>
 public sealed partial class CiWorkflowDriftTests
 {
     [GeneratedRegex(@"^\s*SANDBOX_IMAGE:\s*(?<image>\S+)\s*$", RegexOptions.Multiline)]
@@ -23,11 +26,11 @@ public sealed partial class CiWorkflowDriftTests
     public async Task CiSandboxImage_MatchesTheDefaultSandboxImage()
     {
         string workflow = await File.ReadAllTextAsync(
-            Path.Combine(FindRepositoryRoot(), ".github", "workflows", "ci.yml"), TestContext.Current.CancellationToken);
+            Path.Combine(FindRepositoryRoot(), ".github", "workflows", "content-checks.yml"), TestContext.Current.CancellationToken);
 
         Match match = SandboxImageLine().Match(workflow);
 
-        Assert.True(match.Success, "ci.yml must define SANDBOX_IMAGE.");
+        Assert.True(match.Success, "content-checks.yml must define SANDBOX_IMAGE.");
         Assert.Equal(new SandboxOptions().Image, match.Groups["image"].Value);
     }
 }

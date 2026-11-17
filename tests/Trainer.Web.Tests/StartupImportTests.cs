@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Sockets;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -298,6 +299,150 @@ public sealed class StartupImportTests(PostgresFixture postgres)
             public Task<IReadOnlyList<TopicTitle>> GetTopicTitlesAsync(CultureKey culture, StackKey stack, CancellationToken ct) =>
                 inner.GetTopicTitlesAsync(culture, stack, ct);
         }
+    }
+
+    private static async Task<HttpStatusCode> GetStatusAsync(HttpClient client, string path)
+    {
+        using HttpResponseMessage response = await client.GetAsync(path, TestContext.Current.CancellationToken);
+        return response.StatusCode;
+    }
+
+    [Fact]
+    public async Task StartupImport_NoReleaseOnFreshDatabase_IsReadyAndEmpty()
+    {
+        string missingRoot = Path.Combine(Path.GetTempPath(), "dit-missing-" + Guid.NewGuid().ToString("N"));
+        await using TrainerWebFactory factory = await TrainerWebFactory.CreateAsync(
+            postgres, new TrainerWebFactoryOptions { Settings = new Dictionary<string, string?> { ["App:ContentRoot"] = missingRoot } });
+
+        await WaitForStatusAsync(factory, ReadinessStatus.Ready);
+
+        using HttpClient client = factory.CreateClient();
+        Assert.Equal(HttpStatusCode.OK, await GetStatusAsync(client, "/health/ready"));
+        Assert.Equal(HttpStatusCode.NotFound, await GetStatusAsync(client, "/en/dotnet"));
+    }
+
+    [Fact]
+    public async Task StartupImport_NoReleaseWithActiveImport_IsFailed()
+    {
+        CapturingLoggerProvider logs = new();
+        string connectionString = await postgres.CreateDatabaseAsync();
+        using ContentWorkspace content = ContentWorkspace.CopyOfWeb();
+        await using (TrainerWebFactory seed = await TrainerWebFactory.CreateAsync(postgres, new TrainerWebFactoryOptions { ConnectionString = connectionString, Content = content }))
+        {
+            await seed.WaitUntilReadyAsync();
+        }
+
+        string emptyDirectory = Path.Combine(Path.GetTempPath(), "dit-empty-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(emptyDirectory);
+        try
+        {
+            await using TrainerWebFactory factory = await TrainerWebFactory.CreateAsync(
+                postgres,
+                new TrainerWebFactoryOptions
+                {
+                    ConnectionString = connectionString,
+                    Content = content,
+                    Logs = logs,
+                    Settings = new Dictionary<string, string?> { ["App:ContentRoot"] = emptyDirectory },
+                });
+            await WaitForStatusAsync(factory, ReadinessStatus.Failed);
+
+            // The old path rejected the import and logged "Content rejected"; only the new branch names the stored release.
+            Assert.Contains(logs.Entries, e => e.Level == LogLevel.Error && e.Message.Contains("but release ", StringComparison.Ordinal));
+            Assert.DoesNotContain(logs.Entries, e => e.Message.StartsWith("Content rejected", StringComparison.Ordinal));
+
+            using HttpClient client = factory.CreateClient();
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, await GetStatusAsync(client, "/health/ready"));
+            Assert.Equal(HttpStatusCode.OK, await GetStatusAsync(client, "/en/dotnet/questions/closure-for-loop"));
+        }
+        finally
+        {
+            Directory.Delete(emptyDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task StartupImport_ReleaseAppearsLater_InternalImportMakesItServe()
+    {
+        string laterRoot = Path.Combine(Path.GetTempPath(), "dit-later-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            await using TrainerWebFactory factory = await TrainerWebFactory.CreateAsync(
+                postgres,
+                new TrainerWebFactoryOptions
+                {
+                    InternalPort = 8081,
+                    Settings = new Dictionary<string, string?> { ["App:ContentRoot"] = laterRoot },
+                });
+            await WaitForStatusAsync(factory, ReadinessStatus.Ready);
+            using HttpClient client = factory.CreateClient();
+            Assert.Equal(HttpStatusCode.NotFound, await GetStatusAsync(client, "/en/dotnet/questions/closure-for-loop"));
+
+            // The content appears at the configured root only after the host has started, like deploy-content on a fresh install.
+            foreach (string file in Directory.EnumerateFiles(factory.Content.Root, "*", SearchOption.AllDirectories))
+            {
+                string target = Path.Combine(laterRoot, Path.GetRelativePath(factory.Content.Root, file));
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                File.Copy(file, target);
+            }
+
+            using HttpRequestMessage request = new(HttpMethod.Post, "/internal/content/import");
+            request.Headers.Add(LocalPortFromHeaderStartupFilter.Header, "8081");
+            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", TrainerWebFactory.ImportToken);
+            using HttpResponseMessage import = await client.SendAsync(request, TestContext.Current.CancellationToken);
+
+            Assert.Equal(HttpStatusCode.OK, import.StatusCode);
+            Assert.Equal(HttpStatusCode.OK, await GetStatusAsync(client, "/en/dotnet/questions/closure-for-loop"));
+        }
+        finally
+        {
+            if (Directory.Exists(laterRoot))
+            {
+                Directory.Delete(laterRoot, recursive: true);
+            }
+        }
+    }
+
+    private sealed class FlakyStatusQueries(Counter counter) : IContentStatusQueries
+    {
+        // The database is fresh, so after the failure the real answer would be null too.
+        public Task<string?> GetActiveHashAsync(CancellationToken ct) =>
+            counter.Next() == 1 ? Task.FromException<string?>(Transient()) : Task.FromResult<string?>(null);
+    }
+
+    private sealed class Counter
+    {
+        private int _value;
+
+        public int Value => Volatile.Read(ref _value);
+
+        public int Next() => Interlocked.Increment(ref _value);
+    }
+
+    [Fact]
+    public async Task StartupImport_TransientErrorReadingActiveHash_IsRetried()
+    {
+        Counter counter = new();
+        string missingRoot = Path.Combine(Path.GetTempPath(), "dit-missing-" + Guid.NewGuid().ToString("N"));
+        ImmediateTimeProvider time = new();
+        await using TrainerWebFactory factory = await TrainerWebFactory.CreateAsync(
+            postgres,
+            new TrainerWebFactoryOptions
+            {
+                Settings = new Dictionary<string, string?> { ["App:ContentRoot"] = missingRoot },
+                ConfigureServices = services =>
+                {
+                    services.RemoveAll<TimeProvider>();
+                    services.AddSingleton<TimeProvider>(time);
+                    services.AddSingleton(counter);
+                    services.RemoveAll<IContentStatusQueries>();
+                    services.AddScoped<IContentStatusQueries>(provider => new FlakyStatusQueries(provider.GetRequiredService<Counter>()));
+                },
+            });
+
+        await WaitForStatusAsync(factory, ReadinessStatus.Ready);
+
+        Assert.Equal(2, counter.Value);
     }
 
     [Fact]

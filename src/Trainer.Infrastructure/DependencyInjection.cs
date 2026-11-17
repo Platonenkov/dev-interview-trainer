@@ -4,6 +4,7 @@ using Trainer.Application.Admin;
 using Trainer.Application.Answers;
 using Trainer.Application.Catalog;
 using Trainer.Application.Content;
+using Trainer.Application.Feedback;
 using Trainer.Application.Home;
 using Trainer.Application.Mock;
 using Trainer.Application.Progress;
@@ -21,6 +22,7 @@ using Trainer.Domain.Scheduling;
 using Trainer.Infrastructure.Admin;
 using Trainer.Infrastructure.Answers;
 using Trainer.Infrastructure.Content;
+using Trainer.Infrastructure.Feedback;
 using Trainer.Infrastructure.Mock;
 using Trainer.Infrastructure.Persistence;
 using Trainer.Infrastructure.Progress;
@@ -60,6 +62,8 @@ public static class DependencyInjection
         services.TryAddScoped<IQuestionQueries, QuestionQueries>();
         services.TryAddScoped<ITopicQueries, TopicQueries>();
         services.TryAddScoped<ISitemapQueries, SitemapQueries>();
+        services.TryAddScoped<IContentStatusQueries, ContentStatusQueries>();
+        services.TryAddSingleton<IContentSchemaInfo, ContentSchemaInfo>();
         services.TryAddScoped<IUserAccountService, UserAccountService>();
         services.TryAddSingleton<IReviewScheduler, Sm2ReviewScheduler>();
         services.TryAddScoped<IAnswerRecorder, AnswerRecorder>();
@@ -68,6 +72,8 @@ public static class DependencyInjection
         services.TryAddScoped<ISessionQueries, SessionQueries>();
         services.TryAddScoped<IProgressQueries, ProgressQueries>();
         services.TryAddScoped<IAdminQueries, AdminQueries>();
+        services.TryAddScoped<IQuestionFeedbackService, QuestionFeedbackService>();
+        services.TryAddScoped<IQuestionFeedbackQueries, QuestionFeedbackQueries>();
         return services;
     }
 }

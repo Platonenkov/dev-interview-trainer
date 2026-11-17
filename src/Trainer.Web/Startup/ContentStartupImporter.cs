@@ -70,7 +70,17 @@ public sealed partial class ContentStartupImporter(
 
     private async Task ImportOnceAsync(CancellationToken ct)
     {
-        ContentImportResult result = await ImportAsync(ct);
+        string root = ResolveRoot();
+
+        // A missing schema-version means there is no checkout to import (a fresh install before deploy-content, or a
+        // root that was wiped), which is not the same as a rejected release.
+        if (!File.Exists(Path.Combine(root, "schema-version")))
+        {
+            await HandleMissingContentAsync(ct);
+            return;
+        }
+
+        ContentImportResult result = await ImportAsync(root, ct);
 
         // The import service reloads the snapshot itself and reports Ready only afterwards. A rejected import has not, and
         // a failed reload leaves the state not Ready, so both are covered here (this refresh throws if it fails again).
@@ -90,14 +100,40 @@ public sealed partial class ContentStartupImporter(
         readiness.MarkReady();
     }
 
-    private async Task<ContentImportResult> ImportAsync(CancellationToken ct)
+    private async Task HandleMissingContentAsync(CancellationToken ct)
+    {
+        string? activeHash;
+        await using (AsyncServiceScope scope = scopeFactory.CreateAsyncScope())
+        {
+            IContentStatusQueries status = scope.ServiceProvider.GetRequiredService<IContentStatusQueries>();
+            activeHash = await status.GetActiveHashAsync(ct);
+        }
+
+        // Loaded in both branches: the snapshot must reflect the database before the probe can report anything.
+        await snapshots.RefreshAsync(ct);
+        if (activeHash is null)
+        {
+            LogNoRelease();
+            readiness.MarkReady();
+            return;
+        }
+
+        // The stored release keeps serving, but the probe stays red: the content root that should hold it is gone.
+        LogRootMissing(activeHash);
+        readiness.MarkFailed();
+    }
+
+    private string ResolveRoot()
     {
         string contentRoot = options.Value.ContentRoot
             ?? throw new InvalidOperationException("App:ContentRoot is not configured.");
 
         // A relative root (appsettings.Development.json) is relative to the app, not to wherever the process was started.
-        string root = Path.GetFullPath(contentRoot, environment.ContentRootPath);
+        return Path.GetFullPath(contentRoot, environment.ContentRootPath);
+    }
 
+    private async Task<ContentImportResult> ImportAsync(string root, CancellationToken ct)
+    {
         await using AsyncServiceScope scope = scopeFactory.CreateAsyncScope();
         IContentImportService importer = scope.ServiceProvider.GetRequiredService<IContentImportService>();
         return await importer.ImportAsync(root, ct);
@@ -125,6 +161,12 @@ public sealed partial class ContentStartupImporter(
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Content import finished: {Status}, hash {Hash}.")]
     private partial void LogFinished(ContentImportStatus status, string hash);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "No content release yet: the content root has no schema-version file and nothing was imported. The site serves no stacks until deploy-content runs.")]
+    private partial void LogNoRelease();
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "The content root has no schema-version file, but release {Hash} was imported earlier. Serving the stored content; restore the content checkout.")]
+    private partial void LogRootMissing(string hash);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Startup content import failed on attempt {Attempt} (backoff attempts: {MaxAttempts}) with a transient error; retrying in {Delay}.")]
     private partial void LogRetrying(Exception ex, int attempt, int maxAttempts, TimeSpan delay);

@@ -1,0 +1,108 @@
+name: dev-interview-trainer
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+volumes:
+  pgdata:
+  ogcache:
+
+services:
+  postgres:
+    image: postgres:17-alpine@sha256:d3244e8ce3f165ee3c93d9c4a4b1d0fe48b3a89e2287b717fdcbbde92d405065
+    restart: unless-stopped
+    environment:
+      # Read by the image's first initialisation only; pg_hba.conf rejects network logins as postgres.
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+    command: ["postgres", "-c", "hba_file=/etc/postgresql/pg_hba.conf"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # A directory, not the file: a file bind mount keeps the inode it saw at container start, so a renamed replacement would stay invisible.
+      - ${APP_DIR}/postgres:/etc/postgresql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    logging: *logging
+
+  app:
+    image: ${APP_IMAGE}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:8081:8081"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 768m
+    volumes:
+      - ${APP_DIR}/content:/content:ro
+      - ${APP_DIR}/flags:/flags:ro
+      - ogcache:/var/cache/dit/og
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      Kestrel__Endpoints__Public__Url: http://+:8080
+      Kestrel__Endpoints__Internal__Url: http://+:8081
+      App__Internal__Port: "8081"
+      App__ContentRoot: /content/current
+      App__MaintenanceFlagPath: /flags/maintenance
+      App__OpenGraph__CacheDirectory: /var/cache/dit/og
+      App__PublicBaseUrl: ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL is required}
+      App__AdminTelegramIds: ${ADMIN_TELEGRAM_IDS:?ADMIN_TELEGRAM_IDS is required}
+      App__Analytics__WebsiteId: ${UMAMI_WEBSITE_ID:-}
+      # No value: taken from the .env of the same name and omitted when absent (an empty string would fail startup).
+      App__RateLimits__WritesPerMinute:
+      App__RateLimits__ReadsPerMinute:
+      App__RateLimits__SearchPerMinute:
+      App__Feedback__ReportsPerDay:
+      # The address the userland proxy connects from: the gateway of the fixed subnet.
+      App__ForwardedHeaders__KnownProxies__0: 172.30.0.1
+      TelegramOidc__ClientId: ${TELEGRAM_OIDC_CLIENT_ID:?TELEGRAM_OIDC_CLIENT_ID is required}
+      TelegramOidc__ClientSecret: ${TELEGRAM_OIDC_CLIENT_SECRET:?TELEGRAM_OIDC_CLIENT_SECRET is required}
+      ContentImport__Token: ${CONTENT_IMPORT_TOKEN:?CONTENT_IMPORT_TOKEN is required}
+      ConnectionStrings__Trainer: Host=postgres;Database=trainer;Username=trainer;Password=${DB_PASSWORD:?DB_PASSWORD is required}
+      TRAINER_DB: Host=postgres;Database=trainer;Username=trainer;Password=${DB_PASSWORD:?DB_PASSWORD is required}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 120s
+    logging: *logging
+
+  umami:
+    # Umami 3.5.0 (PostgreSQL build, latest stable when pinned); the digest, not the tag, is what runs.
+    image: ghcr.io/umami-software/umami:postgresql-latest@sha256:b64f40400d77bcadd39cf5c62a1e368c99524ca442024f96e1133355a19a5dbc
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:3001:3000"
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    environment:
+      DATABASE_URL: postgresql://umami:${UMAMI_DB_PASSWORD:?UMAMI_DB_PASSWORD is required}@postgres:5432/umami
+      APP_SECRET: ${UMAMI_APP_SECRET:?UMAMI_APP_SECRET is required}
+      DISABLE_TELEMETRY: "1"
+      # Umami otherwise walks a list of client-IP headers in a fixed order; this pins it to the one header nginx overwrites.
+      CLIENT_IP_HEADER: x-forwarded-for
+    logging: *logging

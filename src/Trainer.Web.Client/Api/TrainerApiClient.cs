@@ -85,6 +85,30 @@ public sealed class TrainerApiClient(HttpClient http, AntiforgeryTokenProvider t
         return new ApiResult<bool>(result.Status == (int)HttpStatusCode.NoContent, result.Status, result.ErrorCode);
     }
 
+    /// <summary>
+    /// <c>PUT /api/questions/{id}/rating</c> for <paramref name="value"/> (<c>like</c> or <c>dislike</c>), or
+    /// <c>DELETE</c> when it is null, which clears the rating.
+    /// </summary>
+    public Task<ApiResult<RatingDto>> SetRatingAsync(long owner, string questionId, string? value, CancellationToken ct)
+    {
+        string path = "api/questions/" + Uri.EscapeDataString(questionId) + "/rating";
+        return SendWriteAsync(
+            owner,
+            () => value is null
+                ? new HttpRequestMessage(HttpMethod.Delete, path)
+                : Json(HttpMethod.Put, path, new RatingRequest(value), TrainerJsonContext.Default.RatingRequest),
+            TrainerJsonContext.Default.RatingDto,
+            ct);
+    }
+
+    /// <summary><c>POST /api/questions/{id}/reports</c>: 201 is a new report, 200 an edited open one, 429 <c>report-limit</c> the daily limit.</summary>
+    public Task<ApiResult<ReportResponse>> ReportAsync(long owner, string questionId, ReportRequest request, CancellationToken ct) =>
+        SendWriteAsync(
+            owner,
+            () => Post("api/questions/" + Uri.EscapeDataString(questionId) + "/reports", request, TrainerJsonContext.Default.ReportRequest),
+            TrainerJsonContext.Default.ReportResponse,
+            ct);
+
     private async Task<ApiResult<T>> SendWriteAsync<T>(
         long owner,
         Func<HttpRequestMessage> build,

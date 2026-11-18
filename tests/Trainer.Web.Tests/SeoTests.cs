@@ -104,6 +104,20 @@ public sealed partial class SeoTests(WebSiteFixture site, PostgresFixture postgr
         Assert.Empty(NoIndexMeta().Matches(body));
     }
 
+    [Theory]
+    [InlineData("/en")]
+    [InlineData("/ru")]
+    public async Task HomePages_NameTheLanguagePickingRootAsXDefault(string path)
+    {
+        (HttpResponseMessage response, string body) = await GetAsync(path);
+        using HttpResponseMessage _ = response;
+
+        Dictionary<string, string> alternates = HreflangMap(body);
+        Assert.Equal(Origin + "/ru", alternates["ru"]);
+        Assert.Equal(Origin + "/en", alternates["en"]);
+        Assert.Equal(Origin + "/", alternates["x-default"]);
+    }
+
     [Fact]
     public async Task Hreflang_ListsOnlyExistingCultures()
     {

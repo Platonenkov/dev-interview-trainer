@@ -103,7 +103,7 @@ public static class SitemapEndpoints
             : entry.Alternates.Contains(CultureKey.Default) ? CultureKey.Default : entry.Alternates[0];
         if (defaultCulture is { } fallback)
         {
-            await WriteAlternateAsync(writer, "x-default", urls.Absolute(request, CulturePath.SwitchCulture(entry.Path, fallback)));
+            await WriteAlternateAsync(writer, "x-default", urls.Absolute(request, HreflangDefault.PathFor(CulturePath.SwitchCulture(entry.Path, fallback))));
         }
 
         await writer.WriteEndElementAsync();

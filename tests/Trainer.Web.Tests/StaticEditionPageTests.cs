@@ -85,6 +85,18 @@ public sealed partial class StaticEditionPageTests(StaticSiteFixture site, Postg
         Assert.Equal("Русский", ru?.TextContent.Trim());
         Assert.Equal("English", en?.TextContent.Trim());
         Assert.Equal("Dev Interview Trainer", document.Title);
+
+        // A shared root link gets a preview: the English site card, the same one /en/ advertises.
+        (HttpResponseMessage enResponse, string enBody) = await GetAsync(site.Factory, "/dit/en/");
+        using HttpResponseMessage __ = enResponse;
+        IHtmlDocument enHome = new HtmlParser().ParseDocument(enBody);
+        string? Og(IHtmlDocument d, string property) => d.QuerySelector($"meta[property=\"og:{property}\"]")?.GetAttribute("content");
+        Assert.Equal(Og(enHome, "image"), Og(document, "image"));
+        Assert.Equal(Og(enHome, "title"), Og(document, "title"));
+        Assert.Equal(Og(enHome, "description"), Og(document, "description"));
+        Assert.EndsWith("/dit/", Og(document, "url"), StringComparison.Ordinal);
+        Assert.Equal("en_US", Og(document, "locale"));
+        Assert.Equal("summary_large_image", document.QuerySelector("meta[name=\"twitter:card\"]")?.GetAttribute("content"));
         IElement? script = document.QuerySelector("script[data-base]");
         Assert.NotNull(script);
         Assert.Equal("/dit/", script.GetAttribute("data-base"));

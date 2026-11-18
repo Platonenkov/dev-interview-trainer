@@ -272,7 +272,7 @@ The Plan 3 acceptance measurement (ADR 0014), on a real mid-range Android phone 
 
 1. Cold, 5 runs: open a new Incognito tab (empty cache; close every Incognito tab
    between runs) and open `https://<site>/ru/dotnet/practice?perf=1`. When the island
-   is ready, the readout in the bottom right corner shows
+   is ready, the readout at the very end of the page, after the footer, shows
    `ready <ms> ms · _framework <bytes> B in <n> files`; write down the milliseconds.
 2. Warm, 5 runs: in a normal tab, open the same URL once; then for each run open
    `https://<site>/ru/about` and type the practice URL again in the address bar (the
@@ -317,7 +317,7 @@ production (only HTTP/1.1 instead of HTTP/2, see Known gaps).
    forwarding" and click "Done". Keep that tab open.
 4. On the phone, in Chrome, open
    `http://localhost:5080/ru/dotnet/practice?perf=1`. When the island is ready, a
-   small readout appears in the bottom right corner:
+   small readout appears at the very end of the page, after the footer:
    `ready <ms> ms · _framework <bytes> B in <n> files`. The milliseconds are from
    navigation start to `data-island-ready`; the bytes are what the `_framework/`
    files cost over the network (0 for files from the cache). `?perf=1` is the only

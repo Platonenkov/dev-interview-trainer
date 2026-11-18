@@ -31,8 +31,8 @@ public sealed class HomePageTests(WebSiteFixture site, PostgresFixture postgres)
         string body = await GetBodyAsync("/en/dotnet");
 
         Assert.Contains("href=\"/en/dotnet/questions?topic=async\"", body, StringComparison.Ordinal);
-        Assert.Contains("async / await <span>5</span>", body, StringComparison.Ordinal);
-        Assert.Contains("C# language <span>1</span>", body, StringComparison.Ordinal);
+        Assert.Contains("title=\"async / await\"><span class=\"topic-card__title\">async / await</span> <span class=\"topic-card__count\">5</span>", body, StringComparison.Ordinal);
+        Assert.Contains("<span class=\"topic-card__title\">C# language</span> <span class=\"topic-card__count\">1</span>", body, StringComparison.Ordinal);
     }
 
     [Fact]

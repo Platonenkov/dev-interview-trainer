@@ -75,7 +75,15 @@ public sealed partial class StaticEditionPageTests(StaticSiteFixture site, Postg
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("text/html", response.Content.Headers.ContentType?.MediaType);
         Assert.Equal("en", document.DocumentElement.GetAttribute("lang"));
-        Assert.Equal("noindex", document.QuerySelector("meta[name=\"robots\"]")?.GetAttribute("content"));
+        // Indexable as the x-default of the culture home pages, not a noindex page.
+        Assert.Null(document.QuerySelector("meta[name=\"robots\"]"));
+        Assert.EndsWith("/dit/", document.QuerySelector("link[rel=\"canonical\"]")?.GetAttribute("href"), StringComparison.Ordinal);
+        Dictionary<string, string?> alternates = document.QuerySelectorAll("link[rel=\"alternate\"][hreflang]")
+            .ToDictionary(l => l.GetAttribute("hreflang")!, l => l.GetAttribute("href"));
+        Assert.Equal(["en", "ru", "x-default"], alternates.Keys.Order(StringComparer.Ordinal));
+        Assert.EndsWith("/dit/ru/", alternates["ru"], StringComparison.Ordinal);
+        Assert.EndsWith("/dit/en/", alternates["en"], StringComparison.Ordinal);
+        Assert.EndsWith("/dit/", alternates["x-default"], StringComparison.Ordinal);
         IElement? ru = document.QuerySelector("a[href=\"/dit/ru/\"]");
         IElement? en = document.QuerySelector("a[href=\"/dit/en/\"]");
         Assert.Equal("ru", ru?.GetAttribute("lang"));

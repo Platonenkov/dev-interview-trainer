@@ -2240,6 +2240,36 @@ def link_file(wave_dir: Path, url: str) -> Path:
     return wave_dir / "evidence" / "links" / f"{hashlib.sha1(url.encode('utf-8')).hexdigest()}.json"
 
 
+# Fetched page text is third-party content: the repository is public and the content is CC BY-SA, so it must never be
+# committed. The text lives under the git-ignored `<wave>/.local/`; committed evidence and task copies keep only its
+# sha256, so the audit trail still binds each verdict to the exact text the model saw.
+LOCAL_DIR = ".local"
+
+
+def local_dir(wave_dir: Path) -> Path:
+    return wave_dir / LOCAL_DIR
+
+
+def excerpt_cache_file(wave_dir: Path, url: str) -> Path:
+    return local_dir(wave_dir) / "excerpts" / f"{hashlib.sha1(url.encode('utf-8')).hexdigest()}.json"
+
+
+def redaction_marker(text: str) -> str:
+    return "[third-party text removed; sha256 " + sha256_bytes(text.encode("utf-8")) + "]"
+
+
+EXCERPT_LINE_RE = re.compile(r"(?m)^(  excerpt: )(.*)$")
+
+
+def redact_task(task: dict) -> dict:
+    """The committed copy of a task: every excerpt line of every item carries the sha256 marker instead of the text."""
+    copy = json.loads(json.dumps(task))
+    for item in copy.get("items", []):
+        if "text" in item:
+            item["text"] = EXCERPT_LINE_RE.sub(lambda m: m.group(1) + redaction_marker(m.group(2)), item["text"])
+    return copy
+
+
 RATE_LIMIT_BACKOFF_SECONDS = (5.0, 15.0, 45.0)
 HOST_MIN_INTERVAL_SECONDS = 1.0
 
@@ -2279,7 +2309,8 @@ def polite_fetch(fetch, sleep=time.sleep, clock=time.monotonic,
 
 def links_fetch(state: dict, docs: dict[str, dict], wave_dir: Path, worktree: Path, fetch=http_fetch,
                 now=utc_now, dead_from_check_links: dict[str, str] | None = None, workers: int = 4) -> dict:
-    """Fetches every distinct link of every wave question and stores status history, title and excerpts."""
+    """Fetches every distinct link of every wave question and stores status history, title and excerpt hashes;
+    the excerpt text goes to the local cache (see LOCAL_DIR)."""
     from concurrent.futures import ThreadPoolExecutor
     cited: dict[str, list[dict]] = {}
     for record in state.values():
@@ -2308,7 +2339,10 @@ def links_fetch(state: dict, docs: dict[str, dict], wave_dir: Path, worktree: Pa
     summary = {"ok": [], "dead": [], "unknown": [], "suspect": [], "warnings": []}
     for url in urls:
         path = link_file(wave_dir, url)
-        data = read_json(path, None) or {"url": url, "history": [], "title": None, "finalUrl": None, "excerpts": {}}
+        data = read_json(path, None) or {"url": url, "history": [], "title": None, "finalUrl": None}
+        # Evidence written before the text moved to the local cache: drop the inline text, never carry it forward.
+        data.pop("excerpts", None)
+        data.setdefault("excerptSha256", {})
         result = fetched[url]
         outcome = fetch_outcome(result)
         data["history"].append({"utc": stamp, "source": "fetch", "status": result["status"], "outcome": outcome,
@@ -2324,8 +2358,13 @@ def links_fetch(state: dict, docs: dict[str, dict], wave_dir: Path, worktree: Pa
             data["title"] = title
             data["finalUrl"] = result["finalUrl"]
             data["fetchedUtc"] = stamp
+            cache_path = excerpt_cache_file(wave_dir, url)
+            cache = read_json(cache_path, {}) or {}
             for record in cited[url]:
-                data["excerpts"][record["stubId"]] = excerpt(text, key_terms(docs[record["path"]]))
+                piece = excerpt(text, key_terms(docs[record["path"]]))
+                cache[record["stubId"]] = piece
+                data["excerptSha256"][record["stubId"]] = sha256_bytes(piece.encode("utf-8"))
+            write_json_atomic(cache_path, cache)
             warning = redirect_warning(url, result["finalUrl"] or url)
         data["warning"] = warning
         data["verdict"] = link_verdict(data["history"])
@@ -2391,8 +2430,12 @@ def _link_lines(record: dict, doc: dict | None, wave_dir: Path) -> list[str]:
             continue
         lines.append(f"- {link['url']}: status {data.get('verdict')}, title {data.get('title')!r}, fetched "
                      f"{data.get('fetchedUtc')}" + (f", warning: {data['warning']}" if data.get("warning") else ""))
-        text = (data.get("excerpts") or {}).get(record["stubId"])
-        if text:
+        digest = (data.get("excerptSha256") or {}).get(record["stubId"])
+        if digest:
+            text = (read_json(excerpt_cache_file(wave_dir, link["url"]), {}) or {}).get(record["stubId"])
+            if text is None or sha256_bytes(text.encode("utf-8")) != digest:
+                raise WaveError(f"{record['stubId']}: the local excerpt of {link['url']} is missing or does not match "
+                                f"its evidence; run links-fetch on this machine")
             lines.append(f"  excerpt: {text}")
     return lines
 
@@ -3172,23 +3215,29 @@ def write_task(task: dict, name: str, args, wave_dir: Path) -> Path:
         problems = preflight(task["ref"], Path(args.server_repo), task_files(task, worktree), worktree)
     if problems:
         raise WaveError("task file refused:\n" + "\n".join(problems))
-    path = wave_dir / "tasks" / f"{name}.json"
-    if path.exists() and not args.overwrite:
-        raise WaveError(f"{path} exists; pass --overwrite to replace an unsubmitted task file")
-    if path.exists():
+    # The submitted file holds the excerpts and stays local; the committed copy under tasks/ is redacted.
+    path = local_dir(wave_dir) / "tasks" / f"{name}.json"
+    audit = wave_dir / "tasks" / f"{name}.json"
+    if (path.exists() or audit.exists()) and not args.overwrite:
+        raise WaveError(f"{audit} exists; pass --overwrite to replace an unsubmitted task file")
+    if path.exists() or audit.exists():
         refuse_submitted_overwrite(name, wave_dir)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    text = json.dumps(task, indent=2, ensure_ascii=False) + "\n"
-    with open(path, "w", encoding="utf-8", newline="\n") as handle:
-        handle.write(text)
+    for target, body in ((path, task), (audit, redact_task(task))):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with open(target, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(json.dumps(body, indent=2, ensure_ascii=False) + "\n")
+
+    def rel(p: Path) -> str:
+        return p.relative_to(worktree).as_posix() if p.is_relative_to(worktree) else str(p)
+
     ledger = load_ledger(wave_dir)
     ledger.setdefault("taskFiles", []).append({
-        "name": name, "file": path.relative_to(worktree).as_posix() if path.is_relative_to(worktree) else str(path),
-        "sha256": task_sha256(path), "ref": task["ref"], "items": len(task["items"]), "createdUtc": utc_stamp()})
+        "name": name, "file": rel(path), "sha256": task_sha256(path), "auditFile": rel(audit),
+        "auditSha256": task_sha256(audit), "ref": task["ref"], "items": len(task["items"]), "createdUtc": utc_stamp()})
     write_json_atomic(wave_dir / "ledger.json", ledger)
     shared = sum(_chars(worktree, f) for p in task["sharedFiles"] for f in _match(p, worktree))
     print(f"wrote {path} ({len(task['items'])} items, shared context {shared:,} characters, "
-          f"sha256 {task_sha256(path)})")
+          f"sha256 {task_sha256(path)}); redacted copy {audit}")
     return path
 
 

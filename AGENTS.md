@@ -194,6 +194,9 @@ untrusted snippet code must not be reachable from the web process.
   and supports the claim.
 - `output` questions must pass snippet execution in CI.
 - Set `meta.verified` to the date you checked the content.
+- Never commit fetched third-party page text. `tools/content-wave/wave.py` keeps link excerpts and the full task
+  files that carry them under the git-ignored `docs/content-wave-*/.local/`; committed evidence and `tasks/` copies
+  hold only `[third-party text removed; sha256 …]` markers. `ContentWaveAuditTests` enforces this.
 
 ## Migrations
 

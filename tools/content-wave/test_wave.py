@@ -936,13 +936,80 @@ class LinksTests(unittest.TestCase):
             def fetch(u):
                 return {"status": 200, "finalUrl": "https://learn.microsoft.com/en-us/dotnet/", "html": html, "error": None}
 
+            evidence = wave.link_file(env.wave_dir, url)
+            evidence.parent.mkdir(parents=True)
+            evidence.write_text(json.dumps({"url": url, "history": [], "title": None, "finalUrl": None,
+                                            "excerpts": {"testing-01": "old page text"}}), encoding="utf-8")
             summary = wave.links_fetch(env.state, docs, env.wave_dir, env.worktree, fetch=fetch)
-            data = json.loads(wave.link_file(env.wave_dir, url).read_text(encoding="utf-8"))
+            raw = evidence.read_text(encoding="utf-8")
+            data = json.loads(raw)
             self.assertEqual("Task.Run Method", data["title"])
-            self.assertIn("Task.Run queues work", data["excerpts"]["testing-01"])
-            self.assertLessEqual(len(data["excerpts"]["testing-01"]), wave.EXCERPT_CHARS)
-            self.assertNotIn("var x", data["excerpts"]["testing-01"])
+            self.assertNotIn("excerpts", data)
+            self.assertNotIn("Task.Run queues work", raw)
+            self.assertNotIn("old page text", raw)
+            cached = json.loads(wave.excerpt_cache_file(env.wave_dir, url).read_text(encoding="utf-8"))["testing-01"]
+            self.assertIn("Task.Run queues work", cached)
+            self.assertLessEqual(len(cached), wave.EXCERPT_CHARS)
+            self.assertNotIn("var x", cached)
+            self.assertEqual(wave.sha256_bytes(cached.encode("utf-8")), data["excerptSha256"]["testing-01"])
+            self.assertTrue(wave.excerpt_cache_file(env.wave_dir, url).is_relative_to(env.wave_dir / ".local"))
             self.assertIn("landing page", summary["warnings"][0])
+        finally:
+            env.cleanup()
+
+    def test_link_lines_read_the_local_excerpt_and_refuse_a_missing_or_altered_one(self):
+        env = WaveEnv()
+        try:
+            record = env.add("testing-01")
+            url = "https://learn.microsoft.com/en-us/x"
+            doc = {"links": [{"url": url}], "locales": {"en": {"title": "Task.Run", "prompt": "", "answer": "",
+                                                               "explanation": ""}}}
+
+            def fetch(u):
+                return {"status": 200, "finalUrl": u, "html": "<title>X</title><p>page body</p>", "error": None}
+
+            wave.links_fetch(env.state, {record["path"]: doc}, env.wave_dir, env.worktree, fetch=fetch)
+            self.assertIn("  excerpt: page body", "\n".join(wave._link_lines(record, doc, env.wave_dir)))
+            cache = wave.excerpt_cache_file(env.wave_dir, url)
+            cache.write_text(json.dumps({"testing-01": "edited"}), encoding="utf-8")
+            with self.assertRaises(wave.WaveError):
+                wave._link_lines(record, doc, env.wave_dir)
+            cache.unlink()
+            with self.assertRaises(wave.WaveError) as caught:
+                wave._link_lines(record, doc, env.wave_dir)
+            self.assertIn("run links-fetch", str(caught.exception))
+        finally:
+            env.cleanup()
+
+    def test_redact_task_replaces_every_excerpt_line_with_its_hash(self):
+        task = {"items": [{"id": "a", "text": "Links:\n- https://x: status ok\n  excerpt: secret page text\nend"},
+                          {"id": "b", "text": "  excerpt: other"}]}
+        redacted = wave.redact_task(task)
+        marker = wave.redaction_marker("secret page text")
+        self.assertEqual(f"Links:\n- https://x: status ok\n  excerpt: {marker}\nend", redacted["items"][0]["text"])
+        self.assertEqual("  excerpt: " + wave.redaction_marker("other"), redacted["items"][1]["text"])
+        self.assertIn("secret page text", task["items"][0]["text"])
+
+    def test_write_task_keeps_the_full_task_local_and_commits_a_redacted_copy(self):
+        from unittest import mock
+        env = WaveEnv()
+        try:
+            (env.wave_dir / "ledger.json").write_text("{}", encoding="utf-8")
+            task = {"ref": "abc", "sharedFiles": [], "items": [{"id": "a", "text": "  excerpt: page text"}]}
+            args = type("Args", (), {"overwrite": False, "worktree": str(env.worktree), "server_repo": str(env.worktree)})
+            with mock.patch.object(wave, "check_task_file", return_value=[]), \
+                    mock.patch.object(wave, "preflight", return_value=[]):
+                path = wave.write_task(task, "verify-r1", args, env.wave_dir)
+                with self.assertRaises(wave.WaveError):
+                    wave.write_task(task, "verify-r1", args, env.wave_dir)
+            self.assertEqual(env.wave_dir / ".local" / "tasks" / "verify-r1.json", path)
+            self.assertIn("page text", path.read_text(encoding="utf-8"))
+            audit = env.wave_dir / "tasks" / "verify-r1.json"
+            self.assertNotIn("page text", audit.read_text(encoding="utf-8"))
+            entry = json.loads((env.wave_dir / "ledger.json").read_text(encoding="utf-8"))["taskFiles"][0]
+            self.assertEqual(wave.task_sha256(path), entry["sha256"])
+            self.assertEqual("docs/content-wave-1/tasks/verify-r1.json", entry["auditFile"])
+            self.assertEqual(wave.task_sha256(audit), entry["auditSha256"])
         finally:
             env.cleanup()
 

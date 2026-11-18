@@ -412,7 +412,7 @@ with `sudo -u deploy rm "$APP_DIR/.import-pending"` and dispatch `deploy-content
 ## Umami upgrade
 
 Umami is pinned to an exact image digest in `deploy/compose/compose.yaml` (the comment names the version).
-Dependabot is told to ignore it, and the `deploy-app` workflow compares the Umami image of the last good bundle
+It is never updated automatically, and the `deploy-app` workflow compares the Umami image of the last good bundle
 with the new one: an upgrade is a deliberate procedure, because the new image migrates the Umami database when it
 starts and there is no way back except a dump taken just before.
 
@@ -802,8 +802,8 @@ failing until then. A manual run without the input is still the way to republish
 
 Check each item in the repository settings and in the workflows before the repository becomes public:
 
-1. Third-party actions are pinned by full commit SHA (`.github/dependabot.yml` keeps the pins current, and the
-   hardening tests fail on an unpinned action).
+1. Third-party actions are pinned by full commit SHA (the pins are updated by hand, and the hardening tests fail on an
+   unpinned action).
 2. Every workflow and job sets `permissions:` to the minimum (`contents: read`; `packages: write` only in the job that
    pushes the image).
 3. Workflows triggered by pull requests never receive secrets and none uses `pull_request_target`.
@@ -812,8 +812,8 @@ Check each item in the repository settings and in the workflows before the repos
    required reviewers: they would also gate the scheduled `ops-check` (whose waiting run the next day's run replaces, so
    the alert goes silent), every content delivery and the follow-up dispatched by `deploy-app`. The branch policy is the
    boundary.
-6. Dependabot is enabled: version updates through `dependabot.yml`, and alerts and security updates in Settings, Code
-   security.
+6. Dependabot version updates are off (no `dependabot.yml`; dependencies are updated by hand). Dependabot alerts and
+   security updates are separate switches in Settings, Code security; decide on them there.
 7. Secret scanning and push protection are enabled in Settings, Code security.
 8. `SECRETS_ADMIN_TOKEN` is a fine-grained token for this repository only, with the Environments permission and
    nothing else; no personal access token with wider scope is stored anywhere.

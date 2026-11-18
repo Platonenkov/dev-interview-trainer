@@ -2302,9 +2302,10 @@ token piped on stdin (no `-f`, no client timeout; the token is checked before an
 exit 4. After a definitive answer it removes the guard; on 200 it keeps the five newest releases and the one `current` points to, and a
 release is removed by renaming it to `<sha>.del.<pid>` first. A release whose import was rejected (422, direct or settled by a later run) is removed the same way after the switch-back, unless it is the previous target; a release held back by exit 5 stays. `deploy-app.sh` does not refuse on `.import-pending`, but it settles it before it starts the application: `dit_revert_import_pending` switches `current` back to the previous target recorded on the file's second line (only while `current` still names the pending release) and removes the file, so the startup import reads a release an earlier delivery had accepted; `restore.sh --replace <dump> trainer` does the same. A malformed file is exit 2.
 
-`.github/dependabot.yml` updates `github-actions` (the SHA pins), `nuget`, the `Dockerfile` and `deploy/compose` weekly, and
-ignores PostgreSQL major versions (a dump and restore is needed) and every update of the Umami image (pinned exactly; upgrades
-follow the manual Umami procedure).
+Dependency updates are manual: the repository has no Dependabot version updates (owner decision, 2026-11-18). NuGet
+versions live in `Directory.Packages.props`, action SHA pins in the workflows, the SDK image in the `Dockerfile` and the
+PostgreSQL and Umami digests in `deploy/compose/compose.yaml`. A PostgreSQL major version needs a dump and restore, and an
+Umami upgrade follows the manual Umami procedure.
 
 `WorkflowHardeningTests` in `Trainer.Deploy.Tests` parse every workflow and composite action: remote actions pinned by full SHA,
 top-level `permissions` and no `write-all`, `packages: write` only in the image build job, callers granting what a called

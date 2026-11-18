@@ -10,6 +10,7 @@ using Microsoft.JSInterop;
 using Trainer.Contracts;
 using Trainer.Domain.Grading;
 using Trainer.Web.Client.Api;
+using Trainer.Web.Client.Backend;
 using Trainer.Web.Client.Components;
 using Trainer.Web.Client.Interop;
 using Trainer.Web.Client.Sessions;
@@ -57,6 +58,38 @@ public sealed class IslandComponentRenderTests
         QuestionAttempt multi = Attempt(TestQuestions.Multi());
         string checkboxes = await RenderAsync<OptionList>(new() { [nameof(OptionList.Attempt)] = multi });
         Assert.Equal(4, Count(checkboxes, "type=\"checkbox\""));
+    }
+
+    [Theory]
+    [InlineData("en", "Report a problem")]
+    [InlineData("ru", "Сообщить о проблеме")]
+    public async Task ClientReportLink_CarriesTheQuestionPageUrlUnderTheBase(string culture, string label)
+    {
+        QuestionDto question = TestQuestions.Single() with { Slug = "s", Id = "01KBZ3Q8N9V2K3M4P5R6S7T8WA" };
+
+        string html = await RenderAsync<ReportProblemLink>(
+            new()
+            {
+                [nameof(ReportProblemLink.Question)] = question,
+                [nameof(ReportProblemLink.Culture)] = culture,
+                [nameof(ReportProblemLink.Stack)] = "dotnet",
+                [nameof(ReportProblemLink.IssuesNewUrl)] = "https://github.com/o/r/issues/new",
+            },
+            culture,
+            ClientEdition.Static,
+            "https://h.io/dit/");
+
+        System.Text.RegularExpressions.Match anchor = System.Text.RegularExpressions.Regex.Match(html, "<a [^>]*href=\"(?<href>[^\"]*)\"[^>]*>(?<text>[^<]*)</a>");
+        Assert.True(anchor.Success, html);
+        Assert.Equal(label, anchor.Groups["text"].Value.Trim());
+        Uri href = new(anchor.Groups["href"].Value);
+        Assert.Equal("https://github.com/o/r/issues/new", href.GetLeftPart(UriPartial.Path));
+        System.Collections.Specialized.NameValueCollection query = System.Web.HttpUtility.ParseQueryString(href.Query);
+        Assert.Equal($"https://h.io/dit/{culture}/dotnet/questions/s/", query["page-url"]);
+        Assert.Equal("question-report.yml", query["template"]);
+        Assert.Equal("01KBZ3Q8N9V2K3M4P5R6S7T8WA", query["question-id"]);
+        Assert.Equal(culture, query["language"]);
+        Assert.Equal($"[{culture}] s", query["title"]);
     }
 
     [Theory]
@@ -174,7 +207,7 @@ public sealed class IslandComponentRenderTests
             [nameof(SessionBar.Position)] = 7,
             [nameof(SessionBar.Count)] = 20,
             [nameof(SessionBar.Completed)] = 6,
-            [nameof(SessionBar.StreakDays)] = 5,
+            [nameof(SessionBar.Progress)] = new IslandProgress(5, 0, []),
         });
 
         Assert.Contains("<span class=\"level-chip level-middle\">middle</span>", html, StringComparison.Ordinal);
@@ -188,7 +221,7 @@ public sealed class IslandComponentRenderTests
     public async Task TopicSidebar_SignedInShowsMetersAndReviewQueue_AnonymousShowsNamesOnly()
     {
         TopicDto[] topics = [new("closures", "Closures"), new("gc", "CLR & GC")];
-        MeDto me = new(42, 5, 14, [new TopicProgressDto("closures", "Closures", 10, 6, 4, 2)]);
+        IslandProgress progress = new(5, 14, [new TopicProgressDto("closures", "Closures", 10, 6, 4, 2)]);
         Dictionary<string, object?> parameters = new()
         {
             [nameof(TopicSidebar.Topics)] = topics,
@@ -198,12 +231,12 @@ public sealed class IslandComponentRenderTests
         };
 
         string anonymous = await RenderAsync<TopicSidebar>(parameters);
-        parameters[nameof(TopicSidebar.Me)] = me;
+        parameters[nameof(TopicSidebar.Progress)] = progress;
         string signedIn = await RenderAsync<TopicSidebar>(parameters);
 
         Assert.DoesNotContain("<meter", anonymous, StringComparison.Ordinal);
         Assert.DoesNotContain("review", anonymous, StringComparison.Ordinal);
-        Assert.Contains("href=\"/en/dotnet/practice?topic=closures\" aria-current=\"true\" data-enhance-nav=\"false\"", anonymous, StringComparison.Ordinal);
+        Assert.Contains("href=\"en/dotnet/practice?topic=closures\" aria-current=\"true\" data-enhance-nav=\"false\"", anonymous, StringComparison.Ordinal);
         Assert.Contains("<meter class=\"side__meter\" min=\"0\" max=\"10\" value=\"4\" aria-hidden=\"true\">", signedIn, StringComparison.Ordinal);
         Assert.Contains("40%", signedIn, StringComparison.Ordinal);
         Assert.Contains("review queue · 14", signedIn, StringComparison.Ordinal);
@@ -215,7 +248,7 @@ public sealed class IslandComponentRenderTests
     [InlineData(IslandStateKind.Empty, "No questions match these filters")]
     [InlineData(IslandStateKind.Offline, "You are offline; starting a session needs the network")]
     [InlineData(IslandStateKind.RateLimited, "Too many requests; try again in 17 seconds")]
-    [InlineData(IslandStateKind.SignedOut, "href=\"/en/signin?returnUrl=%2Fen%2Fdotnet%2Fpractice%3Ftopic%3Dclosures\"")]
+    [InlineData(IslandStateKind.SignedOut, "href=\"en/signin?returnUrl=%2Fen%2Fdotnet%2Fpractice%3Ftopic%3Dclosures\"")]
     [InlineData(IslandStateKind.ServerError, "Something went wrong")]
     public async Task IslandStateView_RendersEveryState(IslandStateKind kind, string expected)
     {
@@ -319,6 +352,50 @@ public sealed class IslandComponentRenderTests
         Assert.Contains("class=\"opts opts--pick opts--fit-2\"", longOptions, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("en", "The site was updated while this page was open", "Reload the page")]
+    [InlineData("ru", "Сайт обновился, пока страница была открыта", "Перезагрузить страницу")]
+    public async Task IslandStateView_SiteUpdated_ShowsTheTextAndAReloadButton(string culture, string text, string button)
+    {
+        string html = await RenderAsync<IslandStateView>(new() { [nameof(IslandStateView.Kind)] = IslandStateKind.SiteUpdated }, culture);
+
+        Assert.Contains("role=\"alert\"", html, StringComparison.Ordinal);
+        Assert.Contains(text, html, StringComparison.Ordinal);
+        Assert.Contains(">" + button + "</button>", html, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("en", "Loading the next question")]
+    [InlineData("ru", "Загружаем следующий вопрос")]
+    public async Task LoadingNext_RendersFixedSkeletonWithLiveRegion(string culture, string text)
+    {
+        string html = await RenderAsync<QuestionSkeleton>(new(), culture);
+
+        // The size class keeps the skeleton as tall as a question card, so the screen does not jump when the question arrives.
+        Assert.Contains("class=\"qcard qcard--skeleton\"", html, StringComparison.Ordinal);
+        Assert.Contains("aria-busy=\"true\"", html, StringComparison.Ordinal);
+        Assert.Contains(text, html, StringComparison.Ordinal);
+        // The announcement lives in a region that outlasts the skeleton (LoadingAnnouncement): one inserted together with
+        // its text is often not announced by screen readers.
+        Assert.DoesNotContain("role=\"status\"", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("aria-live", html, StringComparison.Ordinal);
+        AssertNoInlineStyle(html);
+    }
+
+    [Theory]
+    [InlineData("en", "Loading the next question")]
+    [InlineData("ru", "Загружаем следующий вопрос")]
+    public async Task LoadingAnnouncement_IsAnEmptyStatusRegionUntilActive_ThenCarriesTheText(string culture, string text)
+    {
+        string idle = await RenderAsync<LoadingAnnouncement>(new() { [nameof(LoadingAnnouncement.Active)] = false }, culture);
+        string active = await RenderAsync<LoadingAnnouncement>(new() { [nameof(LoadingAnnouncement.Active)] = true }, culture);
+
+        Assert.Contains("role=\"status\"", idle, StringComparison.Ordinal);
+        Assert.DoesNotContain(text, idle, StringComparison.Ordinal);
+        Assert.Contains("role=\"status\"", active, StringComparison.Ordinal);
+        Assert.Contains(">" + text, active, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task IslandStateView_Ready_RendersNothing() =>
         Assert.Equal("", await RenderAsync<IslandStateView>(new() { [nameof(IslandStateView.Kind)] = IslandStateKind.Ready }));
@@ -350,7 +427,80 @@ public sealed class IslandComponentRenderTests
     private static void AssertNoInlineStyle(string html) =>
         Assert.DoesNotContain(" style=", html, StringComparison.OrdinalIgnoreCase);
 
-    private static async Task<string> RenderAsync<TComponent>(Dictionary<string, object?> parameters, string culture = "en")
+    [Fact]
+    public async Task StaticProfile_MemoryOnlyStorage_ShowsStorageNotice()
+    {
+        StaticSiteFixture site = new(TestQuestions.Open());
+        // Storage cannot be written and holds an unreadable outbox that cannot be set aside: the progress shown is empty.
+        site.Store.LocksAvailable = false;
+        site.Store.SetRaw(StorageKeys.AnonymousOutbox, "{broken");
+        await using IslandHarness harness = new(services => site.Configure(services, new HookStore(site.Store)), "http://localhost/en/dotnet/profile");
+
+        await harness.RenderAsync<Trainer.Web.Client.Islands.ProfileIsland>(StaticSiteFixture.BootstrapJson());
+
+        string text = await harness.TextAsync();
+        Assert.Contains("Answers are kept only until you close this tab", text, StringComparison.Ordinal);
+        Assert.Contains("Your progress", text, StringComparison.Ordinal);
+        Assert.Empty(harness.Errors);
+    }
+
+    [Fact]
+    public async Task StaticProfile_UnreadableHistory_ShowsTheHistoryNotKeptNotice()
+    {
+        StaticSiteFixture site = new(TestQuestions.Open());
+        // Only the history is damaged and cannot be set aside: the answers have no notice of their own.
+        site.Store.LocksAvailable = false;
+        site.Store.SetRaw(StorageKeys.AnonymousMockHistory, "{broken");
+        await using IslandHarness harness = new(services => site.Configure(services, new HookStore(site.Store)), "http://localhost/en/dotnet/profile");
+
+        await harness.RenderAsync<Trainer.Web.Client.Islands.ProfileIsland>(StaticSiteFixture.BootstrapJson());
+
+        string text = await harness.TextAsync();
+        Assert.Contains("Finished mock interviews cannot be saved in this browser", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("Answers are kept only until you close this tab", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task StaticProfile_HistoryOfANewerApp_ShowsTheNewerVersionNotice()
+    {
+        StaticSiteFixture site = new(TestQuestions.Open());
+        site.Store.SetRaw(StorageKeys.AnonymousMockHistory, "{\"version\":2,\"items\":[]}");
+        await using IslandHarness harness = new(services => site.Configure(services, new HookStore(site.Store)), "http://localhost/en/dotnet/profile");
+
+        await harness.RenderAsync<Trainer.Web.Client.Islands.ProfileIsland>(StaticSiteFixture.BootstrapJson());
+
+        Assert.Contains("Progress saved by a newer version of the app is kept", await harness.TextAsync(), StringComparison.Ordinal);
+        Assert.Equal("{\"version\":2,\"items\":[]}", site.Store.Raw(StorageKeys.AnonymousMockHistory));
+    }
+
+    [Fact]
+    public async Task StaticProfile_ShowsTheLimitsNoteAndTheLocalMocks_WithoutImportOrFailedSummaries()
+    {
+        QuestionDto question = TestQuestions.Open();
+        StaticSiteFixture site = new(question);
+        StaticSiteFixture.Tab tab = site.NewTab();
+        await tab.Outbox.AddAsync(StorageKeys.AnonymousOutbox, StaticSiteFixture.Answer(question, "knew", StaticSiteFixture.Start.AddDays(-1)));
+        await tab.History.AddAsync("dotnet", new MockHistoryDto("01KD0000000000000000000001", "middle", 7, StaticSiteFixture.Start.AddHours(-2), 4, 1, 1, 1));
+        await using IslandHarness harness = new(services => site.Configure(services, new HookStore(site.Store)), "http://localhost/en/dotnet/profile");
+
+        await harness.RenderAsync<Trainer.Web.Client.Islands.ProfileIsland>(StaticSiteFixture.BootstrapJson());
+
+        string text = await harness.TextAsync();
+        Assert.Contains("kept only in this browser", text, StringComparison.Ordinal);
+        Assert.Contains("about 5 MB", text, StringComparison.Ordinal);
+        Assert.Contains("Answered questions", text, StringComparison.Ordinal);
+        Assert.Contains("knew 4", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("Import", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("not saved", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("sign in", text, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(harness.Errors);
+    }
+
+    private static async Task<string> RenderAsync<TComponent>(
+        Dictionary<string, object?> parameters,
+        string culture = "en",
+        ClientEdition edition = ClientEdition.Server,
+        string baseUri = "http://localhost/")
         where TComponent : IComponent
     {
         CultureInfo previous = CultureInfo.CurrentUICulture;
@@ -359,7 +509,7 @@ public sealed class IslandComponentRenderTests
         CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo(culture);
         try
         {
-            await using ServiceProvider services = Services();
+            await using ServiceProvider services = Services(edition, baseUri);
             await using HtmlRenderer renderer = new(services, NullLoggerFactory.Instance);
             return await renderer.Dispatcher.InvokeAsync(async () =>
             {
@@ -376,7 +526,7 @@ public sealed class IslandComponentRenderTests
     }
 
     // The same registrations as Program.cs, with fakes for the browser.
-    private static ServiceProvider Services()
+    private static ServiceProvider Services(ClientEdition edition = ClientEdition.Server, string baseUri = "http://localhost/")
     {
         ServiceCollection services = new();
         services.AddSingleton<Microsoft.Extensions.Logging.ILoggerFactory>(NullLoggerFactory.Instance);
@@ -384,7 +534,7 @@ public sealed class IslandComponentRenderTests
         services.AddSingleton<TimeProvider>(new FakeTimeProvider(DeviceStart));
         services.AddSingleton<IJSRuntime, FakeJsRuntime>();
         services.AddSingleton<ILocalTimeFormatter, RecordingTimeFormatter>();
-        services.AddSingleton<NavigationManager, TestNavigation>();
+        services.AddSingleton<NavigationManager>(new TestNavigation(baseUri));
         services.AddSingleton(new FakeHttpHandler().Client());
         services.AddScoped<IBrowserStore, FakeBrowserStore>();
         services.AddScoped<OutboxStore>();
@@ -396,6 +546,7 @@ public sealed class IslandComponentRenderTests
         services.AddScoped<OutboxSyncService>();
         services.AddScoped<AccountWatcher>();
         services.AddScoped<AccountNotice>();
+        services.AddSingleton(new Trainer.Web.Client.Islands.IslandLinks(edition));
         return services.BuildServiceProvider();
     }
 
@@ -416,7 +567,7 @@ public sealed class IslandComponentRenderTests
 
     private sealed class TestNavigation : NavigationManager
     {
-        public TestNavigation() => Initialize("http://localhost/", "http://localhost/en/dotnet/practice?topic=closures");
+        public TestNavigation(string baseUri) => Initialize(baseUri, baseUri + "en/dotnet/practice?topic=closures");
     }
 
     /// <summary>Echoes what the browser helper would be asked: language, epoch milliseconds and whether to show the time.</summary>

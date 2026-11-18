@@ -60,5 +60,11 @@
     }
   }
 
-  window.ditPageLifecycle = { attach: attach, detach: detach, setUnsaved: setUnsaved };
+  // Raised on `document` when an island first shows something to act on; the static edition's service worker
+  // registration (sw-register.js) listens, because by then the island's files have all been requested.
+  function announceUsable() {
+    document.dispatchEvent(new CustomEvent('dit:island-usable'));
+  }
+
+  window.ditPageLifecycle = { attach: attach, detach: detach, setUnsaved: setUnsaved, announceUsable: announceUsable };
 })();

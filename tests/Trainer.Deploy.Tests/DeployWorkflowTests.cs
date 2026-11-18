@@ -166,6 +166,18 @@ public sealed partial class DeployWorkflowTests
     }
 
     [Fact]
+    public void Workflows_NeverPickAFalsyNumberInAnAndOrExpression()
+    {
+        // `cond && 0 || x` always yields x in Actions expressions, because 0 is falsy; a PR checkout of deploy-smoke was
+        // depth 1 for that reason, the merge-base diff failed and every PR ran the full smoke tier.
+        System.Text.RegularExpressions.Regex falsyBranch = new(@"&&\s*(?:0|false|''|null)\s*\|\|");
+        foreach (string path in Directory.GetFiles(Path.Combine(Root, ".github", "workflows"), "*.yml"))
+        {
+            Assert.DoesNotMatch(falsyBranch, File.ReadAllText(path));
+        }
+    }
+
+    [Fact]
     public void DeploySmoke_ModeRuleMissingADeploymentPathIsDetected()
     {
         string script = ModeStepScript();

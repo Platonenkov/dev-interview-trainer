@@ -10,12 +10,18 @@
 @inject IStringLocalizer<SharedResource> L
 @inject PageLinks Links
 @inject IOptions<AppOptions> App
+@inject SitePaths Paths
 
-@if (HttpContext?.User is { Identity.IsAuthenticated: true } user)
+@if (App.Value.Edition == SiteEdition.Static)
+{
+    @* No accounts: progress lives in the browser, and the profile page is the way to it. *@
+    <a class="account__button" href="@ProfileHref" data-enhance-nav="false">@L["Nav.Progress"]</a>
+}
+else if (HttpContext?.User is { Identity.IsAuthenticated: true } user)
 {
     <div class="account">
-        <a class="account__name" href="/@Current/@App.Value.DefaultStack/profile" data-enhance-nav="false">@AccountName.For(user, L)</a>
-        <form class="account__logout" method="post" action="@(TelegramAuth.CallbackPath + "/logout")">
+        <a class="account__name" href="@ProfileHref" data-enhance-nav="false">@AccountName.For(user, L)</a>
+        <form class="account__logout" method="post" action="@Paths.Asset(TelegramAuth.CallbackPath + "/logout")">
             <AntiforgeryToken />
             <button type="submit" class="account__button">@L["Account.SignOut"]</button>
         </form>
@@ -23,14 +29,14 @@
     @if (user.GetTelegramUserId() is { } owner)
     {
         @* Island tabs signed in as someone else notice this and ask for a reload (AccountWatcher). *@
-        <script src="/@Assets["js/account-publish.js"]" data-owner="@owner.ToString(CultureInfo.InvariantCulture)" defer></script>
+        <script src="@Paths.Asset(Assets["js/account-publish.js"])" data-owner="@owner.ToString(CultureInfo.InvariantCulture)" defer></script>
     }
     @if (!InteractiveIslandPageAttribute.IsMatched(HttpContext))
     {
         @* Shown by import-notice.js while this browser holds answers given before sign-in (spec 4, 11.4). The script only
            checks that the anonymous outbox key (data-key, from StorageKeys) exists; the text is localised here. Islands show their own notice. *@
-        <p class="import-notice" hidden data-key="@StorageKeys.AnonymousOutbox"><a href="/@Current/@App.Value.DefaultStack/profile#import" data-enhance-nav="false">@L["Account.ImportNotice"]</a></p>
-        <script src="/@Assets["js/import-notice.js"]" defer></script>
+        <p class="import-notice" hidden data-key="@StorageKeys.AnonymousOutbox"><a href="@(ProfileHref + "#import")" data-enhance-nav="false">@L["Account.ImportNotice"]</a></p>
+        <script src="@Paths.Asset(Assets["js/import-notice.js"])" defer></script>
     }
 }
 else if (!IsSignInPage)
@@ -43,6 +49,8 @@ else if (!IsSignInPage)
     private HttpContext? HttpContext { get; set; }
 
     private string Current => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
+
+    private string ProfileHref => Paths.Page($"/{Current}/{App.Value.DefaultStack}/profile");
 
     // The sign-in page is the target of the link; linking to it from itself would nest its URL in returnUrl.
     private bool IsSignInPage =>
@@ -62,7 +70,7 @@ else if (!IsSignInPage)
         {
             CultureKey culture = CultureKey.TryCreate(Current, out CultureKey parsed) ? parsed : CultureKey.Default;
             string returnPath = Links.PathFor(culture) ?? "/" + culture.Value;
-            return SignInRedirectEndpoint.PagePath(culture, returnPath);
+            return Paths.Page(SignInRedirectEndpoint.PagePath(culture, returnPath));
         }
     }
 

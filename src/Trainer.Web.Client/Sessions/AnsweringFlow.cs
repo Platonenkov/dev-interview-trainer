@@ -111,7 +111,7 @@ public sealed class AnsweringFlow
     /// Runs a keyboard shortcut against <paramref name="attempt"/> (<see cref="KeyboardShortcuts.Resolve"/>); returns
     /// whether it did anything, so the island re-renders. Ignored while saving.
     /// </summary>
-    public async Task<bool> HandleShortcutAsync(ShortcutKey key, QuestionAttempt? attempt, Action next, CancellationToken ct)
+    public async Task<bool> HandleShortcutAsync(ShortcutKey key, QuestionAttempt? attempt, Func<Task> next, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(next);
         if (IsSaving)
@@ -132,7 +132,7 @@ public sealed class AnsweringFlow
                 await SubmitAsync(attempt);
                 return true;
             case ShortcutCommand.Next:
-                next();
+                await next();
                 return true;
             default:
                 return false;

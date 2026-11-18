@@ -1,8 +1,12 @@
 @using Trainer.Domain.Keys
+@using Microsoft.Extensions.Options
 @using Trainer.Web.Routing
+@using Trainer.Web.Startup
 @implements IDisposable
 @inject IStringLocalizer<SharedResource> L
 @inject PageLinks Links
+@inject SitePaths Paths
+@inject IOptions<AppOptions> App
 
 <nav class="lang-switch" aria-label="@L["Language.Label"]">
     @foreach (CultureKey target in CultureKey.Supported.Where(c => c.Value != Current))
@@ -10,12 +14,26 @@
         if (TargetPath(target) is { } href)
         {
             @* A full reload, never enhanced navigation: an island cannot change its culture at runtime (spec 8.3). *@
-            <a href="@href" rel="nofollow" hreflang="@target.Value" lang="@target.Value" data-enhance-nav="false">@Label(target)</a>
+            @if (IsStatic)
+            {
+                @* Links straight to the page: GitHub Pages has no endpoint to set a cookie. lang-choice.js remembers the choice. *@
+                <a href="@href" hreflang="@target.Value" lang="@target.Value" data-lang-choice="@target.Value" data-enhance-nav="false">@Label(target)</a>
+            }
+            else
+            {
+                <a href="@href" rel="nofollow" hreflang="@target.Value" lang="@target.Value" data-enhance-nav="false">@Label(target)</a>
+            }
         }
     }
 </nav>
+@if (IsStatic)
+{
+    <script src="@Paths.Asset(Assets["js/lang-choice.js"])" defer></script>
+}
 
 @code {
+    private bool IsStatic => App.Value.Edition == SiteEdition.Static;
+
     private string Current => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
 
     protected override void OnInitialized() => Links.Changed += OnLinksChanged;
@@ -26,7 +44,12 @@
     private string? TargetPath(CultureKey target)
     {
         string? path = Links.IsSet ? Links.PathFor(target) : "/" + target.Value;
-        return path is null ? null : LanguageEndpoint.SwitchUrl(target, path);
+        if (path is null)
+        {
+            return null;
+        }
+
+        return IsStatic ? Paths.Page(path) : Paths.Asset(LanguageEndpoint.SwitchUrl(target, path));
     }
 
     private void OnLinksChanged() => _ = InvokeAsync(StateHasChanged);

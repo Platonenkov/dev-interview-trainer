@@ -6,6 +6,7 @@ using Trainer.Domain.Feedback;
 using Trainer.Domain.Keys;
 using Trainer.Domain.Levels;
 using Trainer.Domain.Questions;
+using Trainer.Domain.Sessions;
 using Trainer.Domain.Users;
 using Trainer.Infrastructure.Persistence;
 using Trainer.Infrastructure.Persistence.Entities;
@@ -161,15 +162,8 @@ internal sealed class SessionQueries(TrainerDbContext db, TimeProvider clock, Mo
         return SessionCandidates(questions, criteria.Culture);
     }
 
-    private IQueryable<SessionCandidate> SessionCandidates(IQueryable<QuestionEntity> questions, CultureKey culture)
-    {
-        string cultureValue = culture.Value;
-        return questions.Join(
-            db.QuestionLocales.Where(l => l.Culture == cultureValue),
-            q => q.Id,
-            l => l.QuestionId,
-            (q, l) => new SessionCandidate { Question = q, Locale = l });
-    }
+    private IQueryable<SessionCandidate> SessionCandidates(IQueryable<QuestionEntity> questions, CultureKey culture) =>
+        SessionRows.Candidates(db, questions, culture);
 
     private async Task<IReadOnlyList<QuestionDto>> ToDtosAsync(
         List<SessionRow> rows, CultureKey culture, StackKey stack, CancellationToken ct)

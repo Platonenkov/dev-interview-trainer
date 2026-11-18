@@ -49,7 +49,7 @@ public sealed class AdminPageTests(AppHostFixture host) : IClassFixture<AppHostF
             ViewportSize = new ViewportSize { Width = width, Height = 900 },
             BaseURL = host.BaseAddress.ToString(),
         });
-        await context.AddInitScriptAsync($"try {{ localStorage.setItem('theme', '{theme}'); }} catch (e) {{ }}");
+        await context.AddInitScriptAsync($"try {{ localStorage.setItem('dit.theme', '{theme}'); }} catch (e) {{ }}");
         await context.AddCookiesAsync([new Cookie { Name = AuthCookieNames.Session, Value = await host.IssueAdminSessionAsync(), Url = host.BaseAddress.ToString() }]);
         return context;
     }

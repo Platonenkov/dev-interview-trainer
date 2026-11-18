@@ -1,5 +1,6 @@
 using Microsoft.Net.Http.Headers;
 using Trainer.Domain.Keys;
+using Trainer.Web.Seo;
 
 namespace Trainer.Web.Routing;
 
@@ -34,14 +35,14 @@ public static class RootRedirectEndpoint
         return CultureKey.Default;
     }
 
-    private static IResult Handle(HttpContext context)
+    private static IResult Handle(HttpContext context, SitePaths paths)
     {
         // The target depends on two request inputs, so shared caches must not reuse the redirect across them.
         context.Response.Headers.Vary = "Accept-Language, Cookie";
 
         context.Request.Cookies.TryGetValue(CookieName, out string? cookie);
         CultureKey culture = ResolveCulture(cookie, AcceptLanguageByPreference(context.Request));
-        return Results.Redirect("/" + culture.Value, permanent: false);
+        return Results.Redirect(paths.Page("/" + culture.Value), permanent: false);
     }
 
     /// <summary>The <c>Accept-Language</c> tags of <paramref name="request"/>, most preferred first, without <c>*</c> and q=0.</summary>

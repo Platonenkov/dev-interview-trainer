@@ -35,6 +35,12 @@ jobs:
       - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           global-json-file: global.json
+      # Some Trainer.Web.Tests run browser scripts under Node; NodeHarness fails them when Node is missing on CI.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Node version
+        run: node --version
       - name: Restore
         run: dotnet restore
       - name: Verify formatting
@@ -151,6 +157,23 @@ jobs:
             TestResults/perf/**
             TestResults/release/**
           if-no-files-found: warn
+
+  # The GitHub Pages build of the site (publish, export, verify, static smoke in a browser), without retention or upload, so
+  # the whole build is exercised on every pull request and push and pages.yml only has to deploy what it already proved.
+  # Repository variables may be unavailable to pull requests from forks; the fallback is a non-root prefix on a reserved
+  # domain, so such a build still runs, and nothing built from it is ever uploaded.
+  static-site:
+    needs: build-test
+    permissions:
+      contents: read
+    uses: ./.github/workflows/static-site.yml
+    with:
+      ref: ${{ github.sha }}
+      # The sentinel is used whenever no custom domain is set in SITE_URL; this job never uploads, so the address is never published.
+      site_url: ${{ vars.SITE_URL || 'https://ci.invalid/fork-build/' }}
+      build_id: ${{ github.sha }}.${{ github.run_id }}.${{ github.run_attempt }}
+      retain: false
+      upload: false
 
   # The commits the schema check compares. A pull request is tested at GITHUB_SHA, the merge commit of the pull request
   # merge branch (refs/pull/N/merge; GitHub's events documentation: "GITHUB_SHA for this event is the last merge commit of

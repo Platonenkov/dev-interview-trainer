@@ -146,7 +146,7 @@ public sealed class IslandNavigationTests(AppHostFixture host) : IClassFixture<A
 
         string after = await ThemeAsync(tab);
         Assert.NotEqual(before, after);
-        Assert.Equal(after, await tab.EvaluateAsync<string>("() => localStorage.getItem('theme')"));
+        Assert.Equal(after, await tab.EvaluateAsync<string>("() => localStorage.getItem('dit.theme')"));
 
         await tab.Locator("#theme-toggle").ClickAsync();
         Assert.Equal(before, await ThemeAsync(tab));

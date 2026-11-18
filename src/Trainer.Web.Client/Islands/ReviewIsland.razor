@@ -5,6 +5,7 @@
 @using Trainer.Web.Client.Sync
 @implements IDisposable
 @inject TrainerApiClient Api
+@inject IIslandBackend Backend
 @inject OutboxStore Outbox
 @inject OutboxSyncService Sync
 @inject AccountWatcher Accounts
@@ -15,11 +16,13 @@
 @inject ServerClock Clock
 @inject TimeProvider Time
 @inject IStringLocalizer<ClientResource> L
+@inject IslandLinks Links
 
 @* Review (spec 5.3): the signed-in user's due questions, one at a time with feedback, choice questions behind a recall
    step. Pending answers are flushed before the queue is fetched, so a question answered a moment ago is not served
-   again; every answer goes to the outbox first (spec 8.8) and is then sent in the background. *@
-<IslandRoot Usable="_phase != Phase.Loading">
+   again; every answer goes to the outbox first (spec 8.8) and is then sent in the background.
+   The question skeleton (the first question still being fetched) is nothing to act on, so it does not make the island usable. *@
+<IslandRoot Usable="_phase != Phase.Loading && !(_phase == Phase.Question && _session is { Current: null })">
     @if (_bootstrap is { } bootstrap)
     {
         @if (_flow.IsSlow)
@@ -28,16 +31,17 @@
         }
         @* data-answers-saved counts the graded answers whose outbox write returned or outlasted its bound; tests wait on it. *@
         <div class="qs" data-answers-saved="@_flow.Saved">
-            <TopicSidebar Topics="bootstrap.Topics" Me="bootstrap.Me" Culture="@bootstrap.Culture" Stack="@bootstrap.Stack" />
+            <TopicSidebar Topics="bootstrap.Topics" Progress="_progress" Culture="@bootstrap.Culture" Stack="@bootstrap.Stack" />
             @* Focusable by script: a fetch from a button removes that button, so focus waits here meanwhile. *@
             <div class="qs__main" tabindex="-1" @ref="_main">
+                <LoadingAnnouncement Active="@(_phase == Phase.Question && _session is { Current: null })" />
                 @switch (_phase)
                 {
                     case Phase.Loading:
                         <IslandStateView Kind="IslandStateKind.Loading" />
                         break;
                     case Phase.State:
-                        <IslandStateView Kind="_state" RetryAfter="_retryAfter" Retry="RefetchAsync" />
+                        <IslandStateView Kind="_state" RetryAfter="_retryAfter" Retry="RetryAsync" />
                         break;
                     case Phase.Empty:
                         <div class="island-state review-empty" role="status">
@@ -49,13 +53,16 @@
                             </div>
                         </div>
                         break;
+                    case Phase.Question when _session is { Current: null }:
+                        <QuestionSkeleton />
+                        break;
                     case Phase.Question when _session?.Current is { } attempt:
                         <SessionBar Level="@attempt.Question.Level"
                                     TopicTitle="@attempt.Question.TopicTitle"
                                     Position="_session.Index + 1"
                                     Count="_session.Count"
                                     Completed="Completed"
-                                    StreakDays="bootstrap.Me?.StreakDays" />
+                                    Progress="_progress" />
                         <div class="qs__body">
                             <QuestionCard @key="attempt.ClientAnswerId" @ref="_card" Attempt="attempt" Changed="StateHasChanged">
                                 @if (_session.AwaitingRecall)
@@ -73,11 +80,16 @@
                             {
                                 <QuestionFeedbackBar @key="attempt.Question.Id" Question="attempt.Question" Owner="owner" Culture="@bootstrap.Culture" InitialRating="@RatingOf(attempt.Question.Id)" />
                             }
+                            else if (attempt.IsDone && bootstrap.StaticSite is { } site)
+                            {
+                                @* No server to receive a rating or a report: a report is a prefilled GitHub issue. *@
+                                <ReportProblemLink @key="attempt.Question.Id" Question="attempt.Question" Culture="@bootstrap.Culture" Stack="@bootstrap.Stack" IssuesNewUrl="@site.IssuesNewUrl" />
+                            }
                         </div>
                         @if (attempt.IsDone)
                         {
                             <div class="action-bar">
-                                <button type="button" class="btn btn--primary review__next" @ref="_next" @onclick="Next">
+                                <button type="button" class="btn btn--primary review__next" @ref="_next" @onclick="NextAsync">
                                     @L[_session.Index + 1 == _session.Count ? "Practice.Finish" : "Practice.Next"]
                                     <kbd class="kbd-hint" aria-hidden="true">N</kbd>
                                 </button>
@@ -136,6 +148,9 @@
     private ReviewSession? _session;
     private IReadOnlyList<PracticeTopicSummary> _summary = [];
     private IReadOnlyDictionary<string, string>? _myRatings;
+    private IslandProgress? _progress;
+    // A question failed to load: Try again repeats that load instead of fetching a new queue.
+    private bool _resumeLoad;
     private QuestionCard? _card;
     private ElementReference _main;
     private ElementReference _next;
@@ -144,6 +159,7 @@
     private bool _focusMain;
     private bool _focusSummary;
     private bool _fetching;
+    private bool _disposed;
     private AnsweringFlow _flow = null!;
 
     /// <summary>The <c>IslandBootstrapDto</c> the server serialised with <c>TrainerJsonContext</c>.</summary>
@@ -167,7 +183,7 @@
             new SlowStorage(Time),
             Grader,
             attempt => Answers.Create(attempt, AnswerMode.Review, null),
-            answer => Outbox.AddAsync(StorageKeys.UserOutbox(_owner!.Value), answer).AsTask(),
+            answer => Outbox.AddAsync(Backend.OutboxKey(_bootstrap!), answer).AsTask(),
             Sync.RequestFlush);
         _flow.SlowChanged += OnSlowChanged;
         _bootstrap = JsonSerializer.Deserialize(BootstrapJson, TrainerJsonContext.Default.IslandBootstrapDto)
@@ -179,7 +195,7 @@
         // Reads name the page's account too: the server answers 409 once another tab switched it (ADR 0008).
         Api.BindOwner(pageOwner);
         await Accounts.StartAsync(pageOwner);
-        if (_owner is not { } bound)
+        if (!Backend.KeepsProgress(_bootstrap))
         {
             // The page requires a sign-in; a bootstrap without a user means the session ended meanwhile.
             _state = IslandStateKind.SignedOut;
@@ -187,7 +203,12 @@
             return;
         }
 
-        Sync.Start(bound);
+        if (_owner is { } bound)
+        {
+            Sync.Start(bound);
+        }
+
+        _progress = await Backend.GetProgressAsync(_bootstrap, _lifetime.Token);
         await FetchAsync(false);
     }
 
@@ -235,6 +256,7 @@
             _flow.SlowChanged -= OnSlowChanged;
         }
 
+        _disposed = true;
         _lifetime.Cancel();
         _lifetime.Dispose();
     }
@@ -244,10 +266,12 @@
     // Retry and "Check for more" replace the button that was pressed.
     private Task RefetchAsync() => FetchAsync(true);
 
+    private Task RetryAsync() => _resumeLoad ? ResumeLoadAsync() : RefetchAsync();
+
     private async Task FetchAsync(bool moveFocus)
     {
         // A double click or a repeated Enter must not fetch (and replace) the session twice.
-        if (_fetching || _owner is null)
+        if (_fetching || !Backend.KeepsProgress(_bootstrap!))
         {
             return;
         }
@@ -266,6 +290,7 @@
     private async Task FetchOnceAsync(bool moveFocus)
     {
         IslandBootstrapDto bootstrap = _bootstrap!;
+        _resumeLoad = false;
         _phase = Phase.Loading;
         _focusMain = moveFocus;
         StateHasChanged();
@@ -274,18 +299,21 @@
         // Flush-before-fetch: the queue is computed from the answers the server has. What does not make it in time stays
         // pending and SyncStatus says so.
         await Sync.FlushAsync(FlushWait, ct);
-        ApiResult<SessionDto> result = await Api.ReviewAsync(new ReviewSessionRequest(bootstrap.Culture, bootstrap.Stack, SessionSize), ct);
+        ApiResult<SessionPlan> result = await Backend.ReviewAsync(bootstrap, new ReviewSessionRequest(bootstrap.Culture, bootstrap.Stack, SessionSize), ct);
 
         // An answer the flush could not deliver is not on the server yet, which still counts its question as due.
-        HashSet<string> pending = result.Value is { Questions.Count: > 0 } ? await PendingQuestionIdsAsync() : [];
-        IReadOnlyList<QuestionDto> due = [.. (result.Value?.Questions ?? []).Where(q => !pending.Contains(q.Id))];
-        IslandStateKind kind = IslandState.FromResult(result, result.Value is not null && due.Count == 0);
+        SessionPlan? due = result.Value;
+        if (due is { QuestionIds.Count: > 0 } && Backend.FiltersPendingAnswers)
+        {
+            due = due.Without(await PendingQuestionIdsAsync());
+        }
+
+        IslandStateKind kind = IslandState.FromResult(result, due is { QuestionIds.Count: 0 });
         if (kind == IslandStateKind.Ready)
         {
-            _myRatings = result.Value?.MyRatings;
+            _myRatings = due!.MyRatings;
             _session = new ReviewSession(due, Ids, Random.Shared, Clock);
-            _phase = Phase.Question;
-            _focusTitle = moveFocus;
+            await ShowLoadedAsync(_session.StartAsync(ct), focusQuestion: moveFocus, moveFocus: moveFocus);
         }
         else if (kind == IslandStateKind.Empty)
         {
@@ -299,12 +327,70 @@
         }
     }
 
+    private async Task ResumeLoadAsync()
+    {
+        if (_fetching || _session is null)
+        {
+            return;
+        }
+
+        _fetching = true;
+        try
+        {
+            await ShowLoadedAsync(_session.NextAsync(_lifetime.Token), focusQuestion: true, moveFocus: true);
+        }
+        finally
+        {
+            _fetching = false;
+        }
+    }
+
+    // The skeleton stands in while the load runs; a failure keeps the session, so Try again repeats the same load.
+    private async Task ShowLoadedAsync(Task<ApiResult<QuestionDto>> load, bool focusQuestion, bool moveFocus = false)
+    {
+        ReviewSession session = _session!;
+        _resumeLoad = false;
+        _phase = Phase.Question;
+        _focusMain = moveFocus;
+        StateHasChanged();
+
+        ApiResult<QuestionDto> result;
+        try
+        {
+            result = await load;
+        }
+        catch (OperationCanceledException) when (_disposed)
+        {
+            // The page is going away; a source may report that by throwing, which must not surface from a handler.
+            return;
+        }
+
+        if (session.IsFinished)
+        {
+            _summary = PracticeSummary.ByTopic(session.Results);
+            _phase = Phase.Summary;
+            _focusSummary = true;
+            await Backend.OnSessionFinishedAsync(_bootstrap!, _lifetime.Token);
+        }
+        else if (result.IsSuccess && result.Value is not null)
+        {
+            _focusTitle = focusQuestion;
+        }
+        else
+        {
+            _state = result.IsSuccess ? IslandStateKind.ServerError : IslandState.FromResult(result, false);
+            _retryAfter = result.RetryAfter;
+            _resumeLoad = true;
+            _phase = Phase.State;
+        }
+    }
+
     // A read never waits for a lock unless it has to quarantine a corrupt value; past the bound nothing is filtered.
     private Task<HashSet<string>> PendingQuestionIdsAsync() =>
         new SlowStorage(Time).WaitAsync(ReadPendingQuestionIdsAsync(), new HashSet<string>(StringComparer.Ordinal));
 
     private async Task<HashSet<string>> ReadPendingQuestionIdsAsync() =>
-        new((await Outbox.ReadAsync(StorageKeys.UserOutbox(_owner!.Value))).Select(a => a.QuestionId), StringComparer.Ordinal);
+        new((await Outbox.ReadAsync(Backend.OutboxKey(_bootstrap!))).Select(a => a.QuestionId), StringComparer.Ordinal);
 
     private string? RatingOf(string questionId) => _myRatings is not null && _myRatings.TryGetValue(questionId, out string? rating) ? rating : null;
 
@@ -324,19 +410,22 @@
 
     private void Skip() => _flow.Skip(_session?.Current);
 
-    private void Next()
+    private async Task NextAsync()
     {
-        if (_session is null || !_flow.CanGoNext(_session.Current))
+        // A double click or a repeated N must not load the question twice.
+        if (_session is null || _fetching || !_flow.CanGoNext(_session.Current))
         {
             return;
         }
 
-        _session.Next();
-        if (_session.IsFinished)
+        _fetching = true;
+        try
         {
-            _summary = PracticeSummary.ByTopic(_session.Results);
-            _phase = Phase.Summary;
-            _focusSummary = true;
+            await ShowLoadedAsync(_session.NextAsync(_lifetime.Token), focusQuestion: true, moveFocus: true);
+        }
+        finally
+        {
+            _fetching = false;
         }
     }
 
@@ -361,12 +450,12 @@
             return;
         }
 
-        if (await _flow.HandleShortcutAsync(key, _session.Current, Next, _lifetime.Token))
+        if (await _flow.HandleShortcutAsync(key, _session.Current, NextAsync, _lifetime.Token))
         {
             StateHasChanged();
         }
     }
 
-    // Island pages carry <base href="/">, so every link is absolute.
-    private string ModeHref(string mode) => $"/{_bootstrap!.Culture}/{_bootstrap.Stack}/{mode}";
+    // Links are base-relative (IslandLinks).
+    private string ModeHref(string mode) => Links.Page(_bootstrap!.Culture, _bootstrap.Stack, [mode]);
 }

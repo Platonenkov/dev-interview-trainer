@@ -29,7 +29,7 @@ public sealed class PracticeFiltersTests
     [Fact]
     public void Resolve_Nothing_GivesDefaults()
     {
-        PracticeFilterSet filters = PracticeFilterSet.Resolve(Bootstrap(NoUrl), null);
+        PracticeFilterSet filters = PracticeFilterSet.Resolve(Bootstrap(NoUrl), null, false);
 
         Assert.Empty(filters.Levels);
         Assert.Empty(filters.Topics);
@@ -41,7 +41,7 @@ public sealed class PracticeFiltersTests
     [Fact]
     public void Resolve_RememberedWinsOverDefaults_InDisplayOrder()
     {
-        PracticeFilterSet filters = PracticeFilterSet.Resolve(Bootstrap(NoUrl), Remembered());
+        PracticeFilterSet filters = PracticeFilterSet.Resolve(Bootstrap(NoUrl), Remembered(), false);
 
         Assert.Equal(["junior", "senior"], filters.Levels);
         Assert.Equal(["csharp"], filters.Topics);
@@ -53,7 +53,7 @@ public sealed class PracticeFiltersTests
     [Fact]
     public void Resolve_UrlFiltersWinOverRemembered_CountStillRemembered()
     {
-        PracticeFilterSet filters = PracticeFilterSet.Resolve(Bootstrap(new PracticeFiltersDto([], ["async"], [], null, null)), Remembered());
+        PracticeFilterSet filters = PracticeFilterSet.Resolve(Bootstrap(new PracticeFiltersDto([], ["async"], [], null, null)), Remembered(), false);
 
         Assert.Empty(filters.Levels);
         Assert.Equal(["async"], filters.Topics);
@@ -65,7 +65,7 @@ public sealed class PracticeFiltersTests
     [Fact]
     public void Resolve_UrlStatusAlone_CountsAsUrlFilters()
     {
-        PracticeFilterSet filters = PracticeFilterSet.Resolve(Bootstrap(new PracticeFiltersDto([], [], [], "all", null)), Remembered());
+        PracticeFilterSet filters = PracticeFilterSet.Resolve(Bootstrap(new PracticeFiltersDto([], [], [], "all", null)), Remembered(), false);
 
         Assert.Empty(filters.Levels);
         Assert.Equal(PracticeFilterSet.All, filters.Status);
@@ -77,7 +77,7 @@ public sealed class PracticeFiltersTests
     public void Resolve_FirstAlone_UsesDefaultsNotRemembered_CountStillRemembered()
     {
         PracticeFilterSet filters = PracticeFilterSet.Resolve(
-            Bootstrap(new PracticeFiltersDto([], [], [], null, "01KBZ3Q8N9V2K3M4P5R6S7T8WA")), Remembered());
+            Bootstrap(new PracticeFiltersDto([], [], [], null, "01KBZ3Q8N9V2K3M4P5R6S7T8WA")), Remembered(), false);
 
         Assert.Empty(filters.Levels);
         Assert.Empty(filters.Topics);
@@ -91,7 +91,7 @@ public sealed class PracticeFiltersTests
     [InlineData(true, "due")]
     public void Resolve_Due_OnlyWhenSignedIn(bool signedIn, string expected)
     {
-        PracticeFilterSet filters = PracticeFilterSet.Resolve(Bootstrap(NoUrl, signedIn), Remembered(status: "due"));
+        PracticeFilterSet filters = PracticeFilterSet.Resolve(Bootstrap(NoUrl, signedIn), Remembered(status: "due"), signedIn);
 
         Assert.Equal(expected, filters.Status);
     }
@@ -101,14 +101,14 @@ public sealed class PracticeFiltersTests
     {
         StoredPracticeFilters stored = new(StoredPracticeFilters.CurrentVersion, ["middle", "guru"], ["gone"], ["essay"], "weird", 500);
 
-        PracticeFilterSet filters = PracticeFilterSet.Resolve(Bootstrap(NoUrl), stored);
+        PracticeFilterSet filters = PracticeFilterSet.Resolve(Bootstrap(NoUrl), stored, false);
 
         Assert.Equal(["middle"], filters.Levels);
         Assert.Empty(filters.Topics);
         Assert.Empty(filters.Types);
         Assert.Equal(PracticeFilterSet.All, filters.Status);
         Assert.Equal(PracticeFilterSet.MaxCount, filters.Count);
-        Assert.Equal(PracticeFilterSet.MinCount, PracticeFilterSet.Resolve(Bootstrap(NoUrl), stored with { Count = -3 }).Count);
+        Assert.Equal(PracticeFilterSet.MinCount, PracticeFilterSet.Resolve(Bootstrap(NoUrl), stored with { Count = -3 }, false).Count);
     }
 
     [Theory]

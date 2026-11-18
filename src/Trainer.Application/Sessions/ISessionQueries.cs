@@ -1,4 +1,5 @@
 using Trainer.Contracts;
+using Trainer.Domain.Sessions;
 using Trainer.Domain.Users;
 
 namespace Trainer.Application.Sessions;

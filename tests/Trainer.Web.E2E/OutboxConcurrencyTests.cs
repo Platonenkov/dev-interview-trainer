@@ -316,6 +316,40 @@ public sealed class OutboxConcurrencyTests(AppHostFixture host) : IClassFixture<
     }
 
     [Fact]
+    public async Task History_ConcurrentAddsFromTwoTabs_KeepBothAndTheNewestTwentyPerStack()
+    {
+        await using IBrowserContext context = await NewContextAsync();
+        IPage first = await OpenAsync(context);
+        IPage second = await OpenAsync(context);
+        const string HistoryKey = "dit.mock.v1.anon.history";
+        static string Id(string prefix, int i) => "01KD" + prefix + i.ToString("D2", System.Globalization.CultureInfo.InvariantCulture).PadLeft(22 - prefix.Length, '0');
+        // Seven fractional digits, as .NET writes them; the minute grows with the index so "newest" is the high indexes.
+        static object Add(string id, string stack, int minute) => new
+        {
+            op = "historyAdd",
+            key = HistoryKey,
+            value = new { id, stack, level = "middle", questionCount = 5, finishedAt = $"2026-11-12T10:{minute:D2}:00.0000000+00:00", knew = 1, partial = 0, didntKnow = 0, unanswered = 4 },
+        };
+
+        object[] fromFirst = [.. Enumerable.Range(0, 15).Select(i => Add(Id("A", i), "dotnet", 2 * i)), Add(Id("J", 0), "java", 1)];
+        object[] fromSecond = [.. Enumerable.Range(0, 15).Select(i => Add(Id("B", i), "dotnet", (2 * i) + 1))];
+
+        await Task.WhenAll(first.EvaluateAsync<int>(RunOps, fromFirst), second.EvaluateAsync<int>(RunOps, fromSecond));
+
+        string[] ids = await IdsAsync(first, HistoryKey, "items", "id");
+        // 30 dotnet mocks arrived from two tabs at once: exactly the newest 20 stay, and the java mock is not pushed out.
+        string[] expected =
+        [
+            .. Enumerable.Range(5, 10).Select(i => Id("A", i)),
+            .. Enumerable.Range(5, 10).Select(i => Id("B", i)),
+            Id("J", 0),
+        ];
+        Assert.Equal(expected.Order(StringComparer.Ordinal), ids.Order(StringComparer.Ordinal));
+        host.AssertNoCspViolations(first);
+        host.AssertNoCspViolations(second);
+    }
+
+    [Fact]
     public async Task Ops_OutsideTheirKeyFamily_AreRefusedAndWriteNothing()
     {
         await using IBrowserContext context = await NewContextAsync();
@@ -335,6 +369,8 @@ public sealed class OutboxConcurrencyTests(AppHostFixture host) : IClassFixture<
             new { op = "summaryAdd", key = UserKey, value = summary },
             new { op = "summaryAdd", key = "dit.mock.v1.pending.anon", value = summary },
             new { op = "summaryRemove", key = UserKey, ids = new[] { "a" } },
+            new { op = "historyAdd", key = "dit.mock.v1.anon.active", value = new { id = "a", stack = "dotnet", finishedAt = "2026-11-12T10:00:00Z" } },
+            new { op = "historyAdd", key = "dit.mock.v1.990200001.history", value = new { id = "a", stack = "dotnet", finishedAt = "2026-11-12T10:00:00Z" } },
             new { op = "move", key = AnonKey, to = PendingKey },
             new { op = "move", key = PendingKey, to = AnonKey, shape = "summaries" },
             new { op = "move", key = AnonKey, to = UserKey, shape = "summaries" },

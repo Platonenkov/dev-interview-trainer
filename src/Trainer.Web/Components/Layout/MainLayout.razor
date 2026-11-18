@@ -1,11 +1,19 @@
 @inherits LayoutComponentBase
 @using Trainer.Web.Islands
+@using Microsoft.Extensions.Options
+@using Trainer.Web.Startup
 @inject IStringLocalizer<SharedResource> L
+@inject SitePaths Paths
+@inject IOptions<AppOptions> App
 
+@if (App.Value.Edition == SiteEdition.Static)
+{
+    <SiteUpdatedBanner />
+}
 <a class="skip-link" href="@SkipLinkHref">@L["Nav.SkipToContent"]</a>
 <header class="site-header">
     <div class="container site-header__inner">
-        <a class="brand" href="/@CultureInfo.CurrentUICulture.TwoLetterISOLanguageName" aria-label="@L["Nav.HomeLabel"]">
+        <a class="brand" href="@HomeHref" aria-label="@L["Nav.HomeLabel"]">
             <span class="brand__prompt" aria-hidden="true">&gt;</span>@L["Site.Name"]
         </a>
         <div class="site-header__tools">
@@ -23,7 +31,7 @@
 <footer class="site-footer">
     <div class="container site-footer__inner">
         <span>@L["Footer.License"]</span>
-        <a href="/@CultureInfo.CurrentUICulture.TwoLetterISOLanguageName/about">@L["Footer.About"]</a>
+        <a href="@AboutHref">@L["Footer.About"]</a>
     </div>
 </footer>
 
@@ -31,10 +39,16 @@
     [CascadingParameter]
     private HttpContext? HttpContext { get; set; }
 
-    // Island pages carry <base href="/"> for the WebAssembly runtime, against which a bare "#main" would mean "/#main"
-    // and leave the page. Island pages are never output-cached, so writing this request's own URL into them is safe.
+    private static string Current => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
+
+    private string HomeHref => Paths.Page("/" + Current);
+
+    private string AboutHref => Paths.Page($"/{Current}/about");
+
+    // Island pages carry a <base> element for the WebAssembly runtime, against which a bare "#main" would resolve to the
+    // site root and leave the page. Island pages are never output-cached, so writing this request's own URL into them is safe.
     private string SkipLinkHref =>
         HttpContext is { } http && InteractiveIslandPageAttribute.IsMatched(http)
-            ? http.Request.Path.ToUriComponent() + http.Request.QueryString.ToUriComponent() + "#main"
+            ? Paths.CurrentPage(http.Request) + "#main"
             : "#main";
 }

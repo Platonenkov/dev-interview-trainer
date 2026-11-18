@@ -1,5 +1,6 @@
 @page "/{Culture}/{Stack}/questions"
 @using Microsoft.AspNetCore.OutputCaching
+@using Microsoft.Extensions.Options
 @attribute [OutputCache(PolicyName = "public-catalog")]
 @using Trainer.Application.Catalog
 @using Trainer.Application.Progress
@@ -9,10 +10,13 @@
 @using Trainer.Web.Catalog
 @using Trainer.Web.ContentState
 @using Trainer.Web.Seo
+@using Trainer.Web.Startup
 @inject IStringLocalizer<SharedResource> L
 @inject ICatalogQueries Catalogs
 @inject IProgressQueries Progress
 @inject ContentSnapshotProvider Snapshots
+@inject IOptions<AppOptions> App
+@inject SitePaths Paths
 
 @if (_query is not null && _page is not null)
 {
@@ -24,32 +28,64 @@
              NoIndex="@IsNoIndex()" />
     <BreadcrumbJsonLd Items="Breadcrumbs()" />
     <div class="catalog">
-        <FilterPanel Query="_query" Page="_page" />
+        @if (IsStatic)
+        {
+            <StaticFilterForm Page="_page" KnownTopics="Snapshots.Current.TopicsOf(_query.Stack.Value)" Culture="@_query.Culture.Value" Stack="@_query.Stack.Value" />
+        }
+        else
+        {
+            <FilterPanel Query="_query" Page="_page" />
+        }
         <section>
             <h1 class="catalog__heading">@L["Catalog.Heading"]</h1>
-            <p class="catalog__found">@L["Catalog.Found", _page.Total]</p>
+            @if (IsStatic)
+            {
+                @* The template lets catalog-filter.js rewrite the count in the page's language. *@
+                <p class="catalog__found" data-found-template="@L["Catalog.Found", "{0}"]">@L["Catalog.Found", _page.Total]</p>
+            }
+            else
+            {
+                <p class="catalog__found">@L["Catalog.Found", _page.Total]</p>
+            }
             @if (_page.Total > 0)
             {
                 <p class="practise-these">
                     <IslandLink Class="btn btn--primary" Href="@PracticeUrl()" PreloadRuntime="true">@L["Practice.These"]</IslandLink>
                 </p>
             }
-            @if (_page.Rows.Count == 0)
+            @if (IsStatic)
             {
-                <p>@L["Catalog.Empty"]</p>
-            }
-            else
-            {
+                <p data-catalog-empty hidden="@(_page.Rows.Count > 0)">@L["Catalog.Empty"]</p>
                 <ol class="rows">
                     @foreach (CatalogRow row in _page.Rows)
                     {
-                        <li><QuestionRow Row="row" Culture="@_query.Culture.Value" Stack="@_query.Stack.Value" Statuses="_statuses" /></li>
+                        <li><QuestionRow Row="row" Culture="@_query.Culture.Value" Stack="@_query.Stack.Value" FilterData="true" /></li>
                     }
                 </ol>
             }
-            <Pager Query="_query" Page="_page" />
+            else
+            {
+                @if (_page.Rows.Count == 0)
+                {
+                    <p>@L["Catalog.Empty"]</p>
+                }
+                else
+                {
+                    <ol class="rows">
+                        @foreach (CatalogRow row in _page.Rows)
+                        {
+                            <li><QuestionRow Row="row" Culture="@_query.Culture.Value" Stack="@_query.Stack.Value" Statuses="_statuses" /></li>
+                        }
+                    </ol>
+                }
+                <Pager Query="_query" Page="_page" />
+            }
         </section>
     </div>
+    @if (IsStatic)
+    {
+        <script src="@Paths.Asset(Assets["js/catalog-filter.js"])" defer></script>
+    }
 }
 
 @code {
@@ -65,6 +101,8 @@
     private CatalogQuery? _query;
     private CatalogPage? _page;
     private IReadOnlyDictionary<QuestionId, QuestionStatus>? _statuses;
+
+    private bool IsStatic => App.Value.Edition == SiteEdition.Static;
 
     // Combinations beyond one level and one topic, any type filter, every page after the first and every search would
     // only duplicate or dilute the indexable single-selection pages.
@@ -100,6 +138,15 @@
         // The routing middleware has already answered 404 for an unknown culture or stack, so both parse here.
         if (HttpContext is null || !CultureKey.TryCreate(Culture, out CultureKey culture) || !StackKey.TryCreate(Stack, out StackKey stack))
         {
+            return;
+        }
+
+        if (IsStatic)
+        {
+            // A static host cannot run a query: every live row is rendered and catalog-filter.js narrows them, so the
+            // request's query string never reaches the server's HTML and the exported page is one file per culture.
+            _query = new CatalogQuery(culture, stack, [], [], [], 1);
+            _page = await Catalogs.GetAllAsync(culture, stack, HttpContext.RequestAborted);
             return;
         }
 

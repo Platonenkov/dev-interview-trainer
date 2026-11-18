@@ -38,7 +38,7 @@ public sealed class ProfileAndImportTests(AppHostFixture host) : IClassFixture<A
             HasTouch = touch,
             IsMobile = mobile,
         });
-        await context.AddInitScriptAsync($"try {{ localStorage.setItem('theme', '{theme}'); }} catch (e) {{ }}");
+        await context.AddInitScriptAsync($"try {{ localStorage.setItem('dit.theme', '{theme}'); }} catch (e) {{ }}");
         return context;
     }
 
@@ -108,7 +108,7 @@ public sealed class ProfileAndImportTests(AppHostFixture host) : IClassFixture<A
             Resource(streak == 1 ? "Profile.Streak.One" : "Profile.Streak.Many").Replace("{0}", streak.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal));
         await Assertions.Expect(tab.Locator(".profile__total")).ToHaveTextAsync("2");
         ILocator due = tab.Locator(".profile__due a");
-        Assert.Equal("/en/dotnet/review", await due.GetAttributeAsync("href"));
+        Assert.Equal("en/dotnet/review", await due.GetAttributeAsync("href"));
         await Assertions.Expect(due).ToContainTextAsync("1");
         Assert.NotNull(await tab.Locator(".profile__next time").GetAttributeAsync("datetime"));
 
@@ -170,7 +170,7 @@ public sealed class ProfileAndImportTests(AppHostFixture host) : IClassFixture<A
         await tab.GotoAsync("/en/dotnet/practice");
         ILocator islandNotice = tab.Locator(".island-import-notice a");
         await Assertions.Expect(islandNotice).ToBeVisibleAsync(new LocatorAssertionsToBeVisibleOptions { Timeout = Wait });
-        Assert.Equal("/en/dotnet/profile#import", await islandNotice.GetAttributeAsync("href"));
+        Assert.Equal("en/dotnet/profile#import", await islandNotice.GetAttributeAsync("href"));
 
         await OpenProfileAsync(tab);
         ILocator panel = tab.Locator("#import");

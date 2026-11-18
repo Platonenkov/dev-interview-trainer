@@ -14,13 +14,16 @@ public enum IslandStateKind
     SignedOut,
     AccountChanged,
     ServerError,
+
+    /// <summary>The static site was redeployed under the open page: its content files are gone, a reload fetches the new ones.</summary>
+    SiteUpdated,
 }
 
 public static class IslandState
 {
     /// <summary>
     /// Maps the result of a session request: no response is <see cref="IslandStateKind.Offline"/>, 429, 401 and a 409 with the
-    /// <c>owner-mismatch</c> code have their own states, any other failure is <see cref="IslandStateKind.ServerError"/>. A success is
+    /// <c>owner-mismatch</c> code have their own states, a 404 with the <c>site-updated</c> code is <see cref="IslandStateKind.SiteUpdated"/>, any other failure is <see cref="IslandStateKind.ServerError"/>. A success is
     /// <see cref="IslandStateKind.Empty"/> when <paramref name="sessionEmpty"/>, unless it carried no readable body (a
     /// proxy's or captive portal's page), which is a server error rather than an empty pool.
     /// </summary>
@@ -34,6 +37,7 @@ public static class IslandState
             // Only the owner check's 409 means the account changed; any other 409 is an unexpected failure.
             409 when string.Equals(result.ErrorCode, ApiErrorCodes.OwnerMismatch, StringComparison.Ordinal) => IslandStateKind.AccountChanged,
             429 => IslandStateKind.RateLimited,
+            404 when string.Equals(result.ErrorCode, ApiErrorCodes.SiteUpdated, StringComparison.Ordinal) => IslandStateKind.SiteUpdated,
             _ when result.IsSuccess && result.Value is not null => sessionEmpty ? IslandStateKind.Empty : IslandStateKind.Ready,
             _ => IslandStateKind.ServerError,
         };

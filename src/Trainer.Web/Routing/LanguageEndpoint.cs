@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using Trainer.Domain.Keys;
+using Trainer.Web.Seo;
 
 namespace Trainer.Web.Routing;
 
@@ -53,7 +54,7 @@ public static class LanguageEndpoint
         return insideCulture ? candidate : home;
     }
 
-    private static IResult Handle(HttpContext context, string target)
+    private static IResult Handle(HttpContext context, SitePaths paths, string target)
     {
         context.Response.Headers.CacheControl = "no-store";
         context.Response.Headers["X-Robots-Tag"] = "noindex";
@@ -66,7 +67,7 @@ public static class LanguageEndpoint
         context.Response.Cookies.Append(RootRedirectEndpoint.CookieName, culture.Value, CreateCookieOptions(context.Request));
 
         string destination = ResolveReturnPath(context.Request.Query[ReturnParameter].ToString(), culture);
-        return Results.Redirect(ToLocation(destination), permanent: false);
+        return Results.Redirect(ToLocation(paths.Page(destination)), permanent: false);
     }
 
     /// <summary>Options of the <c>lang</c> cookie; sign-in writes it with the same ones when it restores a stored choice.</summary>

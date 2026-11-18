@@ -1,0 +1,324 @@
+name: pages
+
+# Publishes the static site to GitHub Pages. Automatic after ci succeeds on a push to main, or by hand from main.
+#
+# Which commit is built: the one the triggering ci run tested (workflow_run), or the tip of main when dispatched, after
+# checking that it has a successful ci push run. What is live is decided by the live site, not by GitHub's deployment
+# records: gate and recheck read the live build.json through deploy/pages/pages-gate.sh. An older commit never replaces
+# a newer live one; the same commit is skipped on an automatic run and republished on a manual run, which is how a change of
+# the SITE_URL (custom domain), GOATCOUNTER_CODE or verification repository variables goes live (same commit, new build id).
+#
+# Things to know:
+#  - The site address needs no configuration: the gate derives the Pages address of the repository
+#    (pages-gate.sh site-url) and every later job reads it from the gate's output. The SITE_URL repository variable only
+#    overrides it for a custom domain; no file of the repository names the address.
+#  - Only the deploy job has the concurrency group "pages", and an in-progress job is never cancelled, so a run that
+#    publishes nothing never takes a slot from one that does. The decision is repeated inside that job, under the lock and
+#    right before deploy-pages, with the policy of the gate applied to the live site as it is then: a candidate that is
+#    equal to or older than what is live is not published, anything newer is, even when another deployment went live in
+#    between (two close pushes leave the newest commit live). Builds run in parallel. GitHub keeps one pending job per group
+#    and replaces it with a newer one, so a pending deploy job of a newer commit can be replaced by a later-queued one of an
+#    older commit, which then does not publish; the site stays one commit behind until the next push or a manual run.
+#  - When another deployment went live while this build ran, this build kept its immutable files from the older live build, so
+#    a client still on the replaced build may miss some of its hashed files until the recovery banner reloads it; recheck
+#    writes a notice for it.
+#  - The deploy job does not end when deploy-pages returns: it polls the live build.json (cache-busting query) until it carries
+#    this run's build id, up to five minutes, and fails with a clear message on timeout. The "pages" lock is therefore held
+#    until the new build is visible, so the next queued deploy job decides against a build.json that already shows it and an
+#    older candidate is never judged "newer" by a stale manifest.
+#  - The reusable workflow (static-site.yml) is taken from main, the ref this run executes, while its steps check out the
+#    candidate. A candidate older than the tip of main is built with the newest workflow: if a commit changed the tool command
+#    line and the workflow together, a still-running run for the previous commit can fail. The failure is red and harmless
+#    (nothing is published), and the next push or a manual run recovers.
+#  - The decisions are shell logic in deploy/pages/pages-gate.sh, which deploy/tests/pages-gate.test.sh runs with fakes.
+#  - After main was rewritten the live commit may be gone from the history and every run fails; a manual run with
+#    allow_unknown_live set deploys anyway (docs/deployment.md, "Publishing the static site").
+#  - Only deploy has an environment, so a run the gate skips creates no deployment record. A run whose in-lock recheck
+#    declines to publish ends the job green with its deploy step skipped, and says so in the summary.
+#  - There is no schedule and no secret.
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      allow_unknown_live:
+        description: Deploy even when the live commit is not in the history of main (after main was rewritten). Manual runs only.
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  # workflow_run carries the repository's permissions even when the triggering run was not privileged, and its "branches"
+  # filter matches a head branch name that a fork's pull request can also call "main", so every property is checked again.
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      site_url: ${{ steps.site.outputs.site_url }}
+      candidate: ${{ steps.gate.outputs.candidate }}
+      decision: ${{ steps.gate.outputs.decision }}
+      first: ${{ steps.gate.outputs.first }}
+      live_build_id: ${{ steps.gate.outputs.live_build_id }}
+      build_id: ${{ steps.gate.outputs.build_id }}
+    steps:
+      # The scripts live in main, never in the commit being judged, so nothing untrusted is checked out before provenance.
+      # The gate orders commits by ancestry, so it needs the whole history of main.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Derive the site address
+        id: site
+        env:
+          SITE_URL: ${{ vars.SITE_URL }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          bash deploy/pages/pages-gate.sh site-url >> "$GITHUB_OUTPUT"
+      - name: Check provenance
+        id: candidate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          REF_NAME: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+          RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_EVENT: ${{ github.event.workflow_run.event }}
+          RUN_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          RUN_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          bash deploy/pages/pages-gate.sh provenance >> "$GITHUB_OUTPUT"
+
+      - name: Decide
+        id: gate
+        if: ${{ steps.candidate.outputs.sha != '' }}
+        env:
+          SITE_URL: ${{ steps.site.outputs.site_url }}
+          CANDIDATE: ${{ steps.candidate.outputs.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          PAGES_GATE_ALLOW_UNKNOWN_LIVE: ${{ inputs.allow_unknown_live }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          {
+            bash deploy/pages/pages-gate.sh decide "$SITE_URL" "$CANDIDATE" "$EVENT_NAME"
+            echo "candidate=$CANDIDATE"
+            echo "build_id=$CANDIDATE.$RUN_ID.$RUN_ATTEMPT"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: gate
+    if: ${{ needs.gate.outputs.decision == 'deploy' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/static-site.yml
+    with:
+      ref: ${{ needs.gate.outputs.candidate }}
+      site_url: ${{ needs.gate.outputs.site_url }}
+      build_id: ${{ needs.gate.outputs.build_id }}
+      retain: ${{ needs.gate.outputs.first != 'true' }}
+      live_build_id: ${{ needs.gate.outputs.live_build_id }}
+      upload: true
+      goatcounter_code: ${{ vars.GOATCOUNTER_CODE }}
+      google_verification: ${{ vars.GOOGLE_SITE_VERIFICATION }}
+      yandex_verification: ${{ vars.YANDEX_VERIFICATION }}
+
+  # The only job with an environment, the permissions Pages needs and the concurrency group. The build takes minutes, so the
+  # decision is repeated against the live site here, inside the lock and right before deploy-pages, with the same policy:
+  # publish only when nothing else went live meanwhile (a first deployment is still first, any other still follows the build
+  # that retention copied from). Declining is not a failure: the job ends green and deploy-pages is skipped.
+  deploy:
+    needs: [gate, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    outputs:
+      deployed: ${{ steps.recheck.outputs.deploy }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Decide again
+        id: recheck
+        env:
+          SITE_URL: ${{ needs.gate.outputs.site_url }}
+          CANDIDATE: ${{ needs.gate.outputs.candidate }}
+          EVENT_NAME: ${{ github.event_name }}
+          PAGES_GATE_ALLOW_UNKNOWN_LIVE: ${{ inputs.allow_unknown_live }}
+          SEEN_FIRST: ${{ needs.gate.outputs.first }}
+          SEEN_LIVE_BUILD_ID: ${{ needs.gate.outputs.live_build_id }}
+        run: |
+          set -euo pipefail
+          bash deploy/pages/pages-gate.sh recheck "$SITE_URL" "$CANDIDATE" "$EVENT_NAME" "$SEEN_FIRST" "$SEEN_LIVE_BUILD_ID" >> "$GITHUB_OUTPUT"
+      - name: Say that nothing is published
+        if: ${{ steps.recheck.outputs.deploy != 'true' }}
+        run: echo "The candidate is already live or older than the live site, so this run published nothing." >> "$GITHUB_STEP_SUMMARY"
+      - name: Deploy to GitHub Pages
+        id: deployment
+        if: ${{ steps.recheck.outputs.deploy == 'true' }}
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+      - name: Wait until the build is live
+        if: ${{ steps.recheck.outputs.deploy == 'true' }}
+        env:
+          SITE_URL: ${{ needs.gate.outputs.site_url }}
+          BUILD_ID: ${{ needs.gate.outputs.build_id }}
+        run: |
+          set -euo pipefail
+          bash deploy/pages/pages-gate.sh wait-live "$SITE_URL" "$BUILD_ID"
+
+  # Pages serves the new files after a delay, so the checks retry for up to five minutes. They run against the real host:
+  # the routing rules, the not-found page, this run's build id, and what the host does with the runtime (Content-Encoding and
+  # size with gzip and br offered), which is the premise of the compression decision (docs/static-edition-spike.md).
+  live-check:
+    needs: [gate, deploy]
+    if: ${{ needs.deploy.result == 'success' && needs.deploy.outputs.deployed == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check the live site
+        env:
+          SITE_URL: ${{ needs.gate.outputs.site_url }}
+          BUILD_ID: ${{ needs.gate.outputs.build_id }}
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          # The Content-Encoding table matters most when the check fails, so it is written on every exit.
+          write_summary() {
+            if [ -f "$work/summary.md" ]; then
+              cat "$work/summary.md" >> "$GITHUB_STEP_SUMMARY"
+            fi
+            rm -rf "$work"
+          }
+          trap write_summary EXIT
+
+          expect_status() {
+            local code
+            code="$(curl --silent --max-time 20 --output "${3:-/dev/null}" --write-out '%{http_code}' "$1" || true)"
+            if [ "$code" != "$2" ]; then
+              echo "$1 answered $code, expected $2." >&2
+              return 1
+            fi
+          }
+
+          # Prints "<status> <Content-Encoding> <bytes sent>" for a file requested the way a browser does.
+          probe() {
+            local result encoding
+            result="$(curl --silent --max-time 120 --header 'Accept-Encoding: gzip, br' --output /dev/null --dump-header "$work/headers" --write-out '%{http_code} %{size_download}' "$1" || true)"
+            encoding="$(grep -i '^content-encoding:' "$work/headers" | tr -d '\r' | awk '{print tolower($2)}' || true)"
+            echo "${result% *} ${encoding:--} ${result#* }"
+          }
+
+          check_once() {
+            local result name index file plain encoded br_total=0 plain_total=0
+            local plain_status plain_encoding plain_bytes br_status br_encoding br_bytes
+            local -a wasm
+            expect_status "$SITE_URL" 200 || return 1
+            expect_status "${SITE_URL}en/" 200 || return 1
+            expect_status "${SITE_URL}ru/dotnet/questions/" 200 || return 1
+
+            result="$(curl --silent --max-time 20 --output /dev/null --write-out '%{http_code} %{redirect_url}' "${SITE_URL}en" || true)"
+            if [ "$result" != "301 ${SITE_URL}en/" ]; then
+              echo "${SITE_URL}en answered '$result', expected a 301 to ${SITE_URL}en/." >&2
+              return 1
+            fi
+
+            expect_status "${SITE_URL}no-such-page/" 404 "$work/404.html" || return 1
+            if ! grep -q 'id="not-found"' "$work/404.html"; then
+              echo "The 404 page of ${SITE_URL}no-such-page/ is not the site's not-found page." >&2
+              return 1
+            fi
+
+            for name in build immutable; do
+              expect_status "${SITE_URL}${name}.json?_r=$(date +%s%N)" 200 "$work/$name.json" || return 1
+              if [ "$(jq -r '.buildId' "$work/$name.json")" != "$BUILD_ID" ]; then
+                echo "${name}.json does not carry the build id of this run yet." >&2
+                return 1
+              fi
+            done
+
+            index="$(jq -r 'first(.files[] | select(test("^data/[^/]+/[^/]+/index\\.[0-9a-f]+\\.json$"))) // empty' "$work/immutable.json")"
+            if [ -z "$index" ]; then
+              echo "immutable.json lists no content index." >&2
+              return 1
+            fi
+            expect_status "${SITE_URL}${index}" 200 || return 1
+
+            mapfile -t wasm < <(jq -r '.files[] | select(endswith(".wasm"))' "$work/immutable.json")
+            if [ "${#wasm[@]}" -eq 0 ]; then
+              echo "immutable.json lists no runtime .wasm file." >&2
+              return 1
+            fi
+            {
+              echo "### Runtime files on the live host (Accept-Encoding: gzip, br)"
+              echo
+              echo "| File | Status | Content-Encoding | Bytes sent | Brotli file status | Brotli Content-Encoding | Brotli bytes sent |"
+              echo "|---|---|---|---|---|---|---|"
+            } > "$work/summary.md"
+            for file in "${wasm[@]}"; do
+              plain="$(probe "${SITE_URL}${file}")"
+              encoded="$(probe "${SITE_URL}${file}.br")"
+              read -r plain_status plain_encoding plain_bytes <<< "$plain"
+              read -r br_status br_encoding br_bytes <<< "$encoded"
+              echo "| \`$file\` | $plain_status | $plain_encoding | $plain_bytes | $br_status | $br_encoding | $br_bytes |" >> "$work/summary.md"
+              # The page fetches the .br file and decodes it itself, so the host must send those bytes untouched (gzip
+              # on top is undone by the browser; a br Content-Encoding would be undone too and the page would decode twice).
+              if [ "$plain_status" != "200" ] || [ "$br_status" != "200" ]; then
+                echo "$file or its .br file is not served (status $plain_status and $br_status)." >&2
+                return 1
+              fi
+              case "$br_encoding" in
+                - | gzip) ;;
+                *)
+                  echo "${file}.br is sent with Content-Encoding $br_encoding; the page would decode it twice." >&2
+                  return 1
+                  ;;
+              esac
+              plain_total=$((plain_total + plain_bytes))
+              br_total=$((br_total + br_bytes))
+            done
+            {
+              echo
+              echo "Runtime .wasm files as the host sends them: $plain_total bytes. Their .br files: $br_total bytes (budget for all of _framework: 2500000)."
+            } >> "$work/summary.md"
+            if [ "$br_total" -gt 2500000 ]; then
+              echo "The runtime .br files alone are $br_total bytes, over the 2500000 byte budget the Brotli decision rests on." >&2
+              return 1
+            fi
+          }
+
+          deadline=$((SECONDS + 300))
+          until check_once; do
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::The live site did not pass its checks within five minutes."
+              exit 1
+            fi
+            echo "Not ready yet; trying again in 15 seconds."
+            sleep 15
+          done
+          echo "The live site passed its checks."

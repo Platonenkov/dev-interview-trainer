@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Trainer.Contracts.Storage;
 using Trainer.Web.Client.Storage;
 
 namespace Trainer.Web.Client.Tests;
@@ -18,6 +19,7 @@ internal sealed class FakeBrowserStore : IBrowserStore
     {
         ["outbox"] = ("answers", "clientAnswerId"),
         ["summaries"] = ("items", "mockSessionId"),
+        ["history"] = ("items", "id"),
     };
 
     // Parsed documents are kept as nodes so that thousands of appends do not re-parse a growing string each time.
@@ -47,6 +49,28 @@ internal sealed class FakeBrowserStore : IBrowserStore
 
     public ValueTask<string?> ReadAsync(string key) => ValueTask.FromResult(Raw(key));
 
+    /// <summary>Counts how often the fingerprint of a key was asked for; it replaces reading the log in the static edition.</summary>
+    public int Fingerprints { get; private set; }
+
+    public ValueTask<string?> FingerprintAsync(string key)
+    {
+        Fingerprints++;
+        Classified current = Classify(key);
+        if (current.Refusal is not null)
+        {
+            return ValueTask.FromResult<string?>(null);
+        }
+
+        return ValueTask.FromResult<string?>(FingerprintOf(current.Doc?["answers"] as JsonArray ?? []));
+    }
+
+    // Any stable function of the count and the tail will do for the tests; outbox.js has its own.
+    private static string FingerprintOf(JsonArray items)
+    {
+        string tail = string.Concat(items.Skip(Math.Max(0, items.Count - 64)).Select(e => e?.ToJsonString() + ";"));
+        return items.Count + ":" + Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(tail)))[..8];
+    }
+
     public ValueTask<StoreResult> MutateAsync(StoreOp op)
     {
         ArgumentNullException.ThrowIfNull(op);
@@ -70,6 +94,7 @@ internal sealed class FakeBrowserStore : IBrowserStore
     {
         "append" => Append(op.Key, "outbox", op.Value!.Value),
         "summaryAdd" => Append(op.Key, "summaries", JsonSerializer.SerializeToElement(new[] { op.Value!.Value })),
+        "historyAdd" => HistoryAdd(op.Key, op.Value!.Value),
         "remove" => Remove(op.Key, "outbox", op.Ids!),
         "summaryRemove" => Remove(op.Key, "summaries", op.Ids!),
         "move" => Move(op),
@@ -89,10 +114,65 @@ internal sealed class FakeBrowserStore : IBrowserStore
         }
 
         JsonArray added = (JsonArray)JsonNode.Parse(entries.GetRawText())!;
-        Merge(items!, added, id);
+        string previous = FingerprintOf(items!);
+        int newOnes = Merge(items!, added, id);
         Commit(key, doc!, list);
-        return Done(added.Count);
+        return shape == "outbox"
+            ? new StoreResult(true, true, null, null, added.Count, FingerprintOf(items!), previous, newOnes)
+            : Done(added.Count);
     }
+
+    // outbox.js: bad-op without a string id, stack or finishedAt; merge by id, newest finishedAt first (then id), only the
+    // newest 20 of each stack stay; an unreadable finishedAt on the entry being added counts as now.
+    private StoreResult HistoryAdd(string key, JsonElement entry)
+    {
+        (string list, string id) = Shapes["history"];
+        JsonObject added = (JsonObject)JsonNode.Parse(entry.GetRawText())!;
+        if (IdOf(added, id) is null || added["stack"] is not JsonValue stack || !stack.TryGetValue<string>(out _)
+            || added["finishedAt"] is not JsonValue finished || !finished.TryGetValue<string>(out _))
+        {
+            return Fail(StoreErrors.BadOp);
+        }
+
+        if (FinishedAt(added) is null)
+        {
+            added["finishedAt"] = DateTimeOffset.UtcNow.ToString("O", System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        if (!TryList(key, list, out JsonObject? doc, out JsonArray? items, out StoreResult? refusal))
+        {
+            return refusal!;
+        }
+
+        Merge(items!, [added], id);
+        Dictionary<string, int> counts = new(StringComparer.Ordinal);
+        List<JsonNode?> kept =
+        [
+            .. items!
+                .OrderByDescending(e => FinishedAt(e) ?? DateTimeOffset.MinValue)
+                .ThenByDescending(e => IdOf(e, id) ?? "", StringComparer.Ordinal)
+                .Where(e =>
+                {
+                    string group = e is JsonObject o && o["stack"] is JsonValue s && s.TryGetValue(out string? text) ? text : "";
+                    int seen = counts.GetValueOrDefault(group);
+                    counts[group] = seen + 1;
+                    return seen < StoredMockHistory.MaxItems;
+                })
+                .Select(e => e!.DeepClone()),
+        ];
+        _indexes.Remove(items!);
+        doc![list] = new JsonArray([.. kept]);
+        Commit(key, doc, list);
+        return Done(kept.Any(e => IdOf(e, id) == IdOf(added, id)) ? 1 : 0);
+    }
+
+    // The JS reads the instant with Date.parse after making the fraction three digits; DateTimeOffset.TryParse accepts the
+    // same ISO forms, and what it rejects counts as no time.
+    private static DateTimeOffset? FinishedAt(JsonNode? entry) =>
+        entry is JsonObject value && value["finishedAt"] is JsonValue text && text.TryGetValue(out string? raw)
+            && DateTimeOffset.TryParse(raw, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out DateTimeOffset at)
+                ? at
+                : null;
 
     private StoreResult Remove(string key, string shape, IReadOnlyList<string> ids)
     {
@@ -377,8 +457,9 @@ internal sealed class FakeBrowserStore : IBrowserStore
         Writes++;
     }
 
-    private void Merge(JsonArray items, JsonArray added, string id)
+    private int Merge(JsonArray items, JsonArray added, string id)
     {
+        int appended = 0;
         Dictionary<string, int> index = _indexes.GetValue(items, list => IndexOf(list, id));
 
         foreach (JsonNode? entry in added.ToList())
@@ -393,8 +474,11 @@ internal sealed class FakeBrowserStore : IBrowserStore
             {
                 index[value] = items.Count;
                 items.Add(copy);
+                appended++;
             }
         }
+
+        return appended;
     }
 
     private static Dictionary<string, int> IndexOf(JsonArray items, string id)

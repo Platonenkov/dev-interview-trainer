@@ -229,7 +229,7 @@ public sealed class IslandSweepFixture(PostgresFixture postgres, BrowserFixture 
             await context.AddInitScriptAsync("Object.defineProperty(Navigator.prototype, 'maxTouchPoints', { get: () => 5 }); window.ontouchstart = null;");
         }
 
-        await context.AddInitScriptAsync($"try {{ localStorage.setItem('theme', '{theme}'); }} catch (e) {{ }}");
+        await context.AddInitScriptAsync($"try {{ localStorage.setItem('dit.theme', '{theme}'); }} catch (e) {{ }}");
         return context;
     }
 

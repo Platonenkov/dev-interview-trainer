@@ -86,8 +86,12 @@
     [Parameter]
     public EventCallback<PracticeFilterSet> Start { get; set; }
 
-    // Due needs server state, so only a signed-in user is offered it.
-    private IEnumerable<string> Statuses => Bootstrap.Me is null
+    /// <summary>Whether the visitor has progress (<c>IIslandBackend.KeepsProgress</c>); only then is <c>due</c> offered.</summary>
+    [Parameter, EditorRequired]
+    public bool KeepsProgress { get; set; }
+
+    // Due needs the visitor's answer history, so only a visitor with progress is offered it.
+    private IEnumerable<string> Statuses => !KeepsProgress
         ? [PracticeFilterSet.All, PracticeFilterSet.New]
         : [PracticeFilterSet.All, PracticeFilterSet.New, PracticeFilterSet.Due];
 
@@ -124,7 +128,7 @@
 
     private Task StartAsync()
     {
-        PracticeFilterSet chosen = new PracticeFilterSet([.. _levels], [.. _topics], [.. _types], _status, _count).Normalise(Bootstrap);
+        PracticeFilterSet chosen = new PracticeFilterSet([.. _levels], [.. _topics], [.. _types], _status, _count).Normalise(Bootstrap, KeepsProgress);
         return Start.InvokeAsync(chosen);
     }
 }

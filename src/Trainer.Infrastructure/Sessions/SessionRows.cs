@@ -1,8 +1,10 @@
 using System.Text.Json;
 using Trainer.Contracts;
+using Trainer.Domain.Keys;
 using Trainer.Domain.Levels;
 using Trainer.Domain.Questions;
 using Trainer.Infrastructure.Content;
+using Trainer.Infrastructure.Persistence;
 using Trainer.Infrastructure.Persistence.Entities;
 using Trainer.Infrastructure.Queries;
 
@@ -49,6 +51,17 @@ internal static class SessionRows
         c.Locale.AnswerHtml,
         c.Locale.ExplanationHtml,
         c.Locale.Links);
+
+    /// <summary>Joins questions with their locale for the culture; a question without one drops out.</summary>
+    public static IQueryable<SessionCandidate> Candidates(TrainerDbContext db, IQueryable<QuestionEntity> questions, CultureKey culture)
+    {
+        string cultureValue = culture.Value;
+        return questions.Join(
+            db.QuestionLocales.Where(l => l.Culture == cultureValue),
+            q => q.Id,
+            l => l.QuestionId,
+            (q, l) => new SessionCandidate { Question = q, Locale = l });
+    }
 
     public static QuestionDto ToDto(SessionRow row, IReadOnlyDictionary<string, string> topicTitles)
     {

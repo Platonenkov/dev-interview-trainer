@@ -1,3 +1,5 @@
+using Trainer.Web.StaticSite;
+
 namespace Trainer.Web.Startup;
 
 /// <summary>The <c>App</c> configuration section.</summary>
@@ -5,8 +7,20 @@ public sealed class AppOptions
 {
     public const string SectionName = "App";
 
-    /// <summary>Absolute origin used in canonical URLs and the sitemap, without a trailing slash.</summary>
+    /// <summary>
+    /// Absolute public URL used in canonical URLs and the sitemap. Its path, if any (for example <c>/dev-interview-trainer</c>),
+    /// is the path base the site is served under; a trailing slash is ignored.
+    /// </summary>
     public string? PublicBaseUrl { get; init; }
+
+    /// <summary>
+    /// <see cref="SiteEdition.Server"/> (default) is the full site; <see cref="SiteEdition.Static"/> is the build exported to
+    /// GitHub Pages (ADR 0022) and is accepted only in StaticExport, Development and Testing (<see cref="EditionStartupCheck"/>).
+    /// </summary>
+    public SiteEdition Edition { get; init; } = SiteEdition.Server;
+
+    /// <summary>Settings of the static edition (<c>App:StaticSite</c>); ignored by the server edition.</summary>
+    public StaticSiteOptions StaticSite { get; init; } = new();
 
     /// <summary>Directory with the content repository checkout; required for the startup import.</summary>
     public string? ContentRoot { get; init; }

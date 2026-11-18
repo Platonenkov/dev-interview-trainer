@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Trainer.Application.Sessions;
 using Trainer.Contracts;
+using Trainer.Domain.Sessions;
 using Trainer.Domain.Users;
 using Trainer.Web.Auth;
 using Trainer.Web.ContentState;

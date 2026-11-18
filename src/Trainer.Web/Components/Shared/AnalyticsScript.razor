@@ -1,34 +1,67 @@
 @using Microsoft.Extensions.Options
 @using Trainer.Web.Analytics
 @using Trainer.Web.Seo
+@using Trainer.Web.Startup
 @inject IOptions<AnalyticsOptions> Analytics
+@inject IOptions<AppOptions> App
 @inject SiteUrls Site
+@inject SitePaths Paths
 
 @if (_websiteId is not null)
 {
     @* A same-origin external script needs no nonce, so the cached HTML is identical for every visitor (ADR 0012, ADR 0018).
        data-host-url is required: the tracker posts to <host>/api/send, and the app owns /api. *@
-    <script defer src="/stats/script.js" data-website-id="@_websiteId" data-host-url="@_hostUrl"
+    <script defer src="@Paths.Asset("stats/script.js")" data-website-id="@_websiteId" data-host-url="@_hostUrl"
             data-do-not-track="true" data-exclude-search="true" data-exclude-hash="true"></script>
+}
+else if (_goatCounterCode is not null)
+{
+    @* The settings file comes first: goatcounter.js reads window.goatcounter when it runs. Both files are served from this
+       site; the counter is a reduced copy that never sends the query string (ADR 0025). *@
+    <script src="@Paths.Asset(Assets["js/goatcounter-settings.js"])"></script>
+    <script data-goatcounter="@GoatCounterScript.Endpoint(_goatCounterCode)" async src="@Paths.Asset(Assets["js/goatcounter.js"])"></script>
 }
 
 @code {
     [CascadingParameter]
     private HttpContext? HttpContext { get; set; }
 
+    /// <summary>
+    /// The static edition counts with GoatCounter, whose script goes at the end of <c>&lt;body&gt;</c>; the server edition
+    /// counts with Umami, whose script goes in <c>&lt;head&gt;</c>. Each edition renders only its own, in only its own place.
+    /// </summary>
+    [Parameter]
+    public bool AtEndOfBody { get; set; }
+
     private string? _websiteId;
     private string? _hostUrl;
+    private string? _goatCounterCode;
 
     protected override void OnInitialized()
     {
+        if (IsExcluded(HttpContext?.Request.Path.Value))
+        {
+            return;
+        }
+
+        if (App.Value.Edition == SiteEdition.Static)
+        {
+            if (AtEndOfBody && GoatCounterScript.IsValidCode(Analytics.Value.GoatCounterCode))
+            {
+                _goatCounterCode = Analytics.Value.GoatCounterCode;
+            }
+
+            return;
+        }
+
         string? id = Analytics.Value.GetNormalizedWebsiteId();
-        if (id is null || IsExcluded(HttpContext?.Request.Path.Value))
+        if (id is null || AtEndOfBody)
         {
             return;
         }
 
         _websiteId = id;
-        _hostUrl = Site.Origin(HttpContext?.Request) + "/stats";
+        _hostUrl = Site.Origin(HttpContext?.Request) + Paths.Asset("stats");
     }
 
     // The admin, sign-in and per-user profile pages are not public reading; counting them would only add noise to the page-view numbers.

@@ -1,8 +1,8 @@
-using Trainer.Application.Sessions;
 using Trainer.Domain.Levels;
 using Trainer.Domain.Questions;
+using Trainer.Domain.Sessions;
 
-namespace Trainer.Application.Tests;
+namespace Trainer.Domain.Tests;
 
 public sealed class MockComposerTests
 {

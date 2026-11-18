@@ -40,7 +40,7 @@ public sealed class ReviewFlowTests(AppHostFixture host) : IClassFixture<AppHost
             HasTouch = touch,
             IsMobile = mobile,
         });
-        await context.AddInitScriptAsync($"try {{ localStorage.setItem('theme', '{theme}'); }} catch (e) {{ }}");
+        await context.AddInitScriptAsync($"try {{ localStorage.setItem('dit.theme', '{theme}'); }} catch (e) {{ }}");
         await host.SignInAsync(context, new FakeTelegramIdentity(telegramId, "Review Tester", "review_tester"));
         return (context, telegramId);
     }
@@ -176,8 +176,8 @@ public sealed class ReviewFlowTests(AppHostFixture host) : IClassFixture<AppHost
         Assert.Empty(QuestionIds(session));
         ILocator empty = tab.Locator(".review-empty");
         await Assertions.Expect(empty).ToContainTextAsync(Resource("Review.Empty"));
-        Assert.Equal("/en/dotnet/practice", await empty.Locator(".review-empty__practice").GetAttributeAsync("href"));
-        Assert.Equal("/en/dotnet/profile", await empty.Locator(".review-empty__profile").GetAttributeAsync("href"));
+        Assert.Equal("en/dotnet/practice", await empty.Locator(".review-empty__practice").GetAttributeAsync("href"));
+        Assert.Equal("en/dotnet/profile", await empty.Locator(".review-empty__profile").GetAttributeAsync("href"));
         host.AssertNoCspViolations(tab);
     }
 

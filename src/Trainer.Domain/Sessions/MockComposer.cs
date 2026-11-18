@@ -1,7 +1,7 @@
 using Trainer.Domain.Levels;
 using Trainer.Domain.Questions;
 
-namespace Trainer.Application.Sessions;
+namespace Trainer.Domain.Sessions;
 
 /// <summary>
 /// Chooses the questions of a mock interview: about 30% from the level below (none for Junior), the rest at the level, a

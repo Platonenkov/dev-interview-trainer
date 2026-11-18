@@ -128,6 +128,56 @@ public sealed class CatalogQueriesTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task GetAll_ReturnsEveryLiveRowOnOnePageWithUnfilteredFacets()
+    {
+        await using TrainerDbContext db = await SeedAsync();
+        CatalogQueries queries = new(db);
+
+        CatalogPage all = await queries.GetAllAsync(En, Dotnet, Ct);
+        CatalogPage unfiltered = await queries.GetAsync(Query(), Ct);
+
+        Assert.Equal(["junior-open", "middle-output", "middle-single", "q-en-only"], all.Rows.Select(r => r.Slug).Order(StringComparer.Ordinal));
+        Assert.Equal(4, all.Total);
+        Assert.Equal(1, all.Page);
+        Assert.Equal(1, all.PageCount);
+        Assert.Equal(unfiltered.Rows.Select(r => r.Slug), all.Rows.Select(r => r.Slug));
+        Assert.Equal(unfiltered.LevelCounts, all.LevelCounts);
+        Assert.Equal(unfiltered.TopicCounts, all.TopicCounts);
+        Assert.Equal(unfiltered.TypeCounts, all.TypeCounts);
+        Assert.DoesNotContain(all.Rows, r => r.Slug == "q-gone");
+    }
+
+    [Fact]
+    public async Task GetAll_IsNotCutAtThePageSize()
+    {
+        await using TrainerDbContext db = await SeedAsync();
+        for (int i = 0; i < CatalogQuery.PageSize + 3; i++)
+        {
+            AddQuestion(db, $"01KBZ3Q8N9V2K3M4P5R6S7T9{i:00}", $"bulk-{i:00}", "a", Level.Junior, QuestionType.Open, ru: $"Б {i:00}", en: $"Bulk {i:00}");
+        }
+
+        await db.SaveChangesAsync(Ct);
+
+        CatalogPage all = await new CatalogQueries(db).GetAllAsync(En, Dotnet, Ct);
+
+        Assert.Equal(CatalogQuery.PageSize + 3 + 4, all.Rows.Count);
+        Assert.Equal(all.Rows.Count, all.Total);
+        Assert.Equal(1, all.PageCount);
+    }
+
+    [Fact]
+    public async Task GetAll_FollowsTheCulture()
+    {
+        await using TrainerDbContext db = await SeedAsync();
+
+        CatalogPage ru = await new CatalogQueries(db).GetAllAsync(Ru, Dotnet, Ct);
+
+        Assert.DoesNotContain(ru.Rows, r => r.Slug == "q-en-only");
+        Assert.Equal(3, ru.Rows.Count);
+        Assert.Equal("Тема A", ru.Rows.First(r => r.Slug == "junior-open").TopicTitle);
+    }
+
+    [Fact]
     public async Task CatalogQueries_OrdersByLevelThenTitle()
     {
         await using TrainerDbContext db = await SeedAsync();

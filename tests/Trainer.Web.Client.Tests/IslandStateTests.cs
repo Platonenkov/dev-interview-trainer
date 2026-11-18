@@ -31,6 +31,21 @@ public sealed class IslandStateTests
     }
 
     [Fact]
+    public void SiteUpdated404_MapsToSiteUpdated()
+    {
+        ApiResult<SessionDto> siteUpdated = new(null, 404, ApiErrorCodes.SiteUpdated);
+        ApiResult<SessionDto> plain = new(null, 404, ApiErrorCodes.NotFound);
+        ApiResult<SessionDto> noBody = new(null, 404, null);
+        // The code belongs to a 404; the same code on another status is not a redeployed site.
+        ApiResult<SessionDto> wrongStatus = new(null, 500, ApiErrorCodes.SiteUpdated);
+
+        Assert.Equal(IslandStateKind.SiteUpdated, IslandState.FromResult(siteUpdated, false));
+        Assert.Equal(IslandStateKind.ServerError, IslandState.FromResult(plain, false));
+        Assert.Equal(IslandStateKind.ServerError, IslandState.FromResult(noBody, false));
+        Assert.Equal(IslandStateKind.ServerError, IslandState.FromResult(wrongStatus, false));
+    }
+
+    [Fact]
     public void IslandState_SuccessWithoutBody_IsServerError()
     {
         // A 200 whose body did not parse (a proxy's page) carries no session; it must not look like an empty pool.

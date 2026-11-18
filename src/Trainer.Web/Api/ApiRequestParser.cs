@@ -8,6 +8,7 @@ using Trainer.Domain.Ids;
 using Trainer.Domain.Keys;
 using Trainer.Domain.Levels;
 using Trainer.Domain.Questions;
+using Trainer.Domain.Sessions;
 using Trainer.Web.ContentState;
 
 namespace Trainer.Web.Api;

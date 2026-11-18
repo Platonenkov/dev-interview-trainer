@@ -6,6 +6,7 @@
 @using Trainer.Web.Client.Sync
 @implements IAsyncDisposable
 @inject TrainerApiClient Api
+@inject IIslandBackend Backend
 @inject OutboxSyncService Sync
 @inject AccountWatcher Accounts
 @inject MockPersistence Persistence
@@ -15,6 +16,8 @@
 @inject ServerClock Clock
 @inject IJSRuntime JS
 @inject IStringLocalizer<ClientResource> L
+@inject IslandLinks Links
+@inject NavigationManager Navigation
 
 @* Mock interview (spec 5.3): setup, a warning for a small pool before any question shows, answering without feedback,
    the assessment of open and situation questions, then the summary. The running mock is saved on every change and
@@ -52,7 +55,7 @@
                     case AnonymousMockState.HandedOver:
                         <p class="mock__notice mock__anonymous">
                             @L["Mock.Anonymous.Saved"]
-                            <a href="/@bootstrap.Culture/@bootstrap.Stack/profile#import" data-enhance-nav="false">@L["Mock.Anonymous.Import"]</a>
+                            <a href="@(Links.Page(bootstrap.Culture, bootstrap.Stack, ["profile"]) + "#import")" data-enhance-nav="false">@L["Mock.Anonymous.Import"]</a>
                         </p>
                         break;
                 }
@@ -265,8 +268,11 @@
 
     protected override async Task OnInitializedAsync()
     {
-        _bootstrap = JsonSerializer.Deserialize(BootstrapJson, TrainerJsonContext.Default.IslandBootstrapDto)
-            ?? throw new InvalidOperationException("The island bootstrap is empty.");
+        _bootstrap = PracticeQueryString.Apply(
+            JsonSerializer.Deserialize(BootstrapJson, TrainerJsonContext.Default.IslandBootstrapDto)
+                ?? throw new InvalidOperationException("The island bootstrap is empty."),
+            Navigation.Uri,
+            forMock: true);
         _owner = _bootstrap.Me?.TelegramUserId;
         _settings = MockSettings.From(_bootstrap);
         Persistence.Changed += OnPersistenceChanged;
@@ -417,7 +423,7 @@
             || !string.Equals(session.Context.Stack, bootstrap.Stack, StringComparison.Ordinal))
         {
             // Resuming here would mix languages on one page; the mock continues on its own page or is ended here.
-            _elsewhere = $"/{session.Context.Culture}/{session.Context.Stack}/mock";
+            _elsewhere = Links.Page(session.Context.Culture, session.Context.Stack, ["mock"]);
             _elsewhereMock = (session, progress);
             _view = View.Elsewhere;
             return;
@@ -490,7 +496,7 @@
             _focus = Focus.Status;
             StateHasChanged();
 
-            ApiResult<MockSessionDto> result = await Api.MockAsync(_settings.ToRequest(bootstrap.Culture, bootstrap.Stack), _lifetime.Token);
+            ApiResult<MockSessionDto> result = await Backend.MockAsync(bootstrap, _settings.ToRequest(bootstrap.Culture, bootstrap.Stack), _lifetime.Token);
             IslandStateKind kind = IslandState.FromResult(result, result.Value is { Questions.Count: 0 });
             if (kind != IslandStateKind.Ready)
             {
@@ -687,7 +693,7 @@
         StateHasChanged();
         try
         {
-            _handoff = await Persistence.HandOffAsync(session, _owner);
+            _handoff = await Persistence.HandOffAsync(session, _owner, summary => RecordFinishedAsync(session, summary));
         }
         finally
         {
@@ -700,6 +706,25 @@
         }
 
         _focus = Focus.Summary;
+    }
+
+    // The static edition keeps the summary beside the answers (the profile lists it); the server edition does nothing here.
+    // The hand-over calls this only for a mock whose answers are in storage, so the profile never lists a mock that a reload
+    // would lose the answers of, and before the mock's keys are removed, so a failure here cannot lose the only copy; it runs
+    // again on a resume and the backend merges by session id. Bounded like every storage step, and nothing it throws may
+    // stop the summary from showing or the flush from being requested: the history is a convenience.
+    private async Task RecordFinishedAsync(MockSession session, MockSummaryDto summary)
+    {
+        try
+        {
+            await Backend.OnMockFinishedAsync(_bootstrap!, session.Context.SessionId, summary, CancellationToken.None)
+                .WaitAsync(MockPersistence.WriteTimeout, _lifetime.Token);
+        }
+#pragma warning disable CA1031 // See above: any failure of the history is ignored, the store reports its own status.
+        catch (Exception)
+#pragma warning restore CA1031
+        {
+        }
     }
 
     // A new mock may replace this one only once its results are durable (P24): the hand-over is tried again first, and
@@ -747,7 +772,7 @@
         MockHandoff outcome;
         try
         {
-            outcome = await Persistence.HandOffAsync(session, _owner);
+            outcome = await Persistence.HandOffAsync(session, _owner, summary => RecordFinishedAsync(session, summary));
         }
         finally
         {

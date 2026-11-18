@@ -45,6 +45,14 @@ kill_point() {
   fi
 }
 
+# Used by smoke.sh to keep the ALTER ROLE psql session open for a few seconds, so the process-list sampler can observe it
+# deterministically. Needs DIT_TEST_HOOKS=1 and a one or two digit number of seconds, so a stray value in production does nothing.
+psql_hold() {
+  if [ "${DIT_TEST_HOOKS:-}" = "1" ] && [[ "${DIT_TEST_PSQL_HOLD:-}" =~ ^[0-9]{1,2}$ ]]; then
+    printf 'SELECT pg_sleep(%s);' "$DIT_TEST_PSQL_HOLD"
+  fi
+}
+
 usage() {
   dit_log "usage: rotate-db-password.sh <staging-dir> <trainer|umami> begin|finish|commit"
   dit_log "       rotate-db-password.sh <staging-dir> pending-role"
@@ -136,7 +144,7 @@ write_journal() {
 # defaults to "error"); both settings are switched off in the same session, before the statement. They are superuser-only,
 # which is what this session is.
 alter_role() {
-  printf '%s\n' "SET log_min_error_statement = panic;" "SET log_statement = 'none';" '\getenv pw ROTATION_PW' "ALTER ROLE $role PASSWORD :'pw';" |
+  printf '%s\n' "SET log_min_error_statement = panic;" "SET log_statement = 'none';" '\getenv pw ROTATION_PW' "ALTER ROLE $role PASSWORD :'pw';" "$(psql_hold)" |
     ROTATION_PW="$journal_password" dit_compose exec -T --user postgres -e ROTATION_PW postgres psql -v ON_ERROR_STOP=1 -d postgres >/dev/null
 }
 

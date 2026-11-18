@@ -2,6 +2,7 @@ using Trainer.Contracts;
 using Trainer.Domain.Grading;
 using Trainer.Domain.Ids;
 using Trainer.Web.Client.Api;
+using Trainer.Web.Client.Backend;
 
 namespace Trainer.Web.Client.Sessions;
 
@@ -16,9 +17,9 @@ public sealed class ReviewSession
     private readonly PracticeSession _session;
     private bool _optionsShown;
 
-    public ReviewSession(IReadOnlyList<QuestionDto> questions, UlidGenerator ids, Random random, ServerClock clock)
+    public ReviewSession(SessionPlan plan, UlidGenerator ids, Random random, ServerClock clock)
     {
-        _session = new PracticeSession(questions, ids, random, clock);
+        _session = new PracticeSession(plan, ids, random, clock);
     }
 
     public bool IsEmpty => _session.IsEmpty;
@@ -28,7 +29,7 @@ public sealed class ReviewSession
 
     public int Count => _session.Count;
 
-    /// <summary>The attempt on screen; null when the session is empty or finished.</summary>
+    /// <summary>The attempt on screen; null while a question is loading and when the session is empty or finished.</summary>
     public QuestionAttempt? Current => _session.Current;
 
     public bool IsFinished => _session.IsFinished;
@@ -60,15 +61,26 @@ public sealed class ReviewSession
         }
     }
 
-    /// <summary>Moves to the next question, which starts hidden again if it is a choice question.</summary>
-    public void Next()
+    /// <summary>Loads and shows the first question; see <see cref="PracticeSession.StartAsync"/>.</summary>
+    public Task<ApiResult<QuestionDto>> StartAsync(CancellationToken ct) => _session.StartAsync(ct);
+
+    /// <summary>
+    /// Moves to the next question, which starts hidden again if it is a choice question. The recall step restarts only
+    /// once the question has loaded, so a failed load can be repeated without losing the current one's state.
+    /// </summary>
+    public async Task<ApiResult<QuestionDto>> NextAsync(CancellationToken ct)
     {
         if (IsFinished)
         {
-            return;
+            return new ApiResult<QuestionDto>(null, 200, null);
         }
 
-        _session.Next();
-        _optionsShown = false;
+        ApiResult<QuestionDto> result = await _session.NextAsync(ct);
+        if (result.IsSuccess)
+        {
+            _optionsShown = false;
+        }
+
+        return result;
     }
 }

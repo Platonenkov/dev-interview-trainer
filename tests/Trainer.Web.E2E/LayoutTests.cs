@@ -51,7 +51,7 @@ public sealed class LayoutTests(AppHostFixture host) : IClassFixture<AppHostFixt
             ViewportSize = new ViewportSize { Width = width, Height = 900 },
             BaseURL = host.BaseAddress.ToString(),
         });
-        await context.AddInitScriptAsync($"try {{ localStorage.setItem('theme', '{theme}'); }} catch (e) {{ }}");
+        await context.AddInitScriptAsync($"try {{ localStorage.setItem('dit.theme', '{theme}'); }} catch (e) {{ }}");
         return context;
     }
 
@@ -196,7 +196,7 @@ public sealed class LayoutTests(AppHostFixture host) : IClassFixture<AppHostFixt
     public async Task ThemeAppliedBeforeFirstPaint()
     {
         await using IBrowserContext context = await host.Browser.NewContextAsync(new BrowserNewContextOptions { BaseURL = host.BaseAddress.ToString() });
-        await context.AddInitScriptAsync("try { localStorage.setItem('theme', 'light'); } catch (e) { }");
+        await context.AddInitScriptAsync("try { localStorage.setItem('dit.theme', 'light'); } catch (e) { }");
         // Records data-theme at the moment the parser inserts <body>, which is before anything is painted.
         await context.AddInitScriptAsync("""
             new MutationObserver(function (records, observer) {

@@ -73,6 +73,21 @@ public sealed class ContentValidatorTests
         await Expect(s => s with { Stacks = [.. s.Stacks, s.Stacks[0]] }, IssueCodes.TaxonomyDuplicate, "stacks.yaml");
 
     [Fact]
+    public async Task Reports_StackKeyReserved_ForQ() =>
+        await Expect(s => s with { Stacks = [s.Stacks[0] with { Key = "q" }] }, IssueCodes.StackKeyReserved, "stacks.yaml");
+
+    [Fact]
+    public async Task StackKeyReserved_NamesTheKeyAndTheRoute()
+    {
+        ContentSet set = (await ValidSet.Value) with { Stacks = [(await ValidSet.Value).Stacks[0] with { Key = "q" }] };
+
+        ContentIssue issue = Assert.Single(Validate(set), i => i.Code == IssueCodes.StackKeyReserved);
+
+        Assert.Contains("Stack key 'q' is reserved", issue.Message, StringComparison.Ordinal);
+        Assert.Equal("[0].key", issue.JsonPath);
+    }
+
+    [Fact]
     public async Task Reports_TaxonomyDuplicate_ForTopics() =>
         await Expect(
             s => s with { TopicsByStack = new Dictionary<string, IReadOnlyList<TopicDocument>> { ["dotnet"] = [.. s.TopicsByStack["dotnet"], s.TopicsByStack["dotnet"][0]] } },

@@ -60,6 +60,9 @@ public sealed class ContentValidator : IContentValidator
         }
     }
 
+    // The static edition serves question files at data/{culture}/q/..., so a stack named like that segment would shadow its own index.
+    private static readonly string[] ReservedStackKeys = ["q"];
+
     private static void CheckStacks(ContentSet set, List<ContentIssue> issues)
     {
         HashSet<string> seen = new(StringComparer.Ordinal);
@@ -69,6 +72,11 @@ public sealed class ContentValidator : IContentValidator
             if (!seen.Add(stack.Key))
             {
                 Add(issues, StacksPath, IssueCodes.TaxonomyDuplicate, $"Stack '{stack.Key}' is declared more than once.", $"[{i}].key");
+            }
+
+            if (ReservedStackKeys.Contains(stack.Key, StringComparer.Ordinal))
+            {
+                Add(issues, StacksPath, IssueCodes.StackKeyReserved, $"Stack key '{stack.Key}' is reserved for a site route; choose another key.", $"[{i}].key");
             }
 
             CheckTaxonomyLocales(StacksPath, $"[{i}]", $"Stack '{stack.Key}'", stack.Locales, issues);

@@ -5,15 +5,19 @@
 @using Trainer.Web.Client.Sync
 @implements IDisposable
 @inject TrainerApiClient Api
+@inject IIslandBackend Backend
 @inject OutboxSyncService Sync
 @inject SummaryStore Summaries
 @inject AccountWatcher Accounts
 @inject TimeProvider Time
 @inject IStringLocalizer<ClientResource> L
+@inject IslandLinks Links
 
 @* The signed-in user's statistics for one stack (ADR 0010): streak, answers, the review queue, progress per topic and
    level, recent mocks, mock results the server refused, and the anonymous import. Pending answers and summaries are
-   flushed before the profile is fetched, so it counts what was answered a moment ago. *@
+   flushed before the profile is fetched, so it counts what was answered a moment ago. The static edition has no
+   account: the same statistics come from the answers and mocks kept in this browser, with a note about what that
+   storage cannot do, and without the import, the failed results and the flush, which need a server. *@
 <IslandRoot ShowImportNotice="false" Usable="_phase != Phase.Loading">
     @if (_bootstrap is { } bootstrap)
     {
@@ -103,6 +107,10 @@
             {
                 <p class="profile__notice" role="status" tabindex="-1" @ref="_discardNotice">@discardMessage</p>
             }
+            @if (IsStatic)
+            {
+                <p class="profile__note">@L["Profile.Local.Note"]</p>
+            }
             @if (_failed.Count > 0)
             {
                 <section class="profile__section profile__failed" aria-labelledby="profile-failed">
@@ -145,6 +153,9 @@
     private ElementReference _discardNotice;
     private bool _focusNotice;
 
+    // Set only by the static site's pages (IslandBootstrapDto.StaticSite), which have no account.
+    private bool IsStatic => _bootstrap?.StaticSite is not null;
+
     /// <summary>The <c>IslandBootstrapDto</c> the server serialised with <c>TrainerJsonContext</c>.</summary>
     [Parameter, EditorRequired]
     public string BootstrapJson { get; set; } = "";
@@ -168,15 +179,18 @@
         // Reads name the page's account too: the server answers 409 once another tab switched it (ADR 0008).
         Api.BindOwner(pageOwner);
         await Accounts.StartAsync(pageOwner);
-        if (_owner is not { } bound)
+        if (_owner is { } bound)
         {
-            // The page requires a sign-in; a bootstrap without a user means the session ended meanwhile.
+            Sync.Start(bound);
+        }
+        else if (!IsStatic)
+        {
+            // The server's page requires a sign-in; a bootstrap without a user means the session ended meanwhile.
             _state = IslandStateKind.SignedOut;
             _phase = Phase.State;
             return;
         }
 
-        Sync.Start(bound);
         await LoadAsync();
     }
 
@@ -197,7 +211,7 @@
 
     private async Task LoadAsync()
     {
-        if (_owner is not { } owner)
+        if (_owner is null && !IsStatic)
         {
             return;
         }
@@ -215,7 +229,7 @@
             do
             {
                 _reloadRequested = false;
-                await LoadOnceAsync(owner);
+                await LoadOnceAsync(_owner);
             }
             while (_reloadRequested);
         }
@@ -225,13 +239,17 @@
         }
     }
 
-    private async Task LoadOnceAsync(long owner)
+    private async Task LoadOnceAsync(long? owner)
     {
         CancellationToken ct = _lifetime.Token;
-        // Flush-before-fetch: the statistics count what the server has, and a summary it refuses moves to the failed
-        // list now rather than after the page shows it as pending.
-        await Sync.FlushAsync(FlushWait, ct);
-        ApiResult<ProfileDto> result = await Api.ProfileAsync(_bootstrap!.Culture, _bootstrap.Stack, ct);
+        if (owner is not null)
+        {
+            // Flush-before-fetch: the statistics count what the server has, and a summary it refuses moves to the failed
+            // list now rather than after the page shows it as pending.
+            await Sync.FlushAsync(FlushWait, ct);
+        }
+
+        ApiResult<ProfileDto> result = await Backend.ProfileAsync(_bootstrap!, ct);
         IslandStateKind kind = IslandState.FromResult(result, false);
         if (kind == IslandStateKind.Ready)
         {
@@ -245,7 +263,7 @@
             _phase = Phase.State;
         }
 
-        _failed = await ReadFailedAsync(owner);
+        _failed = owner is { } signedIn ? await ReadFailedAsync(signedIn) : [];
     }
 
     // Reads take no lock, but a corrupt value is quarantined first, which does; the profile never waits on that.
@@ -294,6 +312,6 @@
     private static List<ProgressBarItem> LevelItems(ProfileDto profile) =>
         [.. profile.Levels.Select(l => new ProgressBarItem(l.Level, l.Level, l.Known, l.LiveQuestions))];
 
-    // Island pages carry <base href="/">, so every link is absolute.
-    private string ModeHref(string mode) => $"/{_bootstrap!.Culture}/{_bootstrap.Stack}/{mode}";
+    // Links are base-relative (IslandLinks).
+    private string ModeHref(string mode) => Links.Page(_bootstrap!.Culture, _bootstrap.Stack, [mode]);
 }

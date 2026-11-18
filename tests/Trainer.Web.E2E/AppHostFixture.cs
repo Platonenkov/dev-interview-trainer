@@ -210,36 +210,16 @@ public sealed class AppHostFixture(PostgresFixture postgres, BrowserFixture brow
     {
         ArgumentNullException.ThrowIfNull(context);
         IPage tab = await context.NewPageAsync();
-        PageWatch watch = new();
-        _watches[tab] = watch;
-        tab.Request += (_, request) =>
-        {
-            if (new Uri(request.Url).AbsolutePath.StartsWith("/api/sessions/", StringComparison.Ordinal))
-            {
-                Interlocked.Increment(ref watch.SessionRequests);
-            }
-        };
-
-        // An exposed function survives navigations, unlike page globals, so violations of earlier documents are kept.
-        await tab.ExposeFunctionAsync("__ditReportCspViolation", (string violation) => watch.Violations.Enqueue(violation));
-        await tab.AddInitScriptAsync(
-            """
-            document.addEventListener('securitypolicyviolation', function (e) {
-              window.__ditReportCspViolation(location.pathname + ': ' + e.violatedDirective + ' blocked ' + (e.blockedURI || 'inline') + ' at ' + e.sourceFile + ':' + e.lineNumber);
-            });
-            """);
+        _watches[tab] = await PageWatch.AttachAsync(tab);
         return tab;
     }
 
     /// <summary>Fails when any document shown in <paramref name="page"/> reported a CSP violation.</summary>
-    public void AssertNoCspViolations(IPage page)
-    {
-        string[] violations = [.. Watch(page).Violations];
-        Assert.True(violations.Length == 0, "CSP violations: " + string.Join(" | ", violations));
-    }
+    public void AssertNoCspViolations(IPage page) => Watch(page).AssertNoCspViolations();
 
     /// <summary>How many <c>/api/sessions/</c> requests <paramref name="page"/> has made so far.</summary>
-    public int SessionRequestCount(IPage page) => Volatile.Read(ref Watch(page).SessionRequests);
+    public int SessionRequestCount(IPage page) =>
+        Watch(page).RequestUrls.Count(url => new Uri(url).AbsolutePath.StartsWith("/api/sessions/", StringComparison.Ordinal));
 
     private PageWatch Watch(IPage page)
     {
@@ -261,11 +241,47 @@ public sealed class AppHostFixture(PostgresFixture postgres, BrowserFixture brow
             await _telegram.DisposeAsync();
         }
     }
+}
 
-    private sealed class PageWatch
+/// <summary>
+/// What a tab did, kept for the assertions at the end of a test: every CSP violation of every document it showed, and
+/// the URL of every http(s) request it made (an exposed function and an init script survive navigations, unlike page globals).
+/// </summary>
+internal sealed class PageWatch
+{
+    private readonly ConcurrentQueue<string> _violations = new();
+    private readonly ConcurrentQueue<string> _requests = new();
+
+    private PageWatch()
     {
-        public ConcurrentQueue<string> Violations { get; } = new();
+    }
 
-        public int SessionRequests;
+    public IReadOnlyList<string> RequestUrls => [.. _requests];
+
+    public static async Task<PageWatch> AttachAsync(IPage tab)
+    {
+        ArgumentNullException.ThrowIfNull(tab);
+        PageWatch watch = new();
+        tab.Request += (_, request) =>
+        {
+            if (request.Url.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+            {
+                watch._requests.Enqueue(request.Url);
+            }
+        };
+        await tab.ExposeFunctionAsync("__ditReportCspViolation", (string violation) => watch._violations.Enqueue(violation));
+        await tab.AddInitScriptAsync(
+            """
+            document.addEventListener('securitypolicyviolation', function (e) {
+              window.__ditReportCspViolation(location.pathname + ': ' + e.violatedDirective + ' blocked ' + (e.blockedURI || 'inline') + ' at ' + e.sourceFile + ':' + e.lineNumber);
+            });
+            """);
+        return watch;
+    }
+
+    public void AssertNoCspViolations()
+    {
+        string[] violations = [.. _violations];
+        Assert.True(violations.Length == 0, "CSP violations: " + string.Join(" | ", violations));
     }
 }

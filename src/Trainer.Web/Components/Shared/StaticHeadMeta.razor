@@ -1,0 +1,56 @@
+@using Microsoft.Extensions.Options
+@using Trainer.Domain.Keys
+@using Trainer.Web.Analytics
+@using Trainer.Web.Startup
+@inject IOptions<AppOptions> App
+@inject IOptions<AnalyticsOptions> Analytics
+
+@* The first element of <head> on every static page: a meta policy only governs what comes after it (ADR 0024). *@
+<meta http-equiv="Content-Security-Policy" content="@Csp" />
+<meta name="referrer" content="strict-origin-when-cross-origin" />
+@if (!string.IsNullOrEmpty(BuildId))
+{
+    <meta name="dit-build" content="@BuildId" />
+}
+@if (IsHome)
+{
+    @if (!string.IsNullOrWhiteSpace(App.Value.StaticSite.GoogleSiteVerification))
+    {
+        <meta name="google-site-verification" content="@App.Value.StaticSite.GoogleSiteVerification" />
+    }
+    @if (!string.IsNullOrWhiteSpace(App.Value.StaticSite.YandexVerification))
+    {
+        <meta name="yandex-verification" content="@App.Value.StaticSite.YandexVerification" />
+    }
+}
+
+@code {
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    /// <summary>The page hosts an island, so its policy allows WebAssembly and the import map.</summary>
+    [Parameter]
+    public bool IsIslandPage { get; set; }
+
+    /// <summary>The exact text of the page's import map element; its hash goes into the policy.</summary>
+    [Parameter]
+    public string? ImportMapText { get; set; }
+
+    private string? BuildId => App.Value.StaticSite.BuildId;
+
+    private string Csp => StaticCsp.For(
+        IsIslandPage,
+        ImportMapText is null ? null : StaticCsp.Sha256Source(ImportMapText),
+        Analytics.Value.GoatCounterCode);
+
+    // Search consoles ask for the tag on the site's front pages only: the root chooser and each culture home page.
+    private bool IsHome
+    {
+        get
+        {
+            string[] segments = HttpContext?.Request.Path.Value?.Split('/', StringSplitOptions.RemoveEmptyEntries) ?? [];
+            return segments.Length == 0
+                || (segments.Length == 1 && CultureKey.Supported.Any(c => string.Equals(c.Value, segments[0], StringComparison.OrdinalIgnoreCase)));
+        }
+    }
+}

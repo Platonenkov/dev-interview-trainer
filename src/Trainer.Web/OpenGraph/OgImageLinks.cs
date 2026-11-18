@@ -33,14 +33,14 @@ public sealed class OgImageLinks(IStringLocalizer<SharedResource> localizer, Sit
 
     /// <summary>Absolute URL of the site card for the culture.</summary>
     public string SiteUrl(CultureKey culture, HttpRequest? request) =>
-        urls.Absolute(request, SitePath(culture, OgFingerprint.Of(SiteCard(culture, request))));
+        urls.AbsoluteAsset(request, SitePath(culture, OgFingerprint.Of(SiteCard(culture, request))));
 
     /// <summary>Absolute URL of the card of a live question; a retired one has no card (the endpoint answers 404).</summary>
     public string QuestionUrl(CultureKey culture, QuestionPageModel question, HttpRequest? request)
     {
         ArgumentNullException.ThrowIfNull(question);
         string fingerprint = OgFingerprint.Of(QuestionCard(culture, question, request));
-        return urls.Absolute(request, QuestionPath(culture, question.Stack.Value, question.Slug, fingerprint));
+        return urls.AbsoluteAsset(request, QuestionPath(culture, question.Stack.Value, question.Slug, fingerprint));
     }
 
     private string Footer(HttpRequest? request)

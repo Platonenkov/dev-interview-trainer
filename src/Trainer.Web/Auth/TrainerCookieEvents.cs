@@ -2,11 +2,14 @@ using System.Globalization;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.WebUtilities;
+using Microsoft.Extensions.Primitives;
 using Trainer.Application.Users;
 using Trainer.Domain.Keys;
 using Trainer.Domain.Users;
 using Trainer.Web.Routing;
 using Trainer.Web.Security;
+using Trainer.Web.Seo;
 
 namespace Trainer.Web.Auth;
 
@@ -15,7 +18,7 @@ namespace Trainer.Web.Auth;
 /// against the database, the login and denied redirects.
 /// </summary>
 public sealed class TrainerCookieEvents(
-    IUserAccountService users, UserClaimsFactory claims, TimeProvider time, ILogger<TrainerCookieEvents> logger) : CookieAuthenticationEvents
+    IUserAccountService users, UserClaimsFactory claims, TimeProvider time, SitePaths paths, ILogger<TrainerCookieEvents> logger) : CookieAuthenticationEvents
 {
     /// <summary>
     /// Authentication property holding the time of the last database check. The ticket's own <c>IssuedUtc</c> cannot
@@ -143,8 +146,10 @@ public sealed class TrainerCookieEvents(
         }
 
         // The default writes scheme, host and path base; the redirect is same-site, so the relative form is enough and
-        // does not depend on the forwarded host configuration.
-        context.Response.Redirect(SameSiteTarget(context.RedirectUri));
+        // does not depend on the forwarded host configuration. Its return URL carries the path base too, while every
+        // return path inside the server is logical (unprefixed), so the prefix comes off here.
+        context.Response.Redirect(StripPathBaseFromReturnUrl(
+            SameSiteTarget(context.RedirectUri), context.Request.PathBase, context.Options.ReturnUrlParameter));
         return Task.CompletedTask;
     }
 
@@ -163,8 +168,8 @@ public sealed class TrainerCookieEvents(
             return Task.CompletedTask;
         }
 
-        string original = request.PathBase + request.Path + request.QueryString;
-        context.Response.Redirect($"{TelegramAuth.AccessDeniedPath}&{context.Options.ReturnUrlParameter}={Uri.EscapeDataString(original)}");
+        string original = request.Path + request.QueryString;
+        context.Response.Redirect(paths.Asset($"{TelegramAuth.AccessDeniedPath}&{context.Options.ReturnUrlParameter}={Uri.EscapeDataString(original)}"));
         return Task.CompletedTask;
     }
 
@@ -178,6 +183,56 @@ public sealed class TrainerCookieEvents(
             && (absolute.Scheme == Uri.UriSchemeHttp || absolute.Scheme == Uri.UriSchemeHttps)
             ? absolute.PathAndQuery
             : redirectUri;
+
+    /// <summary>
+    /// Removes <paramref name="pathBase"/> from the value of the <paramref name="returnUrlParameter"/> query parameter of
+    /// a same-site redirect target. A value outside the path base is left as it is: the sign-in redirect validates it.
+    /// </summary>
+    public static string StripPathBaseFromReturnUrl(string target, PathString pathBase, string returnUrlParameter)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        int queryStart = target.IndexOf('?', StringComparison.Ordinal);
+        if (!pathBase.HasValue || queryStart < 0)
+        {
+            return target;
+        }
+
+        string prefix = pathBase.Value!;
+        List<KeyValuePair<string, StringValues>> query = [];
+        foreach (KeyValuePair<string, StringValues> pair in QueryHelpers.ParseQuery(target[queryStart..]))
+        {
+            StringValues value = pair.Value;
+            if (string.Equals(pair.Key, returnUrlParameter, StringComparison.OrdinalIgnoreCase))
+            {
+                value = new StringValues([.. pair.Value.Select(v => StripPrefix(v, prefix))]);
+            }
+
+            query.Add(new KeyValuePair<string, StringValues>(pair.Key, value));
+        }
+
+        return target[..queryStart] + QueryString.Create(query).ToUriComponent();
+    }
+
+    private static string? StripPrefix(string? value, string prefix)
+    {
+        if (value is null || !value.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            return value;
+        }
+
+        string rest = value[prefix.Length..];
+        if (rest.Length == 0)
+        {
+            return "/";
+        }
+
+        return rest[0] switch
+        {
+            '/' => rest,
+            '?' => "/" + rest,
+            _ => value,
+        };
+    }
 
     private static bool IsWithinInterval(TimeSpan elapsed) =>
         elapsed >= TimeSpan.Zero && elapsed < TelegramAuth.RevalidationInterval;

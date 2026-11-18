@@ -5,6 +5,10 @@ something stops half-way. The design reasons are in `docs/architecture.md` ("Dep
 ADR 0015 to 0021 under `docs/adr/`. Every command here was taken from the scripts and workflows in this
 repository; when a script and this page disagree, the script is right, and this page has a bug to fix.
 
+The server edition is not deployed while the site runs on GitHub Pages: everything below applies when a server is set up,
+and only "Publishing the static site" applies now. The static edition's own guide is `docs/static-edition.md`; the checks
+for making the repository public are added to it with the pre-public audit (Task 20 of Plan 5).
+
 Conventions used below:
 
 - `<admin>`, `<host>`, `<port>`, `<domain>` and `<owner>/<repo>` are yours to fill in. `<admin>` is the account you
@@ -780,6 +784,19 @@ oldest open one (any further open `dead-links` issues are closed as duplicates) 
 workflow notification as well; when every link resolves it closes the issue; when the checker itself crashes it fails
 without touching the issue. Fix a dead link in the question files the issue lists. The next weekly run, or a manual
 run, closes the issue.
+
+## Publishing the static site
+
+`pages` publishes the static site to GitHub Pages after `ci` succeeds on `main`. It decides what to do from the live
+`build.json`, so it needs the full history of `main`: it skips a commit that is already live or older than the live one, and
+it fails when the live commit is not in that history. That happens after `main` was rewritten (a force-push, or a history
+that was squashed), or when the site at the published address (derived from the repository, or `SITE_URL` for a custom domain) was not built from this repository.
+
+To recover, check that the live site is the one you expect, then run the `pages` workflow by hand from `main` with
+`allow_unknown_live` ticked. The run publishes the tip of `main` (which needs a green `ci` push run) even though the live
+commit is unknown, and the new `build.json` makes later automatic runs work again. Automatic runs ignore the input and keep
+failing until then. A manual run without the input is still the way to republish the same commit after changing the custom-domain `SITE_URL`,
+`GOATCOUNTER_CODE`, `GOOGLE_SITE_VERIFICATION` or `YANDEX_VERIFICATION`.
 
 ## Hardening checklist before the repository goes public
 

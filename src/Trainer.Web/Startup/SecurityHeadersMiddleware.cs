@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Options;
 using Trainer.Web.Islands;
 
 namespace Trainer.Web.Startup;
@@ -8,9 +9,13 @@ namespace Trainer.Web.Startup;
 /// Island pages (<see cref="InteractiveIslandPageAttribute"/>) alone add <c>'wasm-unsafe-eval'</c>, which the
 /// WebAssembly runtime needs to compile its modules, the request's <see cref="CspNonce"/> for the framework's import map
 /// (ADR 0012), and allow a same-origin <c>&lt;base&gt;</c>; no other response may run WebAssembly or carry a nonce.
+/// The static edition sends no security header at all: its pages carry <see cref="StaticCsp"/> as a meta element, so a
+/// local static run behaves like GitHub Pages (ADR 0024).
 /// </summary>
-public sealed class SecurityHeadersMiddleware(RequestDelegate next)
+public sealed class SecurityHeadersMiddleware(RequestDelegate next, IOptions<AppOptions> appOptions)
 {
+    private readonly bool _isStatic = appOptions.Value.Edition == SiteEdition.Static;
+
     public static readonly string ContentSecurityPolicy = Policy(scriptSources: $"'self' {ThemeScript.CspSource}", baseUri: "'none'");
 
     /// <summary>
@@ -23,6 +28,11 @@ public sealed class SecurityHeadersMiddleware(RequestDelegate next)
 
     public Task InvokeAsync(HttpContext context)
     {
+        if (_isStatic)
+        {
+            return next(context);
+        }
+
         IHeaderDictionary headers = context.Response.Headers;
         headers.ContentSecurityPolicy = ContentSecurityPolicy;
         headers.XContentTypeOptions = "nosniff";

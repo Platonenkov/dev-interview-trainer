@@ -10,19 +10,49 @@ namespace Trainer.Web.Client.Storage;
 /// <c>clientAnswerId</c> under Web Locks, never a whole-value write, so other tabs' entries survive. An answer that
 /// could not be written stays in this tab's memory and is retried with the next write; nothing is ever evicted.
 /// </summary>
-public sealed class OutboxStore(IBrowserStore store)
+public sealed class OutboxStore(IBrowserStore store) : IAsyncDisposable
 {
     private const string AnswersMember = "answers";
     private const string IdMember = "clientAnswerId";
 
     private readonly Dictionary<string, KeyState> _keys = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _watched = new(StringComparer.Ordinal);
+    private readonly List<IAsyncDisposable> _watches = [];
 
     // No Web Locks, no localStorage or no outbox.js: writing would be an unlocked shared read-modify-write, so this tab
     // stops writing for its lifetime.
     private bool _memoryOnly;
 
+    /// <summary>
+    /// Called with the key when an append is refused for quota. Returning true says something else of this app's data was
+    /// removed to make room (the static edition's progress checkpoint), and the append is tried once more; the answer log is
+    /// the data that must not be lost, so it outranks anything derived from it.
+    /// </summary>
+    public Func<string, ValueTask<bool>>? MakeRoomAsync { get; set; }
+
     /// <summary>Raised after every change of the entries or of <see cref="Status"/>.</summary>
     public event Action? Changed;
+
+    /// <summary>
+    /// Raised with the key after this tab wrote (added, removed or moved) entries of it, and only then: unlike
+    /// <see cref="Changed"/> it is never raised by a read or by a status change, so a cache of a key's content can drop
+    /// itself on it without reacting to its own loading.
+    /// </summary>
+    public event Action<string>? KeyChanged;
+
+    /// <summary>
+    /// Raised, just before <see cref="KeyChanged"/>, when an <c>append</c> of this tab reached storage: the key, the answers
+    /// and the script's result, whose <see cref="StoreResult.Previous"/> and <see cref="StoreResult.Fingerprint"/> say which
+    /// log state the write started from and left. A cache of the log can then extend itself with these answers when it holds
+    /// the state before, instead of reading the log again.
+    /// </summary>
+    public event Action<string, IReadOnlyList<AnswerDto>, StoreResult>? Appended;
+
+    /// <summary>
+    /// Raised when another tab changed a key this store watches (<see cref="WatchAsync"/>). Not raised for this tab's own
+    /// writes: those raise <see cref="Changed"/>.
+    /// </summary>
+    public event Action? ChangedElsewhere;
 
     public StorageStatus Status
     {
@@ -53,6 +83,30 @@ public sealed class OutboxStore(IBrowserStore store)
         }
     }
 
+    /// <summary>
+    /// Starts listening for other tabs' writes to <paramref name="key"/>, once per key. Call it before the first read, so a
+    /// write between the read and the listener cannot be missed.
+    /// </summary>
+    public async ValueTask WatchAsync(string key)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(key);
+        // Marked before the await: a second caller while the script call is in flight must not register again.
+        if (_watched.Add(key))
+        {
+            _watches.Add(await store.WatchKeyAsync(key, () => ChangedElsewhere?.Invoke()));
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        IAsyncDisposable[] watches = [.. _watches];
+        _watches.Clear();
+        foreach (IAsyncDisposable watch in watches)
+        {
+            await watch.DisposeAsync();
+        }
+    }
+
     /// <summary>Answers held only in memory because storage did not take them.</summary>
     public int UnsavedCount => _keys.Values.Sum(k => k.Unsaved.Count);
 
@@ -80,9 +134,11 @@ public sealed class OutboxStore(IBrowserStore store)
         KeyState state = StateOf(key);
         state.Removed.Remove(answer.ClientAnswerId);
         state.Unsaved[answer.ClientAnswerId] = answer;
-        await PersistAsync(key, state);
+        StoreResult? stored = await PersistAsync(key, state);
         await RetryFailedRemovalAsync(key, state);
         Changed?.Invoke();
+        ReportAppended(key, [answer], stored);
+        KeyChanged?.Invoke(key);
     }
 
     /// <summary>
@@ -101,9 +157,11 @@ public sealed class OutboxStore(IBrowserStore store)
 
         if (answers.Count > 0)
         {
-            await PersistAsync(key, state);
+            StoreResult? stored = await PersistAsync(key, state);
             await RetryFailedRemovalAsync(key, state);
             Changed?.Invoke();
+            ReportAppended(key, answers, stored);
+            KeyChanged?.Invoke(key);
         }
 
         return CanWrite(state) && !answers.Any(a => state.Unsaved.ContainsKey(a.ClientAnswerId));
@@ -122,6 +180,7 @@ public sealed class OutboxStore(IBrowserStore store)
 
         await RemoveStoredAsync(key, state);
         Changed?.Invoke();
+        KeyChanged?.Invoke(key);
     }
 
     /// <summary>
@@ -180,6 +239,8 @@ public sealed class OutboxStore(IBrowserStore store)
 
         await PersistAsync(toKey, target);
         Changed?.Invoke();
+        KeyChanged?.Invoke(fromKey);
+        KeyChanged?.Invoke(toKey);
         return new MoveOutcome(moved, source.MovePending.Count);
     }
 
@@ -237,19 +298,35 @@ public sealed class OutboxStore(IBrowserStore store)
         state.StoredIds = document.Ids(AnswersMember, IdMember);
     }
 
-    private async ValueTask PersistAsync(string key, KeyState state)
+    // Only what this write carried is reported, and only when it was the whole of it: answers that were unsaved from an
+    // earlier failed write went along with it, so the count the script added is not the count the caller handed in.
+    private void ReportAppended(string key, IReadOnlyList<AnswerDto> answers, StoreResult? stored)
+    {
+        if (stored is { Ok: true } && stored.Count == answers.Count)
+        {
+            Appended?.Invoke(key, answers, stored);
+        }
+    }
+
+    private async ValueTask<StoreResult?> PersistAsync(string key, KeyState state)
     {
         if (!CanWrite(state) || state.Unsaved.Count == 0)
         {
-            return;
+            return null;
         }
 
         IReadOnlyList<AnswerDto> unsaved = [.. state.Unsaved.Values];
         JsonElement entries = JsonSerializer.SerializeToElement(unsaved, TrainerJsonContext.Default.IReadOnlyListAnswerDto);
-        StoreResult result = await MutateAsync(state, StoreOp.Append(key, entries));
+        StoreOp append = StoreOp.Append(key, entries);
+        StoreResult result = await MutateAsync(state, append);
+        if (string.Equals(result.Error, StoreErrors.Quota, StringComparison.Ordinal) && MakeRoomAsync is { } makeRoom && await makeRoom(key))
+        {
+            result = await MutateAsync(state, append);
+        }
+
         if (!result.Ok)
         {
-            return;
+            return result;
         }
 
         // Only what this append carried is saved: an answer added (or replaced) while it was in flight stays unsaved.
@@ -260,6 +337,8 @@ public sealed class OutboxStore(IBrowserStore store)
                 state.Unsaved.Remove(sent.ClientAnswerId);
             }
         }
+
+        return result;
     }
 
     private async ValueTask RemoveStoredAsync(string key, KeyState state)

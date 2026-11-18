@@ -90,6 +90,11 @@ Describe 'Get-ProductionSettingNames' {
     It 'lists every name the workflows read from the production environment' {
         $actual = Get-ProductionSettingNames
         $all = @($actual.Secrets) + @($actual.Variables)
+        # Repository variables of the static edition (pages.yml, ci.yml): read outside the production environment and
+        # never rendered into a server .env, so the bootstrap does not manage them (docs/static-edition.md, Configuration).
+        $staticSiteVariables = @('SITE_URL', 'GOATCOUNTER_CODE', 'GOOGLE_SITE_VERIFICATION', 'YANDEX_VERIFICATION')
+        $staticSiteVariables | Where-Object { $_ -in $all } | Should -BeNullOrEmpty
+        $all += $staticSiteVariables
         $used = Get-ChildItem (Join-Path $script:RepoRoot '.github' 'workflows') -Filter *.yml |
             ForEach-Object { [regex]::Matches((Get-Content -Raw $_.FullName), '\b(?:secrets|vars)\.([A-Z][A-Z0-9_]+)') } |
             ForEach-Object { $_.Groups[1].Value } |

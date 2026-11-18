@@ -1,5 +1,6 @@
 using Trainer.Domain.Keys;
 using Trainer.Web.Routing;
+using Trainer.Web.Seo;
 
 namespace Trainer.Web.Auth;
 
@@ -47,7 +48,7 @@ public static class SignInRedirectEndpoint
         return query.Count == 0 ? path : path + "?" + string.Join('&', query);
     }
 
-    private static IResult Handle(HttpContext context)
+    private static IResult Handle(HttpContext context, SitePaths paths)
     {
         context.Response.Headers.CacheControl = "no-store";
         context.Response.Headers["X-Robots-Tag"] = "noindex";
@@ -58,7 +59,7 @@ public static class SignInRedirectEndpoint
         CultureKey culture = CulturePath.FromPath(returnUrl) ?? CultureFromRequest(context.Request);
         string? returnPath = string.IsNullOrEmpty(returnUrl) ? null : LanguageEndpoint.ResolveReturnPath(returnUrl, culture);
         string target = PagePath(culture, returnPath, IsSet(query, DeniedParameter), IsSet(query, ErrorParameter));
-        return Results.Redirect(target, permanent: false);
+        return Results.Redirect(paths.Page(target), permanent: false);
     }
 
     /// <summary>
@@ -78,6 +79,16 @@ public static class SignInRedirectEndpoint
         return CulturePath.FromPath(candidate) is { } culture
             ? LanguageEndpoint.ToLocation(LanguageEndpoint.ResolveReturnPath(candidate, culture))
             : "/";
+    }
+
+    /// <summary>
+    /// <see cref="ResolveReturnPathAfterSignIn"/> as a location under the path base: the library writes the value into
+    /// <c>Location</c> as is, so it must be the final URL. The validation is the same as without a path base.
+    /// </summary>
+    public static string ResolveReturnLocationAfterSignIn(string? candidate, SitePaths paths)
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+        return paths.Page(ResolveReturnPathAfterSignIn(candidate));
     }
 
     private static bool IsSet(IQueryCollection query, string flag) =>

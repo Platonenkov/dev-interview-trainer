@@ -61,3 +61,8 @@ direction and island-to-island.
   filters) is in `localStorage` or on the server, which spec 8.8 requires anyway.
 - A future island that wants enhanced navigation must revisit this decision and
   bring back prerendering with persistent state.
+
+## Note, 2026-11-17
+
+The server edition keeps `<base href="/">`; an edition served under a path base (ADR 0022) writes that path base in the
+same element.

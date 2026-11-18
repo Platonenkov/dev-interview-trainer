@@ -23,4 +23,7 @@ public static class ApiErrorCodes
     public const string ServerError = "server-error";
     public const string QuestionNotFound = "question-not-found";
     public const string ReportLimit = "report-limit";
+
+    /// <summary>A static site's content shard is gone: the site was redeployed under the open page.</summary>
+    public const string SiteUpdated = "site-updated";
 }

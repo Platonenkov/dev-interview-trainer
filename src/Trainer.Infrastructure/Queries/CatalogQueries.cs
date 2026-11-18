@@ -25,13 +25,26 @@ internal sealed class CatalogQueries(TrainerDbContext db) : ICatalogQueries
         int page = Math.Clamp(query.Page, 1, pageCount);
 
         Dictionary<string, string> topicTitles = await LiveQuestions.TopicTitlesAsync(db, query.Culture, query.Stack, ct);
-        IReadOnlyList<CatalogRow> rows = await ReadRowsAsync(matching, query.Culture, page, topicTitles, ct);
+        IReadOnlyList<CatalogRow> rows = await ReadRowsAsync(matching, query.Culture, (page - 1) * CatalogQuery.PageSize, CatalogQuery.PageSize, topicTitles, ct);
 
         IReadOnlyList<FacetCount> levelCounts = await CountLevelsAsync(Filter(live, [], topics, types), ct);
         IReadOnlyList<FacetCount> topicCounts = await CountTopicsAsync(Filter(live, levels, [], types), topics, topicTitles, query.Culture, ct);
         IReadOnlyList<FacetCount> typeCounts = await CountTypesAsync(Filter(live, levels, topics, []), ct);
 
         return new CatalogPage(rows, total, page, pageCount, levelCounts, topicCounts, typeCounts);
+    }
+
+    public async Task<CatalogPage> GetAllAsync(CultureKey culture, StackKey stack, CancellationToken ct)
+    {
+        IQueryable<QuestionEntity> live = LiveQuestions.Of(db, culture, stack);
+        Dictionary<string, string> topicTitles = await LiveQuestions.TopicTitlesAsync(db, culture, stack, ct);
+        IReadOnlyList<CatalogRow> rows = await ReadRowsAsync(live, culture, 0, null, topicTitles, ct);
+
+        IReadOnlyList<FacetCount> levelCounts = await CountLevelsAsync(live, ct);
+        IReadOnlyList<FacetCount> topicCounts = await CountTopicsAsync(live, [], topicTitles, culture, ct);
+        IReadOnlyList<FacetCount> typeCounts = await CountTypesAsync(live, ct);
+
+        return new CatalogPage(rows, rows.Count, 1, 1, levelCounts, topicCounts, typeCounts);
     }
 
     /// <summary>
@@ -86,7 +99,8 @@ internal sealed class CatalogQueries(TrainerDbContext db) : ICatalogQueries
     private async Task<IReadOnlyList<CatalogRow>> ReadRowsAsync(
         IQueryable<QuestionEntity> matching,
         CultureKey culture,
-        int page,
+        int skip,
+        int? take,
         IReadOnlyDictionary<string, string> topicTitles,
         CancellationToken ct)
     {
@@ -97,8 +111,8 @@ internal sealed class CatalogQueries(TrainerDbContext db) : ICatalogQueries
                 where l.Culture == cultureValue
                 orderby q.Level, l.Title, q.Slug
                 select new { q.Id, q.Slug, l.Title, q.Level, q.TopicKey, q.Type, q.Tags })
-            .Skip((page - 1) * CatalogQuery.PageSize)
-            .Take(CatalogQuery.PageSize)
+            .Skip(skip)
+            .Take(take ?? int.MaxValue)
             .ToListAsync(ct);
 
         return [.. projected.Select(r => new CatalogRow(

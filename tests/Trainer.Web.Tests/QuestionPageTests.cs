@@ -37,6 +37,19 @@ public sealed partial class QuestionPageTests(WebSiteFixture site, PostgresFixtu
     }
 
     [Fact]
+    public async Task ServerQuestionPage_IsUnchanged()
+    {
+        (HttpResponseMessage response, string body) = await GetAsync("/en/dotnet/questions/closure-for-loop");
+        using HttpResponseMessage _ = response;
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.DoesNotContain("issues/new", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("Report a problem", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("<form", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("id=\"feedback\"", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task QuestionPage_ExternalLinks_UseOneRelValue()
     {
         (HttpResponseMessage response, string body) = await GetAsync("/ru/dotnet/questions/result-deadlock-ui-thread");

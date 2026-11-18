@@ -10,7 +10,7 @@
     var next = root.dataset.theme === 'light' ? 'dark' : 'light';
     root.dataset.theme = next;
     try {
-      localStorage.setItem('theme', next);
+      localStorage.setItem('dit.theme', next);
     } catch (e) {
       // Storage can be blocked; the choice then lasts until the page is reloaded.
     }

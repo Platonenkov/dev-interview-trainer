@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.Net.Http.Headers;
 using Trainer.Application.Questions;
 using Trainer.Domain.Keys;
+using Trainer.Web.Seo;
 
 namespace Trainer.Web.OpenGraph;
 
@@ -46,7 +47,7 @@ public static class OgImageEndpoints
     }
 
     private static async Task<IResult> GetSiteAsync(
-        string lang, string fingerprint, HttpContext context, OgImageLinks links, OgCardRenderer renderer, OgImageCache cache)
+        string lang, string fingerprint, HttpContext context, OgImageLinks links, SitePaths paths, OgCardRenderer renderer, OgImageCache cache)
     {
         if (!CultureKey.TryCreate(lang, out CultureKey culture))
         {
@@ -57,7 +58,7 @@ public static class OgImageEndpoints
         string current = OgFingerprint.Of(card);
         if (!string.Equals(fingerprint, current, StringComparison.Ordinal))
         {
-            return Results.Redirect(OgImageLinks.SitePath(culture, current), permanent: true);
+            return Results.Redirect(paths.Asset(OgImageLinks.SitePath(culture, current)), permanent: true);
         }
 
         return await ServeAsync(context, cache, OgImageCache.SiteFileName(culture.Value, current), renderer, card);
@@ -65,7 +66,7 @@ public static class OgImageEndpoints
 
     private static async Task<IResult> GetQuestionAsync(
         string lang, string stackKey, string slug, string fingerprint,
-        HttpContext context, IQuestionQueries questions, OgImageLinks links, OgCardRenderer renderer, OgImageCache cache)
+        HttpContext context, IQuestionQueries questions, OgImageLinks links, SitePaths paths, OgCardRenderer renderer, OgImageCache cache)
     {
         if (!CultureKey.TryCreate(lang, out CultureKey culture)
             || !StackKey.TryCreate(stackKey, out StackKey stack)
@@ -85,7 +86,7 @@ public static class OgImageEndpoints
         string current = OgFingerprint.Of(card);
         if (!string.Equals(fingerprint, current, StringComparison.Ordinal))
         {
-            return Results.Redirect(OgImageLinks.QuestionPath(culture, stack.Value, questionSlug.Value, current), permanent: true);
+            return Results.Redirect(paths.Asset(OgImageLinks.QuestionPath(culture, stack.Value, questionSlug.Value, current)), permanent: true);
         }
 
         string fileName = OgImageCache.QuestionFileName(culture.Value, stack.Value, questionSlug.Value, current);

@@ -1,0 +1,50 @@
+@using Trainer.Application.Catalog
+@using Trainer.Web.Catalog
+@inject IStringLocalizer<SharedResource> L
+@inject SitePaths Paths
+<div class="catalog__side">
+    @* A GET form with no token and no cookie (ADR 0011, ADR 0022). Without a script the submit reloads the page with the
+       parameters and every row stays visible; catalog-filter.js reads them and hides what does not match. *@
+    <form class="catalog-search" method="get" action="@Paths.Page(CatalogPath)" role="search" data-catalog-filter data-known-topics="@string.Join(' ', KnownTopics)">
+        <label class="catalog-search__label" for="catalog-search">@L["Catalog.Search.Label"]</label>
+        <div class="catalog-search__row">
+            <input id="catalog-search" name="@CatalogQueryParser.SearchParameter" type="search" maxlength="@CatalogQueryParser.MaxSearchLength" autocomplete="off" />
+            <button type="submit" class="btn btn--primary">@L["Catalog.Filter.Apply"]</button>
+        </div>
+        <details class="filters">
+            <summary class="filters__toggle">@L["Catalog.Filters.Label"]</summary>
+            <div class="filters__panel">
+                @Group("Catalog.Filter.Level", CatalogQueryParser.LevelParameter, Page.LevelCounts.Select(f => (f.Key, L["Level." + f.Key].Value)))
+                @Group("Catalog.Filter.Topic", CatalogQueryParser.TopicParameter, Page.TopicCounts.Select(f => (f.Key, f.Title)))
+                @Group("Catalog.Filter.Type", CatalogQueryParser.TypeParameter, Page.TypeCounts.Select(f => (f.Key, L["Type." + f.Key].Value)))
+                <a class="filters__reset" href="@Paths.Page(CatalogPath)">@L["Catalog.Filter.Reset"]</a>
+            </div>
+        </details>
+    </form>
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public CatalogPage Page { get; set; } = null!;
+
+    /// <summary>Every topic key of the stack, so the script treats a topic without a live question as a real, empty selection.</summary>
+    [Parameter, EditorRequired]
+    public IEnumerable<string> KnownTopics { get; set; } = [];
+
+    [Parameter, EditorRequired]
+    public string Culture { get; set; } = "";
+
+    [Parameter, EditorRequired]
+    public string Stack { get; set; } = "";
+
+    private string CatalogPath => $"/{Culture}/{Stack}/questions";
+
+    private RenderFragment Group(string headingKey, string name, IEnumerable<(string Key, string Label)> items) =>
+        @<fieldset class="filters__group">
+            <legend class="filters__heading">@L[headingKey]</legend>
+            @foreach ((string key, string label) in items)
+            {
+                <label class="filters__item"><input type="checkbox" name="@name" value="@key" /><span>@label</span></label>
+            }
+        </fieldset>;
+}

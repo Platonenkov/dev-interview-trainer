@@ -694,9 +694,18 @@ kill_point_case after-ready 405 old new new yes
 kill_point_case after-last-good 406 new new new yes
 kill_point_case after-marker-removed 407 new new new no
 
-# On top of the named points, kills at random moments (mostly inside Compose calls).
+# On top of the named points, kills at random moments (mostly inside Compose calls). The delay is drawn from 0 to
+# max_tenths tenths of a second. A deploy on a fast runner can finish before its kill, so every miss halves the range
+# (never below 0.5 s) and, when every planned iteration missed, up to four more run with the narrowed range. Only a run
+# that was really interrupted counts, so the check stays meaningful and cannot fail by chance.
 interrupted=0
-for i in $(seq 1 "$kill_iterations"); do
+max_tenths=259
+kill_total=0
+for i in $(seq 1 $((kill_iterations + 4))); do
+  if [ "$i" -gt "$kill_iterations" ] && [ "$interrupted" -ge 1 ]; then
+    break
+  fi
+  kill_total=$i
   n=$((100 + i))
   run="kill-$i"
   upload "$run" "$(commit_for "$n")" "$(image_for "$n")"
@@ -709,9 +718,12 @@ for i in $(seq 1 "$kill_iterations"); do
     kill -0 "$pid" 2>/dev/null || break
     sleep 0.1
   done
-  sleep "$((RANDOM % 25)).$((RANDOM % 10))"
+  sleep "$((RANDOM % max_tenths / 10)).$((RANDOM % 10))"
   if kill -KILL "$pid" 2>/dev/null; then
     interrupted=$((interrupted + 1))
+  else
+    max_tenths=$((max_tenths / 2))
+    [ "$max_tenths" -ge 5 ] || max_tenths=5
   fi
   { wait "$pid"; } 2>/dev/null || true
   assert_record_consistent "kill iteration $i" "$APP_DIR/last-good.env"
@@ -723,11 +735,11 @@ for i in $(seq 1 "$kill_iterations"); do
   fi
 done
 # A run that finished before its random kill proves nothing, so the check needs at least one real interruption.
-[ "$interrupted" -ge 1 ] || fail "none of the $kill_iterations runs was still running when it was killed"
-printf 'killed %d of %d runs at random moments; %d later runs recovered an interrupted one\n' "$interrupted" "$kill_iterations" \
+[ "$interrupted" -ge 1 ] || fail "none of the $kill_total runs was still running when it was killed"
+printf 'killed %d of %d runs at random moments; %d later runs recovered an interrupted one\n' "$interrupted" "$kill_total" \
   "$(grep -l 'a previous deployment was interrupted' "$logs"/kill-*.log 2>/dev/null | wc -l | tr -d ' ')"
 # The next run recovers an interrupted one before it deploys, so afterwards everything describes one deployment again.
-final_n=$((100 + kill_iterations + 1))
+final_n=$((100 + kill_total + 1))
 previous_good_image="$(dit_env_get "$APP_DIR/last-good.env" APP_IMAGE)"
 previous_good_bundle="$(dit_env_get "$APP_DIR/last-good.env" DIT_BUNDLE_SHA)"
 deploy run-after-kills "$(commit_for "$final_n")" "$(image_for "$final_n")"
@@ -1887,6 +1899,7 @@ pass umami_image_change_is_not_rolled_back_automatically
 rotate_script="$APP_DIR/current-bundle/remote/rotate-db-password.sh"
 rotate_runs=0
 rotate_kill=""
+rotate_psql_hold=""
 rotate_bash=(bash)
 rotate_status=0
 rotate_out=""
@@ -1902,7 +1915,11 @@ rotate() { # <role> <begin|finish|commit|pending-role> [new password for begin];
   if [ -n "$rotate_kill" ]; then
     hooks=(DIT_TEST_HOOKS=1 "DIT_TEST_KILL_AT=$rotate_kill")
   fi
+  if [ -n "$rotate_psql_hold" ]; then
+    hooks+=(DIT_TEST_HOOKS=1 "DIT_TEST_PSQL_HOLD=$rotate_psql_hold")
+  fi
   rotate_kill=""
+  rotate_psql_hold=""
   if [ "$mode" = pending-role ]; then
     args=("$stage" pending-role)
   else
@@ -1977,6 +1994,8 @@ rm -f "$sampler_stop"
 sample_processes "$samples" "$sampler_stop" "$postgres_before" &
 sampler_pid=$!
 bash -c 'sleep 3; :' "$canary" &
+# The hook keeps the ALTER ROLE psql session open for 3 s, far longer than one sampling pass.
+rotate_psql_hold=3
 rotate trainer begin "$new_trainer_password"
 touch "$sampler_stop"
 wait "$sampler_pid"
@@ -2012,7 +2031,7 @@ pass rotate_begin_then_commit_keeps_app_ready
 [ "$(grep -c -x -e '--sample--' "$samples")" -ge 5 ] || fail "process list: the sampler took fewer than five samples"
 grep -qF -- "$canary" "$samples" || fail "process list: the sampler did not see a known argument, so it proves nothing"
 grep -q 'rotate-db-password.sh' "$samples" || fail "process list: the sampler never saw the rotation script"
-grep -q 'psql' "$samples" || fail "process list: the sampler never saw psql"
+grep -q 'psql -v ON_ERROR_STOP=1' "$samples" || fail "process list: the sampler never saw the psql session that sets the password"
 if grep -qF -e "$new_trainer_password" -e "$old_trainer_password" "$samples"; then
   fail "process list: a password appeared on a command line"
 fi

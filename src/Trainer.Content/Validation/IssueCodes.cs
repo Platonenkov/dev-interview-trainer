@@ -12,6 +12,7 @@ public static class IssueCodes
     public const string StackUnknown = "stack-unknown";
     public const string TopicUnknown = "topic-unknown";
     public const string TaxonomyDuplicate = "taxonomy-duplicate";
+    public const string StackKeyReserved = "stack-key-reserved";
     public const string TaxonomyLocaleIncomplete = "taxonomy-locale-incomplete";
     public const string LocaleUnsupported = "locale-unsupported";
     public const string LevelInvalid = "level-invalid";

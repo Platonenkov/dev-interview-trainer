@@ -334,6 +334,94 @@ production (only HTTP/1.1 instead of HTTP/2, see Known gaps).
 8. Report the medians next to the emulated rows in the table above, marked
    "phone".
 
+## Static edition: warm visits on GitHub Pages
+
+Pages sends `Cache-Control: max-age=600`, so without help a warm visit revalidates every file after ten minutes. The
+content-addressed service worker (ADR 0026) answers fingerprinted files and content shards from its own cache, which
+takes the warm path back to the nearly zero bytes of the server edition. The page fills the cache from Resource Timing
+after the island is usable, so a first visit adds close to no traffic (the files are answered by the HTTP cache). The
+worker is not part of the Playwright lab runs of this document; its effect is measured by the live checks after each
+deployment.
+
+## Static edition: Brotli runtime on GitHub Pages
+
+Pages serves `.wasm` gzip at best, and the gzip cold set of an island page (2 784 251 bytes, measured in
+`docs/static-edition-spike.md`) is over the 2.5 MB budget. With `App:StaticSite:BrotliRuntime` on, the page fetches the
+`.br` files of the runtime and decodes them itself (ADR 0027): 2 350 695 bytes of `.br` plus about 67 KB of decoder
+(`gzip -9`), 2 417 576 in all. Decoding adds main-thread time per file, so the live checks record the transfer and the
+usable time of a cold load; the `_framework` transfer is held to the 2 500 000-byte budget by the static smoke suite in CI
+(`docs/static-edition.md`). The `.br` and fallback URLs are fetched in the default cache mode because they are content-addressed. The runtime passes no integrity to the loader, so
+the decoded bytes are verified against a table the export publishes (`js/boot-integrity.{hash}.mjs`, ADR 0027, decision 7).
+
+## Static edition: browser checks of the exported site
+
+Two groups of tests run the exported site in Chromium, served by the Pages emulator (`tools/Trainer.StaticSite`) under
+its path prefix the way GitHub Pages serves a project site (`Cache-Control: max-age=600`, gzip, no other headers).
+
+- **`Category=E2E`, `tests/Trainer.Web.E2E`** (`StaticSiteTests`, `StaticServiceWorkerTests`, `StaticCatalogFilterTests`,
+  `StaticDeploymentTests`, `StaticBrotliBootTests`): functional checks of a fixture export of the Debug build. They cover the
+  language chooser, the islands running from browser storage, the catalog filter against the server catalog, the service
+  worker, a second deployment while pages of the first are open or cached, the recovery banner, and the page's request and
+  cookie hygiene. They record no timings. A Debug build ships no pre-compressed files, so the fixture writes the `.br` files
+  itself; the integrity table (below) comes from the app's endpoint manifest like a Release build's, so the island really boots
+  from the decoded files (`Brotli_BootsOnANestedRoute` asserts no plain `.wasm` is requested), and the failure paths of the
+  Brotli loader are driven through the `loadBootResource` function the page hands to Blazor.
+- **`Category=StaticSmoke`, `tests/Trainer.Web.Release`** (`StaticSmokeTests`, `StaticIslandPerformanceTests`): the Release
+  export of a deployment. They need `DIT_STATIC_SITE_DIR` (the export, absolute) and `DIT_STATIC_SITE_URL` (the public URL it was
+  made for); `DIT_PREVIOUS_PAGE` is the live Practice page of the previous build (served so that page runs against this
+  artifact's retained files), and `DIT_STATIC_SMOKE_REQUIRED=1` turns a missing input into a failure (CI sets it). The host
+  compresses nothing here: the runtime is the `.br` set, which is also the largest transfer. The worker is active in these
+  runs, so the warm numbers include its cache. `DIT_PERF_RUNS` lowers the number of runs of a timing (default 5) on a loaded
+  machine.
+
+The performance tests apply the same emulated phone as above and hold the transfer to the same budget: `_framework/` at most
+2 500 000 bytes (always blocking), usable at 8 500 ms cold and 4 750 ms warm (blocking only with `DIT_PERF_ENFORCE=1`).
+"Usable" is `data-island-ready`, which in the static edition waits for the content index and the replay of the browser's
+answer log; "shell" is the first render (`data-island-shell-ms`). Transfer is what the host sent, so it includes the files
+the service worker's fill asked for after the load. Besides the cold and warm runs the suite checks that a late index or a
+late first question delays `data-island-ready` (a shell alone cannot pass), runs with 10 000 answers seeded into
+`dit.outbox.v1.anon` (usable within the same budgets; a Start pressed at once begins a session in under 500 ms for `all`,
+`new` and `due`; a `?first=` link shows its question at least a second before the progress, with the log read held back so
+that the replay is not already running on the page's one thread) and times one answer appended to that log. The ten-thousand
+answer timings start from the progress checkpoint a returning visitor has (ADR 0028); the one load that has none and replays
+the whole log is timed on its own and recorded as `firstLoadWithoutCheckpointMs`. Every row of `TestResults/perf/perf.json` carries `edition: static`, and the practice rows the size of the index.
+
+```bash
+export DIT_STATIC_SITE_DIR=/abs/path/to/export DIT_STATIC_SITE_URL=https://owner.github.io/dit/ DIT_STATIC_SMOKE_REQUIRED=1
+dotnet test --project tests/Trainer.Web.Release --filter-trait "Category=StaticSmoke"
+```
+
+Local measurement of the fix round (2026-11-18, a Release publish exported with the Pages configuration, three runs per
+timing, the emulated phone above; advisory, on a 12-CPU desktop that was shared with other work, so the figures are not a CI
+figure):
+
+| | cold usable (median) | warm usable (median) | shell (cold median) |
+|---|---|---|---|
+| Practice, empty log | 12 492 ms | 8 903 ms | 10 096 ms |
+| Practice, 10 000 answers, with the stored checkpoint | 12 721 ms | 9 378 ms | 9 689 ms |
+| Practice, 10 000 answers, the one load that has no checkpoint | 20 003 ms | | |
+
+- **Transfer.** `_framework/` is 2 486 240 bytes in 50 files, under the 2 500 000-byte budget (the table `js/boot-integrity`
+  is part of it). Before the fix every decoded file was refused and the plain file was downloaded as well: 8 045 938 bytes.
+- **Why the runtime's integrity was empty.** The published boot configuration inside `dotnet.js` lists a sha256 per runtime
+  file, but `dotnet.js` of the pinned SDK (10.0.203) copies the field `hash` of each resource to the `integrity` argument of
+  `loadBootResource`, and the configuration names it `integrity`. No setting in this repository's projects changes that. The app therefore exports
+  the table itself (ADR 0027, decision 7), built from the sha256 the build already computed for each published file.
+- **10 000 answers.** The replay was 1.0 to 1.3 s of a load; the rest was reading the log into .NET (a document parse of 1.4 to
+  2.3 s, one DTO per entry 3.6 to 5.4 s, the ids 0.6 to 0.8 s). The checkpoint (74 KB) replaces all of it, so a log of ten
+  thousand answers now costs about the same as an empty one (cold plus about 0.2 s, warm within the noise of the runs). An
+  appended answer takes 672 ms from the click to the write being reported, 135 ms of it in `outbox.js`, where it was 811 ms.
+  The one load without a checkpoint (every visitor's first load after this change) still replays everything and takes
+  20 s on the emulated phone, about half of it a page that cannot draw because the replay holds its one thread.
+- **The budgets on this machine.** The 8 500 ms cold and 4 750 ms warm budgets are not met with `DIT_PERF_ENFORCE=1`, and the
+  ten thousand answers are not the reason: the same machine measures the server edition's Practice page at 9 248 ms cold and
+  5 393 ms warm (en, five runs, same publish), already over the budgets that were set at about 7.7 s and 4.3 s. Against the
+  server edition the static island is about 3 s slower cold and 3.5 s warm. Measured pieces of that: decoding the `.br`
+  files costs about 0.95 s per load (46 files, the decoder runs on the main thread, 4x slowed) and the response built from
+  decoded bytes has no compiled-code cache, so the runtime compiles again on every load; from the shell to the usable mark
+  the page spends 2.2 to 3.1 s that is not the log (the index and the first renders). These are unmeasured beyond that and
+  are the next place to look; they are not caused by the answer log.
+
 ## Known gaps
 
 - **iOS Safari ignores `interactive-widget=resizes-content`.** Island pages ask

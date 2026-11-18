@@ -30,20 +30,24 @@ src/Trainer.Snippets/        Docker sandbox that compiles and runs content snipp
 src/Trainer.Web/             Blazor Web App host: static SSR pages, island pages, routing, SEO, output cache, health checks
 src/Trainer.Web.Client/      WebAssembly islands (trimmed); references only Domain and Contracts
 tools/Trainer.ContentCli/    validate / run-snippets / check-links / new-question / generate-schemas
+tools/Trainer.StaticSite/    export / verify / serve for the static edition (crawler, retention, structural verifier, Pages emulator)
 tests/                       xUnit v3 projects; Trainer.TestSupport holds shared fixtures,
                              Trainer.Web.Client.Tests covers the WebAssembly client,
                              Trainer.Web.E2E holds the Playwright browser checks,
                              Trainer.Web.Release smoke-tests and times the published Release build,
-                             Trainer.ContentCli.Tests covers the CLI (link checker on a local Kestrel server)
+                             Trainer.ContentCli.Tests covers the CLI (link checker on a local Kestrel server),
+                             Trainer.StaticSite.Tests covers the static-site tool (exporter, retention, verifier, emulator)
 Dockerfile                   production image: the published Trainer.Web and the EF Core migration bundle (/app/migrate/efbundle)
 content/                     question bank (CC BY-SA 4.0), deployed separately from the app
 deploy/                      what the workflows upload to the server: compose/ (Compose project, pg_hba.conf), remote/ (server
-                             scripts), scripts/ (render-env.sh), nginx/ and systemd/ (host assets), bootstrap/ (Bootstrap.ps1
+                             scripts), scripts/ (render-env.sh), pages/ (pages-gate.sh, the deploy decisions of pages.yml), nginx/ and systemd/ (host assets), bootstrap/ (Bootstrap.ps1
                              and provision.sh for first-time VPS provisioning), tests/ (shell tests, the smoke test)
-.github/workflows/           ci.yml (build-test, content, e2e, release, schema-base, schema-compat, workflow-lint), deploy-app.yml, deploy-content.yml, rotate-db-password.yml,
+.github/workflows/           ci.yml (build-test, content, e2e, release, static-site, schema-base, schema-compat, workflow-lint), deploy-app.yml, deploy-content.yml, rotate-db-password.yml,
                              ops-check.yml (the production server), deploy-smoke.yml (quick and full tier, `DIT_SMOKE_MODE`; a pull request gets full only when it changes the deployment files), schema-compat.yml, content-checks.yml
-                             (called by the others), link-check.yml (weekly dead-link report); .github/actions/ssh-setup and postgres-from-compose
-docs/                        architecture.md, content-guide.md, deployment.md, design mockups, specs and plans,
+                             (called by the others), link-check.yml (weekly dead-link report), static-site.yml (the static site build, called by
+                             ci.yml and pages.yml), pages.yml (GitHub Pages deployment; its decisions are deploy/pages/pages-gate.sh);
+                             .github/actions/ssh-setup and postgres-from-compose
+docs/                        architecture.md, content-guide.md, deployment.md, static-edition.md, design mockups, specs and plans,
                              adr/ (architecture decision records, one file per decision)
 ```
 
@@ -100,14 +104,28 @@ untrusted snippet code must not be reachable from the web process.
   anonymous responses must not set cookies (tests enforce this, output caching
   depends on it). A catalog request with a search term (`q`) is never cached. Check SEO metadata (title, description,
   canonical, hreflang, JSON-LD) when touching them.
+- The static edition (ADR 0022) sets no cookie: no page, redirect, asset or content-shard (ADR 0023) response carries `Set-Cookie`, which is why
+  its language choice lives in `localStorage` (`dit.lang`) and its island pages persist no antiforgery token
+  (`NoPersistedAntiforgery`). A feature that needs a server (sign-in, accounts, sync, the language endpoint) is hidden
+  or explained in the static edition and listed in section 6 of the static edition spec
+  (`docs/superpowers/specs/2026-11-17-static-edition-design.md`); it never shows a control that cannot work.
+- The static edition sends no security header (`SecurityHeadersMiddleware` steps aside; ADR 0024). Its CSP is the meta
+  element from `StaticCsp`, and a new inline script on a static page needs its hash there, or the browser refuses it
+  (`StaticCspTests` checks every exported-like page).
 - Interactive islands use `InteractiveWebAssembly` (`IslandRenderMode.NoPrerender`)
   and live only on non-indexed pages (Practice, Mock, Review, profile). Do not
   introduce `InteractiveServer`. A page that hosts an island carries
   `[InteractiveIslandPage]`: only such pages load `blazor.web.js`, carry
-  `<base href="/">`, `<ImportMap />` with a per-request nonce (ADR 0012) and get
-  the CSP with `'wasm-unsafe-eval'` and that nonce. Island pages are
-  noindex, never output-cached and never compressed (they carry an antiforgery
-  token). Fragment links on them must include the page path (`<base href="/">`).
+  `<base href>` (the path base), `<ImportMap />` with a per-request nonce (ADR 0012, server edition; the static
+  edition renders the import map as text allowed by its hash, ADR 0024) and get
+  the CSP with `'wasm-unsafe-eval'` and that nonce (server) or hash (static). Island pages are
+  noindex, never output-cached and never compressed (in the server edition they carry an antiforgery
+  token; the static edition persists none). Fragment links on them must include the page path (`<base href>` would send a bare `#main` to the site root).
+- Every URL the server writes (href, src, action, srcset, `og:*`, canonical and alternate links, sitemap and
+  `robots.txt` entries, redirect `Location`, `NavigateTo`) goes through `SitePaths` (`Page` for pages, `Asset` for
+  files and endpoints) or `SiteUrls` (absolute). Inside the server, paths stay logical and unprefixed
+  (`CatalogQueryParser.ToUrl`, `PageLinks`, `CulturePath`, `PathFor`); the conversion happens once, at output.
+  `PathBaseTests` fails on a root-relative URL that misses the path base.
 - Island pages start Blazor with enhanced navigation off (ADR 0009): every
   navigation between public and island pages is a full page load. Links from
   public pages into islands carry `data-enhance-nav="false"`: render them with
@@ -136,6 +154,13 @@ untrusted snippet code must not be reachable from the web process.
   `document` click handler.
 - Writes from islands go through `/api` with the antiforgery header and a
   client-generated answer id via the outbox (design section 8.8).
+- Islands never call `TrainerApiClient` for session or profile data; they go
+  through `IIslandBackend` (`Backend/`), which the server edition implements as
+  `ServerIslandBackend` and the static edition as `StaticIslandBackend`. A session is a
+  `SessionPlan` (ids, order, an `IQuestionSource`): `PracticeSession` and
+  `ReviewSession` load each question on `StartAsync` and `NextAsync`, prefetch
+  the following one, and keep their position when a load fails. While
+  `Current` is null the island shows `QuestionSkeleton`, never a blank card.
 - Islands build question screens from the shared `Sessions/` model
   (`QuestionAttempt`, `AnswerFactory`) and components (`QuestionCard`,
   `OptionList`, `FeedbackPanel`, `AnswerArea`, ...), and show failures through
@@ -197,6 +222,11 @@ for a change that touches `deploy/`, `.github/workflows/` or a configuration val
   per-run staging directory, and, when it calls a reusable workflow, grants that workflow's permissions on the
   calling job (a called workflow cannot raise them). The deploy-bundle tests in `Trainer.Deploy.Tests` check these
   rules for the existing workflows.
+- `pages.yml` has no `schedule`, `push` or `pull_request` trigger and uses no secret, and the public site address is derived
+  from the repository by the gate (`pages-gate.sh site-url`), and the optional `SITE_URL` repository variable overrides it for a
+  custom domain: no workflow names an address (`ci.yml` falls back to a `ci.invalid` sentinel when no custom domain is set,
+  which never uploads). The `github-pages` environment belongs to the `deploy` job of `pages.yml` alone; the
+  `production` rules above are unchanged.
 - A new page that should not be counted by analytics opts out in `AnalyticsScript`.
 - Never use `set -x` or `bash -x` in a deploy script: they handle secrets and the repository tests forbid tracing.
 

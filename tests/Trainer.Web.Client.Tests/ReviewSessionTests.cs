@@ -11,17 +11,21 @@ public sealed class ReviewSessionTests
 {
     private static readonly DateTimeOffset DeviceStart = new(2026, 11, 12, 10, 0, 0, TimeSpan.Zero);
 
-    private static ReviewSession Create(int seed, params QuestionDto[] questions)
+    private static async Task<ReviewSession> CreateAsync(int seed, params QuestionDto[] questions)
     {
         FakeTimeProvider device = new(DeviceStart);
         ServerClock clock = new(device, new FakeBrowserStore());
-        return new ReviewSession(questions, new UlidGenerator(device), new Random(seed), clock);
+        ReviewSession session = new(TestPlans.Preloaded(questions), new UlidGenerator(device), new Random(seed), clock);
+        await session.StartAsync(TestContext.Current.CancellationToken);
+        return session;
     }
 
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
+
     [Fact]
-    public void Review_ChoiceKinds_StartWithRecallStep()
+    public async Task Review_ChoiceKinds_StartWithRecallStep()
     {
-        ReviewSession session = Create(1, TestQuestions.Single(), TestQuestions.Multi(), TestQuestions.OutputChoice());
+        ReviewSession session = await CreateAsync(1, TestQuestions.Single(), TestQuestions.Multi(), TestQuestions.OutputChoice());
 
         for (int i = 0; i < 3; i++)
         {
@@ -39,7 +43,7 @@ public sealed class ReviewSessionTests
             Assert.Single(attempt.Picked);
             Assert.True(session.CanSubmit);
             attempt.SubmitAutomatic();
-            session.Next();
+            await session.NextAsync(Ct);
         }
 
         Assert.True(session.IsFinished);
@@ -47,15 +51,23 @@ public sealed class ReviewSessionTests
     }
 
     [Fact]
-    public void Review_ShowOptions_RevealsShuffled()
+    public async Task Review_ShowOptions_RevealsShuffled()
     {
         QuestionDto question = TestQuestions.Single();
         string[] original = [.. question.Options.Select(o => o.Id)];
 
         // Some seed shuffles the four options away from the content order; the attempt keeps that order.
-        ReviewSession session = Enumerable.Range(0, 20)
-            .Select(seed => Create(seed, question))
-            .First(s => !s.Current!.Options.Select(o => o.Id).SequenceEqual(original, StringComparer.Ordinal));
+        ReviewSession? session = null;
+        for (int seed = 0; seed < 20 && session is null; seed++)
+        {
+            ReviewSession candidate = await CreateAsync(seed, question);
+            if (!candidate.Current!.Options.Select(o => o.Id).SequenceEqual(original, StringComparer.Ordinal))
+            {
+                session = candidate;
+            }
+        }
+
+        Assert.NotNull(session);
         string[] shown = [.. session.Current!.Options.Select(o => o.Id)];
 
         session.ShowOptions();
@@ -75,7 +87,7 @@ public sealed class ReviewSessionTests
     [InlineData("situation")]
     [InlineData("find-bug")]
     [InlineData("output-typed")]
-    public void Review_OpenKind_SkipsRecallStep(string kind)
+    public async Task Review_OpenKind_SkipsRecallStep(string kind)
     {
         QuestionDto question = kind switch
         {
@@ -83,19 +95,19 @@ public sealed class ReviewSessionTests
             "output-typed" => TestQuestions.OutputTyped(),
             _ => TestQuestions.Open(kind),
         };
-        ReviewSession session = Create(1, question, TestQuestions.Single());
+        ReviewSession session = await CreateAsync(1, question, TestQuestions.Single());
 
         Assert.False(session.AwaitingRecall);
 
         // The next choice question starts hidden again.
-        session.Next();
+        await session.NextAsync(Ct);
         Assert.True(session.AwaitingRecall);
     }
 
     [Fact]
-    public void Review_Empty_HasNoCurrent()
+    public async Task Review_Empty_HasNoCurrent()
     {
-        ReviewSession session = Create(1);
+        ReviewSession session = await CreateAsync(1);
 
         Assert.True(session.IsEmpty);
         Assert.True(session.IsFinished);
@@ -105,7 +117,7 @@ public sealed class ReviewSessionTests
         Assert.Empty(session.Results);
 
         session.ShowOptions();
-        session.Next();
+        await session.NextAsync(Ct);
         Assert.Equal(0, session.Index);
     }
 }

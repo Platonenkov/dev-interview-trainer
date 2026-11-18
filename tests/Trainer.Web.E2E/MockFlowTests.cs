@@ -40,7 +40,7 @@ public sealed class MockFlowTests(AppHostFixture host) : IClassFixture<AppHostFi
             HasTouch = touch,
             IsMobile = mobile,
         });
-        await context.AddInitScriptAsync($"try {{ localStorage.setItem('theme', '{theme}'); }} catch (e) {{ }}");
+        await context.AddInitScriptAsync($"try {{ localStorage.setItem('dit.theme', '{theme}'); }} catch (e) {{ }}");
         return context;
     }
 
@@ -244,7 +244,7 @@ public sealed class MockFlowTests(AppHostFixture host) : IClassFixture<AppHostFi
         for (int i = 0; i < 5; i++)
         {
             string href = await items.Nth(i).Locator("a").GetAttributeAsync("href") ?? "";
-            Assert.StartsWith("/en/dotnet/questions/", href, StringComparison.Ordinal);
+            Assert.StartsWith("en/dotnet/questions/", href, StringComparison.Ordinal);
         }
 
         await Assertions.Expect(tab.Locator(".mock-summary__table tbody tr").First).ToBeVisibleAsync();
@@ -653,7 +653,7 @@ public sealed class MockFlowTests(AppHostFixture host) : IClassFixture<AppHostFi
         await tab.GotoAsync(MockPath);
         await tab.Locator(ReadyIsland).WaitForAsync(new LocatorWaitForOptions { Timeout = Wait });
         await WaitForPhaseAsync(tab, "elsewhere");
-        Assert.Equal("/ru/dotnet/mock", await tab.Locator(".mock .island-state a.btn").GetAttributeAsync("href"));
+        Assert.Equal("ru/dotnet/mock", await tab.Locator(".mock .island-state a.btn").GetAttributeAsync("href"));
         Assert.Equal(0, await tab.Locator(".qcard").CountAsync());
 
         await tab.Locator(".mock__end-elsewhere").ClickAsync();
@@ -688,7 +688,7 @@ public sealed class MockFlowTests(AppHostFixture host) : IClassFixture<AppHostFi
         await tab.Locator(".mock__anonymous-finish").ClickAsync();
 
         ILocator import = tab.Locator(".mock__anonymous a");
-        await Assertions.Expect(import).ToHaveAttributeAsync("href", "/en/dotnet/profile#import");
+        await Assertions.Expect(import).ToHaveAttributeAsync("href", "en/dotnet/profile#import");
         Assert.Null(await StoredAsync(tab, AnonymousProgress));
         Assert.Equal(expected, await StoredCountAsync(tab, AnonymousOutbox));
         Assert.Null(await StoredAsync(tab, $"dit.mock.v1.{telegramId}.active"));

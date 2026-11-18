@@ -201,4 +201,14 @@ public sealed class RotateScriptTests
         Assert.Matches(@"if \[ ""\$\{DIT_TEST_HOOKS:-\}"" = ""1"" \] && \[ ""\$\{DIT_TEST_KILL_AT:-\}"" = ""\$1"" \]; then\s+kill -KILL \$\$", Body(text, "kill_point"));
         Assert.Equal(["after-alter-role", "after-env", "after-last-good", "after-journal"], Regex.Matches(text, @"^\s+kill_point (?<name>[a-z-]+)$", RegexOptions.Multiline).Select(m => m.Groups["name"].Value));
     }
+
+    [Fact]
+    public void PsqlHold_IsInertWithoutTheHookVariablesAndAcceptsOnlySeconds()
+    {
+        string text = Script();
+
+        Assert.Matches(@"if \[ ""\$\{DIT_TEST_HOOKS:-\}"" = ""1"" \] && \[\[ ""\$\{DIT_TEST_PSQL_HOLD:-\}"" =~ \^\[0-9\]\{1,2\}\$ \]\]; then\s+printf 'SELECT pg_sleep\(%s\);' ""\$DIT_TEST_PSQL_HOLD""", Body(text, "psql_hold"));
+        Assert.Equal(1, Regex.Count(text, @"\$\(psql_hold\)"));
+        Assert.Contains("\"$(psql_hold)\" |", Body(text, "alter_role"), StringComparison.Ordinal);
+    }
 }

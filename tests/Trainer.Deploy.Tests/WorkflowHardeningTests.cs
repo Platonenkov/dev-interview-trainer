@@ -14,6 +14,8 @@ public sealed partial class WorkflowHardeningTests
 {
     private const string SshSetup = "./.github/actions/ssh-setup";
 
+    private const string PagesEnvironment = "github-pages";
+
     private static readonly string Root = ContentWorkspace.RepositoryRoot();
 
     private static readonly string[] DeployWorkflowFiles = ["deploy-app.yml", "ops-check.yml", "deploy-content.yml", "rotate-db-password.yml"];
@@ -23,7 +25,7 @@ public sealed partial class WorkflowHardeningTests
 
     private static readonly string[] ProvisionHookNames = ["DIT_TEST_AUTHORIZED_KEYS", "DIT_TEST_SSH_DIR", "DIT_TEST_APP_DIR"];
 
-    private static readonly string[] TestHookNames = ["DIT_TEST_HOOKS", "DIT_TEST_KILL_AT", "DIT_TEST_IMPORT_URL", .. ProvisionHookNames];
+    private static readonly string[] TestHookNames = ["DIT_TEST_HOOKS", "DIT_TEST_KILL_AT", "DIT_TEST_PSQL_HOLD", "DIT_TEST_IMPORT_URL", .. ProvisionHookNames];
 
     [GeneratedRegex(@"@[0-9a-f]{40}$")]
     private static partial Regex FullShaPin();
@@ -443,6 +445,40 @@ public sealed partial class WorkflowHardeningTests
         }
     }
 
+    [GeneratedRegex(@">>\s*(?<target>""?\$\{?\w+\}?""?)\s*$")]
+    private static partial Regex AppendRedirect();
+
+    [Fact]
+    public void RunSteps_NeverAppendThreeTimesInARowToTheSameFile()
+    {
+        // ShellCheck SC2129 (actionlint runs it on every run script) flags three or more consecutive redirects to one target;
+        // the appends to GITHUB_OUTPUT and GITHUB_STEP_SUMMARY are grouped in { ...; } >> "$FILE" instead.
+        foreach (YamlFile file in Workflows())
+        {
+            foreach (YamlNode node in AllNodes(file).Where(n => n.Path.Length > 0 && n.Path[^1] == "run" && n.Value is string))
+            {
+                string? previous = null;
+                int streak = 0;
+                foreach (string line in ((string)node.Value!).Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0 && !l.StartsWith('#')))
+                {
+                    Match match = AppendRedirect().Match(line);
+                    string? target = match.Success ? match.Groups["target"].Value : null;
+                    streak = target is not null && target == previous ? streak + 1 : target is null ? 0 : 1;
+                    previous = target;
+                    Assert.True(streak < 3, $"{file.Name}: {string.Join('/', node.Path)} appends three times in a row to {target}; group them in {{ ...; }} >> {target}.");
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public void RunSteps_AppendRedirectPattern_MatchesTheFormsTheWorkflowsUse()
+    {
+        Assert.Matches(AppendRedirect(), "echo \"a=1\" >> \"$GITHUB_OUTPUT\"");
+        Assert.Matches(AppendRedirect(), "bash deploy/pages/pages-gate.sh decide \"$SITE_URL\" >> \"$GITHUB_OUTPUT\"");
+        Assert.DoesNotMatch(AppendRedirect(), "echo hello");
+    }
+
     [Fact]
     public void Walker_ReachesScalarsNestedInSequencesAndMappings()
     {
@@ -575,8 +611,20 @@ public sealed partial class WorkflowHardeningTests
         }
     }
 
+    // The github-pages environment of pages.yml (deploy job only, PagesWorkflowTests) is not a production environment.
     private static bool UsesProduction(YamlFile file) =>
-        JobsUsingSshSetup(file).Any() || Jobs(file).Values.Any(job => IsMap(job) && Map(job).ContainsKey("environment"));
+        JobsUsingSshSetup(file).Any() || Jobs(file).Values.Any(job => IsMap(job) && EnvironmentName(job) != string.Empty && EnvironmentName(job) != PagesEnvironment);
+
+    // The environment key is a name or a { name, url } mapping; a job without one has an empty name.
+    private static string EnvironmentName(object? job)
+    {
+        if (!IsMap(job) || !Map(job).TryGetValue("environment", out object? environment))
+        {
+            return string.Empty;
+        }
+
+        return IsMap(environment) ? Text(Map(environment).GetValueOrDefault("name")) : Text(environment);
+    }
 
     // The list above is what the deploy checks run over; a workflow that touches the server or reads the production
     // environment without being on it would escape the concurrency, staging and test-hook rules.
@@ -620,6 +668,9 @@ public sealed partial class WorkflowHardeningTests
     [InlineData("deploy-content.yml", "  checks:\n    needs: resolve\n", "  checks:\n    environment: production\n    needs: resolve\n")]
     [InlineData("ci.yml", "  build-test:\n    runs-on: ubuntu-latest\n", "  build-test:\n    environment: production\n    runs-on: ubuntu-latest\n")]
     [InlineData("ops-check.yml", "    environment: production\n", "")]
+    [InlineData("ci.yml", "  build-test:\n    runs-on: ubuntu-latest\n", "  build-test:\n    environment: github-pages\n    runs-on: ubuntu-latest\n")]
+    [InlineData("pages.yml", "  gate:\n    runs-on: ubuntu-latest\n", "  gate:\n    environment: github-pages\n    runs-on: ubuntu-latest\n")]
+    [InlineData("pages.yml", "  live-check:\n    needs: [gate, deploy]\n", "  live-check:\n    environment: production\n    needs: [gate, deploy]\n")]
     public void EnvironmentCheck_FailsWhenACodeOnlyJobDeclaresAnEnvironment(string name, string from, string to)
     {
         YamlFile mutated = Mutated(name, from, to);
@@ -633,6 +684,13 @@ public sealed partial class WorkflowHardeningTests
         {
             bool declares = Map(job.Value).TryGetValue("environment", out object? environment);
             bool sshJob = UsesSshSetup(job.Value);
+            if (EnvironmentName(job.Value) == PagesEnvironment)
+            {
+                // The Pages deployment job is the one other environment, and it never touches the server.
+                Assert.True(file.Name == "pages.yml" && job.Key == "deploy" && !sshJob, $"{file.Name}:{job.Key}: the {PagesEnvironment} environment belongs to the deploy job of pages.yml only.");
+                continue;
+            }
+
             Assert.True(declares == sshJob, $"{file.Name}:{job.Key}: a job has the production environment exactly when it uses ssh-setup.");
             if (declares)
             {
@@ -1173,6 +1231,7 @@ public sealed partial class WorkflowHardeningTests
     [Theory]
     [InlineData("DIT_TEST_HOOKS")]
     [InlineData("DIT_TEST_KILL_AT")]
+    [InlineData("DIT_TEST_PSQL_HOLD")]
     [InlineData("DIT_TEST_IMPORT_URL")]
     public void TestHookCheck_FailsWhenAProductionWorkflowNamesAHook(string hook)
     {
@@ -2108,6 +2167,7 @@ public sealed partial class WorkflowHardeningTests
     [Theory]
     [InlineData("DIT_TEST_HOOKS")]
     [InlineData("DIT_TEST_KILL_AT")]
+    [InlineData("DIT_TEST_PSQL_HOLD")]
     [InlineData("DIT_TEST_IMPORT_URL")]
     public void TestHookCheck_FailsWhenTheRotationWorkflowNamesAHook(string hook)
     {

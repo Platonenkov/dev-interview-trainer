@@ -6,6 +6,8 @@ using Telegram.OpenIdConnect.AspNetCore;
 using Trainer.Application.Users;
 using Trainer.Domain.Users;
 using Trainer.Web.Caching;
+using Trainer.Web.Seo;
+using Trainer.Web.Startup;
 
 namespace Trainer.Web.Auth;
 
@@ -20,7 +22,7 @@ public static class AuthServiceCollectionExtensions
     /// the session cookie settings, the admin list and the authorization policies.
     /// </summary>
     public static IServiceCollection AddTrainerAuth(
-        this IServiceCollection services, IConfiguration configuration, IHostEnvironment environment)
+        this IServiceCollection services, IConfiguration configuration, IHostEnvironment environment, SiteEdition edition)
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
@@ -67,7 +69,8 @@ public static class AuthServiceCollectionExtensions
             // ("/\t/evil.test", which a browser reads as "//evil.test"), so the final target is validated again here.
             options.Events.OnTicketReceived = context =>
             {
-                context.ReturnUri = SignInRedirectEndpoint.ResolveReturnPathAfterSignIn(context.ReturnUri);
+                context.ReturnUri = SignInRedirectEndpoint.ResolveReturnLocationAfterSignIn(
+                    context.ReturnUri, context.HttpContext.RequestServices.GetRequiredService<SitePaths>());
                 return Task.CompletedTask;
             };
         });
@@ -90,7 +93,8 @@ public static class AuthServiceCollectionExtensions
             });
 
         services.AddAuthorizationBuilder()
-            .AddPolicy(AdminPolicy, policy => policy.RequireRole(Roles.Admin));
+            .AddPolicy(AdminPolicy, policy => policy.RequireRole(Roles.Admin))
+            .AddProgressPolicy(edition);
         services.AddCascadingAuthenticationState();
         return services;
     }

@@ -7,6 +7,7 @@ using Trainer.Domain.Grading;
 using Trainer.Domain.Keys;
 using Trainer.Domain.Levels;
 using Trainer.Domain.Questions;
+using Trainer.Domain.Sessions;
 using Trainer.Domain.Users;
 using Trainer.Infrastructure.Feedback;
 using Trainer.Infrastructure.Persistence;

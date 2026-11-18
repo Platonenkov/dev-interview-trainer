@@ -34,7 +34,7 @@ public sealed record PracticeFilterSet(
     /// than by a remembered filter that might match nothing else. The count is never in the URL, so it is always the
     /// remembered one.
     /// </summary>
-    public static PracticeFilterSet Resolve(IslandBootstrapDto bootstrap, StoredPracticeFilters? remembered)
+    public static PracticeFilterSet Resolve(IslandBootstrapDto bootstrap, StoredPracticeFilters? remembered, bool keepsProgress)
     {
         ArgumentNullException.ThrowIfNull(bootstrap);
         PracticeFiltersDto url = bootstrap.InitialFilters;
@@ -45,14 +45,17 @@ public sealed record PracticeFilterSet(
             : remembered is not null
                 ? new PracticeFilterSet(remembered.Levels ?? [], remembered.Topics ?? [], remembered.Types ?? [], remembered.Status ?? All, count)
                 : new PracticeFilterSet([], [], [], All, count);
-        return chosen.Normalise(bootstrap);
+        return chosen.Normalise(bootstrap, keepsProgress);
     }
 
-    /// <summary>Keeps only what <paramref name="bootstrap"/> offers, in its order, and clamps the count.</summary>
-    public PracticeFilterSet Normalise(IslandBootstrapDto bootstrap)
+    /// <summary>
+    /// Keeps only what <paramref name="bootstrap"/> offers, in its order, and clamps the count. <c>due</c> is kept only
+    /// when the visitor has progress (<paramref name="keepsProgress"/>, from the backend).
+    /// </summary>
+    public PracticeFilterSet Normalise(IslandBootstrapDto bootstrap, bool keepsProgress)
     {
         ArgumentNullException.ThrowIfNull(bootstrap);
-        bool signedIn = bootstrap.Me is not null;
+        bool signedIn = keepsProgress;
         string status = Status switch
         {
             New => New,

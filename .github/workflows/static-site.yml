@@ -1,0 +1,254 @@
+name: static-site
+
+# The whole site build in one place (spec 5.11): deterministic Release publish, a throw-away PostgreSQL, the published app
+# in the StaticExport environment, the crawler, the structural verifier and the static smoke suite in a browser. ci.yml
+# calls it on every pull request and push (no retention, no upload); pages.yml calls it for a deployment (retention from the
+# live build, upload of the Pages artifact). The caller owns concurrency; this workflow only reads the repository.
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Full commit SHA to build.
+        type: string
+        required: true
+      site_url:
+        description: Public site address with a trailing slash, computed by the calling workflow. Every other URL is derived from it.
+        type: string
+        required: true
+      build_id:
+        description: Identity of this deployment, <commit>.<run id>.<attempt>.
+        type: string
+        required: true
+      goatcounter_code:
+        description: GoatCounter site code (the GOATCOUNTER_CODE repository variable); empty turns analytics off.
+        type: string
+        required: false
+        default: ''
+      google_verification:
+        description: Value of the google-site-verification meta tag; empty renders nothing.
+        type: string
+        required: false
+        default: ''
+      yandex_verification:
+        description: Value of the yandex-verification meta tag; empty renders nothing.
+        type: string
+        required: false
+        default: ''
+      live_build_id:
+        description: Build id of the live site, which retention copies immutable files from. Needed when retain is true.
+        type: string
+        required: false
+        default: ''
+      retain:
+        description: Copy the immutable files of the live build into the export (every deployment except the first).
+        type: boolean
+        required: false
+        default: false
+      upload:
+        description: Upload the export as the Pages artifact.
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      # PostgreSQL runs on the runner for this job only; the password protects nothing and never leaves it.
+      TRAINER_DB: Host=localhost;Port=5432;Database=trainer;Username=postgres;Password=release
+    steps:
+      # First, before any cost is paid: an empty site address would otherwise surface as an unrelated failure much later.
+      - name: Derive the site paths
+        id: site
+        env:
+          SITE_URL: ${{ inputs.site_url }}
+          REF: ${{ inputs.ref }}
+          BUILD_ID: ${{ inputs.build_id }}
+          RETAIN: ${{ inputs.retain }}
+          LIVE_BUILD_ID: ${{ inputs.live_build_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SITE_URL" ]; then
+            echo "::error::site_url is empty; the calling workflow must pass the site address."
+            exit 1
+          fi
+          if ! [[ "$SITE_URL" =~ ^https://[^/?#@]+/([^?#]*/)?$ ]]; then
+            echo "::error::site_url must be an https URL with a trailing slash and no query or fragment."
+            exit 1
+          fi
+          if ! [[ "$REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::ref must be a full lowercase commit SHA."
+            exit 1
+          fi
+          if ! [[ "$BUILD_ID" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            echo "::error::build_id may contain only letters, digits, dots, dashes and underscores."
+            exit 1
+          fi
+          if [ "$RETAIN" = "true" ] && [ -z "$LIVE_BUILD_ID" ]; then
+            echo "::error::retain needs live_build_id, the build the immutable files are copied from."
+            exit 1
+          fi
+          rest="${SITE_URL#https://}"
+          prefix="/${rest#*/}"
+          echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
+          echo "app_url=http://127.0.0.1:5080$prefix" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Static site build"
+            echo
+            echo "- Build id: \`$BUILD_ID\`"
+            echo "- Commit: \`$REF\`"
+            echo "- Site path prefix: \`$prefix\`"
+            echo "- Retention from the live build: \`$RETAIN\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      # The same pin as the release job of ci.yml: the relinked runtime, and so the transfer budget, is reproducible only
+      # on one SDK and workload set. The override is job-local and never committed.
+      - name: Pin the SDK to 10.0.303
+        run: |
+          jq '.sdk = {version: "10.0.303", rollForward: "disable"}' global.json > global.json.tmp
+          mv global.json.tmp global.json
+          cat global.json
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: 10.0.303
+      - name: Install wasm-tools
+        run: |
+          version="$(dotnet --version)"
+          echo "SDK $version"
+          case "$version" in
+            10.0.3??) ;;
+            *) echo "::error::The wasm-tools pin needs an SDK in the 10.0.3xx band, got $version"; exit 1 ;;
+          esac
+          dotnet workload install wasm-tools --version 10.0.303
+
+      - name: Restore
+        run: dotnet restore
+      - name: Restore tools
+        run: dotnet tool restore
+
+      # A constant informational version keeps the assemblies, and so every fingerprint, identical for identical source;
+      # the identity of a deployment lives in build.json and the dit-build meta tag instead.
+      - name: Publish Release
+        run: dotnet publish src/Trainer.Web -c Release -o "$GITHUB_WORKSPACE/artifacts/web" -p:IncludeSourceRevisionInInformationalVersion=false -p:InformationalVersion=static
+
+      # The image comes from deploy/compose/compose.yaml, the single place its digest is pinned.
+      - name: Start PostgreSQL
+        uses: ./.github/actions/postgres-from-compose
+      - name: Migrate the database
+        run: dotnet ef database update --project src/Trainer.Infrastructure
+
+      # AllowedHosts is not set here. In StaticExport, AllowedHostsDefault narrows the wildcard to the host of the public base
+      # URL plus localhost, 127.0.0.1 and [::1], so the loopback address the crawler uses is accepted only because
+      # ASPNETCORE_URLS below names 127.0.0.1; do not move the listener to another name. The working directory is the publish
+      # directory: the content root, wwwroot and the static asset manifest are found there.
+      - name: Start the published app
+        working-directory: artifacts/web
+        env:
+          ASPNETCORE_ENVIRONMENT: StaticExport
+          ASPNETCORE_URLS: http://127.0.0.1:5080
+          App__Edition: Static
+          App__PublicBaseUrl: ${{ inputs.site_url }}
+          App__StaticSite__BuildId: ${{ inputs.build_id }}
+          App__StaticSite__GoogleSiteVerification: ${{ inputs.google_verification }}
+          App__StaticSite__YandexVerification: ${{ inputs.yandex_verification }}
+          App__Analytics__GoatCounterCode: ${{ inputs.goatcounter_code }}
+          App__ContentRoot: ${{ github.workspace }}/content
+          ConnectionStrings__Trainer: ${{ env.TRAINER_DB }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/artifacts/logs"
+          nohup dotnet Trainer.Web.dll > "$GITHUB_WORKSPACE/artifacts/logs/app.log" 2>&1 < /dev/null &
+          echo "$!" > "$RUNNER_TEMP/app.pid"
+      - name: Wait for the app
+        env:
+          APP_URL: ${{ steps.site.outputs.app_url }}
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 120); do
+            if ! kill -0 "$(cat "$RUNNER_TEMP/app.pid")" 2>/dev/null; then
+              echo "::error::The published app exited before it became ready."
+              tail -n 80 "$GITHUB_WORKSPACE/artifacts/logs/app.log" || true
+              exit 1
+            fi
+            if curl --silent --fail --max-time 3 --output /dev/null "${APP_URL}health/ready"; then
+              echo "The app is ready."
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::${APP_URL}health/ready was not 200 within 120 seconds."
+          tail -n 80 "$GITHUB_WORKSPACE/artifacts/logs/app.log" || true
+          exit 1
+
+      - name: Build the export tool
+        run: dotnet publish tools/Trainer.StaticSite -c Release -o "$RUNNER_TEMP/static-site-tool"
+      - name: Export the site
+        env:
+          APP_URL: ${{ steps.site.outputs.app_url }}
+          SITE_URL: ${{ inputs.site_url }}
+          BUILD_ID: ${{ inputs.build_id }}
+          REF: ${{ inputs.ref }}
+          RETAIN: ${{ inputs.retain }}
+          LIVE_BUILD_ID: ${{ inputs.live_build_id }}
+        run: |
+          set -euo pipefail
+          args=(export --app "$APP_URL" --site-url "$SITE_URL" --out "$GITHUB_WORKSPACE/artifacts/site" --build-id "$BUILD_ID" --commit "$REF")
+          if [ "$RETAIN" = "true" ]; then
+            args+=(--retain-from "$SITE_URL" --live-build-id "$LIVE_BUILD_ID" --previous-page-out "$GITHUB_WORKSPACE/artifacts/previous-page.html")
+          fi
+          dotnet "$RUNNER_TEMP/static-site-tool/Trainer.StaticSite.dll" "${args[@]}"
+      # Only the export needs the app; the smoke suite serves the folder from its own emulator.
+      - name: Stop the app
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/app.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/app.pid")" 2>/dev/null || true
+          fi
+      # A separate step, so a problem in the export fails the job on its own line (exit code 1 for a problem, 2 for bad arguments).
+      - name: Verify the export
+        env:
+          SITE_URL: ${{ inputs.site_url }}
+        run: dotnet "$RUNNER_TEMP/static-site-tool/Trainer.StaticSite.dll" verify --dir "$GITHUB_WORKSPACE/artifacts/site" --site-url "$SITE_URL"
+
+      - name: Build the smoke tests
+        run: dotnet build tests/Trainer.Web.Release --no-restore
+      - name: Install Playwright Chromium
+        run: pwsh tests/Trainer.Web.Release/bin/Debug/net10.0/playwright.ps1 install --with-deps chromium
+      # The _framework transfer budget (2 500 000 bytes) always gates; the timings are written to the job summary and fail
+      # the job only with DIT_PERF_ENFORCE=1 (docs/performance.md). DIT_STATIC_SMOKE_REQUIRED turns a missing input into a
+      # failure and --minimum-expected-tests a suite that silently ran nothing. DIT_PREVIOUS_PAGE is set only when a
+      # previous page was captured (retention), which is every deployment except the first.
+      - name: Static smoke tests
+        env:
+          DIT_STATIC_SITE_DIR: ${{ github.workspace }}/artifacts/site
+          DIT_STATIC_SITE_URL: ${{ inputs.site_url }}
+          DIT_STATIC_SMOKE_REQUIRED: '1'
+          DIT_PERF_ENFORCE: '0'
+          DIT_PREVIOUS_PAGE: ${{ inputs.retain && format('{0}/artifacts/previous-page.html', github.workspace) || '' }}
+        run: dotnet test --project tests/Trainer.Web.Release --no-build --filter-trait "Category=StaticSmoke" --minimum-expected-tests 4
+      - name: Upload measurements
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: static-site-perf
+          path: |
+            TestResults/perf/**
+            artifacts/logs/**
+          if-no-files-found: warn
+
+      - name: Upload the Pages artifact
+        if: ${{ inputs.upload }}
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: artifacts/site

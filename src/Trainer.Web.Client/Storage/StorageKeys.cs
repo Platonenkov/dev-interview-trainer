@@ -11,14 +11,23 @@ public static class StorageKeys
 {
     public const string AnonymousOutbox = "dit.outbox.v1.anon";
 
+    /// <summary>The replayed progress of the anonymous answer log (<c>ProgressCheckpoint</c>): derived data, rebuilt from the log whenever it does not match.</summary>
+    public const string AnonymousProgressCheckpoint = "dit.progress.v1.anon";
+
     /// <summary>Where unparseable values are copied before their key is cleared: the prefix plus Unix milliseconds.</summary>
     public const string CorruptPrefix = "dit.outbox.v1.corrupt.";
 
     public const string Account = "dit.account";
 
+    /// <summary>The language a visitor chose in the static edition; a preference, last writer wins.</summary>
+    public const string LanguageChoice = "dit.lang";
+
     public const string ServerClock = "dit.clock.v1";
 
     public const string PracticeFilters = "dit.practice.v1.filters";
+
+    /// <summary>The finished mocks of a visitor of the static edition, kept on this device only (<c>StoredMockHistory</c>).</summary>
+    public const string AnonymousMockHistory = "dit.mock.v1.anon.history";
 
     /// <summary>The owner segment of the mock keys for a visitor who is not signed in.</summary>
     public const string AnonymousOwner = "anon";

@@ -27,6 +27,7 @@ public static class PracticeStatusKeys
 
 /// <summary>What the server hands an island at startup, so the island needs no extra request before it renders.</summary>
 /// <param name="Me">Null for an anonymous visitor.</param>
+/// <param name="StaticSite">Set only by the static edition: where the content shards are.</param>
 public sealed record IslandBootstrapDto(
     string Culture,
     string Stack,
@@ -34,4 +35,5 @@ public sealed record IslandBootstrapDto(
     IReadOnlyList<string> Levels,
     IReadOnlyList<string> Types,
     PracticeFiltersDto InitialFilters,
-    MeDto? Me);
+    MeDto? Me,
+    StaticSiteDto? StaticSite = null);

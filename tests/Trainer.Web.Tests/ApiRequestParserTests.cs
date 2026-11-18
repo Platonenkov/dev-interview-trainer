@@ -5,6 +5,7 @@ using Trainer.Contracts;
 using Trainer.Domain.Grading;
 using Trainer.Domain.Keys;
 using Trainer.Domain.Levels;
+using Trainer.Domain.Sessions;
 using Trainer.Web.Api;
 using Trainer.Web.ContentState;
 

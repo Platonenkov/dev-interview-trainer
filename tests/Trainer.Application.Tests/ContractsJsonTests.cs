@@ -17,6 +17,13 @@ public sealed class ContractsJsonTests
         ["333"], [[1, 2], [4]], "<p>Answer</p>", "<p>Explanation</p>",
         [new LinkDto("https://learn.microsoft.com/dotnet", "Docs", "en")]);
 
+    private static readonly StaticSiteDto StaticSite =
+        new("data/en/dotnet/index.0123456789abcdef.json", "https://github.com/Platonenkov/dev-interview-trainer/issues/new");
+
+    private static readonly StaticIndexDto StaticIndex = new(
+        StaticIndexDto.CurrentFormat, "en", "dotnet", "c0ffee", [new TopicDto("csharp", "C#")],
+        [new StaticIndexEntryDto("01KBZ3Q8N9V2K3M4P5R6S7T8WA", "closure-for-loop", "csharp", "junior", "find-bug", "Title", "fedcba9876543210")]);
+
     private static readonly TopicProgressDto TopicProgress = new("csharp", "C#", 12, 5, 3, 2);
 
     private static readonly MockSummaryDto Summary =
@@ -27,6 +34,9 @@ public sealed class ContractsJsonTests
         At.AddMinutes(-30), At.AddMinutes(60), "assessment", 1, 7,
         [new AttemptState("01KBZ3Q8N9V2K3M4P5R6S7T8WC", ["b", "a"], ["a"], [2, 3], "333", "notes", true, At.AddMinutes(-5), true, "partial", At.AddMinutes(-4), "knew", At.AddMinutes(-1), false)],
         new MockCompletionState(At, [new AnswerDto("01KBZ3Q8N9V2K3M4P5R6S7T8WC", "01KBZ3Q8N9V2K3M4P5R6S7T8WA", "partial", true, "mock", "01KBZ3Q8N9V2K3M4P5R6S7T8WD", At)], Summary, true, false));
+
+    private static readonly StoredMockHistoryItem MockHistoryItem =
+        new("01KBZ3Q8N9V2K3M4P5R6S7T8WD", "dotnet", "middle", 12, At, 7, 3, 1, 1);
 
     /// <summary>One sample per wire type; the coverage test fails when a type is added without one.</summary>
     private static readonly object[] Samples =
@@ -59,7 +69,10 @@ public sealed class ContractsJsonTests
         new MeDto(123456789012L, 4, 7, [TopicProgress]),
         new PracticeFiltersDto(["junior"], [], ["open"], "all", null),
         new IslandBootstrapDto("en", "dotnet", [new TopicDto("csharp", "C#")], ["junior", "middle"], ["open", "single"],
-            new PracticeFiltersDto([], [], [], "all", null), new MeDto(123456789012L, 4, 7, [TopicProgress])),
+            new PracticeFiltersDto([], [], [], "all", null), new MeDto(123456789012L, 4, 7, [TopicProgress]), StaticSite),
+        StaticSite,
+        StaticIndex,
+        StaticIndex.Questions[0],
         Progress,
         Progress.Attempts[0],
         Progress.Completion!,
@@ -67,6 +80,8 @@ public sealed class ContractsJsonTests
         new StoredMockSummary("01KBZ3Q8N9V2K3M4P5R6S7T8WD", Summary, null),
         new StoredMockQuestions(StoredMockQuestions.CurrentVersion, "01KBZ3Q8N9V2K3M4P5R6S7T8WD", [Question]),
         new StoredPracticeFilters(StoredPracticeFilters.CurrentVersion, ["middle"], ["async"], ["single"], "new", 12),
+        new StoredMockHistory(StoredMockHistory.CurrentVersion, [MockHistoryItem]),
+        MockHistoryItem,
     ];
 
     private static Type[] WireTypes() =>
@@ -89,6 +104,46 @@ public sealed class ContractsJsonTests
             Assert.Equal(json, JsonSerializer.Serialize(copy, typeInfo));
             AssertCamelCase(json);
         }
+    }
+
+    [Fact]
+    public void StaticContracts_RoundTripThroughTrainerJsonContext()
+    {
+        string indexJson = JsonSerializer.Serialize(StaticIndex, TrainerJsonContext.Default.StaticIndexDto);
+        StaticIndexDto? index = JsonSerializer.Deserialize(indexJson, TrainerJsonContext.Default.StaticIndexDto);
+        Assert.NotNull(index);
+        Assert.Equal(StaticIndex.Format, index.Format);
+        Assert.Equal(StaticIndex.Culture, index.Culture);
+        Assert.Equal(StaticIndex.Stack, index.Stack);
+        Assert.Equal(StaticIndex.ContentHash, index.ContentHash);
+        Assert.Equal(StaticIndex.Topics, index.Topics);
+        Assert.Equal(StaticIndex.Questions, index.Questions);
+
+        StaticSiteDto? site = JsonSerializer.Deserialize(
+            JsonSerializer.Serialize(StaticSite, TrainerJsonContext.Default.StaticSiteDto), TrainerJsonContext.Default.StaticSiteDto);
+        Assert.Equal(StaticSite, site);
+
+        StaticIndexEntryDto? entry = JsonSerializer.Deserialize(
+            JsonSerializer.Serialize(StaticIndex.Questions[0], TrainerJsonContext.Default.StaticIndexEntryDto), TrainerJsonContext.Default.StaticIndexEntryDto);
+        Assert.Equal(StaticIndex.Questions[0], entry);
+
+        Assert.StartsWith("{\"format\":1,\"culture\":\"en\",\"stack\":\"dotnet\",\"contentHash\":\"c0ffee\"", indexJson, StringComparison.Ordinal);
+        Assert.Equal(
+            "data/en/q/01KBZ3Q8N9V2K3M4P5R6S7T8WA.fedcba9876543210.json",
+            StaticContentPaths.Question("en", "01KBZ3Q8N9V2K3M4P5R6S7T8WA", "fedcba9876543210"));
+        Assert.Equal("data/ru/dotnet/index.0123456789abcdef.json", StaticContentPaths.Index("ru", "dotnet", "0123456789abcdef"));
+    }
+
+    [Fact]
+    public void ContractsJson_IslandBootstrapWithoutStaticSite_SerialisesItAsNullAndReadsOldJson()
+    {
+        const string oldJson = "{\"culture\":\"en\",\"stack\":\"dotnet\",\"topics\":[],\"levels\":[],\"types\":[],"
+            + "\"initialFilters\":{\"levels\":[],\"topics\":[],\"types\":[],\"status\":null,\"firstQuestionId\":null},\"me\":null}";
+
+        IslandBootstrapDto? bootstrap = JsonSerializer.Deserialize(oldJson, TrainerJsonContext.Default.IslandBootstrapDto);
+
+        Assert.NotNull(bootstrap);
+        Assert.Null(bootstrap.StaticSite);
     }
 
     [Fact]

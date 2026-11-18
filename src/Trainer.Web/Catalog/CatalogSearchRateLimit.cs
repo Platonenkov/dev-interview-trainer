@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using Microsoft.Extensions.Localization;
 using Microsoft.Net.Http.Headers;
+using Trainer.Web.Seo;
 
 namespace Trainer.Web.Catalog;
 
@@ -62,6 +63,7 @@ public static class CatalogSearchRateLimit
 
         IStringLocalizer<SharedResource> localizer = context.RequestServices.GetRequiredService<IStringLocalizer<SharedResource>>();
         HtmlEncoder html = context.RequestServices.GetRequiredService<HtmlEncoder>();
+        SitePaths paths = context.RequestServices.GetRequiredService<SitePaths>();
         string title = localizer["Search.RateLimited.Title"];
         StringBuilder page = new();
         page.Append("<!DOCTYPE html>\n<html lang=\"")
@@ -69,10 +71,11 @@ public static class CatalogSearchRateLimit
             .Append("\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">")
             .Append("<meta name=\"robots\" content=\"noindex\"><title>")
             .Append(html.Encode(title)).Append(" · ").Append(html.Encode(localizer["Site.Name"]))
-            .Append("</title><link rel=\"stylesheet\" href=\"/css/tokens.css\"><link rel=\"stylesheet\" href=\"/css/site.css\"></head>")
+            .Append("</title><link rel=\"stylesheet\" href=\"").Append(html.Encode(paths.Asset("css/tokens.css")))
+            .Append("\"><link rel=\"stylesheet\" href=\"").Append(html.Encode(paths.Asset("css/site.css"))).Append("\"></head>")
             .Append("<body><main class=\"container main\"><h1>").Append(html.Encode(title)).Append("</h1><p>")
             .Append(html.Encode(localizer["Search.RateLimited.Body"])).Append("</p><p><a class=\"btn\" href=\"")
-            .Append(html.Encode(context.Request.Path.Value ?? "/")).Append("\">")
+            .Append(html.Encode(context.Request.PathBase.Add(context.Request.Path).Value ?? "/")).Append("\">")
             .Append(html.Encode(localizer["Search.RateLimited.Back"])).Append("</a></p></main></body></html>");
         await response.WriteAsync(page.ToString(), Encoding.UTF8, ct);
     }

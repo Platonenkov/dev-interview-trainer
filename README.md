@@ -25,8 +25,10 @@ The project is built in plans:
 - **Plan 2 (done):** Telegram sign-in (including the dev bot), the `/api`,
   and the Practice, Mock, Review and profile islands with spaced repetition and
   progress, plus the admin page.
-- **Plan 3 (this state):** deployment and operations (`docs/deployment.md`),
+- **Plan 3 (done):** deployment and operations (`docs/deployment.md`),
   question feedback, Open Graph images and cookieless analytics.
+- **Plan 5:** the static edition, the same application exported as plain files and published on GitHub Pages without a
+  server, with progress kept in the visitor's browser (`docs/static-edition.md`). This is the current state.
 
 The design and the reasons behind it:
 `docs/superpowers/specs/2026-11-11-dev-interview-trainer-design.md`.

@@ -130,12 +130,12 @@ public sealed class AnsweringFlowTests
         QuestionAttempt attempt = h.Attempt(TestQuestions.Single(correct: "a"));
         int nexts = 0;
 
-        Assert.False(await h.Flow.HandleShortcutAsync(ShortcutKey.Next, attempt, () => nexts++, Ct));
-        Assert.True(await h.Flow.HandleShortcutAsync(ShortcutKey.Option1, attempt, () => nexts++, Ct));
+        Assert.False(await h.Flow.HandleShortcutAsync(ShortcutKey.Next, attempt, () => { nexts++; return Task.CompletedTask; }, Ct));
+        Assert.True(await h.Flow.HandleShortcutAsync(ShortcutKey.Option1, attempt, () => { nexts++; return Task.CompletedTask; }, Ct));
         Assert.Equal(attempt.Options[0].Id, Assert.Single(attempt.Picked));
-        Assert.True(await h.Flow.HandleShortcutAsync(ShortcutKey.Submit, attempt, () => nexts++, Ct));
+        Assert.True(await h.Flow.HandleShortcutAsync(ShortcutKey.Submit, attempt, () => { nexts++; return Task.CompletedTask; }, Ct));
         Assert.Single(h.Written);
-        Assert.True(await h.Flow.HandleShortcutAsync(ShortcutKey.Next, attempt, () => nexts++, Ct));
+        Assert.True(await h.Flow.HandleShortcutAsync(ShortcutKey.Next, attempt, () => { nexts++; return Task.CompletedTask; }, Ct));
         Assert.Equal(1, nexts);
     }
 
@@ -149,7 +149,7 @@ public sealed class AnsweringFlowTests
         int nexts = 0;
 
         Task submitting = h.Flow.SubmitAsync(attempt);
-        Assert.False(await h.Flow.HandleShortcutAsync(ShortcutKey.Next, attempt, () => nexts++, Ct));
+        Assert.False(await h.Flow.HandleShortcutAsync(ShortcutKey.Next, attempt, () => { nexts++; return Task.CompletedTask; }, Ct));
         Assert.False(h.Flow.CanGoNext(attempt));
         write.SetResult();
         await submitting;

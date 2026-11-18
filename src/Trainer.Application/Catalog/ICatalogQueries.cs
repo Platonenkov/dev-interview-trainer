@@ -1,3 +1,5 @@
+using Trainer.Domain.Keys;
+
 namespace Trainer.Application.Catalog;
 
 public interface ICatalogQueries
@@ -10,4 +12,11 @@ public interface ICatalogQueries
     /// questions whose title in the culture contains it (case-insensitive, literal) or that carry the tag it spells.
     /// </summary>
     Task<CatalogPage> GetAsync(CatalogQuery query, CancellationToken ct);
+
+    /// <summary>
+    /// Every live question of the stack in the culture on one page (<c>Page = 1</c>, <c>PageCount = 1</c>), in the order of
+    /// <see cref="GetAsync"/>, with the facets of an empty query. The static edition renders this once and filters it in
+    /// the browser, because a static host cannot run a query.
+    /// </summary>
+    Task<CatalogPage> GetAllAsync(CultureKey culture, StackKey stack, CancellationToken ct);
 }

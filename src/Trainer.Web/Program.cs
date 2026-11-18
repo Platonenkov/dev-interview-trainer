@@ -29,12 +29,14 @@ using Trainer.Web.Seo;
 using Trainer.Web.ContentState;
 using Trainer.Web.Routing;
 using Trainer.Web.Security;
+using Trainer.Web.StaticSite;
 using Trainer.Web.Startup;
 
 WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
 
 AppOptions appOptions = builder.Configuration.GetSection(AppOptions.SectionName).Get<AppOptions>() ?? new AppOptions();
 StartupMigrations.EnsureAllowed(appOptions, builder.Environment);
+EditionStartupCheck.EnsureValid(appOptions, builder.Environment);
 PublicBaseUrlValidation.EnsureValid(appOptions, builder.Environment);
 TrustedProxies trustedProxies = ForwardedHeadersSetup.Parse(appOptions.ForwardedHeaders);
 string? defaultedAllowedHost = AllowedHostsDefault.Apply(builder.Configuration, appOptions, builder.Environment);
@@ -70,6 +72,14 @@ builder.Services.AddSingleton<OgImageLinks>();
 // Importing clears the page cache and the rendered Open Graph images together.
 builder.Services.AddSingleton<IContentCacheInvalidator, CompositeContentCacheInvalidator>();
 builder.Services.AddSingleton<ReadinessState>();
+if (appOptions.Edition == SiteEdition.Static)
+{
+    appOptions.StaticSite.EnsureValid();
+    builder.Services.AddSingleton<StaticContentCatalog>();
+    builder.Services.AddSingleton<StaticAssetList>();
+}
+
+builder.Services.AddSingleton<SitePaths>();
 builder.Services.AddSingleton<SiteUrls>();
 builder.Services.AddScoped<PageLinks>();
 builder.Services.AddScoped<IslandBootstrapFactory>();
@@ -88,7 +98,7 @@ builder.Services.AddResponseCompression(options =>
     options.Providers.Add<BrotliCompressionProvider>();
     options.Providers.Add<GzipCompressionProvider>();
 });
-builder.Services.AddTrainerAuth(builder.Configuration, builder.Environment);
+builder.Services.AddTrainerAuth(builder.Configuration, builder.Environment, appOptions.Edition);
 // Auth and antiforgery cookies are protected with this key ring; it lives in PostgreSQL so it survives restarts (ADR 0004).
 builder.Services.AddDataProtection()
     .SetApplicationName("dev-interview-trainer")
@@ -108,6 +118,12 @@ builder.Services.AddRazorComponents()
     .AddAuthenticationStateSerialization(options => options.SerializationCallback = AuthenticationStateSerialization.SerializeAsync);
 // The default encoder writes every non-Latin character as a numeric entity, which triples the size of Russian pages.
 builder.Services.AddWebEncoders(options => options.TextEncoderSettings = new TextEncoderSettings(UnicodeRanges.BasicLatin, UnicodeRanges.Cyrillic));
+if (appOptions.Edition == SiteEdition.Static)
+{
+    // After AddRazorComponents, which registers the persistence being removed.
+    NoPersistedAntiforgery.Apply(builder.Services);
+}
+
 builder.Services.AddHealthChecks()
     .AddCheck<ReadinessHealthCheck>("content", HealthStatus.Unhealthy, [ReadinessHealthCheck.Tag]);
 
@@ -123,7 +139,14 @@ if (appOptions.ApplyMigrationsOnStartup)
     await StartupMigrations.ApplyAsync(app.Services, app.Lifetime.ApplicationStopping);
 }
 
-// First: everything after it (cookie flags, redirects, logging) must see the client address and scheme, not the proxy's.
+// First of all, so routing, redirects and status pages see paths relative to the base the site is served under.
+string pathBase = app.Services.GetRequiredService<SitePaths>().PathBase;
+if (pathBase.Length > 0)
+{
+    app.UsePathBase(pathBase);
+}
+
+// Before the other middleware: cookie flags, redirects and logging must see the client address and scheme, not the proxy's.
 app.UseForwardedHeaders();
 app.UseMiddleware<SecurityHeadersMiddleware>();
 // After the security headers so its 503 carries them, and still before routing, so no write endpoint is reachable.
@@ -166,8 +189,15 @@ app.UseOutputCache();
 app.UseAntiforgery();
 
 app.MapStaticAssets();
-RootRedirectEndpoint.Map(app);
-LanguageEndpoint.Map(app);
+StaticRootEndpoint.Map(app, appOptions.Edition);
+if (appOptions.Edition == SiteEdition.Static)
+{
+    StaticContentEndpoints.Map(app);
+    ServiceWorkerEndpoint.Map(app);
+    BootIntegrityEndpoint.Map(app);
+    StaticExportEndpoints.Map(app);
+}
+
 SignInRedirectEndpoint.Map(app);
 app.MapTelegramOidcEndpoints();
 app.MapTrainerApi();

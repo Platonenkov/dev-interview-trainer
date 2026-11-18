@@ -3,6 +3,7 @@
 @inject OutboxStore Outbox
 @inject SummaryStore Summaries
 @inject ActiveMockStore ActiveMock
+@inject LocalMockHistoryStore History
 @inject IStringLocalizer<ClientResource> L
 
 @if (Message is { } message)
@@ -20,6 +21,15 @@
             Outbox.UnsavedCount),
         StorageStatus.NewerVersion => L["Storage.NewerVersion"].Value,
         StorageStatus.WriteFailed => L["Storage.WriteFailed"].Value,
+        _ => HistoryMessage,
+    };
+
+    // The history of finished mocks lives in the same storage as the answers, so it only adds a notice when the answers
+    // have none: its own write failed (quota), or its document is a newer app's or unreadable.
+    private string? HistoryMessage => History.Status switch
+    {
+        StorageStatus.MemoryOnly or StorageStatus.Full => L["Storage.HistoryNotKept"].Value,
+        StorageStatus.NewerVersion => L["Storage.NewerVersion"].Value,
         _ => null,
     };
 
@@ -34,6 +44,7 @@
         Outbox.Changed += OnChanged;
         Summaries.Changed += OnChanged;
         ActiveMock.Changed += OnChanged;
+        History.Changed += OnChanged;
     }
 
     public void Dispose()
@@ -41,6 +52,7 @@
         Outbox.Changed -= OnChanged;
         Summaries.Changed -= OnChanged;
         ActiveMock.Changed -= OnChanged;
+        History.Changed -= OnChanged;
     }
 
     private void OnChanged() => _ = InvokeAsync(StateHasChanged);

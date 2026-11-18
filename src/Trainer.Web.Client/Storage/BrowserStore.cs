@@ -38,4 +38,69 @@ public sealed class BrowserStore(IJSRuntime js) : IBrowserStore
             return new StoredRead(false, null);
         }
     }
+
+    public async ValueTask<string?> FingerprintAsync(string key)
+    {
+        try
+        {
+            return await js.InvokeAsync<string?>("ditStore.fingerprint", key);
+        }
+        catch (JSException)
+        {
+            return null;
+        }
+    }
+
+    public async ValueTask<IAsyncDisposable> WatchKeyAsync(string key, Action onChanged)
+    {
+        KeyWatch watch = new(js, onChanged);
+        await watch.StartAsync(key);
+        return watch;
+    }
+
+    /// <summary>One <c>ditStore.watchKey</c> registration; <c>outbox.js</c> calls <see cref="OnKeyChanged"/> for each event.</summary>
+    public sealed class KeyWatch(IJSRuntime js, Action onChanged) : IAsyncDisposable
+    {
+        private DotNetObjectReference<KeyWatch>? _reference;
+        private int? _handle;
+
+        internal async ValueTask StartAsync(string key)
+        {
+            _reference = DotNetObjectReference.Create(this);
+            try
+            {
+                _handle = await js.InvokeAsync<int>("ditStore.watchKey", key, _reference);
+            }
+            catch (JSException)
+            {
+                // No script or no storage: there is no other tab to hear from.
+            }
+        }
+
+        [JSInvokable]
+        public void OnKeyChanged() => onChanged();
+
+        public async ValueTask DisposeAsync()
+        {
+            if (_handle is { } handle)
+            {
+                _handle = null;
+                try
+                {
+                    await js.InvokeVoidAsync("ditStore.unwatchKey", handle);
+                }
+                catch (JSDisconnectedException)
+                {
+                    // The page is going away; its listeners go with it.
+                }
+                catch (JSException)
+                {
+                    // Nothing left to unregister.
+                }
+            }
+
+            _reference?.Dispose();
+            _reference = null;
+        }
+    }
 }

@@ -39,7 +39,8 @@ for running it are in [deployment.md](deployment.md). The reasons behind the des
 28. [Tests and CI](#tests-and-ci)
 29. [Line endings and formatting](#line-endings-and-formatting)
 30. [Deployment topology](#deployment-topology)
-31. [Decision records](#decision-records)
+31. [Static edition](#static-edition)
+32. [Decision records](#decision-records)
 
 ## Layers and allowed references
 
@@ -53,6 +54,7 @@ Trainer.Infrastructure  -> Application, Content
 Trainer.Web.Client      -> Domain, Contracts
 Trainer.Web             -> Infrastructure, Application, Contracts, Web.Client
 tools/Trainer.ContentCli -> Content, Snippets
+tools/Trainer.StaticSite -> Contracts (never Web: it talks to the running app over HTTP)
 ```
 
 | Project | Responsibility |
@@ -66,6 +68,7 @@ tools/Trainer.ContentCli -> Content, Snippets
 | `Trainer.Web.Client` | The WebAssembly islands (`Microsoft.NET.Sdk.BlazorWebAssembly`, trimmed with `TrimMode` `full` and the trim analyzers on): `IslandRoot`, the island components (`Islands/`), the client strings (`Localization/ClientResource.{ru,en}.resx`). The server names the island components only in its render markers, so `Islands/IslandRoots.cs` keeps them through the trimmer with `[DynamicDependency]` (a new island must be added there; `IslandRootsTests` compares the entries with every component in `Islands/` and every server `@rendermode` use, and the `Release` suite boots all four islands). Never references Application, Infrastructure or Content. |
 | `Trainer.Web` | Blazor Web App host: static SSR pages, routing, SEO, output cache, security headers, health checks, and the `/api` minimal API the islands call (`Api/`). |
 | `tools/Trainer.ContentCli` | `validate`, `run-snippets`, `check-links`, `new-question`, `generate-schemas`. |
+| `tools/Trainer.StaticSite` | `export`, `verify`, `serve`: crawls the running static edition into the GitHub Pages site, keeps the previous deployment's immutable files, verifies the result structurally and serves it like Pages, see [Static edition](#static-edition). |
 
 Rules:
 
@@ -496,7 +499,9 @@ for the islands inside the noindex pages `/{culture}/{stack}/practice`, `/mock`,
 - `<base href="/">` makes the runtime, the preloads and the JS initializers find
   `/_framework/` from any page path. Under it a bare `#fragment` link would leave
   an island page, so the layout writes the skip link of island pages with the
-  request's own path (island pages are never cached, so that is safe).
+  request's own path (island pages are never cached, so that is safe). The server
+  edition keeps `<base href="/">`; an edition served under a path base (ADR 0022)
+  writes that path base instead, and so do the skip link and every other URL.
 - The page renders a static `<div class="island" data-island="...">` with a
   fixed-height `.island-skeleton` and the island component. The island renders
   `IslandRoot` (`.island-root`), and `.island:has(.island-root) > .island-skeleton`
@@ -572,20 +577,68 @@ mixes accounts:
 | `dit.outbox.v1.u.{telegramUserId}` | answers given while signed in | `append`, `remove`, `move` |
 | `dit.mock.v1.pending.{telegramUserId}` | mock summaries still to send | `summaryAdd`, `summaryRemove`, `move` |
 | `dit.mock.v1.failed.{telegramUserId}` | summaries the server refused, with the reason | `move`, `summaryRemove` |
+| `dit.progress.v1.anon` | the static edition's replayed progress for one state of the anonymous log (`ProgressCheckpoint`, ADR 0028); derived, safe to delete | `put` |
+| `dit.mock.v1.anon.history` | finished mocks of the static edition, newest 20 per stack (`StoredMockHistory`) | `historyAdd` |
 | `dit.mock.v1.{owner}.active` | progress of the active mock (`MockProgress`) | `putIfRevision`, `delete` |
 | `dit.mock.v1.{owner}.{sessionId}.questions` | its questions, written once at start | `put`, `delete` |
 | `dit.clock.v1`, `dit.practice.v1.filters` | last-writer-wins preferences | `put` |
 | `dit.outbox.v1.corrupt.{unix ms}` | a quarantined unparseable value | `quarantine` |
+| `dit.lang` | the language chosen in the static edition (`ru` or `en`); read by `root-chooser.js` | `lang-choice.js` (plain `setItem`, last writer wins) |
+| `dit.theme` | the chosen theme (`light` or `dark`), read by the inline theme script before first paint. The server edition's script also adopts the older bare `theme` key once (read only, copied to `dit.theme`, never written or removed); the static edition's script has no migration, because a bare `theme` key on the shared `github.io` origin belongs to some other site (`ThemeScript.Source` and `StaticSource`) | `theme-toggle.js` (plain `setItem`) |
+| `dit.recover.{path}{query without _r}` (`sessionStorage`, not `localStorage`) | `1`: the recovery banner was already shown for this page in this browser session, so a file that stays broken cannot make it flicker | `RecoveryScript` (plain `setItem`, in try/catch) |
 | `dit.account` | `owner\|unix ms`: the owner (Telegram id or `anon`) a tab last saw signed in and when | `ditStore.claimAccount`, `account-publish.js` (plain `setItem`) |
 
 `{owner}` is the Telegram user id or `anon`. The Telegram id stays in key names
 after sign-out; accepted in ADR 0008 because it is not a secret.
 
+**Static edition.** There the anonymous outbox `dit.outbox.v1.anon` is the visitor's
+whole progress: it receives every answer of Practice, Mock and Review, is never
+sent anywhere and is never trimmed. `StaticIslandBackend` replays the full log
+(every stack and language, ordered by `answeredAt`, then client answer id) through
+`Sm2ReviewScheduler` in `LocalProgress`, and `LocalProgressCache` memoises that per
+page. Reading a long log into .NET costs seconds on a phone (ADR 0028), so a load
+first asks `outbox.js` for the log's fingerprint (entry count and a hash of its tail,
+computed natively, `ditStore.fingerprint`) and takes the stored `ProgressCheckpoint`
+(`dit.progress.v1.anon`) when it was written for exactly that state; only a missing,
+damaged or stale checkpoint (or an answer held only in memory) makes the load replay
+the whole log, after which it stores the checkpoint. The log stays the only source of
+truth: a checkpoint is derived, versioned, named by an algorithm string that a test
+pins to the scheduler's behaviour, and never trusted for another log state. An answer
+this tab writes is applied to the memo (`OutboxStore.Appended`, `LocalProgress.TryAppend`)
+when the append started from the state the memo describes and nothing replays before it;
+any other change drops the memo: `OutboxStore.KeyChanged` (this tab removed or moved
+entries) and `OutboxStore.ChangedElsewhere` (another tab changed the key;
+`ditStore.watchKey` is a `storage` listener for one key, registered before the first
+read). An answer's `answeredAt` is fixed when it enters the log, from the device
+clock, and replay never moves it. About 200 bytes per answer: 9 000 answers are about
+1.8 MB, and the origin's 5 MB quota is the limit.
+
+The finished mocks are the one thing the static edition stores besides the log:
+`LocalMockHistoryStore` merges each summary (`MockHistoryDto`, counts summed over its
+topics) into `dit.mock.v1.anon.history` with the `historyAdd` op, which merges by mock
+session id, sorts by `finishedAt` (then id), cuts each stack's list to its newest 20
+(`StoredMockHistory.MaxItems`, a few kilobytes per stack) and writes once under the
+key's lock, so two tabs finishing mocks together keep both. Every entry carries its
+stack (`StoredMockHistoryItem`); an unreadable `finishedAt` counts as now for the entry
+being added. `MockIsland` records a mock through `IIslandBackend.OnMockFinishedAsync`,
+called by `MockPersistence.HandOffAsync` once the answers reached the outbox and before
+the mock's keys are removed; a failure there is ignored. The hand-over runs again after
+a reload, and the merge by id records it once. A mock the
+store cannot write (no Web Locks, no `localStorage`, quota) stays in this tab's memory
+and is retried by the next add; a newer app's document is never touched, and an
+unreadable one is quarantined like an outbox or, if that fails, left in place with this
+tab no longer writing it. `LocalMockHistoryStore.Status` feeds `StorageNotice`
+(`Storage.HistoryNotKept`, or the newer-version message) when the answers have no
+notice of their own. The profile (`StaticIslandBackend.ProfileAsync`) lists the newest
+five of its own stack; entries without a valid stack are skipped.
+
 **Formats.** An outbox key holds exactly the spec 8.8 document,
 `{ "version": 1, "answers": [{ clientAnswerId, questionId, grade, usedHint, mode,
 mockSessionId?, answeredAt }] }` (`AnswerBatch`). A summary list is
 `{ "version": 1, "items": [{ mockSessionId, summary, reason }] }`
-(`MockSummaryList`); the questions are `StoredMockQuestions` and the progress is
+(`MockSummaryList`); the static history is
+`{ "version": 1, "items": [{ id, stack, level, questionCount, finishedAt, knew, partial,
+didntKnow, unanswered }] }` (`StoredMockHistory`); the questions are `StoredMockQuestions` and the progress is
 `MockProgress` (`version`, `sessionId`, `revision`, the phase, the deadline,
 `finishedAt`, the attempts and the completion state). Every document is serialised through `TrainerJsonContext`
 (`Trainer.Contracts/Storage/`). A list that becomes empty removes its key.
@@ -595,7 +648,7 @@ every key it touches; the script computes that set up front, sorts it and
 acquires `navigator.locks.request('dit-store:' + key)` for each key exactly once,
 nested in sorted order, so two moves in opposite directions cannot deadlock.
 Inside the locks it reads, applies and writes in one synchronous task. No op
-writes a whole list: `append` and `summaryAdd` merge by id (a known id is
+writes a whole list: `append`, `summaryAdd` and `historyAdd` merge by id (a known id is
 replaced in place), `remove` and `summaryRemove` delete only the given ids, so a
 tab appending while another removes acknowledged entries loses nothing. The op
 and its result (`StoreOp`, `StoreResult { ok, persisted, error, revision, count }`)
@@ -610,6 +663,7 @@ patterns and answers `bad-op` otherwise, so no op writes outside its family:
 |---|---|
 | `append`, `remove` | outboxes (`dit.outbox.v1.anon`, `dit.outbox.v1.u.{id}`) |
 | `summaryAdd`, `summaryRemove` | summary lists (`dit.mock.v1.pending.{id}`, `dit.mock.v1.failed.{id}`) |
+| `historyAdd` | the static mock history (`dit.mock.v1.anon.history`) |
 | `move` | both keys in the family of its shape (`outbox` or `summaries`) |
 | `put` | the preference keys and the questions key (session id a ULID) |
 | `putIfRevision` | the progress key |
@@ -1145,8 +1199,9 @@ the first question's title (`QuestionCard` titles take `tabindex="-1"`); Finish
 to the assessment heading; a grade or Skip first to the item's title (its
 buttons are disabled while the grade is saved), then to the next open item, and
 after the last one through the "Saving the results" heading to the summary
-heading. In the assessment, 1-3 grade the item that holds focus (or the one
-focus was last moved to). Status texts go through one live region that exists
+heading. In Practice and Review, Next moves focus to the new question's title.
+In the assessment, 1-3 grade the item that holds focus (or the one focus was
+last moved to). Status texts go through one live region that exists
 from the start.
 
 **Bounded waits.** Every storage step the island waits for (load, save, outbox
@@ -1777,7 +1832,13 @@ A relative `App:ContentRoot` is resolved against the application content root
 |---|---|
 | `ConnectionStrings:Trainer` | PostgreSQL connection string. Required. Never committed: set it with an environment variable (`ConnectionStrings__Trainer`) or user secrets. |
 | `App:ContentRoot` | Directory with the content checkout. `appsettings.Development.json` sets `../../content`. |
-| `App:PublicBaseUrl` | Absolute origin for canonical, `hreflang` and sitemap URLs, without a trailing slash. Outside Development and Testing it must be an absolute `https` URL, or startup fails. With output caching, a request-derived origin would let a spoofed `Host` header poison cached URLs. |
+| `App:PublicBaseUrl` | Absolute public URL for canonical, `hreflang` and sitemap URLs; a trailing slash is ignored. Outside Development and Testing it must be an absolute `https` URL, or startup fails. With output caching, a request-derived origin would let a spoofed `Host` header poison cached URLs. A path is allowed (`https://h.io/dev-interview-trainer/`) and becomes the path base, see [Static edition](#static-edition); a query, a fragment and `.` or `..` segments fail startup. |
+| `App:Edition` | `Server` (default) or `Static`, see [Static edition](#static-edition). `Static` is accepted only in the `StaticExport`, `Development` and `Testing` environments, or startup fails. |
+| `App:StaticSite:RepositoryUrl` | The project's GitHub repository, an absolute `https` URL without a query or fragment (startup fails otherwise). The static edition builds its "new issue" link from it (`RepositoryUrl` + `/issues/new`, not a key of its own). Default `https://github.com/Platonenkov/dev-interview-trainer`. Read in the static edition only, see [Static edition](#static-edition). |
+| `App:StaticSite:GoogleSiteVerification` | Value of `<meta name="google-site-verification">`, rendered on the static root chooser and each culture home page. A public value (repository variable `GOOGLE_SITE_VERIFICATION`). Empty renders nothing. |
+| `App:StaticSite:YandexVerification` | Value of `<meta name="yandex-verification">`, rendered like the Google tag (repository variable `YANDEX_VERIFICATION`). Empty renders nothing. |
+| `App:StaticSite:BuildId` | Identity of the deployment (`<commit>.<run id>.<attempt>`), rendered into every static page as `<meta name="dit-build">`. Empty (a local run) renders nothing. |
+| `App:StaticSite:BrotliRuntime` | `true` makes the static edition ship the Brotli-compressed runtime: `StaticAssetList` exports the `_framework/` `.br` files and the island pages decode them in the browser (ADR 0027), because GitHub Pages serves `.wasm` gzip at best. Default `false`; the `StaticExport` environment sets it (`appsettings.StaticExport.json`), which is the configuration the Pages export runs with. |
 | `AllowedHosts` | Host filtering. `appsettings.json` ships `*`. Outside Development and Testing, `*` or an empty value is replaced at startup by the host of `App:PublicBaseUrl` plus `localhost`, `127.0.0.1` and `[::1]` (so container and load-balancer probes on loopback still work), and the change is logged at Information, so requests for any other `Host` get 400. An explicit value other than `*` is kept as is. |
 | `App:DefaultStack` | Stack shown on `/{culture}`. Default `dotnet`. |
 | `App:StartupImport:MaxAttempts` | Number of backoff attempts of the startup import on transient database failures; after them it keeps retrying at `MaxDelay`. Default `8`. |
@@ -1794,6 +1855,7 @@ A relative `App:ContentRoot` is resolved against the application content root
 | `App:RateLimits:SearchPerMinute` | Catalog requests with a search term (`q`) per client address per minute (ADR 0011); a request over the limit gets 429 with `Retry-After` and a localised HTML page. Cached catalog pages without a term are never limited. Default `30`. Must be positive, or startup fails. |
 | `App:Feedback:ReportsPerDay` | New question reports one signed-in user may file within a rolling 24 hours (ADR 0016); editing an open report does not count. Default `10`. Must be positive, or startup fails. |
 | `App:Analytics:WebsiteId` | Umami website id (a GUID) for cookieless page-view counting (ADR 0018). Unset or empty: no script is rendered anywhere. A value that is not a GUID fails startup. |
+| `App:Analytics:GoatCounterCode` | GoatCounter site code (the subdomain of `<code>.goatcounter.com`), 2 to 63 lowercase letters, digits or hyphens; anything else fails startup. Read by the static edition only, which renders GoatCounter and never Umami (the server edition renders Umami and ignores this key). Unset or empty: no script and no GoatCounter origin in the CSP (ADR 0025). |
 | `App:ApplyMigrationsOnStartup` | Applies EF Core migrations at startup. Allowed only when `ASPNETCORE_ENVIRONMENT` is `Development`; in any other environment startup throws. |
 | `App:MaintenanceFlagPath` | Path of a flag file. While it exists, `MaintenanceGateMiddleware` (registered right after `UseForwardedHeaders`, before routing) answers 503 with `Retry-After: 60` and an empty body to every request whose method is not `GET`, `HEAD` or `OPTIONS` and to everything under `/signin-telegram`, so no form post, `/api` write or sign-in callback reaches a handler. The check is cached for one second. Only the `/internal` path prefix on the internal port is exempt (the pages and `/api` are also served on that port and stay gated), and the startup import is not an HTTP request, so content still loads during a restore. This is the second layer: nginx answers 503 to every request, GET included, while the flag exists, so the application lets a read through only when it does not arrive via nginx. An unreadable flag (a missing mount, a permission error) counts as absent: the gate fails open, so a broken mount never takes the site down. The 503 carries `Cache-Control: no-store` and the security headers. Unset (the default) leaves the gate off; Compose sets `/flags/maintenance`, the read-only mount of `${APP_DIR}/flags`. The gate is in the application because nginx buffers a request body before proxying, so a request admitted before the flag appeared can still arrive after it. |
 | `App:OpenGraph:CacheDirectory` | Directory of the rendered Open Graph PNG cache (ADR 0017). Unset: a `dit-og` directory under the system temp path. Compose sets `/var/cache/dit/og`, a volume. A missing or unwritable directory disables caching only (one warning is logged); the directory is emptied after every committed import. |
@@ -2029,7 +2091,7 @@ infrastructure failure separately from a content defect.
 | `Trainer.Web.Client.Tests` | The WebAssembly client: RU/EN key parity of `ClientResource` and that every key resolves in its culture; browser storage, server clock, API client, outbox sync and account watcher against in-memory fakes; the question session model (attempts, grading eligibility, snapshots, island states, keyboard shortcut resolution). |
 | `Trainer.Web.E2E` | Playwright and Chromium against the real site on Kestrel at `http://localhost:{port}` with a fake Telegram provider; `Category=E2E`. Each test class gets its own host, but the run shares one Chromium (`BrowserFixture`, an assembly fixture; tests isolate themselves in browser contexts): a browser and Playwright driver per class kept the machine CPU-bound at startup long enough for navigations to time out. `AppHostFixture.NewPageAsync` records CSP violations of every document a tab shows (`AssertNoCspViolations`) and counts `/api/sessions/` requests; `SignInAsync` signs a browser context in through the real OIDC flow. The island sweep (`IslandLayoutTests`, `IslandAccessibilityTests`, one shared `IslandSweepFixture` host) renders Practice (question and feedback), the signed-in question page with its feedback forms, Mock (answering and summary), Review, profile, sign-in, admin (with seeded report rows) and the 429 page of a rate-limited catalog search (its host allows one search a minute) at 375, 768, 1280 and 1920 px (dark), 375 and 1280 px (light) and 320 px (sign-in, the 429 page, Practice feedback, the question page feedback forms and profile also in Russian), measures each rendering once and checks overflow, the primary action, overlapping key elements, words broken in the header, code font size, CSP violations, 44 px targets for a touch screen, a mouse and a mouse with a touch screen, accessible names and one language per page in both cultures, the project's focus ring (a 2 px `--accent` outline) on every Tab stop of every swept page, and a single verdict announcement. Writes screenshots to `TestResults/screenshots`. |
 | `Trainer.Web.Release` | The published Release build (`dotnet publish -c Release`, `DIT_RELEASE_PUBLISH_DIR`) started as a child process on `http://localhost:5080` over a migrated database (`DIT_RELEASE_CONNECTION`) and the repository `content/`, with a fake Telegram provider and Chromium; `Category=Release`, skipped when the two variables are unset (`PublishedAppFixture`). `ReleaseSmokeTests`: every island boots (Practice, Mock, Review, profile); Practice in RU and EN with the real DTOs (request and response bodies deserialised through `TrainerJsonContext`, acknowledged ids equal to stored rows), Mock and Review, public pages without `_framework/` requests, prefetched runtime URLs equal to what the island requests, every `_framework/` file requested once per cold load under its fingerprinted name (`Trainer.Web.staticwebassets.endpoints.json` labels), no CSP violation or failed runtime request, a signed-in warm visit loading the runtime from the browser cache, `X-Client-Utc-Offset: 420` from a device in `Asia/Novosibirsk`, the import map nonce and no development scripts in the HTML, and `Cache-Control: max-age=31536000, immutable` on fingerprinted assets for anonymous and signed-in requests. `IslandPerformanceTests`: the runtime transfer budget and Practice cold and warm timings under the phone profile (`docs/performance.md`); measurements go to `TestResults/perf/perf.json`. |
-| `Trainer.Deploy.Tests` | The Compose file (loopback ports, digests, hardening, bounded logs), `pg_hba.conf`, the shell conventions of `deploy/` (strict mode, no xtrace, postgres commands as the `postgres` user), `deploy/tests/render-env.test.sh`, `lib.test.sh`, `backup-lib.test.sh` and `rotate.test.sh` (the exit codes of the rotation script against a stand-in for docker), `LinkCheckScriptTests` (the two `run:` scripts of `link-check.yml` under bash with a recording `gh` and a scripted `dotnet`: which exit codes may open, edit or close the issue), the systemd units and the conventions of the backup scripts (credentials never on a command line, only the rotation and umami-recovery guards allowed over a trainer backup, no automatic rename back), the structure of `deploy-smoke.yml`, `schema-compat.yml`, `content-checks.yml` and the `ci.yml` calls (permissions, pinned actions, inputs through `env`, the check list of `smoke.sh`) and that `deploy/tests/content` is a copy of the Web test content. |
+| `Trainer.Deploy.Tests` | The Compose file (loopback ports, digests, hardening, bounded logs), `pg_hba.conf`, the shell conventions of `deploy/` (strict mode, no xtrace, postgres commands as the `postgres` user), `deploy/tests/render-env.test.sh`, `lib.test.sh`, `backup-lib.test.sh`, `pages-gate.test.sh` (provenance, decision and recheck of `deploy/pages/pages-gate.sh` against a local stand-in for the live site, a throw-away git history and fake `git` and `gh`) and `rotate.test.sh` (the exit codes of the rotation script against a stand-in for docker), `LinkCheckScriptTests` (the two `run:` scripts of `link-check.yml` under bash with a recording `gh` and a scripted `dotnet`: which exit codes may open, edit or close the issue), the systemd units and the conventions of the backup scripts (credentials never on a command line, only the rotation and umami-recovery guards allowed over a trainer backup, no automatic rename back), the structure of `deploy-smoke.yml`, `schema-compat.yml`, `content-checks.yml`, `static-site.yml`, `pages.yml` (`PagesWorkflowTests`) and the `ci.yml` calls (permissions, pinned actions, inputs through `env`, the check list of `smoke.sh`) and that `deploy/tests/content` is a copy of the Web test content. |
 | `Trainer.TestSupport` | Shared helpers: `PostgresFixture`, `TrainerWebFactory`, `ContentWorkspace`, and the sign-in doubles: `FakeTelegramOidcServer` (a loopback OIDC provider), `TelegramSignInDriver`, `SessionCookieReader`, `CapturingLoggerProvider`. |
 
 xUnit v3 with the built-in `Assert` on Microsoft.Testing.Platform. Commands are in
@@ -2043,11 +2105,12 @@ xUnit v3 with the built-in `Assert` on Microsoft.Testing.Platform. Commands are 
 | `content` | Calls `content-checks.yml` (read-only permissions, no secrets): build, `validate`, pull the pinned sandbox image, Docker tests, `run-snippets`; exit code 3 is annotated as an infrastructure failure. |
 | `e2e` | Build, install Playwright Chromium, E2E tests, upload `TestResults/screenshots` as an artifact. |
 | `release` | PostgreSQL started by `.github/actions/postgres-from-compose` from the image `deploy/compose/compose.yaml` pins (the only place its digest is written), build, `dotnet publish -c Release`, `dotnet tool restore`, `dotnet ef database update` against the service, install Playwright Chromium, the `Release` tests, upload `TestResults/perf` and `TestResults/release` (the measurements and the app log). Timings are held to regression budgets (8 500 ms cold, 4 750 ms warm, ADR 0014) and fail the job only when the workflow is dispatched by hand with `enforce = true` (`DIT_PERF_ENFORCE=1`); see `docs/performance.md`. |
+| `static-site` | Calls `static-site.yml` (read-only permissions, no secrets) with the commit under test, `site_url` from the repository variable `SITE_URL` (a non-root fallback on the reserved domain `ci.invalid` whenever no custom domain is set, which includes pull requests from forks, where the variable is unreadable), and neither retention nor upload, so the whole static build runs on every pull request and push. |
 | `schema-base` | Resolves the two commits the schema check compares: for a pull request `GITHUB_SHA` (the merge commit of the pull request merge branch) and the pull request base commit, for a push to `main` the pushed commit and `github.event.before`, for a manual run the optional `previous` input, which defaults to the parent of the dispatched commit (`HEAD^`). |
 | `schema-compat` | Calls `schema-compat.yml` with those commits (read-only permissions). |
 | `workflow-lint` | Downloads actionlint at a pinned version, checks the archive against a pinned SHA-256 before extracting it, and lints every workflow under `.github/workflows` (ShellCheck runs over each `run:` script; read-only permissions, no `needs`). |
 
-`content`, `e2e`, `release` and `schema-compat` start after `build-test` succeeds; `workflow-lint` and `schema-base` start at once. The workflow can also
+`content`, `e2e`, `release`, `static-site` and `schema-compat` start after `build-test` succeeds; `workflow-lint` and `schema-base` start at once. The workflow can also
 be started by hand (`workflow_dispatch`), which is how the enforced performance run is made. A newer push cancels the
 running job of the same pull request. Every push to `main` has its own concurrency group
 (the commit SHA), so no run on `main` is cancelled or replaced by a later one.
@@ -2063,6 +2126,76 @@ suite must run at least ten tests (`--minimum-expected-tests`), so a run that ex
 second run happens only when the previous commit carries `tests/Trainer.Web.Release/RERUNNABLE`, which says that its suite
 tolerates a non-empty database; the one commit without the marker is skipped with the log line `previous Release suite is not
 re-runnable; second run skipped`. The `previous` commit of a deployment is the commit running in production.
+
+`.github/workflows/static-site.yml` is the reusable workflow that builds the static site (`workflow_call`, `contents: read`, no
+secrets, one job `build` with a 30 minute limit). Required inputs: `ref` (a full commit SHA), `site_url` (https, trailing slash) and
+`build_id`; optional, with defaults: `goatcounter_code`, `google_verification`, `yandex_verification`, `live_build_id` (strings) and
+`retain`, `upload` (booleans, false). The first step fails at once when `site_url` is empty or malformed and derives `prefix` (the
+path of the URL) and `app_url` (`http://127.0.0.1:5080` plus the prefix), so no other step names the site. Then it checks out `ref`,
+pins SDK 10.0.303 and installs `wasm-tools` as the `release` job of `ci.yml` does, publishes `src/Trainer.Web` in Release with
+`-p:IncludeSourceRevisionInInformationalVersion=false -p:InformationalVersion=static` (a constant version keeps every fingerprint
+identical for identical source; the identity of a deployment is `build.json`; the determinism of the publish was proven once, in the
+spike of `docs/static-edition-spike.md`, and is not repeated in CI). PostgreSQL starts from the compose pin, the migrations are applied, and
+the published app runs in the background from `artifacts/web` with `ASPNETCORE_ENVIRONMENT=StaticExport` (which turns on
+`App:StaticSite:BrotliRuntime`), `App:Edition=Static` and the public base URL, build id, analytics and verification values from the
+inputs; `AllowedHosts` is not set: in `StaticExport`, `AllowedHostsDefault` narrows the wildcard to the host of the public base
+URL plus `localhost`, `127.0.0.1` and `[::1]`, so the loopback address of the crawler is accepted because `ASPNETCORE_URLS` names
+`127.0.0.1`. The job declares `contents: read` itself, with a 30 minute limit (the steps are the SDK and `wasm-tools` install, one
+publish, the migrations, the export, a Chromium install and the smoke suite). After `health/ready` answers
+(up to 120 seconds) the tool `tools/Trainer.StaticSite` exports the site with `--retain-from <site_url> --live-build-id
+--previous-page-out` when `retain` is true, the app is stopped, and `verify` runs as a separate step that fails the job on any
+problem. The `StaticSmoke` tests then run over the export in Chromium with `DIT_STATIC_SMOKE_REQUIRED=1` and
+`--minimum-expected-tests 4`; the `_framework` transfer budget (2 500 000 bytes) always gates, while the timings
+(`DIT_PERF_ENFORCE=0`) go to the job summary, and `DIT_PREVIOUS_PAGE` is set only when retention captured a previous page. The
+measurements and the app log are uploaded (`static-site-perf`), and `actions/upload-pages-artifact` uploads `artifacts/site` when
+`upload` is true.
+
+`.github/workflows/pages.yml` publishes the site to GitHub Pages. It runs after `ci` succeeds on a push to `main`
+(`workflow_run`, provenance checked again) and by hand from `main` (`workflow_dispatch`); there is no schedule, no `push` and no
+`pull_request` trigger, and no secret. The site address is derived from the repository by the gate (`https://<owner>.github.io/<repository>/`) and every later job
+reads it from the gate output; the optional `SITE_URL` repository variable overrides it for a custom domain, and
+`GOATCOUNTER_CODE`, `GOOGLE_SITE_VERIFICATION` and `YANDEX_VERIFICATION` are the other optional ones. No file of the repository names the address. The workflow
+declares `contents: read`. The concurrency group `pages` (`cancel-in-progress: false`) is on the `deploy` job only, not on the
+workflow, so a run that publishes nothing (a failed `ci`, a fork pull request whose branch is called `main`, an already-live
+commit) never replaces a pending run that does. The decision is repeated inside that job, under the lock and right before
+`actions/deploy-pages`, so a run that waited for another deployment sees what it made live and cannot publish an older commit
+after a newer one; builds run in parallel across runs. GitHub keeps one pending job per group and replaces it with a newer one,
+so the residual case is a pending `deploy` job of a newer commit replaced by a later-queued one of an older commit, which then
+publishes nothing and leaves the site one commit behind until the next push or a manual dispatch. A job with an environment
+creates a deployment record when it starts, so a run whose in-lock recheck declines leaves a record that shows the job without a
+deployment; a run the gate skips creates none. This is a deliberate deviation from spec 5.11, which has the recheck as its own job
+without an environment (recorded in the spec's amendments): the decision has to be made under the lock, and a separate job
+cannot hold the lock of another. The reusable workflow `static-site.yml` is resolved from the ref the `pages` run executes (the tip
+of `main`), while its steps check out the candidate; a candidate older than the tip is built with the newest workflow, so a commit
+that changes the tool command line and the workflow together can make a still-running run for the previous commit fail, red and
+harmless (nothing is published), until the next push or a manual run.
+All the branching of the workflow is in `deploy/pages/pages-gate.sh` (ShellCheck and the shell-convention tests cover it as part of
+`deploy/`), tested by `deploy/tests/pages-gate.test.sh` with a stand-in for the live site, a throw-away git history and fake `git`
+and `gh`; the `run:` steps only call it. `provenance` picks the commit to publish. `decide <site_url> <candidate> <event>` reads the
+live `build.json`, not deployment records: a candidate that is an ancestor of the live commit is skipped, the live commit itself is
+skipped on an automatic run and republished on a manual one (a configuration-only change goes live that way, as the same commit
+with a new build id), a divergent live commit is replaced, a missing manifest on an empty root is the first deployment, and
+anything else (a root without a manifest, a redirect, a 5xx after three attempts, an error of `git merge-base --is-ancestor`
+other than "not an ancestor", a live commit missing from the history) fails the run. `recheck` repeats the decision inside the `deploy` job, just before
+`deploy-pages`, with the same policy against the live site as it is then: it prints `deploy=true` when the candidate is neither the
+live commit (on an automatic run) nor an ancestor of it, even if another deployment went live meanwhile or the site is no longer
+empty, so two close pushes leave the newest commit live. When the live build id differs from the one the gate saw, it writes a
+`::notice::`: the build copied its immutable files from the older build, so a client still on the build that was just replaced may
+miss some hashed files until the recovery banner reloads it. Pages may serve the previous `build.json` briefly after a
+deployment, and the next queued `deploy` job would then judge an older candidate "newer" than the commit that just went live.
+So the `deploy` job does not end when `deploy-pages` returns: `pages-gate.sh wait-live <site_url> <build_id>` polls
+`build.json?_r=` (cache-busting) until it carries this run's build id, for up to five minutes (`PAGES_GATE_WAIT_SECONDS`), and
+fails with an error that names both build ids on timeout, so the `pages` lock is held until the new build is visible. The
+`workflow_dispatch` input `allow_unknown_live` (default false), passed through `env`,
+lets a manual run deploy when the live commit is not in the history, which is the recovery after `main` was rewritten
+(`docs/deployment.md`, "Publishing the static site"); an automatic run still fails.
+
+| Job | Steps |
+|---|---|
+| `gate` | No environment; `contents: read`, `actions: read`. Checks out `main` with full history (the scripts come from `main`, never from the commit being judged), then runs `pages-gate.sh site-url` (the address: `SITE_URL` when set, else derived from the repository), `pages-gate.sh provenance` (`conclusion` is `success`, the event is a `push`, the head repository is this repository; a manual run must be on `main` and its commit must have a successful `ci` push run) and `pages-gate.sh decide`. Outputs `site_url`, `candidate`, `decision`, `first`, `live_build_id` and `build_id` (`<candidate>.<run id>.<attempt>`). |
+| `build` | Runs only for `decision=deploy`; no concurrency group. Calls `static-site.yml` with retention (unless this is the first deployment) from the live build and `upload: true`. |
+| `deploy` | The only job with an environment (`github-pages`), with `pages: write` and `id-token: write`, and with the concurrency group `pages`. It always starts after `build`: checks out `main` with full history (`persist-credentials: false`), runs `pages-gate.sh recheck` with the same event and policy against the live site, and runs `actions/deploy-pages` only when the answer is `deploy=true` (the candidate is still newer than what is live now; a changed live build id only adds a notice). It then runs `pages-gate.sh wait-live` for this run's build id, so the lock outlasts the propagation of the new `build.json`. When it declines, the job ends green, the deploy and wait steps are skipped and the summary says nothing was published. Output `deployed`. |
+| `live-check` | Runs only after a `deploy` that published (`deployed` is `true`). For up to five minutes it checks the chooser, `en/` and `ru/dotnet/questions/`, the 301 from `en` to `en/`, the not-found page, that `build.json` and `immutable.json` carry this run's build id, one content index, and for every runtime `.wasm` of `immutable.json` the `Content-Encoding` and size with `Accept-Encoding: gzip, br` (written to the summary, also when the check fails): its `.br` file must be served without a `br` encoding and within the transfer budget, which is the premise of the Brotli decision. |
 
 `.github/workflows/deploy-smoke.yml` checks the deployment bundle on pull requests that touch `deploy/`, the `Dockerfile` or
 `src/`, when a deploy workflow calls it with the image it is about to ship (`workflow_call`, inputs `image` and `mode`) and on
@@ -2224,7 +2357,7 @@ guard files) are in [deployment.md](deployment.md).
   without a change when the given role differs from the journal's, and `commit` also refuses (exit 1) while `.env` does not yet hold
   the journaled value. The journal blocks `deploy-app.sh`, `receive-content.sh` and `restore.sh` (guard `rotation`; `backup.sh` proceeds over it, so the `trainer` backup is not stopped) and
   fails the `guards` check of `ops-check.sh`; the script switches xtrace off before any variable holds the value.
-  `DIT_TEST_KILL_AT` (honoured only with `DIT_TEST_HOOKS=1`) stops it after the journal, `ALTER ROLE`, `.env` or `last-good.env`.
+  `DIT_TEST_KILL_AT` (honoured only with `DIT_TEST_HOOKS=1`) stops it after the journal, `ALTER ROLE`, `.env` or `last-good.env`. `DIT_TEST_PSQL_HOLD=<seconds>` (same gate) keeps the `ALTER ROLE` psql session open for that long, so the smoke's process-list sampler is certain to see it.
 - `remote/deploy-app.sh <staging-dir> <image-ref> <commit-sha>` deploys one release under the deploy lock: it refuses to start
   while a guard file exists (`flags/maintenance`, `.rotation-pending`, `.umami-recovery`; exit 3) or when the new `.env`
   carries different database passwords or the flags path is not traversable by nginx (exit 2), takes a pre-deploy backup (required
@@ -2263,6 +2396,141 @@ guard files) are in [deployment.md](deployment.md).
 - On the server, `bundles/<sha>/` holds an unpacked bundle, `current-bundle` and `compose.yaml` are symlinks switched under the
   deploy lock, and `postgres/` (mounted as a directory, so a renamed `pg_hba.conf` is seen) receives the active bundle's rules.
 
+## Static edition
+
+The same application can be exported as a static site for GitHub Pages (ADR 0022). `App:Edition` selects `Server`
+(default) or `Static`; `EditionStartupCheck` refuses `Static` outside `StaticExport`, `Development` and `Testing`. The operator's
+guide (build, deployment, preview, settings, custom domain, troubleshooting) is [`docs/static-edition.md`](static-edition.md);
+this section describes the code, and the CI section describes `static-site.yml` and `pages.yml`.
+
+**Path base.** The path of `App:PublicBaseUrl`, without a trailing slash, is the request path base: `Program.cs`
+calls `UsePathBase` before every other middleware. `SitePaths` (`Seo/`) is the one place that builds URLs from logical
+paths (culture-rooted, unprefixed):
+
+- `PathBase` is empty or such as `/dev-interview-trainer`; `BaseHref` is `PathBase + "/"`.
+- `Page(path)` prefixes a page path; in the static edition it also appends `/` to the path part before `?`. `"#x"`
+  is returned unchanged and `"/"` becomes `BaseHref`.
+- `Asset(path)` prefixes a file path with or without a leading slash and never appends a slash.
+- `CurrentPage(request)` is the prefixed path and query of the request, for fragment links on island pages.
+
+**Catalog.** A static host cannot run the catalog query, so the static `Catalog.razor` renders every live row of the culture
+(`ICatalogQueries.GetAllAsync`: `Page = 1`, `PageCount = 1`, the facets of an empty query) with no pager and a slashed
+canonical, and `StaticFilterForm` replaces `FilterPanel`. The form keeps ADR 0011's shape: `<form method="get" role="search">`
+with no token and no cookie, a search box `q` (`maxlength` 100) and checkbox groups `level`, `topic` and `type`. Each
+`QuestionRow` carries `data-level`, `data-topic`, `data-type`, `data-title` (lowercase) and `data-tags`.
+`wwwroot/js/catalog-filter.js` reads `location.search`, normalises `q` like `CatalogQueryParser.ParseSearch`, ticks the
+boxes, fills the search box and hides the rows that do not match: alternatives within a group, AND across groups, and a
+term matches a lowercase title that contains it or a tag equal to it with spaces turned into hyphens (the rule of
+`CatalogQueries.ApplySearch`). It then rewrites the count (`data-found-template`) and shows the empty message. `page` and
+`_r` are ignored. Without JavaScript every row stays visible.
+
+**Content shards** (ADR 0023). A static host has no API, so the islands read questions as files:
+`data/{culture}/{stack}/index.{hash}.json` (format version, culture, stack, the content hash of the import, topic titles
+and, for every live question with a locale for the culture, `id`, `slug`, `topic`, `level`, `type`, `title` and its file
+hash, ordered by id) and `data/{culture}/q/{id}.{hash}.json` (the `QuestionDto` of a server session). `StaticSiteQueries`
+(`Trainer.Infrastructure/StaticSite/`) builds the questions with `SessionRows.ToDto`; `StaticContentCatalog`
+(`Trainer.Web/StaticSite/`, a singleton registered in the static edition only) serialises them with `TrainerJsonContext`,
+names each file after the first 16 hex characters of the SHA-256 of its bytes (`StaticContentHash`) and caches the
+active content hash too, and is cleared by `CompositeContentCacheInvalidator` after each import. `StaticContentEndpoints` serves the current names only (`Content-Type:
+application/json; charset=utf-8`); any other name under `/data` is an empty 404. The island page bootstrap
+(`IslandBootstrapDto.StaticSite`, null in the server edition) names the index path without a leading slash and the issue URL.
+`IStaticSiteQueries.GetPagePathsAsync` lists the sitemap pages, the pages of retired questions and, separately, the
+redirect sources (question pages of renamed slugs) for the export.
+
+**Security settings** (ADR 0024). Pages sends no headers, so `SecurityHeadersMiddleware` sends none in the static edition and
+every static page (public, island, `404.html`, the root chooser) starts its `<head>` with `StaticHeadMeta`: the CSP meta
+element from `StaticCsp.For(islandPage, importMapHash, goatCounterCode)`, `<meta name="referrer">`, `<meta name="dit-build">`
+and, on the root chooser and each culture home page, the two verification metas. Inline scripts are allowed by SHA-256: the
+theme script (`ThemeScript.StaticSource`), `RecoveryScript` and, on island pages, the import map, which `App.razor` renders
+from `ImportMapDefinition` as text with LF line endings (the hash is of the exact text). A new inline script needs its hash in
+`StaticCsp`; `StaticCspTests` parses every exported-like page to check that.
+
+**Recovery** (design 5.13). `RecoveryScript` is inline on every static page and exposes `window.ditRecover()`, which
+`islands-start.js` calls on any boot failure. It also listens, in the capture phase, for load errors of elements marked
+`data-recover` (the stylesheets, `islands-start.js`, `blazor.web.js`; never the analytics scripts) and unhides
+`#site-updated` (`SiteUpdatedBanner`, first in `<body>`) at most once per page and browser session (`sessionStorage`
+key `dit.recover.<path+query without _r>`, so the reloaded URL that the banner's own link produces is the same page). The banner's
+link gets the page's path and query with `_r=<time>`.
+
+**Analytics** (ADR 0025). `AnalyticsScript` renders GoatCounter at the end of `<body>` in the static edition and
+Umami in `<head>` in the server edition, never both. The counter is `js/goatcounter.js`, a self-hosted reduced copy of the
+vendor's `count.v4.js` (ISC) that never sends the query string, reduces the referrer to another origin or nothing, cuts the
+path at `?` and `#` and honours Do Not Track; `js/goatcounter-settings.js` reports `location.pathname`. `GoatCounterScriptTests`
+run it under Node.
+
+**Service worker** (ADR 0026). GitHub Pages caches every file for ten minutes, so `GET /sw.js` (static edition only,
+`ServiceWorkerEndpoint`) serves `wwwroot/js/sw-template.js` with `const ELIGIBLE = /.../;` prepended. The expression is
+`StaticAssetRules.JavaScriptRegex`: a fingerprinted asset (`name.<10 characters of [a-z0-9]>.ext`) or a content shard
+(`data/.+\.[0-9a-f]{16}\.json`); `StaticAssetRules` is host-only, not `Trainer.Contracts`. The worker keeps one cache,
+`dit-immutable-v1:<scope path>`, cache first for eligible `GET` requests with no query and no `Range`, stores only `ok`,
+status 200, non-redirected, `basic` or `default` responses whose URL is the requested one, writes best effort, and prunes
+least recently used (40 MB of runtime and assets by `Content-Length`, 600 content files, evicting to 90% of a budget once
+it is exceeded; recency persisted at most once a minute as `__recency`; a page request and a fill share one fetch per URL). `install` calls `skipWaiting()`, `activate` enables navigation preload and always claims, navigations answer with the awaited `preloadResponse` or `fetch`, and HTML, `build.json` and `sw.js` are
+never cached. `js/sw-register.js` (a `defer` script on every `App.razor` page of the static edition, with `data-scope` and
+`data-sw`) registers after `load` and posts the same-origin URLs under the scope from Resource Timing to the controlling
+worker, again on `dit:island-usable`, which `IslandRoot` raises once through `ditPageLifecycle.announceUsable`; the worker
+fills what it does not have inside `waitUntil`; a URL the browser was answered with an error status (`responseStatus` of 400 or more in every entry) is not posted until a later answer is good. `StaticAssetList` (`Trainer.Web/StaticSite/`, a singleton in the static
+edition) reads `<ApplicationName>.staticwebassets.endpoints.json`: `ExportRoutes` without precompressed and selector
+variants and `Immutable`, the fingerprinted routes and the precompressed variants of them. `ServiceWorkerScriptTests` run the worker and the registration under
+Node against fakes.
+
+**Brotli runtime** (ADR 0027). With `App:StaticSite:BrotliRuntime` on, `StaticAssetList` also exports the `_framework/` `.br`
+routes (`.gz` never) and lists them in `Immutable`, and `App.razor` puts `data-brotli="true"` on the `islands-start.js`
+tag. On such a page `islands-start.js` passes `loadBootResource` to `Blazor.start`: for `dotnetwasm`, `assembly`, `pdb` and
+`globalization` it fetches `<url>.br`, decodes it with the vendored `js/vendor/brotli-decode.mjs` (Google's `decode.min.js`,
+tag and hash in the ADR), checks the SHA-256 against the integrity table and answers with a `Response` of the original
+content type; any failure refetches the uncompressed file, and other types return `undefined` synchronously. Decoded bytes are
+never used without a verified table entry: a resource the table does not list (or a table that fails to load) loads uncompressed,
+at the integrity the runtime passed, which is empty for a fingerprinted resource, so at the runtime's default trust. The
+runtime passes that empty integrity because .NET 10 reads the boot configuration field `hash` while the configuration carries
+`integrity`, so the table is a file of the app:
+`BootIntegrityModule` (`js/boot-integrity.{hash}.mjs`, served by `BootIntegrityEndpoint`, listed in `Immutable`) maps each
+runtime file's path under `_framework/` to the sha256 of the published file (read from the endpoint manifest), and the
+import map names it with its own `integrity`. `ExportVerifier` checks every entry against the published bytes, that each
+`.br` has an entry and decodes to its file, and every `integrity` value of an import map against the file it names.
+`BrotliBootLoaderTests` run that logic under Node with the real decoder and `crypto.subtle`.
+
+**Export tool** (spec 5.2, 5.10, 5.13). `GET /static-export/manifest.json` (static edition only, `StaticExportEndpoints`,
+no cookie) lists what to crawl as site paths under the path base: `Pages` (the root chooser, every sitemap page, retired
+question pages and the four island pages of every culture and stack), `Redirects`, `Files` (sitemaps, `robots.txt`,
+`sw.js`), `Indexes`, `Assets` (`StaticAssetList.ExportRoutes`), `Immutable`, `NotFoundPage`, `RedirectPageCsp`
+(`StaticCsp.For(false, null, code)`), `BuildId` and `EligiblePattern` (`StaticAssetRules.JavaScriptRegex`).
+`tools/Trainer.StaticSite` reads it with its own `ExportManifest` record and never references the web project.
+`export --app <transport url> --site-url <public url> --out <dir> --build-id <id> --commit <sha>` fetches every entry
+through the transport URL with automatic redirects off, at most four requests in flight, and retries 503 and 429 up to five
+times after `Retry-After` (default 2 s). It saves the bytes the app serves (a content encoding is undone; a shard's
+SHA-256 must equal the hash in its name), turns each `Redirects` entry (301 or 308 with a Location under the public or the
+transport URL) into a redirect page (`RedirectPage`: meta refresh, canonical, `noindex`, a link, the manifest's CSP,
+referrer and `dit-build`, no script), saves the not-found page's 404 as `404.html`, fetches each page's `og:image` and every
+question file named by an index, and writes `build.json` and `immutable.json` (build id, the immutable asset routes, every
+Open Graph image and content file, and the eligibility rule). An absolute URL that is neither under the public site URL nor under the
+transport URL fails the export, and the crawl client refuses any other host. With `--retain-from <live site url>
+--live-build-id <id>` (omitted on the first deployment) `Retention` fetches the live `build.json` and `immutable.json`
+with a cache-busting query, requires both build ids to equal the id the deployment gate read (retrying for three
+minutes, then failing), downloads every listed file the export lacks, requires identical bytes for a listed name that the
+export also has (a `.br` file whose bytes differ passes when both copies decode to the same bytes, and the new build's copy is
+kept, because a compressor change alters the Brotli stream and not the fingerprint of the file it decodes to), judges the live
+build's names by the eligibility pattern of the live `immutable.json` rather than by this build's rule (this build's rule is
+the fallback when the live manifest has none), and records the copies in `retained.json`; `--previous-page-out` also saves the live Practice page after
+checking its `dit-build`. `verify --dir <dir> --site-url <url>` (`ExportVerifier`) parses every HTML and XML file with
+AngleSharp and `System.Xml`: each URL (`href`, `src`, `srcset`, `action`, `og:*`, canonical and alternate links, meta
+refresh, import map entries, JSON-LD on the site's host, CSS `url()` and `@import` of inline styles and linked stylesheets,
+sitemap `loc` and `xhtml:link`, `robots.txt`, and the URLs in the island markers and the persisted component state) is
+resolved against the document and its `<base>` and, when it is on the site's host, must be under the path base and
+resolve through `StaticSiteLayout.Resolve`; external hosts are allowed only for GoatCounter, GitHub issue links and
+content links with `rel=noopener`. Every HTML file starts `<head>` with the CSP meta and carries the build id of
+`build.json`; every page the app rendered (not a redirect page) carries the recovery script allowed by the page's policy.
+A file whose name matches the eligibility rule must be in `immutable.json` or `retained.json`, so the service worker
+(ADR 0026) can trust the rule. `serve --dir <dir> --site-url <url> [--port n] [--gzip]` (`PagesEmulator`) serves the
+directory like Pages: `index.html` for a slashed directory, a 301 for a directory without the slash, `404.html` for a
+miss, `Cache-Control: max-age=600` and nothing else, gzip level 6 for text, JavaScript, JSON, XML and WebAssembly when
+asked; its test hooks (`SwapRoot`, `FailOnce`, `Delay`, `MapExtra`) serve the browser tests. Exit codes: 0, 1 (a crawl,
+retention or verification failure), 2 (usage).
+
+`SiteUrls.Origin` is scheme, host and port only. `SiteUrls.Absolute` is the origin plus `Page`, and
+`SiteUrls.AbsoluteAsset` the origin plus `Asset` (sitemap files, images). With an `App:PublicBaseUrl` without a path
+and `Edition=Server` every URL is what it was before.
+
 ## Decision records
 
 Decisions that depart from the design document, or that the design leaves open, are
@@ -2292,3 +2560,10 @@ recorded one per file in `docs/adr/` (Status, Context, Decision, Consequences).
 | [0019](adr/0019-database-roles.md) | Least-privilege database roles and `pg_hba`; the superuser is reachable only through `docker compose exec --user postgres` on the server. |
 | [0020](adr/0020-deploy-serialisation.md) | Deploy workflows serialise per workflow and on the server lock, never deploy an older commit over a newer one automatically, and `deploy-app` starts after a green `ci` run on `main`. |
 | [0021](adr/0021-encrypted-offsite-backups.md) | Database backups are encrypted with `age`, copied to a Backblaze B2 bucket with a key that cannot delete, and restored only through a guarded script that stops for the operator on any failure. |
+| [0022](adr/0022-static-edition-on-github-pages.md) | The static edition is the same code exported to GitHub Pages under a path base, with slashed page URLs, no accounts or server features, and progress stored per origin. |
+| [0023](adr/0023-content-shards-for-the-static-edition.md) | The static edition serves an index per culture and stack and one content-hashed JSON file per question, built from the imported rows by the code that builds a session. |
+| [0024](adr/0024-security-headers-on-github-pages.md) | The static edition's CSP and referrer policy are meta elements; inline scripts are allowed by hash, and `frame-ancestors`, `nosniff` and CSP reports are lost on Pages. |
+| [0025](adr/0025-goatcounter-in-the-static-edition.md) | The static edition counts page views with GoatCounter, pinned by URL and SHA-384 integrity, with the path reported without the query. |
+| [0026](adr/0026-content-addressed-service-worker.md) | A service worker caches fingerprinted files and content shards cache first in one least-recently-used cache, sound because the export verifier keeps every matching name immutable. |
+| [0027](adr/0027-brotli-boot-resources-on-pages.md) | The static edition fetches the runtime as Brotli files and decodes them in the page with Google's decoder, verifying each decoded file against an exported integrity table and falling back to the uncompressed file on any failure. |
+| [0028](adr/0028-progress-checkpoint-in-the-static-edition.md) | The static edition stores a checkpoint of its replayed progress next to the answer log, used only for the log state it was written for, so a page load does not replay thousands of answers. |

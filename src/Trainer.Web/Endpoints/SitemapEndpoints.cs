@@ -48,7 +48,7 @@ public static class SitemapEndpoints
         foreach (CultureKey culture in CultureKey.Supported)
         {
             await writer.WriteStartElementAsync(null, "sitemap", null);
-            await writer.WriteElementStringAsync(null, "loc", null, urls.Absolute(context.Request, $"/sitemap-{culture.Value}.xml"));
+            await writer.WriteElementStringAsync(null, "loc", null, urls.AbsoluteAsset(context.Request, $"/sitemap-{culture.Value}.xml"));
             await writer.WriteEndElementAsync();
         }
 
@@ -118,24 +118,24 @@ public static class SitemapEndpoints
         await writer.WriteEndElementAsync();
     }
 
-    private static async Task WriteRobotsAsync(HttpContext context, SiteUrls urls)
+    private static async Task WriteRobotsAsync(HttpContext context, SiteUrls urls, SitePaths paths)
     {
         context.Response.ContentType = TextContentType;
         await using StreamWriter writer = new(context.Response.Body, new UTF8Encoding(false), leaveOpen: true);
         await writer.WriteLineAsync("User-agent: *");
-        await writer.WriteLineAsync("Disallow: /api/");
-        await writer.WriteLineAsync("Disallow: /signin-telegram/");
-        await writer.WriteLineAsync("Disallow: /lang/");
+        await writer.WriteLineAsync($"Disallow: {paths.PathBase}/api/");
+        await writer.WriteLineAsync($"Disallow: {paths.PathBase}/signin-telegram/");
+        await writer.WriteLineAsync($"Disallow: {paths.PathBase}/lang/");
         foreach (CultureKey culture in CultureKey.Supported)
         {
-            await writer.WriteLineAsync($"Disallow: /{culture.Value}/signin");
+            await writer.WriteLineAsync($"Disallow: {paths.PathBase}/{culture.Value}/signin");
             foreach (string segment in InteractiveSegments)
             {
-                await writer.WriteLineAsync($"Disallow: /{culture.Value}/*/{segment}");
+                await writer.WriteLineAsync($"Disallow: {paths.PathBase}/{culture.Value}/*/{segment}");
             }
         }
 
         await writer.WriteLineAsync();
-        await writer.WriteLineAsync("Sitemap: " + urls.Absolute(context.Request, "/sitemap.xml"));
+        await writer.WriteLineAsync("Sitemap: " + urls.AbsoluteAsset(context.Request, "/sitemap.xml"));
     }
 }

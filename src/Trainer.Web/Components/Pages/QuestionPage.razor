@@ -11,12 +11,17 @@
 @using Trainer.Web.Auth
 @using Trainer.Web.OpenGraph
 @using Trainer.Web.Seo
+@using Trainer.Web.Startup
+@using Microsoft.Extensions.Options
 @inject IStringLocalizer<SharedResource> L
 @inject IQuestionQueries Questions
 @inject IProgressQueries Progress
 @inject IQuestionFeedbackQueries FeedbackQueries
 @inject NavigationManager Navigation
 @inject OgImageLinks ImageLinks
+@inject SitePaths Paths
+@inject SiteUrls Site
+@inject IOptions<AppOptions> App
 
 @if (_model is not null)
 {
@@ -42,7 +47,7 @@
             }
             else
             {
-                <a class="chip" href="/@Culture/@Stack/topics/@_model.Topic.Value">@_model.TopicTitle</a>
+                <a class="chip" href="@Paths.Page($"/{Culture}/{Stack}/topics/{_model.Topic.Value}")">@_model.TopicTitle</a>
             }
             <span class="chip">@L["Type." + QuestionTypeKeys.ToKey(_model.Type)]</span>
         </div>
@@ -120,7 +125,11 @@
                 <IslandLink Class="btn" Href="@($"/{Culture}/{Stack}/practice?first={_model.Id.Value}")" PreloadRuntime="true">@L["Question.Practise"]</IslandLink>
             </p>
         }
-        @if (_feedbackOpen)
+        @if (IsStatic)
+        {
+            <ReportProblemLink QuestionId="@_model.Id.Value" Slug="@_model.Slug" Culture="@(Culture!)" PageUrl="@Site.Absolute(HttpContext?.Request, PathFor(Culture))" />
+        }
+        else if (_feedbackOpen)
         {
             <QuestionFeedbackForms QuestionId="_model.Id" Current="_rating" ReturnPath="@PathFor(Culture)" Culture="@(Culture!)" NoticeCode="@Feedback" />
         }
@@ -137,7 +146,7 @@
         </p>
         @if (!_model.TopicIsRetired)
         {
-            <p class="question__back"><a href="/@Culture/@Stack/topics/@_model.Topic.Value">← @L["Question.BackToTopic"]</a></p>
+            <p class="question__back"><a href="@Paths.Page($"/{Culture}/{Stack}/topics/{_model.Topic.Value}")">← @L["Question.BackToTopic"]</a></p>
         }
         @if (_related.Count > 0)
         {
@@ -170,6 +179,8 @@
 
     [CascadingParameter]
     private HttpContext? HttpContext { get; set; }
+
+    private bool IsStatic => App.Value.Edition == SiteEdition.Static;
 
     private QuestionPageModel? _model;
     private bool _signedIn;
@@ -230,7 +241,7 @@
         if (target is { } to)
         {
             HttpContext.Response.StatusCode = StatusCodes.Status301MovedPermanently;
-            HttpContext.Response.Headers.Location = $"/{culture.Value}/{stack.Value}/questions/{to.Value}";
+            HttpContext.Response.Headers.Location = Paths.Page($"/{culture.Value}/{stack.Value}/questions/{to.Value}");
             return;
         }
 

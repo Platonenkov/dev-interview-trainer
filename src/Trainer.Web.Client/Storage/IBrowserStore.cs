@@ -20,4 +20,25 @@ public interface IBrowserStore
     /// "nothing is stored". By default every read counts as readable.
     /// </summary>
     async ValueTask<StoredRead> ReadCheckedAsync(string key) => new(true, await ReadAsync(key));
+
+    /// <summary>
+    /// Identifies the state of an outbox without reading it: the entry count and a hash of its tail, as <c>outbox.js</c>
+    /// computes them natively (an answer log is far too big to read into .NET just to compare it). Null when the key holds
+    /// something that is not a readable outbox or when there is no script, so the caller reads the whole log instead.
+    /// </summary>
+    ValueTask<string?> FingerprintAsync(string key) => ValueTask.FromResult<string?>(null);
+
+    /// <summary>
+    /// Calls <paramref name="onChanged"/> whenever another tab changes <paramref name="key"/> (the browser's <c>storage</c>
+    /// event, which never fires in the writing tab); disposing the result stops it. Without the script or without storage
+    /// nothing is ever called, so a caller treats the event as a courtesy that only makes its cache fresher sooner.
+    /// </summary>
+    ValueTask<IAsyncDisposable> WatchKeyAsync(string key, Action onChanged) => ValueTask.FromResult<IAsyncDisposable>(NoWatch.Instance);
+
+    private sealed class NoWatch : IAsyncDisposable
+    {
+        public static readonly NoWatch Instance = new();
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
 }

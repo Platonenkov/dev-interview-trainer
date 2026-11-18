@@ -5,6 +5,7 @@
 @using Trainer.Web.Client.Sync
 @implements IDisposable
 @inject TrainerApiClient Api
+@inject IIslandBackend Backend
 @inject OutboxStore Outbox
 @inject OutboxSyncService Sync
 @inject AccountWatcher Accounts
@@ -16,10 +17,13 @@
 @inject ServerClock Clock
 @inject TimeProvider Time
 @inject IStringLocalizer<ClientResource> L
+@inject IslandLinks Links
+@inject NavigationManager Navigation
 
 @* Practice (spec 5.3): filters, then one question at a time with feedback after each answer, then a summary by topic.
-   Every answer goes to the owner's outbox first (spec 8.8); a signed-in owner's outbox is flushed in the background. *@
-<IslandRoot Usable="_phase != Phase.Loading">
+   Every answer goes to the owner's outbox first (spec 8.8); a signed-in owner's outbox is flushed in the background.
+   The question skeleton (a question still being fetched) is nothing to act on, so it does not make the island usable. *@
+<IslandRoot Usable="_phase != Phase.Loading && !(_phase == Phase.Question && _session is { Current: null })">
     @if (_bootstrap is { } bootstrap)
     {
         @* data-answers-saved counts the graded answers whose outbox write returned or outlasted its bound; tests wait on it. *@
@@ -28,14 +32,15 @@
             <p class="storage-notice practice__slow" role="status">@L["Storage.Slow"]</p>
         }
         <div class="qs" data-answers-saved="@_flow.Saved">
-            <TopicSidebar Topics="bootstrap.Topics" Me="bootstrap.Me" CurrentTopic="@CurrentTopic" Culture="@bootstrap.Culture" Stack="@bootstrap.Stack" />
+            <TopicSidebar Topics="bootstrap.Topics" Progress="_progress" CurrentTopic="@CurrentTopic" Culture="@bootstrap.Culture" Stack="@bootstrap.Stack" />
             @* Focusable by script: a fetch from a button (Start, New session, Try again) removes that button, so focus
                waits here meanwhile instead of falling to the body. *@
             <div class="qs__main" tabindex="-1" @ref="_main">
+                <LoadingAnnouncement Active="@(_phase == Phase.Question && _session is { Current: null })" />
                 @switch (_phase)
                 {
                     case Phase.Filters:
-                        <PracticeFilters Bootstrap="bootstrap" Value="_filters" Start="StartFromFormAsync" />
+                        <PracticeFilters Bootstrap="bootstrap" KeepsProgress="Backend.KeepsProgress(bootstrap)" Value="_filters" Start="StartFromFormAsync" />
                         break;
                     case Phase.Loading:
                         <IslandStateView Kind="IslandStateKind.Loading" />
@@ -43,15 +48,18 @@
                     case Phase.State:
                         <IslandStateView Kind="_state" RetryAfter="_retryAfter" Retry="RetryAsync" ChangeFilters="ShowFilters" />
                         break;
+                    case Phase.Question when _session is { Current: null }:
+                        <QuestionSkeleton />
+                        break;
                     case Phase.Question when _session?.Current is { } attempt:
                         <SessionBar Level="@attempt.Question.Level"
                                     TopicTitle="@attempt.Question.TopicTitle"
                                     Position="_session.Index + 1"
-                                    Count="_session.Count"
+                                    Count="ShownCount"
                                     Completed="Completed"
-                                    StreakDays="bootstrap.Me?.StreakDays" />
+                                    Progress="_progress" />
                         <div class="qs__body">
-                            <QuestionCard @key="attempt.ClientAnswerId" Attempt="attempt" Changed="StateHasChanged">
+                            <QuestionCard @key="attempt.ClientAnswerId" @ref="_card" Attempt="attempt" Changed="StateHasChanged">
                                 <AnswerArea Attempt="attempt" Flow="_flow" Graded="SelfGradeAsync" Skip="Skip" Changed="StateHasChanged" />
                             </QuestionCard>
                             @* Rendered before the answer too: its live region must exist, empty, for the verdict to be announced. *@
@@ -60,12 +68,18 @@
                             {
                                 <QuestionFeedbackBar @key="attempt.Question.Id" Question="attempt.Question" Owner="owner" Culture="@bootstrap.Culture" InitialRating="@RatingOf(attempt.Question.Id)" />
                             }
+                            else if (attempt.IsDone && bootstrap.StaticSite is { } site)
+                            {
+                                @* No server to receive a rating or a report: a report is a prefilled GitHub issue. *@
+                                <ReportProblemLink @key="attempt.Question.Id" Question="attempt.Question" Culture="@bootstrap.Culture" Stack="@bootstrap.Stack" IssuesNewUrl="@site.IssuesNewUrl" />
+                            }
                         </div>
                         @if (attempt.IsDone)
                         {
                             <div class="action-bar">
-                                <button type="button" class="btn btn--primary practice__next" @ref="_next" @onclick="Next">
-                                    @L[_session.Index + 1 == _session.Count ? "Practice.Finish" : "Practice.Next"]
+                                @* A first= link shows its question before the rest of the session is picked; Next waits for that. *@
+                                <button type="button" class="btn btn--primary practice__next" @ref="_next" @onclick="NextAsync" disabled="@_session.SelectionPending">
+                                    @L[_session.Index + 1 == _session.Count && !_session.SelectionPending ? "Practice.Finish" : "Practice.Next"]
                                     <kbd class="kbd-hint" aria-hidden="true">N</kbd>
                                 </button>
                             </div>
@@ -133,13 +147,20 @@
     private PracticeSession? _session;
     private IReadOnlyList<PracticeTopicSummary> _summary = [];
     private IReadOnlyDictionary<string, string>? _myRatings;
+    private IslandProgress? _progress;
+    private QuestionCard? _card;
     private (PracticeFilterSet Filters, string? First, IReadOnlyList<string> Seen) _lastRequest;
     private ElementReference _main;
     private ElementReference _next;
+    private bool _focusNextWhenEnabled;
     private ElementReference _summaryHeading;
     private bool _focusMain;
+    private bool _focusTitle;
+    // A question failed to load: Try again repeats that load instead of fetching a new session.
+    private bool _resumeLoad;
     private bool _focusSummary;
     private bool _fetching;
+    private bool _disposed;
     private AnsweringFlow _flow = null!;
 
     /// <summary>The <c>IslandBootstrapDto</c> the server serialised with <c>TrainerJsonContext</c>.</summary>
@@ -157,7 +178,10 @@
 
     private bool SignedIn => _owner is not null;
 
-    private string OutboxKey => _owner is { } owner ? StorageKeys.UserOutbox(owner) : StorageKeys.AnonymousOutbox;
+    private string OutboxKey => Backend.OutboxKey(_bootstrap!);
+
+    // While the rest of a first= session is being picked the size is unknown, and 0 hides the position instead of showing a guess.
+    private int ShownCount => _session is { SelectionPending: true } ? 0 : _session?.Count ?? 0;
 
     private string? CurrentTopic => _filters.Topics.Count == 1 ? _filters.Topics[0] : null;
 
@@ -178,8 +202,11 @@
                 }
             });
         _flow.SlowChanged += OnSlowChanged;
-        _bootstrap = JsonSerializer.Deserialize(BootstrapJson, TrainerJsonContext.Default.IslandBootstrapDto)
-            ?? throw new InvalidOperationException("The island bootstrap is empty.");
+        _bootstrap = PracticeQueryString.Apply(
+            JsonSerializer.Deserialize(BootstrapJson, TrainerJsonContext.Default.IslandBootstrapDto)
+                ?? throw new InvalidOperationException("The island bootstrap is empty."),
+            Navigation.Uri,
+            forMock: false);
         _owner = _bootstrap.Me?.TelegramUserId;
 
         // The watcher first: a sync bound after another tab already switched accounts must not start.
@@ -192,14 +219,57 @@
             Sync.Start(bound);
         }
 
-        _filters = PracticeFilterSet.Resolve(_bootstrap, await FilterStore.LoadAsync());
+        // Started now so a backend that loads something (the static index and progress replay) works while the stored
+        // filters are read; the island is usable once both are done.
+        Task<IslandProgress?> progress = Backend.GetProgressAsync(_bootstrap, _lifetime.Token);
+        _filters = PracticeFilterSet.Resolve(_bootstrap, await FilterStore.LoadAsync(), Backend.KeepsProgress(_bootstrap));
         if (_bootstrap.InitialFilters.FirstQuestionId is { } first)
         {
+            // The question does not depend on the progress, so the sidebar catches up when it is ready.
+            _ = ShowProgressWhenReadyAsync(progress);
             await FetchAsync(_filters, first, []);
         }
         else
         {
+            _progress = await progress;
             _phase = Phase.Filters;
+        }
+    }
+
+    private async Task ShowProgressWhenReadyAsync(Task<IslandProgress?> progress)
+    {
+        try
+        {
+            _progress = await progress;
+        }
+#pragma warning disable CA1031 // The sidebar is optional; a failed progress read leaves it without numbers.
+        catch (Exception)
+#pragma warning restore CA1031
+        {
+            return;
+        }
+
+        if (!_disposed)
+        {
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    // The rest of a first= session is picked in the background; Next stays disabled until it is.
+    private async Task CompleteSelectionAsync(PracticeSession session)
+    {
+        try
+        {
+            await session.CompleteSelectionAsync(_lifetime.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        if (!_disposed && ReferenceEquals(session, _session))
+        {
+            await InvokeAsync(StateHasChanged);
         }
     }
 
@@ -221,9 +291,30 @@
             await _main.FocusAsync();
         }
 
-        if (_phase == Phase.Question && _session?.Current?.IsDone == true && _flow.TakeFocusNext())
+        // The Next button the user pressed is gone by now; focus follows the question that replaced it.
+        if (_focusTitle && _phase == Phase.Question && _card is not null)
         {
-            await _next.FocusAsync();
+            _focusTitle = false;
+            await _card.Title.FocusAsync();
+        }
+
+        if (_phase == Phase.Question && _session?.Current?.IsDone == true)
+        {
+            if (_session.SelectionPending)
+            {
+                // focus() on a disabled button does nothing and focus would fall to the body: wait on the question, and
+                // move to Next when the rest of a first= session is picked and Next is enabled.
+                if (_flow.TakeFocusNext())
+                {
+                    _focusNextWhenEnabled = true;
+                    await _main.FocusAsync();
+                }
+            }
+            else if (_focusNextWhenEnabled || _flow.TakeFocusNext())
+            {
+                _focusNextWhenEnabled = false;
+                await _next.FocusAsync();
+            }
         }
 
         if (_focusSummary && _phase == Phase.Summary)
@@ -241,6 +332,7 @@
             _flow.SlowChanged -= OnSlowChanged;
         }
 
+        _disposed = true;
         _lifetime.Cancel();
         _lifetime.Dispose();
     }
@@ -270,12 +362,19 @@
         await FetchAsync(filters, null, [], moveFocus: true);
     }
 
-    private Task RetryAsync() => FetchAsync(_lastRequest.Filters, _lastRequest.First, _lastRequest.Seen, moveFocus: true);
+    private Task RetryAsync() => _resumeLoad
+        ? ResumeLoadAsync()
+        : FetchAsync(_lastRequest.Filters, _lastRequest.First, _lastRequest.Seen, moveFocus: true);
 
     // "New session" leaves out what was just shown, in every status; the server applies Exclude to every status.
     private Task NewSessionAsync() => FetchAsync(_filters, null, _session?.SeenIds ?? [], moveFocus: true);
 
-    private void ShowFilters() => _phase = Phase.Filters;
+    private void ShowFilters()
+    {
+        // A new session replaces whatever failed to load; Try again must not resume the old one.
+        _resumeLoad = false;
+        _phase = Phase.Filters;
+    }
 
     /// <param name="moveFocus">The fetch was started by a button the loading state removes.</param>
     private async Task FetchAsync(PracticeFilterSet filters, string? first, IReadOnlyList<string> seen, bool moveFocus = false)
@@ -300,6 +399,7 @@
     {
         IslandBootstrapDto bootstrap = _bootstrap!;
         _lastRequest = (filters, first, seen);
+        _resumeLoad = false;
         _phase = Phase.Loading;
         _focusMain = moveFocus;
         StateHasChanged();
@@ -312,23 +412,89 @@
             await Sync.FlushAsync(FlushWait, ct);
         }
 
-        IReadOnlyList<AnswerDto>? answeredHere = !SignedIn && string.Equals(filters.Status, PracticeFilterSet.New, StringComparison.Ordinal)
-            ? await Outbox.ReadAsync(StorageKeys.AnonymousOutbox)
-            : null;
+        // An anonymous visitor's "new" session leaves out what this browser already answered.
+        IReadOnlyList<AnswerDto>? answeredHere = Backend.SendsAnsweredAsExclude
+            && !Backend.KeepsProgress(bootstrap)
+            && string.Equals(filters.Status, PracticeFilterSet.New, StringComparison.Ordinal)
+                ? await Outbox.ReadAsync(OutboxKey)
+                : null;
         PracticeSessionRequest request = filters.ToRequest(bootstrap.Culture, bootstrap.Stack, first, PracticeFilterSet.Excluded(seen, answeredHere));
-        ApiResult<SessionDto> result = await Api.PracticeAsync(request, ct);
+        ApiResult<SessionPlan> result = await Backend.PracticeAsync(bootstrap, request, ct);
 
-        IslandStateKind kind = IslandState.FromResult(result, result.Value is { Questions.Count: 0 });
+        IslandStateKind kind = IslandState.FromResult(result, result.Value is { QuestionIds.Count: 0 });
         if (kind == IslandStateKind.Ready)
         {
             _myRatings = result.Value!.MyRatings;
-            _session = new PracticeSession(result.Value!.Questions, Ids, Random.Shared, Clock);
-            _phase = Phase.Question;
+            _session = new PracticeSession(result.Value!, Ids, Random.Shared, Clock);
+            if (_session.SelectionPending)
+            {
+                _ = CompleteSelectionAsync(_session);
+            }
+
+            await ShowLoadedAsync(_session.StartAsync(ct), moveFocus, focusQuestion: false);
         }
         else
         {
             _state = kind;
             _retryAfter = result.RetryAfter;
+            _phase = Phase.State;
+        }
+    }
+
+    private async Task ResumeLoadAsync()
+    {
+        if (_fetching || _session is null)
+        {
+            return;
+        }
+
+        _fetching = true;
+        try
+        {
+            await ShowLoadedAsync(_session.NextAsync(_lifetime.Token), moveFocus: true, focusQuestion: true);
+        }
+        finally
+        {
+            _fetching = false;
+        }
+    }
+
+    // The skeleton stands in while the load runs; a failure keeps the session, so Try again repeats the same load.
+    private async Task ShowLoadedAsync(Task<ApiResult<QuestionDto>> load, bool moveFocus, bool focusQuestion)
+    {
+        PracticeSession session = _session!;
+        _resumeLoad = false;
+        _phase = Phase.Question;
+        _focusMain = moveFocus;
+        StateHasChanged();
+
+        ApiResult<QuestionDto> result;
+        try
+        {
+            result = await load;
+        }
+        catch (OperationCanceledException) when (_disposed)
+        {
+            // The page is going away; a source may report that by throwing, which must not surface from a handler.
+            return;
+        }
+
+        if (session.IsFinished)
+        {
+            _summary = PracticeSummary.ByTopic(session.Results);
+            _phase = Phase.Summary;
+            _focusSummary = true;
+            await Backend.OnSessionFinishedAsync(_bootstrap!, _lifetime.Token);
+        }
+        else if (result.IsSuccess && result.Value is not null)
+        {
+            _focusTitle = focusQuestion;
+        }
+        else
+        {
+            _state = result.IsSuccess ? IslandStateKind.ServerError : IslandState.FromResult(result, false);
+            _retryAfter = result.RetryAfter;
+            _resumeLoad = true;
             _phase = Phase.State;
         }
     }
@@ -341,19 +507,22 @@
 
     private void Skip() => _flow.Skip(_session?.Current);
 
-    private void Next()
+    private async Task NextAsync()
     {
-        if (_session is null || !_flow.CanGoNext(_session.Current))
+        // A double click or a repeated N must not load the question twice.
+        if (_session is null || _fetching || _session.SelectionPending || !_flow.CanGoNext(_session.Current))
         {
             return;
         }
 
-        _session.Next();
-        if (_session.IsFinished)
+        _fetching = true;
+        try
         {
-            _summary = PracticeSummary.ByTopic(_session.Results);
-            _phase = Phase.Summary;
-            _focusSummary = true;
+            await ShowLoadedAsync(_session.NextAsync(_lifetime.Token), moveFocus: true, focusQuestion: true);
+        }
+        finally
+        {
+            _fetching = false;
         }
     }
 
@@ -361,14 +530,14 @@
 
     private async Task HandleShortcutAsync(ShortcutKey key)
     {
-        if (_phase == Phase.Question && await _flow.HandleShortcutAsync(key, _session?.Current, Next, _lifetime.Token))
+        if (_phase == Phase.Question && await _flow.HandleShortcutAsync(key, _session?.Current, NextAsync, _lifetime.Token))
         {
             StateHasChanged();
         }
     }
 
-    // Island pages carry <base href="/">, so every link is absolute.
-    private string QuestionHref(QuestionDto question) => $"/{_bootstrap!.Culture}/{_bootstrap.Stack}/questions/{question.Slug}";
+    // Links are base-relative (IslandLinks).
+    private string QuestionHref(QuestionDto question) => Links.Page(_bootstrap!.Culture, _bootstrap.Stack, ["questions", question.Slug]);
 
     private static string Mark(Grade grade) => grade switch
     {

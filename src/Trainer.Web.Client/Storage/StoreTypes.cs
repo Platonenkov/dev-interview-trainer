@@ -9,7 +9,7 @@ namespace Trainer.Web.Client.Storage;
 /// op reads.
 /// </summary>
 /// <param name="Op">The op name: <c>append</c>, <c>remove</c>, <c>move</c>, <c>summaryAdd</c>, <c>summaryRemove</c>,
-/// <c>putIfRevision</c>, <c>put</c>, <c>delete</c> or <c>quarantine</c>.</param>
+/// <c>historyAdd</c>, <c>putIfRevision</c>, <c>put</c>, <c>delete</c> or <c>quarantine</c>.</param>
 /// <param name="Value">Entries to append, the summary item to add, the document to put, or for <c>move</c> the fields
 /// set on every moved entry.</param>
 /// <param name="Shape"><c>outbox</c> (default) or <c>summaries</c>: which list and id field a <c>move</c> works on.</param>
@@ -48,6 +48,12 @@ public sealed record StoreOp(
     public static StoreOp SummaryRemove(string key, string mockSessionId) => new("summaryRemove", key, Ids: [mockSessionId]);
 
     /// <summary>
+    /// Merges one finished mock (a <c>StoredMockHistoryItem</c>) into the history by <c>id</c> and keeps only the newest
+    /// <see cref="Trainer.Contracts.Storage.StoredMockHistory.MaxItems"/> of each stack, in one step under the key's lock.
+    /// </summary>
+    public static StoreOp HistoryAdd(string key, JsonElement item) => new("historyAdd", key, Value: item);
+
+    /// <summary>
     /// Writes the document only when the stored <c>revision</c> (0 when absent) equals <paramref name="expectedRevision"/>
     /// and, when <paramref name="sessionId"/> is given, a stored document belongs to that mock session.
     /// </summary>
@@ -71,7 +77,11 @@ public sealed record StoreOp(
 /// <param name="Error">One of <see cref="StoreErrors"/> when <paramref name="Ok"/> is false.</param>
 /// <param name="Revision">For <c>putIfRevision</c>: the stored revision after the op, or the conflicting one.</param>
 /// <param name="Count">Entries appended, removed or moved.</param>
-public sealed record StoreResult(bool Ok, bool Persisted, string? Error, long? Revision, int Count = 0)
+/// <param name="Fingerprint">For an outbox <c>append</c>: the fingerprint of the log after it (see <see cref="IBrowserStore.FingerprintAsync"/>).</param>
+/// <param name="Previous">For an outbox <c>append</c>: the fingerprint of the log just before it, so a cache that holds the
+/// state before can tell that nothing else was written in between.</param>
+/// <param name="Added">For an outbox <c>append</c>: how many of the entries were new; the others replaced entries with the same id.</param>
+public sealed record StoreResult(bool Ok, bool Persisted, string? Error, long? Revision, int Count = 0, string? Fingerprint = null, string? Previous = null, int Added = 0)
 {
     public static StoreResult Failed(string error) => new(false, false, error, null);
 }

@@ -11,6 +11,7 @@ using Trainer.Web.Client.Storage;
 using Trainer.Web.Internal;
 using Trainer.Web.OpenGraph;
 using Trainer.Web.Security;
+using Trainer.Web.StaticSite;
 using Trainer.Web.Startup;
 
 namespace Trainer.Web.Tests;
@@ -46,6 +47,9 @@ public sealed partial class DocsTests(WebSiteFixture site) : IClassFixture<WebSi
 
     [GeneratedRegex(@"\s+")]
     private static partial Regex Whitespace();
+
+    [GeneratedRegex(@"vars\.(?<name>[A-Z][A-Z0-9_]*)")]
+    private static partial Regex PagesVariable();
 
     [GeneratedRegex(@"^(?:required|optional)=\((?<names>[^)]*)\)", RegexOptions.Multiline)]
     private static partial Regex RenderEnvNames();
@@ -628,13 +632,14 @@ public sealed partial class DocsTests(WebSiteFixture site) : IClassFixture<WebSi
 
         static void AddProperties(HashSet<string> keys, Type type, string prefix)
         {
-            foreach (PropertyInfo property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+            // A get-only property is derived from a key (StaticSiteOptions.IssuesNewUrl), not a key itself.
+            foreach (PropertyInfo property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance).Where(p => p.CanWrite))
             {
                 string key = prefix + ":" + property.Name;
                 bool isSection = property.PropertyType.IsClass && property.PropertyType != typeof(string);
                 if (isSection)
                 {
-                    foreach (PropertyInfo inner in property.PropertyType.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+                    foreach (PropertyInfo inner in property.PropertyType.GetProperties(BindingFlags.Public | BindingFlags.Instance).Where(p => p.CanWrite))
                     {
                         keys.Add(key + ":" + inner.Name);
                     }
@@ -675,8 +680,10 @@ public sealed partial class DocsTests(WebSiteFixture site) : IClassFixture<WebSi
             StorageKeys.AnonymousOutbox,
             StorageKeys.CorruptPrefix,
             StorageKeys.Account,
+            StorageKeys.LanguageChoice,
             StorageKeys.ServerClock,
             StorageKeys.PracticeFilters,
+            StorageKeys.AnonymousMockHistory,
             StorageKeys.UserOutbox(123456).Replace("123456", "{telegramUserId}", StringComparison.Ordinal),
             StorageKeys.PendingSummaries(123456).Replace("123456", "{telegramUserId}", StringComparison.Ordinal),
             StorageKeys.FailedSummaries(123456).Replace("123456", "{telegramUserId}", StringComparison.Ordinal),
@@ -896,6 +903,110 @@ public sealed partial class DocsTests(WebSiteFixture site) : IClassFixture<WebSi
         Assert.Contains(expected, BootstrapSwitchMentions(markdown));
     }
 
+    private static readonly string[] StaticEditionSections =
+    [
+        "Overview",
+        "How the site is built",
+        "Deployments and cached pages",
+        "Preview locally",
+        "Configuration",
+        "Moving to a custom domain",
+        "Progress in the browser",
+        "Content updates",
+        "Reports from visitors",
+        "Troubleshooting",
+        "Spike results",
+        "Going public",
+        "Acceptance log",
+    ];
+
+    private static string StaticEdition() => Read("docs", "static-edition.md");
+
+    [Fact]
+    public void StaticEdition_HasRequiredSections()
+    {
+        string[] titles = SectionTitles(StaticEdition());
+
+        int previous = -1;
+        foreach (string required in StaticEditionSections)
+        {
+            int index = Array.IndexOf(titles, required);
+            Assert.True(index >= 0, $"docs/static-edition.md is missing the section '## {required}'.");
+            Assert.True(index > previous, $"docs/static-edition.md has '## {required}' out of order.");
+            previous = index;
+
+            string body = Section(StaticEdition(), required).Trim();
+            Assert.True(body.Length >= 40, $"The section '## {required}' of docs/static-edition.md has no content.");
+        }
+    }
+
+    [GeneratedRegex(@"^(?:\| |- )`(?<name>[^`]+)`", RegexOptions.Multiline)]
+    private static partial Regex DocumentedItem();
+
+    [Fact]
+    public void StaticEdition_DocumentsEveryStaticSetting()
+    {
+        string configuration = Section(StaticEdition(), "Configuration");
+
+        // The keys come from the option classes, so a new static key fails here until it is documented.
+        List<string> keys = ["App:Edition", "App:PublicBaseUrl", "App:Analytics:" + nameof(AnalyticsOptions.GoatCounterCode)];
+        keys.AddRange(typeof(StaticSiteOptions).GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .Where(p => p.CanWrite)
+            .Select(p => "App:StaticSite:" + p.Name));
+        Assert.Contains("App:StaticSite:BrotliRuntime", keys);
+
+        // The repository variables are the ones pages.yml reads.
+        IEnumerable<string> variables = PagesVariable().Matches(Read(".github", "workflows", "pages.yml"))
+            .Select(m => m.Groups["name"].Value)
+            .Distinct(StringComparer.Ordinal);
+        string[] expectedVariables = ["GOATCOUNTER_CODE", "GOOGLE_SITE_VERIFICATION", "SITE_URL", "YANDEX_VERIFICATION"];
+        Assert.Equal(expectedVariables, variables.Order(StringComparer.Ordinal));
+
+        // A name counts only as the first cell of a table row or the lead of a list item, not as a passing mention.
+        HashSet<string> documented = [.. DocumentedItem().Matches(configuration).Select(m => m.Groups["name"].Value)];
+        foreach (string name in keys.Concat(variables).Concat(["build.json", "immutable.json"]))
+        {
+            Assert.True(documented.Contains(name), $"The Configuration section of docs/static-edition.md has no table row or list item for `{name}`.");
+        }
+    }
+
+    [Fact]
+    public void StaticEdition_StatesTheOriginChangeConsequence()
+    {
+        string section = Whitespace().Replace(Section(StaticEdition(), "Moving to a custom domain"), " ");
+
+        Assert.Contains("`SITE_URL`", section, StringComparison.Ordinal);
+        Assert.Contains("Settings, Pages", section, StringComparison.Ordinal);
+        Assert.Contains("progress does not move", section, StringComparison.Ordinal);
+        Assert.Contains("announce the move", section, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Agents_DescribesTheStaticEdition()
+    {
+        string agents = Read("AGENTS.md");
+
+        Assert.Matches(@"(?m)^tools/Trainer\.StaticSite/ ", agents);
+        Assert.Contains("Trainer.StaticSite.Tests covers", agents, StringComparison.Ordinal);
+        Assert.Matches(@"(?m)^docs/ .*static-edition\.md", agents);
+
+        // One marker for each rule the static-edition tasks added: URLs through SitePaths, no cookie, the island backend
+        // seam, the meta CSP with hashes, and the Pages workflow.
+        string[] rules =
+        [
+            "`PathBaseTests` fails on a root-relative URL",
+            "The static edition (ADR 0022) sets no cookie",
+            "`IIslandBackend`",
+            "a new inline script on a static page needs its hash there",
+            "`pages.yml` has no `schedule`",
+        ];
+        string flat = Whitespace().Replace(agents, " ");
+        foreach (string rule in rules)
+        {
+            Assert.True(flat.Contains(rule, StringComparison.Ordinal), $"AGENTS.md lost the static-edition rule '{rule}'.");
+        }
+    }
+
     [Fact]
     public void Documentation_UsesNoLongDashes()
     {
@@ -907,6 +1018,7 @@ public sealed partial class DocsTests(WebSiteFixture site) : IClassFixture<WebSi
             Path.Combine("docs", "performance.md"),
             Path.Combine("docs", "content-guide.md"),
             Path.Combine("docs", "deployment.md"),
+            Path.Combine("docs", "static-edition.md"),
             .. AdrFiles().Select(file => Path.Combine("docs", "adr", file)),
         ];
 

@@ -10,6 +10,13 @@ public sealed class AnalyticsOptions
     /// <summary>The Umami website id, a GUID. Empty means no tracking script is rendered anywhere.</summary>
     public string? WebsiteId { get; init; }
 
+    /// <summary>
+    /// The GoatCounter site code (the subdomain of <c>{code}.goatcounter.com</c>), lowercase letters, digits and hyphens.
+    /// The static edition counts page views with GoatCounter and the server edition with Umami, so each edition ignores the
+    /// other's setting. Empty means no tracking script and no CSP entry for GoatCounter (ADR 0025).
+    /// </summary>
+    public string? GoatCounterCode { get; init; }
+
     /// <summary>The normalised website id, or null when analytics is not configured.</summary>
     public string? GetNormalizedWebsiteId() => Guid.TryParse(WebsiteId, out Guid id) ? id.ToString("D") : null;
 }
@@ -17,7 +24,7 @@ public sealed class AnalyticsOptions
 /// <summary>Reads <see cref="AnalyticsOptions"/> at startup, failing startup on a malformed website id.</summary>
 public static class AnalyticsSetup
 {
-    /// <exception cref="InvalidOperationException">The website id is set but is not a GUID.</exception>
+    /// <exception cref="InvalidOperationException">The website id is set but is not a GUID, or the GoatCounter code is malformed.</exception>
     public static AnalyticsOptions Read(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
@@ -27,6 +34,12 @@ public static class AnalyticsSetup
         {
             // The value itself is not echoed: a mistyped id is not a secret, but there is no reason to log configuration.
             throw new InvalidOperationException($"{AnalyticsOptions.SectionName}:{nameof(AnalyticsOptions.WebsiteId)} must be a GUID.");
+        }
+
+        if (!string.IsNullOrEmpty(options.GoatCounterCode) && !GoatCounterScript.IsValidCode(options.GoatCounterCode))
+        {
+            throw new InvalidOperationException(
+                $"{AnalyticsOptions.SectionName}:{nameof(AnalyticsOptions.GoatCounterCode)} must be 2 to 63 lowercase letters, digits or hyphens.");
         }
 
         return options;

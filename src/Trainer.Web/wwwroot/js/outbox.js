@@ -17,17 +17,25 @@
 
   var SHAPES = {
     outbox: { list: 'answers', id: 'clientAnswerId' },
-    summaries: { list: 'items', id: 'mockSessionId' }
+    summaries: { list: 'items', id: 'mockSessionId' },
+    history: { list: 'items', id: 'id' }
   };
+
+  // The static edition keeps the newest finished mocks of each stack only (StoredMockHistory.MaxItems), so the document
+  // stays small.
+  var HISTORY_LIMIT = 20;
 
   // Key families (StorageKeys). Every op checks its keys against its family before taking any lock, so no op can write a
   // key of another family or one the app does not own. The owner itself is not checked: the script does not know who
   // is signed in, so moving between owners is the caller's decision.
   var OUTBOX_KEY = /^dit\.outbox\.v1\.(anon|u\.[1-9][0-9]*)$/;
   var SUMMARY_KEY = /^dit\.mock\.v1\.(pending|failed)\.[1-9][0-9]*$/;
+  var HISTORY_KEY = /^dit\.mock\.v1\.anon\.history$/;
   var PROGRESS_KEY = /^dit\.mock\.v1\.(anon|[1-9][0-9]*)\.active$/;
   var QUESTIONS_KEY = /^dit\.mock\.v1\.(anon|[1-9][0-9]*)\.[0-9A-HJKMNP-TV-Z]{26}\.questions$/;
   var PREFERENCE_KEY = /^dit\.(clock\.v1|practice\.v1\.filters)$/;
+  // Derived data (LocalProgressCheckpoint): rebuilt from the log whenever it does not match it, so last writer wins.
+  var CHECKPOINT_KEY = /^dit\.progress\.v1\.anon$/;
 
   // Which family a list shape lives in: a move must stay inside one family.
   var SHAPE_KEYS = { outbox: OUTBOX_KEY, summaries: SUMMARY_KEY };
@@ -41,20 +49,22 @@
   }
 
   // Whole-value writes only where the last writer may win (preferences) or the value is written once (questions);
+  // the checkpoint may also be deleted, to make room for an answer (OutboxStore.MakeRoomAsync);
   // quarantine only for keys the stores read as documents (never dit.account or a quarantined copy).
   var ALLOWED = {
     append: function (op) { return OUTBOX_KEY.test(op.key); },
     remove: function (op) { return OUTBOX_KEY.test(op.key); },
     summaryAdd: function (op) { return SUMMARY_KEY.test(op.key); },
     summaryRemove: function (op) { return SUMMARY_KEY.test(op.key); },
+    historyAdd: function (op) { return HISTORY_KEY.test(op.key); },
     move: function (op) {
       var family = own(SHAPE_KEYS, op.shape == null ? 'outbox' : op.shape);
       return family !== null && typeof op.to === 'string' && family.test(op.key) && family.test(op.to);
     },
     putIfRevision: function (op) { return PROGRESS_KEY.test(op.key); },
-    put: function (op) { return inFamily(op.key, [PREFERENCE_KEY, QUESTIONS_KEY]); },
-    'delete': function (op) { return inFamily(op.key, [PROGRESS_KEY, QUESTIONS_KEY]); },
-    quarantine: function (op) { return inFamily(op.key, [OUTBOX_KEY, SUMMARY_KEY, PROGRESS_KEY, QUESTIONS_KEY, PREFERENCE_KEY]); }
+    put: function (op) { return inFamily(op.key, [PREFERENCE_KEY, QUESTIONS_KEY, CHECKPOINT_KEY]); },
+    'delete': function (op) { return inFamily(op.key, [PROGRESS_KEY, QUESTIONS_KEY, CHECKPOINT_KEY]); },
+    quarantine: function (op) { return inFamily(op.key, [OUTBOX_KEY, SUMMARY_KEY, HISTORY_KEY, PROGRESS_KEY, QUESTIONS_KEY, PREFERENCE_KEY]); }
   };
 
   function result(ok, persisted, error, extra) {
@@ -91,7 +101,8 @@
     return e && (e.name === 'QuotaExceededError' || e.code === 22 || e.code === 1014) ? 'quota' : 'write-failed';
   }
 
-  // True when a container sits deeper than MAX_DEPTH levels (the root object is level 1).
+  // True when a container sits deeper than MAX_DEPTH levels (the root object is level 1). Written as loops that allocate
+  // nothing: the answer log walks tens of thousands of nodes on every append and every read of its classification.
   function tooDeep(value, depth) {
     if (value === null || typeof value !== 'object') {
       return false;
@@ -101,19 +112,34 @@
       return true;
     }
 
-    var children = Array.isArray(value) ? value : Object.keys(value).map(function (k) { return value[k]; });
-    for (var i = 0; i < children.length; i++) {
-      if (tooDeep(children[i], depth + 1)) {
-        return true;
+    if (Array.isArray(value)) {
+      for (var i = 0; i < value.length; i++) {
+        var item = value[i];
+        if (item !== null && typeof item === 'object' && tooDeep(item, depth + 1)) {
+          return true;
+        }
+      }
+
+      return false;
+    }
+
+    for (var key in value) {
+      if (Object.prototype.hasOwnProperty.call(value, key)) {
+        var member = value[key];
+        if (member !== null && typeof member === 'object' && tooDeep(member, depth + 1)) {
+          return true;
+        }
       }
     }
 
     return false;
   }
 
-  // Every write goes through here: a value the client could not read back is refused before anything is stored.
-  function setDocument(s, key, value) {
-    if (tooDeep(value, 0)) {
+  // Every write goes through here: a value the client could not read back is refused before anything is stored. An op that
+  // only adds entries to a document it has just classified passes depthChecked and has checked the entries itself, so the
+  // whole document is not walked a second time.
+  function setDocument(s, key, value, depthChecked) {
+    if (!depthChecked && tooDeep(value, 0)) {
       throw TOO_DEEP;
     }
 
@@ -179,8 +205,9 @@
     return Array.isArray(entries) && entries.every(function (e) { return idOf(e, shape) !== null; });
   }
 
-  // Entries with a known id are replaced in place; new ones are appended.
+  // Entries with a known id are replaced in place; new ones are appended. Returns how many were new.
   function merge(list, entries, shape) {
+    var added = 0;
     var index = new Map();
     list.forEach(function (entry, i) {
       var id = idOf(entry, shape);
@@ -195,8 +222,30 @@
       } else {
         index.set(id, list.length);
         list.push(entry);
+        added++;
       }
     });
+    return added;
+  }
+
+  // What identifies the state of an answer log without reading all of it: the entry count and a hash of the last
+  // FINGERPRINT_TAIL entries (id, grade, time). The static edition's progress checkpoint (LocalProgressCheckpoint) is valid
+  // exactly while this value is the one it was written for. Answers are only ever appended, so a change shows in the count
+  // or the tail; a log edited in the middle by hand without changing either is not noticed, which is the price of not
+  // hashing every answer.
+  var FINGERPRINT_TAIL = 64;
+
+  function fingerprintOf(list) {
+    var hash = 2166136261;
+    for (var i = Math.max(0, list.length - FINGERPRINT_TAIL); i < list.length; i++) {
+      var entry = list[i] !== null && typeof list[i] === 'object' ? list[i] : {};
+      var text = String(entry.clientAnswerId) + '|' + String(entry.grade) + '|' + String(entry.answeredAt) + ';';
+      for (var c = 0; c < text.length; c++) {
+        hash = Math.imul(hash ^ text.charCodeAt(c), 16777619) >>> 0;
+      }
+    }
+
+    return list.length + ':' + hash.toString(16);
   }
 
   function without(list, ids, shape) {
@@ -205,11 +254,11 @@
   }
 
   // Throws on failure; the stored value is then unchanged. An empty list removes the key.
-  function writeList(s, key, doc, shape) {
+  function writeList(s, key, doc, shape, depthChecked) {
     if (doc[shape.list].length === 0) {
       s.removeItem(key);
     } else {
-      setDocument(s, key, doc);
+      setDocument(s, key, doc, depthChecked);
     }
   }
 
@@ -223,9 +272,16 @@
       return refusal(target);
     }
 
-    merge(target.list, entries, shape);
-    writeList(s, op.key, target.doc, shape);
-    return done(entries.length);
+    // The document was classified (depth checked) just now; only what is added needs checking, at the depth it will have
+    // (root level 1, list level 2, entry level 3).
+    if (entries.some(function (entry) { return tooDeep(entry, 2); })) {
+      throw TOO_DEEP;
+    }
+
+    var previous = shape === SHAPES.outbox ? fingerprintOf(target.list) : null;
+    var added = merge(target.list, entries, shape);
+    writeList(s, op.key, target.doc, shape, true);
+    return done(entries.length, shape === SHAPES.outbox ? { added: added, previous: previous, fingerprint: fingerprintOf(target.list) } : undefined);
   }
 
   function remove(s, op, shape) {
@@ -243,7 +299,7 @@
     var removed = target.list.length - kept.length;
     if (removed > 0) {
       target.doc[shape.list] = kept;
-      writeList(s, op.key, target.doc, shape);
+      writeList(s, op.key, target.doc, shape, true);
     }
 
     return done(removed);
@@ -331,6 +387,62 @@
     return done(moving.length);
   }
 
+  // The instant of a history entry. .NET writes seven fractional digits and some writers fewer than three, which not every
+  // engine reads, so the fraction is made exactly three digits for Date.parse; no readable time is -Infinity.
+  function finishedTime(entry) {
+    var text = entry !== null && typeof entry === 'object' && typeof entry.finishedAt === 'string' ? entry.finishedAt : '';
+    var time = Date.parse(text.replace(/\.(\d+)/, function (match, digits) { return '.' + (digits + '00').slice(0, 3); }));
+    return Number.isFinite(time) ? time : -Infinity;
+  }
+
+  // Newest first; the id breaks a tie, as the client's own ordering does.
+  function newestFirst(a, b) {
+    var ta = finishedTime(a);
+    var tb = finishedTime(b);
+    if (ta !== tb) {
+      return tb > ta ? 1 : -1;
+    }
+
+    var ia = idOf(a, SHAPES.history) || '';
+    var ib = idOf(b, SHAPES.history) || '';
+    return ia === ib ? 0 : ib > ia ? 1 : -1;
+  }
+
+  // The newest HISTORY_LIMIT of every stack; an entry without a string stack forms a group of its own (the client skips it).
+  function newestPerStack(list) {
+    var counts = new Map();
+    return list.slice().sort(newestFirst).filter(function (entry) {
+      var stack = entry !== null && typeof entry === 'object' && typeof entry.stack === 'string' ? entry.stack : '';
+      var seen = counts.get(stack) || 0;
+      counts.set(stack, seen + 1);
+      return seen < HISTORY_LIMIT;
+    });
+  }
+
+  // Merge by id, sort, cut to the newest HISTORY_LIMIT per stack: one write, so two tabs finishing mocks together keep
+  // both. An unreadable finishedAt on the entry being added counts as now, so a mock is never added and silently cut.
+  function historyAdd(s, op) {
+    var entry = op.value;
+    if (!hasIds([entry], SHAPES.history) || typeof entry.finishedAt !== 'string' || typeof entry.stack !== 'string') {
+      return failed('bad-op');
+    }
+
+    if (finishedTime(entry) === -Infinity) {
+      entry = Object.assign({}, entry, { finishedAt: new Date().toISOString() });
+    }
+
+    var target = readList(s, op.key, SHAPES.history);
+    if (target.state !== 'valid') {
+      return refusal(target);
+    }
+
+    merge(target.list, [entry], SHAPES.history);
+    target.doc.items = newestPerStack(target.list);
+    writeList(s, op.key, target.doc, SHAPES.history);
+    // Zero when the mock is older than every one of the twenty kept for its stack.
+    return done(target.doc.items.some(function (e) { return idOf(e, SHAPES.history) === entry.id; }) ? 1 : 0);
+  }
+
   function putIfRevision(s, op) {
     if (!op.value || !Number.isInteger(op.expectedRevision)) {
       return failed('bad-op');
@@ -408,6 +520,7 @@
     move: move,
     summaryAdd: function (s, op) { return append(s, op, SHAPES.summaries, [op.value]); },
     summaryRemove: function (s, op) { return remove(s, op, SHAPES.summaries); },
+    historyAdd: historyAdd,
     putIfRevision: putIfRevision,
     put: put,
     'delete': deleteKey,
@@ -460,6 +573,29 @@
       }
     });
     return JSON.stringify(outcome);
+  }
+
+  // The fingerprint of an outbox key (see fingerprintOf), read without a lock: one getItem is a consistent snapshot. Null
+  // for a document that is not readable as an outbox (corrupt, newer app) and when storage cannot be read, so a caller then
+  // takes the slow path through the stores that classify and quarantine.
+  function fingerprint(key) {
+    if (typeof key !== 'string' || !OUTBOX_KEY.test(key)) {
+      return null;
+    }
+
+    var s = storage();
+    var classified;
+    try {
+      classified = classify(s ? s.getItem(key) : null);
+    } catch (e) {
+      return null;
+    }
+
+    if (classified.state === 'missing') {
+      return fingerprintOf([]);
+    }
+
+    return classified.state === 'valid' ? fingerprintOf(Array.isArray(classified.doc.answers) ? classified.doc.answers : []) : null;
   }
 
   function read(key) {
@@ -543,12 +679,40 @@
     }
   }
 
+  // A storage listener for one key (OutboxStore.ChangedElsewhere): the static edition's progress is the whole answer log
+  // under one key, and another tab's write must drop this tab's memoised replay. The event never fires in the writer,
+  // and a null key means another tab cleared the whole storage, which changes every key.
+  var keyWatchers = new Map();
+
+  function watchKey(key, dotnetRef) {
+    var handle = nextWatcher++;
+    var listener = function (event) {
+      if (event.key === key || event.key === null) {
+        dotnetRef.invokeMethodAsync('OnKeyChanged');
+      }
+    };
+    window.addEventListener('storage', listener);
+    keyWatchers.set(handle, listener);
+    return handle;
+  }
+
+  function unwatchKey(handle) {
+    var listener = keyWatchers.get(handle);
+    if (listener) {
+      window.removeEventListener('storage', listener);
+      keyWatchers.delete(handle);
+    }
+  }
+
   window.ditStore = {
     mutate: mutate,
     read: read,
+    fingerprint: fingerprint,
     publishAccount: publishAccount,
     claimAccount: claimAccount,
     watchAccount: watchAccount,
-    unwatchAccount: unwatchAccount
+    unwatchAccount: unwatchAccount,
+    watchKey: watchKey,
+    unwatchKey: unwatchKey
   };
 })();

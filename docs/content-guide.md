@@ -931,6 +931,7 @@ A test checks that this section lists exactly the codes that exist in the source
 | `stack-unknown` | The stack is not in `stacks.yaml`, or topics or redirects exist for an unknown stack. | Add the stack or fix the key. |
 | `topic-unknown` | The topic is not in the stack `topics.yaml`. | Add the topic or fix the key. |
 | `taxonomy-duplicate` | A stack or topic key is declared twice. | Remove the duplicate. |
+| `stack-key-reserved` | A stack key equals a route segment of the site (`q`). | Choose another key. |
 | `taxonomy-locale-incomplete` | A stack or topic lacks a non-empty title and description in `ru` or `en`. | Add both locales. |
 | `locale-unsupported` | A locale key is not `ru` or `en`. | Use `ru` and `en`. |
 | `level-invalid` | `level` is not one of the five levels. | Use `junior`, `middle`, `senior`, `lead` or `architect`. |

@@ -10,6 +10,7 @@ public sealed class ShellScriptTests
     [InlineData("lib.test.sh")]
     [InlineData("deploy-lib.test.sh")]
     [InlineData("backup-lib.test.sh")]
+    [InlineData("pages-gate.test.sh")]
     public async Task ShellTestScript_Passes(string scriptName)
     {
         string? bash = FindBash();

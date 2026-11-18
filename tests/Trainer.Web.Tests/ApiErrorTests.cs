@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Trainer.Application.Sessions;
 using Trainer.Contracts;
+using Trainer.Domain.Sessions;
 using Trainer.Domain.Users;
 using Trainer.TestSupport;
 using static Trainer.Web.Tests.ApiTestHelpers;

@@ -10,8 +10,9 @@ internal static class SignInLink
     {
         ArgumentNullException.ThrowIfNull(navigation);
         string culture = UiLanguage.Current;
-        // Island pages have <base href="/">, so the base-relative path is the path itself.
+        // The server takes the return path without the site's path base, which is what the base-relative path is. The link
+        // itself is base-relative too, resolved by the page's <base href>.
         string returnPath = "/" + navigation.ToBaseRelativePath(navigation.Uri);
-        return $"/{culture}/signin?returnUrl={Uri.EscapeDataString(returnPath)}";
+        return $"{culture}/signin?returnUrl={Uri.EscapeDataString(returnPath)}";
     }
 }

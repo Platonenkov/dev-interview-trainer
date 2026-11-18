@@ -1,5 +1,10 @@
 using System.Net;
+using System.Text.RegularExpressions;
+using AngleSharp.Dom;
+using AngleSharp.Html.Dom;
+using Microsoft.Extensions.Configuration;
 using Trainer.TestSupport;
+using Trainer.Web.Analytics;
 
 namespace Trainer.Web.Tests;
 
@@ -132,5 +137,100 @@ public sealed class AnalyticsScriptTests(PostgresFixture postgres)
         Exception thrown = Assert.ThrowsAny<Exception>(() => factory.CreateClient());
 
         Assert.Contains("App:Analytics:WebsiteId", thrown.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GoatCounter_RenderedSameOriginOnPublicPagesNotOnProfile()
+    {
+        await using TrainerWebFactory factory = await StaticCspSiteFixture.CreateFactoryAsync(postgres, StaticCspSiteFixture.StaticSettings());
+
+        foreach (string path in new[] { "/dit/en/dotnet/questions/", "/dit/en/about/", "/dit/ru/dotnet/practice/" })
+        {
+            (HttpResponseMessage response, _, IHtmlDocument document) = await StaticCspTests.FetchAsync(factory, path);
+            using HttpResponseMessage disposable = response;
+
+            IElement counter = Assert.Single(document.QuerySelectorAll("script[data-goatcounter]"));
+            Assert.Equal("https://dit-test.goatcounter.com/count", counter.GetAttribute("data-goatcounter"));
+            Assert.Matches(new Regex(@"^/dit/js/goatcounter(\.[a-z0-9]+)?\.js$", RegexOptions.CultureInvariant), counter.GetAttribute("src"));
+            Assert.False(counter.HasAttribute("integrity"));
+            Assert.False(counter.HasAttribute("crossorigin"));
+            Assert.True(counter.HasAttribute("async"));
+
+            // Settings first, and both at the end of the body: the counter reads window.goatcounter when it runs.
+            IElement settings = Assert.Single(document.QuerySelectorAll("script[src*=\"goatcounter-settings\"]"));
+            Assert.True(counter.CompareDocumentPosition(settings).HasFlag(DocumentPositions.Preceding));
+            Assert.Same(counter, document.Body!.LastElementChild);
+            Assert.Empty(document.QuerySelectorAll("script[data-website-id], script[src*=\"/stats/\"]"));
+        }
+
+        (HttpResponseMessage profile, _, IHtmlDocument profileDocument) = await StaticCspTests.FetchAsync(factory, "/dit/en/dotnet/profile/");
+        using HttpResponseMessage profileDisposable = profile;
+        Assert.Empty(profileDocument.QuerySelectorAll("script[data-goatcounter], script[src*=\"goatcounter-settings\"], script[src*=\"goatcounter.\"]"));
+    }
+
+    [Fact]
+    public async Task StaticEdition_IgnoresTheUmamiWebsiteId()
+    {
+        Dictionary<string, string?> settings = StaticCspSiteFixture.StaticSettings();
+        settings["App:Analytics:WebsiteId"] = WebsiteId;
+        await using TrainerWebFactory factory = await StaticCspSiteFixture.CreateFactoryAsync(postgres, settings);
+
+        (HttpResponseMessage response, string body, _) = await StaticCspTests.FetchAsync(factory, "/dit/en/dotnet/questions/");
+        using HttpResponseMessage disposable = response;
+
+        Assert.DoesNotContain("data-website-id", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("/stats/", body, StringComparison.Ordinal);
+        Assert.Contains("data-goatcounter=", body, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("UPPER")]
+    [InlineData("a")]
+    [InlineData("has space")]
+    [InlineData("-abc.def")]
+    public void GoatCounterCode_Malformed_FailsStartup(string code)
+    {
+        IConfiguration configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["App:Analytics:GoatCounterCode"] = code })
+            .Build();
+
+        InvalidOperationException thrown = Assert.Throws<InvalidOperationException>(() => AnalyticsSetup.Read(configuration));
+
+        Assert.Contains("App:Analytics:GoatCounterCode", thrown.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("dit")]
+    [InlineData("my-site-2")]
+    public void GoatCounterCode_WellFormed_IsAccepted(string code)
+    {
+        IConfiguration configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["App:Analytics:GoatCounterCode"] = code })
+            .Build();
+
+        Assert.Equal(code, AnalyticsSetup.Read(configuration).GoatCounterCode);
+    }
+
+    [Fact]
+    public async Task ServerEdition_IgnoresGoatCounterAndKeepsItsHeaders()
+    {
+        Dictionary<string, string?> settings = new() { ["App:Analytics:GoatCounterCode"] = "dit-test" };
+        TrainerWebFactory factory = await TrainerWebFactory.CreateAsync(postgres, new TrainerWebFactoryOptions { Settings = settings });
+        await using TrainerWebFactory disposable = factory;
+        await factory.WaitUntilReadyAsync();
+        using HttpClient client = factory.CreateNonRedirectingClient();
+
+        (HttpResponseMessage response, string body) = await GetAsync(client, "/en/dotnet/questions");
+        using HttpResponseMessage response1 = response;
+
+        Assert.DoesNotContain("gc.zgo.at", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("goatcounter", body, StringComparison.OrdinalIgnoreCase);
+        string csp = Assert.Single(response.Headers.GetValues("Content-Security-Policy"));
+        Assert.DoesNotContain("goatcounter", csp, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("frame-ancestors 'none'", csp, StringComparison.Ordinal);
+        Assert.Equal("nosniff", Assert.Single(response.Headers.GetValues("X-Content-Type-Options")));
+        Assert.Equal("strict-origin-when-cross-origin", Assert.Single(response.Headers.GetValues("Referrer-Policy")));
+        Assert.DoesNotContain("http-equiv", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("id=\"site-updated\"", body, StringComparison.Ordinal);
     }
 }

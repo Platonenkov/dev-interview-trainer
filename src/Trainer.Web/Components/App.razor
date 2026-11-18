@@ -1,14 +1,43 @@
+@using Microsoft.Extensions.Options
 @using Trainer.Web.Islands
+@using Trainer.Web.Seo
 @using Trainer.Web.Startup
+@using Trainer.Web.StaticSite
+@inject SitePaths Paths
+@inject IServiceProvider Services
+@inject IOptions<AppOptions> Options
 <!DOCTYPE html>
-<html lang="@CultureInfo.CurrentUICulture.TwoLetterISOLanguageName">
+<html lang="@CultureInfo.CurrentUICulture.TwoLetterISOLanguageName" data-edition="@(Options.Value.Edition == SiteEdition.Static ? "static" : null)">
 <head>
-    <script>@((MarkupString)ThemeScript.Source)</script>
-    <meta charset="utf-8" />
+    @if (IsStatic)
+    {
+        @* First, so the policy governs everything after it, the inline scripts included (ADR 0024). *@
+        <StaticHeadMeta IsIslandPage="@IsIslandPage" ImportMapText="@ImportMapText" />
+        @* Right after the policy and the other metas: the encoding must be declared within the first 1024 bytes. *@
+        <meta charset="utf-8" />
+    }
+    <script>@((MarkupString)ThemeScript.For(Options.Value.Edition))</script>
+    @if (IsStatic)
+    {
+        @* Before the stylesheets and scripts it watches, and inline because the file that failed may be the one that would load it. *@
+        <script>@((MarkupString)RecoveryScript.Source)</script>
+    }
+    @if (!IsStatic)
+    {
+        <meta charset="utf-8" />
+    }
     @if (IsIslandPage)
     {
-        @* The runtime, the preloads and its JS initializers resolve "_framework/..." against the document base. *@
-        <base href="/" />
+        @* The runtime, the preloads and its JS initializers resolve "_framework/..." against the document base, which is the path base the site is served under. *@
+        @if (Paths.PathBase.Length == 0)
+        {
+            @* A literal, so a site at the root renders exactly the markup it always did. *@
+            <base href="/" />
+        }
+        else
+        {
+            <base href="@Paths.BaseHref" />
+        }
         @* The on-screen keyboard resizes the layout instead of covering inputs. iOS Safari ignores it; islands.css pads with env(safe-area-inset-bottom). *@
         <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content" />
     }
@@ -16,39 +45,53 @@
     {
         <meta name="viewport" content="width=device-width, initial-scale=1" />
     }
-    <link rel="stylesheet" href="/@Assets["css/tokens.css"]" />
-    <link rel="stylesheet" href="/@Assets["css/site.css"]" />
+    <link rel="stylesheet" href="@Paths.Asset(Assets["css/tokens.css"])" data-recover="@IsStatic" />
+    <link rel="stylesheet" href="@Paths.Asset(Assets["css/site.css"])" data-recover="@IsStatic" />
     @if (IsIslandPage)
     {
-        <link rel="stylesheet" href="/@Assets["css/islands.css"]" />
+        <link rel="stylesheet" href="@Paths.Asset(Assets["css/islands.css"])" data-recover="@IsStatic" />
         <ResourcePreloader />
         @* Maps the runtime's plain module names (blazor.web.js imports ./_framework/dotnet.js) to the fingerprinted files
            the preloads fetched; without it each such file is downloaded twice. Inline, so allowed by nonce (ADR 0012). *@
-        <ImportMap AdditionalAttributes="ImportMapAttributes" />
+        @if (IsStatic)
+        {
+            @* A static file cannot carry a per-request nonce, so the map is written as text and allowed by its hash. *@
+            <script type="importmap">@((MarkupString)ImportMapText!)</script>
+        }
+        else
+        {
+            <ImportMap AdditionalAttributes="ImportMapAttributes" />
+        }
     }
     <AnalyticsScript />
     <HeadOutlet />
 </head>
 <body>
     <Routes />
-    <script src="/@Assets["js/theme-toggle.js"]" defer></script>
+    <script src="@Paths.Asset(Assets["js/theme-toggle.js"])" defer></script>
     @if (IsIslandPage)
     {
         @* Only island pages load the runtime (ADR 0009). *@
         @* Before the runtime: the islands call window.ditStore for every outbox and mock-session write. *@
-        <script src="/@Assets["js/outbox.js"]"></script>
+        <script src="@Paths.Asset(Assets["js/outbox.js"])"></script>
         @* Before the runtime too: KeyboardShortcuts attaches through window.ditShortcuts. *@
-        <script src="/@Assets["js/shortcuts.js"]"></script>
+        <script src="@Paths.Asset(Assets["js/shortcuts.js"])"></script>
         @* The Mock island saves its debounced text when the page is hidden (window.ditPageLifecycle). *@
-        <script src="/@Assets["js/page-lifecycle.js"]"></script>
-        <script src="/@Assets["_framework/blazor.web.js"]" autostart="false"></script>
-        <script src="/@Assets["js/islands-start.js"]"></script>
+        <script src="@Paths.Asset(Assets["js/page-lifecycle.js"])"></script>
+        <script src="@Paths.Asset(Assets["_framework/blazor.web.js"])" autostart="false" data-recover="@IsStatic"></script>
+        <script src="@Paths.Asset(Assets["js/islands-start.js"])" data-recover="@IsStatic" data-brotli="@(IsStatic && Options.Value.StaticSite.BrotliRuntime ? "true" : null)"></script>
     }
     else
     {
         @* Prefetches the runtime when a Practice or Mock entry point is hovered, focused or touched (spec 8.2). *@
-        <script src="/@Assets["js/runtime-preload.js"]" defer></script>
+        <script src="@Paths.Asset(Assets["js/runtime-preload.js"])" defer></script>
     }
+    @if (IsStatic)
+    {
+        @* Every static page, so any entry point can start the worker (ADR 0026). The worker's own rule decides what it caches. *@
+        <script src="@Paths.Asset(Assets["js/sw-register.js"])" data-scope="@Paths.BaseHref" data-sw="@Paths.Asset("sw.js")" defer></script>
+    }
+    <AnalyticsScript AtEndOfBody="true" />
 </body>
 </html>
 
@@ -58,6 +101,25 @@
 
     [Inject]
     private CspNonce Nonce { get; set; } = default!;
+
+    private bool IsStatic => Options.Value.Edition == SiteEdition.Static;
+
+    // Null outside the static island pages. Computed once per render: the policy in <head> hashes exactly this text. The
+    // definition may be indented with the platform's newline, but a browser hashes the text after the HTML parser has turned
+    // every CRLF into LF, so the text is written with LF only.
+    private string? _importMapText;
+
+    private string? ImportMapText => IsStatic && IsIslandPage
+        ? _importMapText ??= StaticImportMap().ToString().ReplaceLineEndings("\n")
+        : null;
+
+    // With the Brotli runtime the map also names the integrity table the loader verifies decoded files against.
+    private ImportMapDefinition StaticImportMap()
+    {
+        ImportMapDefinition framework = ImportMapDefinition.FromResourceCollection(Assets);
+        BootIntegrityModule? table = Services.GetRequiredService<StaticAssetList>().BootIntegrity;
+        return table is null ? framework : ImportMapDefinition.Combine(framework, table.ToImportMap());
+    }
 
     private bool IsIslandPage => HttpContext is not null && InteractiveIslandPageAttribute.IsMatched(HttpContext);
 

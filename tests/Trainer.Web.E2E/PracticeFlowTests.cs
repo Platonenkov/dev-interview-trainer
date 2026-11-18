@@ -45,7 +45,7 @@ public sealed class PracticeFlowTests(AppHostFixture host) : IClassFixture<AppHo
             HasTouch = touch,
             IsMobile = mobile,
         });
-        await context.AddInitScriptAsync($"try {{ localStorage.setItem('theme', '{theme}'); }} catch (e) {{ }}");
+        await context.AddInitScriptAsync($"try {{ localStorage.setItem('dit.theme', '{theme}'); }} catch (e) {{ }}");
         return context;
     }
 
@@ -851,7 +851,7 @@ public sealed class PracticeFlowTests(AppHostFixture host) : IClassFixture<AppHo
         await AnswerShownAsync(tab);
         await NextAsync(tab);
         await Assertions.Expect(tab.Locator(".practice-summary")).ToBeVisibleAsync();
-        await Assertions.Expect(tab.Locator(".practice-summary a[href^='/en/dotnet/questions/']")).ToHaveCountAsync(2);
+        await Assertions.Expect(tab.Locator(".practice-summary a[href^='en/dotnet/questions/']")).ToHaveCountAsync(2);
 
         SessionTap tap = await TapAsync(tab);
         JsonElement next = await PressAsync(tab, tap, ".practice-summary__new");

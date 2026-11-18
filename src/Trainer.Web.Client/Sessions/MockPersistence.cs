@@ -186,7 +186,12 @@ public sealed class MockPersistence : IDisposable
     /// nothing over: the other tab owns the mock.
     /// </summary>
     /// <param name="telegramUserId">The signed-in owner, or null for an anonymous one.</param>
-    public async Task<MockHandoff> HandOffAsync(MockSession session, long? telegramUserId)
+    /// <param name="beforeClear">
+    /// Runs with the summary once the answers and the summary are handled and before the mock's keys are removed, so a
+    /// copy kept elsewhere (the static history) exists before the mock can no longer be resumed. It runs again on every
+    /// repeated hand-over and must be idempotent and must not throw.
+    /// </param>
+    public async Task<MockHandoff> HandOffAsync(MockSession session, long? telegramUserId, Func<MockSummaryDto, Task>? beforeClear = null)
     {
         ArgumentNullException.ThrowIfNull(session);
         if (IsReadOnly)
@@ -238,6 +243,11 @@ public sealed class MockPersistence : IDisposable
                 session.MarkSummaryQueued();
                 await SaveAsync(session);
             }
+        }
+
+        if (answers && summary && !IsReadOnly && beforeClear is not null)
+        {
+            await beforeClear(completion.Summary);
         }
 
         bool cleared = answers && summary && !IsReadOnly

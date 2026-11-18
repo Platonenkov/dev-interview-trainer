@@ -236,7 +236,7 @@ public sealed class IslandComponentRenderTests
 
         Assert.DoesNotContain("<meter", anonymous, StringComparison.Ordinal);
         Assert.DoesNotContain("review", anonymous, StringComparison.Ordinal);
-        Assert.Contains("href=\"en/dotnet/practice?topic=closures\" aria-current=\"true\" data-enhance-nav=\"false\"", anonymous, StringComparison.Ordinal);
+        Assert.Contains("href=\"en/dotnet/practice?topic=closures\" aria-current=\"true\" title=\"Closures\" data-enhance-nav=\"false\"", anonymous, StringComparison.Ordinal);
         Assert.Contains("<meter class=\"side__meter\" min=\"0\" max=\"10\" value=\"4\" aria-hidden=\"true\">", signedIn, StringComparison.Ordinal);
         Assert.Contains("40%", signedIn, StringComparison.Ordinal);
         Assert.Contains("review queue · 14", signedIn, StringComparison.Ordinal);

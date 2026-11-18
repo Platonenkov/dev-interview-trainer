@@ -1,0 +1,57 @@
+@using Microsoft.Extensions.Options
+@using Trainer.Web.Islands
+@using Trainer.Web.Startup
+@inject IStringLocalizer<SharedResource> L
+@inject IOptions<AppOptions> App
+@inject SitePaths Paths
+
+@* The site's sections. Wide screens show them in a row; narrower ones (and every phone) get a burger made of a
+   details element, so the menu opens without a script and under the static edition's CSP. The two lists are the same
+   links, and CSS shows exactly one of them, so assistive technology never meets both. *@
+<nav class="site-nav" aria-label="@L["Nav.Sections"]">
+    <ul class="site-nav__row">
+        @Links()
+    </ul>
+    <details class="site-nav__burger">
+        <summary class="site-nav__toggle" aria-label="@L["Nav.Menu"]">
+            <span class="site-nav__icon" aria-hidden="true"></span>
+        </summary>
+        <ul class="site-nav__panel">
+            @Links()
+        </ul>
+    </details>
+</nav>
+
+@code {
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    private string Culture => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
+
+    private string Section(string name) => $"/{Culture}/{App.Value.DefaultStack}/{name}";
+
+    // Question pages live under the catalog's path, so the catalog link stays current on them too.
+    private bool IsCurrent(string path)
+    {
+        string? request = HttpContext?.Request.Path.Value?.TrimEnd('/');
+        return request is not null
+            && (string.Equals(request, path, StringComparison.OrdinalIgnoreCase)
+                || request.StartsWith(path + "/", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private string Questions => Section("questions");
+
+    private string Practice => Section("practice");
+
+    private string Mock => Section("mock");
+
+    private string Review => Section("review");
+
+    private RenderFragment Links() => __builder =>
+    {
+        <li><a class="site-nav__link" href="@Paths.Page(Questions)" aria-current="@(IsCurrent(Questions) ? "page" : null)">@L["Nav.Questions"]</a></li>
+        <li><IslandLink Class="site-nav__link" Href="@Practice" PreloadRuntime="true" Current="@IsCurrent(Practice)">@L["Nav.Practice"]</IslandLink></li>
+        <li><IslandLink Class="site-nav__link" Href="@Mock" PreloadRuntime="true" Current="@IsCurrent(Mock)">@L["Nav.Mock"]</IslandLink></li>
+        <li><IslandLink Class="site-nav__link" Href="@Review" Rel="nofollow" Current="@IsCurrent(Review)">@L["Nav.Review"]</IslandLink></li>
+    };
+}

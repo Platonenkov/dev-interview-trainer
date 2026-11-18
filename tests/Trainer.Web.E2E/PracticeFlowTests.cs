@@ -1051,6 +1051,28 @@ public sealed class PracticeFlowTests(AppHostFixture host) : IClassFixture<AppHo
         host.AssertNoCspViolations(tab);
     }
 
+    // The feedback can be taller than the screen; Next takes focus but must not drag the page down to the end of it.
+    [Fact]
+    public async Task Practice_AnswerKeepsTheScrollAndShowsNextOnDesktop()
+    {
+        await using IBrowserContext context = await NewContextAsync(width: 1280, height: 420);
+        IPage tab = await host.NewPageAsync(context);
+        await OpenFirstAsync(tab, SingleId);
+        await tab.Locator(".opt--pick").First.ClickAsync();
+        double before = await tab.EvaluateAsync<double>("() => window.scrollY");
+
+        await SubmitAsync(tab);
+        ILocator next = tab.Locator(".practice__next");
+        await Assertions.Expect(next).ToBeFocusedAsync();
+
+        Assert.True(await tab.EvaluateAsync<bool>("() => document.documentElement.scrollHeight > window.innerHeight"),
+            "The page must be taller than the viewport for this test to mean anything.");
+        // Graded options grow a little and scroll anchoring follows them; the jump this guards against was the whole
+        // feedback height (hundreds of pixels).
+        Assert.InRange(await tab.EvaluateAsync<double>("() => window.scrollY") - before, -48, 48);
+        await AssertInViewportAsync(tab, next, "Next after answering");
+    }
+
     private static async Task AssertInViewportAsync(IPage tab, ILocator element, string what)
     {
         LocatorBoundingBoxResult box = (await element.BoundingBoxAsync())!;

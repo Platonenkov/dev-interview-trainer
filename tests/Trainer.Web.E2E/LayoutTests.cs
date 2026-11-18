@@ -142,7 +142,13 @@ public sealed class LayoutTests(AppHostFixture host) : IClassFixture<AppHostFixt
         await AssertTargetsAsync(tab, ".lang-switch a", "language switch");
         await AssertTargetsAsync(tab, ".filters summary", "filter drawer toggle");
         await AssertTargetsAsync(tab, ".filters a", "filter drawer links");
-        await AssertTargetsAsync(tab, "header a, header button", "header controls");
+        // Below 1024 px the site sections sit behind the burger and their row is not rendered; open the burger and
+        // check what a visitor can reach: the burger itself and every link it shows.
+        await tab.Locator(".site-nav__toggle").ClickAsync();
+        Assert.True(await tab.Locator(".site-nav__burger").EvaluateAsync<bool>("e => e.open"));
+        await AssertTargetsAsync(tab, ".site-nav__toggle", "site menu toggle");
+        await AssertTargetsAsync(tab, ".site-nav__panel a", "site menu links");
+        await AssertTargetsAsync(tab, "header a:visible, header button:visible", "header controls");
     }
 
     [Theory]

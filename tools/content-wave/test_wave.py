@@ -2360,6 +2360,22 @@ class ActualStopTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("forecast FAILED", message)
 
+    def test_actual_stop_alone_enables_both_rules_with_default_shares(self):
+        only_stop = {"budgetUsd": 300, "budgetFloorUsd": 0, "actualStopUsd": 120}
+        ok, message = wave.ledger_check(spent_ledger(100), 45, 0, 300, 0, only_stop, "gen")
+        self.assertFalse(ok)
+        self.assertIn("ceiling FAILED", message)
+        ok, message = wave.ledger_check(spent_ledger(130), 0, 0, 300, 0, only_stop, "gen")
+        self.assertFalse(ok)
+        self.assertIn("ceiling FAILED", message)
+        self.assertIn("forecast FAILED", message)
+        # Default stage shares: 60 + 45 x 0.6 (unstaged) + 45 x 0.30 (gen) + 20 = 120.5 > 120.
+        ok, message = wave.ledger_check(spent_ledger(60, (45, None)), 45, 20, 300, 0, only_stop, "gen")
+        self.assertFalse(ok)
+        self.assertIn("forecast FAILED", message)
+        ok, message = wave.ledger_check(spent_ledger(60, (45, "gen")), 45, 20, 300, 0, only_stop, "gen")
+        self.assertTrue(ok, message)
+
     def test_ledger_envelope_still_governs_reservations(self):
         ok, message = wave.ledger_check(spent_ledger(60, (45, "gen")), 45, 20, 150, 5, STOP_LIMITS, "gen")
         self.assertFalse(ok)
@@ -2395,6 +2411,20 @@ def wave2_targets(topics, **acceptance):
                              "levelFloors": {"junior": 4, "middle": 8, "senior": 7, "lead": 3, "architect": 2},
                              **acceptance}
     return targets
+
+
+def plan_of(state):
+    counts = {}
+    for record in state.values():
+        counts[record["topic"]] = counts.get(record["topic"], 0) + 1
+    return counts
+
+
+def disk_reader(worktree):
+    def read(root, ref, path):
+        file = Path(worktree) / path
+        return file.read_text(encoding="utf-8") if file.is_file() else None
+    return read
 
 
 def planned_state(env, topic, level, count, status="planned"):
@@ -2437,7 +2467,7 @@ class GenerationContextTests(unittest.TestCase):
                  self.write("d", "single", id_="01WAVEDRAFT"), self.write("e", "single")]
         files.append("content/dotnet/testing/f.yaml")  # not on disk: no type, still a candidate
         got = wave.context_files("testing", targets, self.env.worktree, self.env.wave_dir, "abc", [],
-                                 lambda *a: files, {"single"}, {"01WAVEDRAFT"})
+                                 lambda *a: files, {"single"}, {"01WAVEDRAFT"}, disk_reader(self.env.worktree))
         self.assertEqual(["docs/content-wave-1/outline/testing.json", "content/dotnet/testing/b.yaml",
                           "content/dotnet/testing/e.yaml", "content/dotnet/testing/a.yaml",
                           "content/dotnet/testing/c.yaml", "content/dotnet/testing/f.yaml"], got)
@@ -2451,7 +2481,8 @@ class GenerationContextTests(unittest.TestCase):
         draft_path = self.write("draft", "open", id_=draft["id"])
         seed = self.write("seed", "open")
         tasks, _ = wave.build_gen_tasks(self.env.state, targets, "abc", self.env.worktree, self.env.wave_dir, {}, None,
-                                        None, "2026-11-19", lister=lambda *a: [draft_path, seed])
+                                        None, "2026-11-19", lister=lambda *a: [draft_path, seed],
+                                        reader=disk_reader(self.env.worktree))
         self.assertEqual(["docs/content-wave-1/outline/testing.json", seed], tasks[0]["items"][0]["files"])
 
     def test_generation_context_is_capped(self):
@@ -2497,10 +2528,10 @@ class FloorAcceptanceTests(unittest.TestCase):
         env.state["testing-lead-03"]["status"] = "rejected"
         env.state["testing-lead-02"]["status"] = "rejected"
         # Existing lead 1 + one survivor = 2, below min(target 4, floor 3).
-        failures, _ = wave.acceptance(env.state, targets, {"testing": {"lead": 1}}, {})
+        failures, _ = wave.acceptance(env.state, targets, {"testing": {"lead": 1}}, {}, plan_of(env.state))
         self.assertTrue(any(f.startswith("testing lead") for f in failures), failures)
         env.state["testing-lead-02"]["status"] = "verify-pass"
-        failures, _ = wave.acceptance(env.state, targets, {"testing": {"lead": 1}}, {})
+        failures, _ = wave.acceptance(env.state, targets, {"testing": {"lead": 1}}, {}, plan_of(env.state))
         self.assertEqual([], [f for f in failures if "lead" in f])
 
     def test_one_rejected_middle_stub_does_not_fail_the_wave(self):
@@ -2508,7 +2539,7 @@ class FloorAcceptanceTests(unittest.TestCase):
         env = self.new_env()
         planned_state(env, "testing", "middle", 9, status="verify-pass")
         env.state["testing-middle-09"]["status"] = "rejected"
-        failures, shortfall = wave.acceptance(env.state, targets, {}, {})
+        failures, shortfall = wave.acceptance(env.state, targets, {}, {}, plan_of(env.state))
         self.assertEqual([], failures)
         self.assertEqual(["testing middle: 1"], shortfall)
 
@@ -2517,9 +2548,9 @@ class FloorAcceptanceTests(unittest.TestCase):
         env = self.new_env()
         planned_state(env, "testing", "junior", 3, status="verify-pass")
         planned_state(env, "testing", "middle", 1, status="verify-pass")
-        self.assertEqual([], wave.acceptance(env.state, targets, {}, {})[0])
+        self.assertEqual([], wave.acceptance(env.state, targets, {}, {}, plan_of(env.state))[0])
         env.state["testing-junior-03"]["status"] = "rejected"
-        failures, _ = wave.acceptance(env.state, targets, {}, {})
+        failures, _ = wave.acceptance(env.state, targets, {}, {}, plan_of(env.state))
         self.assertTrue(any(f.startswith("testing junior") for f in failures), failures)
 
     def test_acceptance_share_counts_new_stubs_only(self):
@@ -2528,10 +2559,10 @@ class FloorAcceptanceTests(unittest.TestCase):
         planned_state(env, "testing", "middle", 4, status="verify-pass")
         env.state["testing-middle-04"]["status"] = "rejected"
         # 6 seeds + 3 survivors = 9/10 passes a share over the whole topic, but 3/4 new stubs does not.
-        failures, _ = wave.acceptance(env.state, targets, {"testing": {"middle": 6}}, {})
+        failures, _ = wave.acceptance(env.state, targets, {"testing": {"middle": 6}}, {}, plan_of(env.state))
         self.assertTrue(any("3/4" in f for f in failures), failures)
         env.state["testing-middle-04"]["status"] = "verify-pass"
-        failures, _ = wave.acceptance(env.state, targets, {"testing": {"middle": 6}}, {})
+        failures, _ = wave.acceptance(env.state, targets, {"testing": {"middle": 6}}, {}, plan_of(env.state))
         self.assertEqual([], failures)
 
     def test_a_shortfall_does_not_shrink_the_denominator(self):
@@ -2540,7 +2571,7 @@ class FloorAcceptanceTests(unittest.TestCase):
         planned_state(env, "testing", "middle", 10, status="verify-pass")
         for record in list(env.state.values())[:2]:
             record["status"] = "shortfall"
-        failures, _ = wave.acceptance(env.state, targets, {}, {})
+        failures, _ = wave.acceptance(env.state, targets, {}, {}, plan_of(env.state))
         self.assertTrue(any("8/10" in f for f in failures), failures)
 
     def test_wave_one_acceptance_is_unchanged_without_the_new_keys(self):
@@ -2548,7 +2579,7 @@ class FloorAcceptanceTests(unittest.TestCase):
         targets["acceptance"] = {"minShare": 0.75}
         env = self.new_env()
         planned_state(env, "testing", "middle", 3, status="verify-pass")
-        self.assertEqual([], wave.acceptance(env.state, targets, {}, {})[0])
+        self.assertEqual([], wave.acceptance(env.state, targets, {}, {}, plan_of(env.state))[0])
 
 
 class ShortfallTests(unittest.TestCase):
@@ -2559,7 +2590,7 @@ class ShortfallTests(unittest.TestCase):
         planned_state(env, "csharp", "junior", 3)
         planned_state(env, "csharp", "middle", 9)
         # ceil(0.85 x 12) = 11 must survive: one cut, from middle (floor 8 of 9); junior is held to its target.
-        picked = wave.pick_shortfall(env.state, targets, {}, 3)
+        picked = wave.pick_shortfall(env.state, targets, {}, 3, plan_of(env.state))
         self.assertEqual(["csharp-middle-01"], picked)
 
     def test_pick_shortfall_orders_levels_and_spreads_over_topics(self):
@@ -2571,7 +2602,7 @@ class ShortfallTests(unittest.TestCase):
         planned_state(env, "a", "middle", 20)
         planned_state(env, "a", "senior", 20)
         planned_state(env, "b", "middle", 30)
-        picked = wave.pick_shortfall(env.state, targets, {}, 6)
+        picked = wave.pick_shortfall(env.state, targets, {}, 6, plan_of(env.state))
         self.assertEqual(6, len(picked))
         self.assertTrue(all("-middle-" in s for s in picked), picked)
         # Slack: a 50 - ceil(42.5) = 7, b 30 - ceil(25.5) = 4; each cut lowers the slack of its topic by one.
@@ -2584,7 +2615,7 @@ class ShortfallTests(unittest.TestCase):
         self.addCleanup(env.cleanup)
         planned_state(env, "testing", "lead", 5)
         planned_state(env, "testing", "architect", 3)
-        self.assertEqual([], wave.pick_shortfall(env.state, targets, {}, 2))
+        self.assertEqual([], wave.pick_shortfall(env.state, targets, {}, 2, plan_of(env.state)))
 
     def test_pick_shortfall_counts_existing_questions_in_the_cell(self):
         targets = wave2_targets({"testing": {"levels": {"middle": 12}}})
@@ -2592,7 +2623,7 @@ class ShortfallTests(unittest.TestCase):
         self.addCleanup(env.cleanup)
         planned_state(env, "testing", "middle", 6)
         # 6 existing + 6 new: the floor 8 leaves room for 4 cuts, but ceil(0.85 x 6) = 6 allows none.
-        self.assertEqual([], wave.pick_shortfall(env.state, targets, {"testing": {"middle": 6}}, 4))
+        self.assertEqual([], wave.pick_shortfall(env.state, targets, {"testing": {"middle": 6}}, 4, plan_of(env.state)))
 
     def test_shortfall_command_is_a_dry_run_until_apply(self):
         targets = wave2_targets({"csharp": {"levels": {"junior": 3, "middle": 9}}})
@@ -2601,6 +2632,7 @@ class ShortfallTests(unittest.TestCase):
         planned_state(env, "csharp", "junior", 3)
         planned_state(env, "csharp", "middle", 9)
         env.save()
+        wave.save_planned_new(env.wave_dir, env.state)
         wave.write_json_atomic(env.wave_dir / "targets.json", targets)
         dump = env.root / "dump.json"
         dump.write_text(json.dumps({"questions": [], "readIssues": []}), encoding="utf-8")
@@ -2613,6 +2645,74 @@ class ShortfallTests(unittest.TestCase):
         self.assertEqual("shortfall", record["status"])
         self.assertEqual("budget", record["failures"][-1]["reason"])
         self.assertEqual(1, sum(1 for r in env.state.values() if r["status"] == "shortfall"))
+
+
+class PersistedPlanTests(unittest.TestCase):
+    def test_allocate_persists_the_planned_new_count_per_topic(self):
+        targets = wave2_targets({"testing": {"levels": {"junior": 2}}})
+        env = WaveEnv(targets)
+        self.addCleanup(env.cleanup)
+        wave.write_json_atomic(env.wave_dir / "targets.json", targets)
+        outline = env.wave_dir / "outline"
+        outline.mkdir()
+        stubs = [stub("alpha-feature", "junior", hinge="garbage collector generations promote survivors"),
+                 stub("beta-feature", "junior", hinge="dependency injection lifetimes scoped singleton")]
+        wave.assign_stub_ids("testing", stubs)
+        (outline / "testing.json").write_text(json.dumps({"topic": "testing", "stubs": stubs}), encoding="utf-8")
+        dump = env.root / "dump.json"
+        dump.write_text(json.dumps({"questions": [], "readIssues": []}), encoding="utf-8")
+        code = wave.main(["--wave-dir", str(env.wave_dir), "--worktree", str(env.worktree),
+                          "--dump-file", str(dump), "allocate"])
+        self.assertEqual(0, code)
+        self.assertEqual({"testing": 2}, wave.load_planned_new(env.wave_dir))
+
+    def test_late_existing_questions_do_not_lower_the_protected_minimum(self):
+        targets = wave2_targets({"testing": {"levels": {"middle": 12}}})
+        env = WaveEnv(targets)
+        self.addCleanup(env.cleanup)
+        planned_state(env, "testing", "middle", 12)
+        persisted = plan_of(env.state)
+        # Four questions of the topic showed up after planning: target - fresh existing would give 8 planned
+        # and allow three cuts; the persisted 12 protects ceil(0.85 x 12) = 11 stubs.
+        picked = wave.pick_shortfall(env.state, targets, {"testing": {"middle": 4}}, 3, persisted)
+        self.assertEqual(1, len(picked))
+
+    def test_a_topic_without_a_persisted_count_is_not_cut(self):
+        targets = wave2_targets({"testing": {"levels": {"middle": 12}}})
+        env = WaveEnv(targets)
+        self.addCleanup(env.cleanup)
+        planned_state(env, "testing", "middle", 12)
+        self.assertEqual([], wave.pick_shortfall(env.state, targets, {}, 3, {}))
+
+    def test_acceptance_fails_when_no_planned_count_is_persisted(self):
+        targets = wave2_targets({"testing": {"levels": {"middle": 20}}})
+        failures, _ = wave.acceptance({}, targets, {"testing": {"middle": 10}}, {}, {})
+        self.assertTrue(any(f.startswith("testing:") and "planned count" in f for f in failures), failures)
+        failures, _ = wave.acceptance({}, targets, {"testing": {"middle": 20}}, {}, {})
+        self.assertEqual([], [f for f in failures if "planned count" in f])
+
+
+class SampleReaderTests(unittest.TestCase):
+    def test_sample_ids_and_types_are_read_at_the_requested_ref(self):
+        env = WaveEnv()
+        self.addCleanup(env.cleanup)
+        targets = wave2_targets({"testing": {"levels": {"junior": 4}}})
+        targets["generationContext"] = {"topicSamples": 6, "neighbourSamples": 0}
+        on_disk = env.worktree / "content/dotnet/testing/a.yaml"
+        on_disk.parent.mkdir(parents=True, exist_ok=True)
+        on_disk.write_text("id: 01WORKTREE\ntype: single\n", encoding="utf-8")
+        seen = []
+
+        def reader(worktree, ref, path):
+            seen.append((ref, path))
+            return {"content/dotnet/testing/a.yaml": "id: 01WAVE\ntype: open\n",
+                    "content/dotnet/testing/b.yaml": "id: 01B\ntype: single\n"}.get(path)
+
+        files = ["content/dotnet/testing/a.yaml", "content/dotnet/testing/b.yaml"]
+        got = wave.context_files("testing", targets, env.worktree, env.wave_dir, "abc123", [],
+                                 lambda *a: files, {"single"}, {"01WAVE"}, reader)
+        self.assertEqual(["docs/content-wave-1/outline/testing.json", "content/dotnet/testing/b.yaml"], got)
+        self.assertEqual({"abc123"}, {ref for ref, _ in seen})
 
 
 class PlanCountsCommandTests(unittest.TestCase):

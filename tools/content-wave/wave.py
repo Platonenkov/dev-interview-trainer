@@ -192,6 +192,8 @@ def actual_spent(ledger: dict) -> float | None:
 
 
 STAGES = ("outline", "dedupe", "gen", "verify", "repair")
+DEFAULT_MAX_ACTUAL_SHARE = 0.6
+DEFAULT_EXPECTED_ACTUAL_SHARE = {"outline": 0.45, "dedupe": 0.45, "gen": 0.30, "verify": 0.25, "repair": 0.50}
 
 
 def _stage_share(shares: dict, stage: str | None, fallback: float) -> float:
@@ -203,10 +205,10 @@ def ledger_check(ledger: dict, submit_estimate: float, forecast_remaining: float
     """True iff every active rule holds.
 
     envelope: actual spent + outstanding estimates + this submit + forecast of remaining stages <= budget - floor.
-    With `limits` (the targets) and `actualStopUsd` set, two rules on real spend are added: `ceiling` books every
-    outstanding estimate and this submit at `maxActualShare`, `forecast` books them at the expected share of their
-    stage (`expectedActualShare`; a submit without a recorded stage counts at `maxActualShare`) and adds
-    `forecast_remaining`, which covers only the stages after this submit.
+    With `limits` (the targets) and `actualStopUsd` set, both rules on real spend always run: `ceiling` books every
+    outstanding estimate and this submit at `maxActualShare` (default 0.6), `forecast` books them at the expected
+    share of their stage (`expectedActualShare`, defaults above; a submit without a recorded stage counts at
+    `maxActualShare`) and adds `forecast_remaining`, which covers only the stages after this submit.
     """
     spent = actual_spent(ledger)
     if spent is None:
@@ -224,23 +226,19 @@ def ledger_check(ledger: dict, submit_estimate: float, forecast_remaining: float
     stop = limits.get("actualStopUsd")
     if stop is not None:
         stop = float(stop)
-        max_share = limits.get("maxActualShare")
-        shares = limits.get("expectedActualShare")
-        if max_share is not None:
-            max_share = float(max_share)
-            booked = spent + (outstanding + estimate) * max_share
-            results.append(("ceiling", booked <= stop + 1e-9,
-                            f"spent {spent:.2f} + (outstanding {outstanding:.2f} + submit {estimate:.2f}) x "
-                            f"{max_share:g} = {booked:.2f} vs actual stop {stop:.2f}"))
-        if shares:
-            fallback = float(max_share if max_share is not None else max(float(v) for v in shares.values()))
-            held = sum(float(s.get("estimateUsd", 0)) * _stage_share(shares, s.get("stage"), fallback)
-                       for s in outstanding_submits)
-            own = estimate * _stage_share(shares, stage, fallback)
-            booked = spent + held + own + forecast
-            results.append(("forecast", booked <= stop + 1e-9,
-                            f"spent {spent:.2f} + outstanding {held:.2f} + submit {own:.2f} + "
-                            f"remaining stages {forecast:.2f} = {booked:.2f} vs actual stop {stop:.2f}"))
+        max_share = float(limits.get("maxActualShare", DEFAULT_MAX_ACTUAL_SHARE))
+        shares = limits.get("expectedActualShare", DEFAULT_EXPECTED_ACTUAL_SHARE)
+        booked = spent + (outstanding + estimate) * max_share
+        results.append(("ceiling", booked <= stop + 1e-9,
+                        f"spent {spent:.2f} + (outstanding {outstanding:.2f} + submit {estimate:.2f}) x "
+                        f"{max_share:g} = {booked:.2f} vs actual stop {stop:.2f}"))
+        held = sum(float(s.get("estimateUsd", 0)) * _stage_share(shares, s.get("stage"), max_share)
+                   for s in outstanding_submits)
+        own = estimate * _stage_share(shares, stage, max_share)
+        booked = spent + held + own + forecast
+        results.append(("forecast", booked <= stop + 1e-9,
+                        f"spent {spent:.2f} + outstanding {held:.2f} + submit {own:.2f} + "
+                        f"remaining stages {forecast:.2f} = {booked:.2f} vs actual stop {stop:.2f}"))
     failed = [name for name, ok, _ in results if not ok]
     return not failed, "; ".join(f"{name}{'' if ok else ' FAILED'}: {text}" for name, ok, text in results)
 
@@ -268,6 +266,13 @@ def submit_gate(targets: dict, ledger: dict, estimate: float, now: dt.datetime) 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
+
+
+def git_show(worktree: Path, ref: str, path: str) -> str | None:
+    """Text of `path` at `ref`, None when the ref has no such file."""
+    result = subprocess.run(["git", "-C", str(worktree), "show", f"{ref}:{path}"], capture_output=True,
+                            encoding="utf-8")
+    return result.stdout if result.returncode == 0 else None
 
 
 def preflight(ref: str, server_repo: Path, files: list[str], worktree: Path) -> list[str]:
@@ -1168,14 +1173,17 @@ def wave_markers(state: dict) -> set[str]:
 
 
 def _sample_files(worktree: Path, ref: str, directory: str, lister, skip: set[str],
-                  types: set[str]) -> list[str]:
-    """Committed questions of a directory, outside the wave, those of `types` first; each group in path order."""
+                  types: set[str], reader=git_show) -> list[str]:
+    """Committed questions of a directory, outside the wave, those of `types` first; each group in path order.
+
+    Ids and types are read at `ref`, the same revision the listing comes from, not from the working tree.
+    """
     preferred, rest = [], []
     for file in sorted(lister(worktree, ref, directory)):
         if file.endswith(("topics.yaml", "redirects.yaml")) or file in skip:
             continue
-        path = worktree / file
-        scalars = top_level_scalars(path.read_text(encoding="utf-8")) if path.is_file() else {}
+        text = reader(worktree, ref, file)
+        scalars = top_level_scalars(text) if text is not None else {}
         if scalars.get("id") in skip:
             continue
         (preferred if scalars.get("type") in types else rest).append(file)
@@ -1184,7 +1192,7 @@ def _sample_files(worktree: Path, ref: str, directory: str, lister, skip: set[st
 
 def context_files(topic: str, targets: dict, worktree: Path, wave_dir: Path, ref: str, extra: list[str],
                   lister=committed_files, stub_types: set[str] | None = None,
-                  markers: set[str] | None = None) -> list[str]:
+                  markers: set[str] | None = None, reader=git_show) -> list[str]:
     """`outline/<topic>.json` plus committed questions of the topic, then of its neighbours, within a size limit.
 
     With `generationContext` in the targets the samples are capped instead: `topicSamples` questions of the topic
@@ -1198,7 +1206,8 @@ def context_files(topic: str, targets: dict, worktree: Path, wave_dir: Path, ref
         names += [(n, int(capped.get("neighbourSamples", 0)))
                   for n in targets["topics"].get(topic, {}).get("neighbours", [])]
         for name, limit in names:
-            samples = _sample_files(worktree, ref, f"content/dotnet/{name}", lister, skip, stub_types or set())
+            samples = _sample_files(worktree, ref, f"content/dotnet/{name}", lister, skip, stub_types or set(),
+                                    reader)
             files.extend(f for f in samples[:limit] if f not in files)
         return files
     size = sum(_chars(worktree, f) for f in files if (worktree / f).is_file())
@@ -1269,7 +1278,8 @@ def _group_order(targets: dict) -> dict[str, int]:
 def build_question_items(chunks: list[list[dict]], targets: dict, worktree: Path, wave_dir: Path, ref: str,
                          registry: dict, stage: str, text_for, extra_files_for=None, lister=committed_files,
                          id_prefix: str = "gen",
-                         markers: set[str] | None = None) -> tuple[list[tuple[str, dict]], dict]:
+                         markers: set[str] | None = None,
+                         reader=git_show) -> tuple[list[tuple[str, dict]], dict]:
     """Items `<id_prefix>-<topic>-<k>` (k continues across task files) and their registry entries."""
     group_order = _group_order(targets)
     topic_order = {t: i for i, t in enumerate(targets["topics"])}
@@ -1284,7 +1294,7 @@ def build_question_items(chunks: list[list[dict]], targets: dict, worktree: Path
         used.add(item_id)
         extra = extra_files_for(chunk) if extra_files_for else []
         files = context_files(topic, targets, worktree, wave_dir, ref, extra, lister,
-                              {r["type"] for r in chunk}, markers)
+                              {r["type"] for r in chunk}, markers, reader)
         item = {"id": item_id, "text": text_for(chunk), "files": files}
         items.append((targets["topics"][topic].get("group", ""), item))
         entries[item_id] = {"stage": stage, "stubs": [r["stubId"] for r in chunk]}
@@ -1306,7 +1316,7 @@ def base_task(model: str, instructions: str, shared: list[str], schema: dict, re
 
 def build_gen_tasks(state: dict, targets: dict, ref: str, worktree: Path, wave_dir: Path, registry: dict,
                     only: list[str] | None, max_estimate: float | None, today: str, lister=committed_files,
-                    retry: bool = False) -> tuple[list[dict], dict]:
+                    retry: bool = False, reader=git_show) -> tuple[list[dict], dict]:
     """Generation (or split retry) tasks; returns the task files' contents and the new registry entries."""
     pending = pending_stubs(registry, "gen") | pending_stubs(registry, "repair")
     if retry:
@@ -1335,7 +1345,7 @@ def build_gen_tasks(state: dict, targets: dict, ref: str, worktree: Path, wave_d
                      GEN_SCHEMA, ref)
     items, entries = build_question_items(chunks, targets, worktree, wave_dir, ref, registry, "gen",
                                           lambda c: gen_item_text(c, today), lister=lister,
-                                          markers=wave_markers(state))
+                                          markers=wave_markers(state), reader=reader)
     tasks = []
     for chunk_items in split_by_estimate(task, items, worktree, max_estimate):
         tasks.append({**task, "items": chunk_items})
@@ -2909,7 +2919,7 @@ def repair_candidates(state: dict, registry: dict) -> list[dict]:
 
 def build_repair_tasks(state: dict, targets: dict, ref: str, worktree: Path, wave_dir: Path, registry: dict,
                        docs: dict[str, dict], max_estimate: float | None,
-                       lister=committed_files) -> tuple[list[dict], dict, list[str]]:
+                       lister=committed_files, reader=git_show) -> tuple[list[dict], dict, list[str]]:
     records = repair_candidates(state, registry)
     if not records:
         raise WaveError("no questions to repair")
@@ -2928,7 +2938,8 @@ def build_repair_tasks(state: dict, targets: dict, ref: str, worktree: Path, wav
     task = base_task("claude-opus-5-5", repair_instructions(wave_dir, worktree), repair_shared(wave_dir, worktree),
                      GEN_SCHEMA, ref)
     items, entries = build_question_items(chunks, targets, worktree, wave_dir, ref, registry, "repair", text_for,
-                                          lister=lister, id_prefix="repair", markers=wave_markers(state))
+                                          lister=lister, id_prefix="repair", markers=wave_markers(state),
+                                          reader=reader)
     tasks = [{**task, "items": chunk_items} for chunk_items in split_by_estimate(task, items, worktree, max_estimate)]
     return tasks, entries, revised
 
@@ -2954,15 +2965,30 @@ def plan_counts(state: dict, targets: dict, seed_levels: dict, seed_types: dict)
 # ---------------------------------------------------------------- shortfall by budget
 
 SHORTFALL_LEVEL_ORDER = ("middle", "junior", "senior")
+PLAN_FILE = "plan.json"
 
 
-def pick_shortfall(state: dict, targets: dict, existing: dict, count: int) -> list[str]:
+def load_planned_new(wave_dir: Path) -> dict[str, int]:
+    return dict(read_json(wave_dir / PLAN_FILE, {}).get("plannedNew", {}))
+
+
+def save_planned_new(wave_dir: Path, state: dict) -> None:
+    """Stubs per topic as allocated, rejected and cut ones included: the fixed denominator of acceptance."""
+    counts: dict[str, int] = {}
+    for record in state.values():
+        counts[record["topic"]] = counts.get(record["topic"], 0) + 1
+    write_json_atomic(wave_dir / PLAN_FILE, {"plannedNew": dict(sorted(counts.items()))})
+
+
+def pick_shortfall(state: dict, targets: dict, existing: dict, count: int, planned_new: dict) -> list[str]:
     """Stubs to drop when the budget cannot pay for all of them; fewer than `count` when fewer qualify.
 
     Only `planned` stubs are cut. After a cut the level cell must keep `min(target, floor)` and the topic must keep
     ceil(minShare x planned new) stubs; lead and architect are never cut. Levels go middle, junior, senior; inside a
     level the topic with the largest slack first, then by stubId. `existing` is per topic and level, as
-    `existing_counts` returns it.
+    `existing_counts` returns it. `planned_new` is the per-topic count persisted at allocate: recomputing it from a
+    fresh inventory would shrink the protected minimum whenever questions appear after planning. A topic without a
+    persisted count is not cut.
     """
     acceptance_spec = targets.get("acceptance", {})
     share = float(acceptance_spec.get("minShare", 0.85))
@@ -2975,9 +3001,6 @@ def pick_shortfall(state: dict, targets: dict, existing: dict, count: int) -> li
             cells[topic, level] = existing.get(topic, {}).get(level, 0) + sum(
                 1 for r in alive if r["topic"] == topic and r["level"] == level)
         kept[topic] = sum(1 for r in alive if r["topic"] == topic)
-    planned_new = {
-        topic: sum(max(0, spec["levels"].get(lv, 0) - existing.get(topic, {}).get(lv, 0)) for lv in LEVELS)
-        for topic, spec in targets["topics"].items()}
     candidates = sorted((r for r in alive if r["status"] == "planned" and r["level"] in SHORTFALL_LEVEL_ORDER),
                         key=lambda r: r["stubId"])
     chosen: list[str] = []
@@ -2985,6 +3008,8 @@ def pick_shortfall(state: dict, targets: dict, existing: dict, count: int) -> li
         best = None
         for record in candidates:
             topic, level = record["topic"], record["level"]
+            if topic not in planned_new:
+                continue
             spec = targets["topics"][topic]
             slack = kept[topic] - math.ceil(share * planned_new[topic])
             if slack < 1 or cells[topic, level] - 1 < level_floor(spec, floors, level):
@@ -3058,8 +3083,12 @@ def level_floor(spec: dict, floors: dict, level: str) -> int:
     return min(target, floors[level]) if level in floors else target
 
 
-def acceptance(state: dict, targets: dict, seed_levels: dict, seed_types: dict) -> tuple[list[str], list[str]]:
-    """(failures, shortfall lines) on the survivors plus the seeds."""
+def acceptance(state: dict, targets: dict, seed_levels: dict, seed_types: dict,
+               planned_new: dict | None = None) -> tuple[list[str], list[str]]:
+    """(failures, shortfall lines) on the survivors plus the seeds.
+
+    With basis "new" the share is survivors / `planned_new[topic]`, the count persisted at allocate.
+    """
     failures, shortfall = [], []
     share = targets["acceptance"]["minShare"]
     basis = targets["acceptance"].get("basis")
@@ -3073,8 +3102,12 @@ def acceptance(state: dict, targets: dict, seed_levels: dict, seed_types: dict) 
         target = sum(spec["levels"].values())
         total = sum(levels.values())
         if basis == "new":
-            planned = sum(1 for r in state.values() if r["topic"] == topic)
-            if len(survivors) < math.ceil(share * planned):
+            planned = (planned_new or {}).get(topic)
+            owed = sum(max(0, spec["levels"].get(lv, 0) - seed_levels.get(topic, {}).get(lv, 0)) for lv in LEVELS)
+            if planned is None and owed > 0:
+                failures.append(f"{topic}: {owed} new question(s) are owed but no planned count is persisted "
+                                f"({PLAN_FILE}); run allocate")
+            elif planned and len(survivors) < math.ceil(share * planned):
                 failures.append(f"{topic}: {len(survivors)}/{planned} new questions is below {share:.0%}")
             for level in LEVELS:
                 needed = level_floor(spec, floors, level)
@@ -3515,7 +3548,10 @@ def cmd_shortfall(args, wave_dir: Path) -> int:
     state = load_state(wave_dir / "state.json")
     dump = load_dump(worktree, args.dump_file)
     existing, _ = existing_counts(dump, {r["id"] for r in state.values()})
-    picked = pick_shortfall(state, load_targets(wave_dir), existing, args.count)
+    planned_new = load_planned_new(wave_dir)
+    if not planned_new:
+        raise WaveError(f"{wave_dir / PLAN_FILE} is missing: run allocate first")
+    picked = pick_shortfall(state, load_targets(wave_dir), existing, args.count, planned_new)
     verb = "cut" if args.apply else "would cut"
     for stub_id in picked:
         print(f"{verb}: {stub_id} ({state[stub_id]['topic']} {state[stub_id]['level']})")
@@ -3641,6 +3677,7 @@ def cmd_allocate(args, wave_dir: Path) -> int:
     state = load_state(wave_dir / "state.json")
     state = allocate(outlines, state, {q["document"]["id"] for q in dump["questions"]})
     save_state(wave_dir / "state.json", state)
+    save_planned_new(wave_dir, state)
     planned = sum(1 for r in state.values() if r["status"] == "planned")
     print(f"{len(state)} records, {planned} planned")
     return 0
@@ -3801,7 +3838,8 @@ def cmd_finalize(args, wave_dir: Path) -> int:
         print(f"{len(open_records)} record(s) not terminal")
         return 1
     _, seed_levels, seed_types = _docs_and_seeds(Path(args.worktree), args, state)
-    failures, shortfall = acceptance(state, load_targets(wave_dir), seed_levels, seed_types)
+    failures, shortfall = acceptance(state, load_targets(wave_dir), seed_levels, seed_types,
+                                    load_planned_new(wave_dir))
     counts = {s: sum(1 for r in state.values() if r["status"] == s) for s in STATUSES}
     print("statuses: " + ", ".join(f"{k} {v}" for k, v in counts.items() if v))
     for line in shortfall:

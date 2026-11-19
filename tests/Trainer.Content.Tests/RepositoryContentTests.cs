@@ -32,10 +32,10 @@ public sealed class RepositoryContentTests
     }
 
     [Fact]
-    public async Task RepositoryContent_DeclaresAllTwentyThreeTopics()
+    public async Task RepositoryContent_DeclaresAllTwentySevenTopics()
     {
         ContentSet set = await new ContentReader().ReadAsync(Fixtures.RepositoryContent, TestContext.Current.CancellationToken);
 
-        Assert.Equal(23, set.TopicsByStack["dotnet"].Count);
+        Assert.Equal(27, set.TopicsByStack["dotnet"].Count);
     }
 }

@@ -1,5 +1,7 @@
 """Tests for the content wave driver. Run: python -m unittest discover -s tools/content-wave -v"""
 
+import contextlib
+import io
 import json
 import os
 import re
@@ -378,11 +380,13 @@ class InventoryAndOutlineTests(unittest.TestCase):
 
 class WaveDirTests(unittest.TestCase):
     def test_task_instructions_name_the_wave_dir(self):
-        env = WaveEnv(wave="content-wave-2")
+        env = VerifyEnv(wave="content-wave-2")
         try:
             wave_dir, worktree = env.wave_dir, env.worktree
             for i, level in enumerate(("junior", "junior"), 1):
                 env.add(f"testing-{i:02d}", topic="testing", level=level, type_="open")
+            env.write_question(env.add("testing-03"))
+            env.add("testing-04")["status"] = "needs-repair"
             (wave_dir / "outline").mkdir(parents=True)
             (wave_dir / "outline" / "testing.json").write_text("{}", encoding="utf-8")
             full = json.loads((wave.REPO_ROOT / "docs" / "content-wave-1" / "targets.json").read_text(encoding="utf-8"))
@@ -394,10 +398,11 @@ class WaveDirTests(unittest.TestCase):
             gen_tasks, entries = wave.build_gen_tasks(env.state, env.targets, "abc", worktree, wave_dir, {}, None, None,
                                                       "2026-11-13", lister=lambda *a: [])
             gen = gen_tasks[0]
-            repair = wave.base_task("claude-opus-5-5", wave.repair_instructions(wave_dir, worktree),
-                                    wave.repair_shared(wave_dir, worktree), wave.GEN_SCHEMA, "abc")
-            verify = wave.base_task("claude-sonnet-5-5", wave.verify_instructions(wave_dir, worktree),
-                                    wave.verify_shared(wave_dir, worktree), wave.VERDICT_SCHEMA, "abc")
+            repair_tasks, _, _ = wave.build_repair_tasks(env.state, env.targets, "abc", worktree, wave_dir, {}, {},
+                                                         None, lister=lambda *a: [])
+            verify_tasks, _ = wave.build_verify_tasks(env.state, env.targets, "abc", worktree, wave_dir, {}, {}, 1,
+                                                      None, None)
+            repair, verify = repair_tasks[0], verify_tasks[0]
             strings = []
             for task in (outline, dedupe, gen, repair, verify):
                 strings.append(task["instructions"])
@@ -2304,6 +2309,349 @@ class TaskFileSizeTests(unittest.TestCase):
         with self.assertRaises(wave.WaveError):
             wave.split_by_estimate(task, [("g", {"id": "big", "text": "y" * 5000})], Path("."), None,
                                    max_bytes=1000)
+
+
+STOP_LIMITS = {
+    "budgetUsd": 300, "budgetFloorUsd": 0, "actualStopUsd": 120, "maxActualShare": 0.6,
+    "expectedActualShare": {"outline": 0.45, "dedupe": 0.45, "gen": 0.30, "verify": 0.25, "repair": 0.50},
+}
+
+
+def spent_ledger(usd, *submits):
+    return {"readings": [{"utc": "2026-11-19T10:00:00Z", "usd": usd, "baselineUsd": 0, "outstandingAtReading": []}],
+            "submits": [{"name": f"s{i}", "batchId": f"b{i}", "estimateUsd": estimate, "status": "submitted",
+                         **({"stage": stage} if stage else {})} for i, (estimate, stage) in enumerate(submits)]}
+
+
+class ActualStopTests(unittest.TestCase):
+    def test_submit_gate_without_cutoff_has_no_cutoff_problem(self):
+        targets = {"capPerSubmitUsd": 50, "capPerDayUsd": 150}
+        ledger = spent_ledger(0)
+        late = wave.parse_utc("2031-01-01T00:00:00Z")
+        self.assertEqual([], wave.submit_gate(targets, ledger, 10, late))
+
+    def test_ledger_ceiling_counts_outstanding_and_this_submit_at_max_share(self):
+        ok, message = wave.ledger_check(spent_ledger(100), 45, 0, 300, 0, STOP_LIMITS, "gen")
+        self.assertFalse(ok)
+        self.assertIn("ceiling FAILED", message)
+        self.assertIn("127.00", message)
+        self.assertNotIn("envelope FAILED", message)
+        # An outstanding estimate counts once, at the same share: 60 + (45 + 45) x 0.6 = 114.
+        ok, _ = wave.ledger_check(spent_ledger(60, (45, "gen")), 45, 0, 300, 0, STOP_LIMITS, "gen")
+        self.assertTrue(ok)
+        ok, message = wave.ledger_check(spent_ledger(60, (45, "gen")), 60, 0, 300, 0, STOP_LIMITS, "gen")
+        self.assertFalse(ok)
+        self.assertIn("ceiling FAILED", message)
+
+    def test_ledger_forecast_counts_outstanding_by_stage(self):
+        ledger = spent_ledger(60, (45, "gen"))
+        ok, message = wave.ledger_check(ledger, 45, 50, 300, 0, STOP_LIMITS, "gen")
+        self.assertFalse(ok)
+        self.assertIn("forecast FAILED", message)
+        self.assertIn("137.00", message)
+        self.assertNotIn("ceiling FAILED", message)
+        ok, message = wave.ledger_check(ledger, 45, 20, 300, 0, STOP_LIMITS, "gen")
+        self.assertTrue(ok, message)
+
+    def test_ledger_forecast_books_an_unstaged_submit_at_max_share(self):
+        # 60 + 45 x 0.6 (no stage recorded) + 13.5 + 20 = 120.5 > 120, where gen would have given 107.
+        ok, message = wave.ledger_check(spent_ledger(60, (45, None)), 45, 20, 300, 0, STOP_LIMITS, "gen")
+        self.assertFalse(ok)
+        self.assertIn("forecast FAILED", message)
+
+    def test_ledger_envelope_still_governs_reservations(self):
+        ok, message = wave.ledger_check(spent_ledger(60, (45, "gen")), 45, 20, 150, 5, STOP_LIMITS, "gen")
+        self.assertFalse(ok)
+        self.assertIn("envelope FAILED", message)
+
+    def test_ledger_without_actual_stop_keeps_the_envelope_only(self):
+        ok, message = wave.ledger_check(spent_ledger(100), 45, 0, 300, 0, {"budgetUsd": 300}, "gen")
+        self.assertTrue(ok)
+        self.assertNotIn("ceiling", message)
+
+    def test_ledger_submit_records_the_stage(self):
+        env = WaveEnv()
+        try:
+            task = env.wave_dir / "task.json"
+            task.write_text("{}", encoding="utf-8")
+            sha = wave.task_sha256(task)
+            wave.write_json_atomic(env.wave_dir / "ledger.json", {"taskFiles": [{"sha256": sha}], "submits": []})
+            argv = ["--wave-dir", str(env.wave_dir), "--worktree", str(env.worktree), "ledger-submit", "--name", "n",
+                    "--task", str(task), "--plan-id", "p", "--batch-id", "b1", "--estimate", "10",
+                    "--confirmation", "c", "--stage", "gen"]
+            self.assertEqual(0, wave.main(argv))
+            self.assertEqual("gen", wave.read_json(env.wave_dir / "ledger.json")["submits"][0]["stage"])
+            with self.assertRaises(SystemExit):
+                wave.main(argv[:-1] + ["nonsense"])
+        finally:
+            env.cleanup()
+
+
+def wave2_targets(topics, **acceptance):
+    targets = small_targets(topics)
+    targets["policies"]["leadArchitectForbiddenTypes"] = ["output", "find-bug"]
+    targets["acceptance"] = {"minShare": 0.85, "basis": "new",
+                             "levelFloors": {"junior": 4, "middle": 8, "senior": 7, "lead": 3, "architect": 2},
+                             **acceptance}
+    return targets
+
+
+def planned_state(env, topic, level, count, status="planned"):
+    for i in range(1, count + 1):
+        env.add(f"{topic}-{level}-{i:02d}", topic=topic, level=level, type_="open")["status"] = status
+
+
+class OutlinePolicyTests(unittest.TestCase):
+    def test_check_outline_rejects_output_and_find_bug_on_lead_and_architect(self):
+        targets = wave2_targets({"testing": {"levels": {"middle": 1, "lead": 2, "architect": 1}}})
+        outlines = {"testing": [stub("a", "lead", "output"), stub("b", "architect", "find-bug"),
+                                stub("c", "lead", "open"), stub("d", "middle", "output")]}
+        failures = wave.check_outline(outlines, remaining_of(targets), {}, targets)
+        forbidden = [f for f in failures if "is not allowed at level" in f]
+        self.assertEqual(2, len(forbidden), failures)
+        self.assertTrue(any("testing/a" in f and "output" in f for f in forbidden))
+        self.assertTrue(any("testing/b" in f and "find-bug" in f for f in forbidden))
+
+    def test_check_outline_without_the_policy_key_allows_them(self):
+        targets = small_targets({"testing": {"levels": {"lead": 1}}})
+        failures = wave.check_outline({"testing": [stub("a", "lead", "output")]}, remaining_of(targets), {}, targets)
+        self.assertEqual([], [f for f in failures if "not allowed" in f])
+
+
+class GenerationContextTests(unittest.TestCase):
+    def setUp(self):
+        self.env = WaveEnv()
+        self.addCleanup(self.env.cleanup)
+
+    def write(self, name, type_, id_="01SEED"):
+        path = self.env.worktree / "content/dotnet/testing" / f"{name}.yaml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"id: {id_}\nslug: {name}\ntopic: testing\nlevel: junior\ntype: {type_}\n", encoding="utf-8")
+        return f"content/dotnet/testing/{name}.yaml"
+
+    def test_generation_samples_prefer_the_stub_type_and_skip_wave_drafts(self):
+        targets = wave2_targets({"testing": {"levels": {"junior": 4}}})
+        targets["generationContext"] = {"topicSamples": 6, "neighbourSamples": 0}
+        files = [self.write("a", "open"), self.write("b", "single"), self.write("c", "open"),
+                 self.write("d", "single", id_="01WAVEDRAFT"), self.write("e", "single")]
+        files.append("content/dotnet/testing/f.yaml")  # not on disk: no type, still a candidate
+        got = wave.context_files("testing", targets, self.env.worktree, self.env.wave_dir, "abc", [],
+                                 lambda *a: files, {"single"}, {"01WAVEDRAFT"})
+        self.assertEqual(["docs/content-wave-1/outline/testing.json", "content/dotnet/testing/b.yaml",
+                          "content/dotnet/testing/e.yaml", "content/dotnet/testing/a.yaml",
+                          "content/dotnet/testing/c.yaml", "content/dotnet/testing/f.yaml"], got)
+
+    def test_wave_drafts_are_skipped_through_build_gen_tasks(self):
+        targets = wave2_targets({"testing": {"levels": {"junior": 4}}})
+        targets["generationContext"] = {"topicSamples": 6, "neighbourSamples": 0}
+        self.env.add("testing-01")
+        draft = self.env.add("testing-02")
+        draft["status"] = "generated"
+        draft_path = self.write("draft", "open", id_=draft["id"])
+        seed = self.write("seed", "open")
+        tasks, _ = wave.build_gen_tasks(self.env.state, targets, "abc", self.env.worktree, self.env.wave_dir, {}, None,
+                                        None, "2026-11-19", lister=lambda *a: [draft_path, seed])
+        self.assertEqual(["docs/content-wave-1/outline/testing.json", seed], tasks[0]["items"][0]["files"])
+
+    def test_generation_context_is_capped(self):
+        targets = wave2_targets({"testing": {"levels": {"junior": 4}, "neighbours": ["csharp"]},
+                                 "csharp": {"levels": {"junior": 1}}})
+        targets["generationContext"] = {"topicSamples": 6, "neighbourSamples": 0}
+
+        def lister(worktree, ref, directory):
+            name = directory.rsplit("/", 1)[1]
+            return [f"{directory}/{name}-{i:02d}.yaml" for i in range(20 if name == "testing" else 5)]
+
+        got = wave.context_files("testing", targets, self.env.worktree, self.env.wave_dir, "abc", [], lister)
+        self.assertEqual(7, len(got))
+        self.assertEqual("docs/content-wave-1/outline/testing.json", got[0])
+        self.assertTrue(all(f.startswith("content/dotnet/testing/") for f in got[1:]))
+
+    def test_neighbour_samples_are_taken_when_asked(self):
+        targets = wave2_targets({"testing": {"levels": {"junior": 4}, "neighbours": ["csharp"]},
+                                 "csharp": {"levels": {"junior": 1}}})
+        targets["generationContext"] = {"topicSamples": 1, "neighbourSamples": 2}
+        got = wave.context_files("testing", targets, self.env.worktree, self.env.wave_dir, "abc", [],
+                                 lambda w, r, d: [f"{d}/{i}.yaml" for i in range(5)])
+        self.assertEqual(1 + 1 + 2, len(got))
+
+    def test_without_generation_context_wave_one_selection_is_kept(self):
+        targets = wave2_targets({"testing": {"levels": {"junior": 4}}})
+        got = wave.context_files("testing", targets, self.env.worktree, self.env.wave_dir, "abc", [],
+                                 lambda w, r, d: [f"{d}/{i}.yaml" for i in range(20)])
+        self.assertEqual(21, len(got))
+
+
+class FloorAcceptanceTests(unittest.TestCase):
+    def new_env(self):
+        env = WaveEnv()
+        self.addCleanup(env.cleanup)
+        return env
+
+    def test_acceptance_fails_when_a_level_floor_is_missed(self):
+        targets = wave2_targets({"testing": {"levels": {"middle": 2, "lead": 4}}})
+        env = self.new_env()
+        planned_state(env, "testing", "middle", 2, status="verify-pass")
+        planned_state(env, "testing", "lead", 3, status="verify-pass")
+        env.state["testing-lead-03"]["status"] = "rejected"
+        env.state["testing-lead-02"]["status"] = "rejected"
+        # Existing lead 1 + one survivor = 2, below min(target 4, floor 3).
+        failures, _ = wave.acceptance(env.state, targets, {"testing": {"lead": 1}}, {})
+        self.assertTrue(any(f.startswith("testing lead") for f in failures), failures)
+        env.state["testing-lead-02"]["status"] = "verify-pass"
+        failures, _ = wave.acceptance(env.state, targets, {"testing": {"lead": 1}}, {})
+        self.assertEqual([], [f for f in failures if "lead" in f])
+
+    def test_one_rejected_middle_stub_does_not_fail_the_wave(self):
+        targets = wave2_targets({"testing": {"levels": {"middle": 9}}})
+        env = self.new_env()
+        planned_state(env, "testing", "middle", 9, status="verify-pass")
+        env.state["testing-middle-09"]["status"] = "rejected"
+        failures, shortfall = wave.acceptance(env.state, targets, {}, {})
+        self.assertEqual([], failures)
+        self.assertEqual(["testing middle: 1"], shortfall)
+
+    def test_a_target_below_the_floor_is_held_to_the_target(self):
+        targets = wave2_targets({"testing": {"levels": {"junior": 3, "middle": 1}}})
+        env = self.new_env()
+        planned_state(env, "testing", "junior", 3, status="verify-pass")
+        planned_state(env, "testing", "middle", 1, status="verify-pass")
+        self.assertEqual([], wave.acceptance(env.state, targets, {}, {})[0])
+        env.state["testing-junior-03"]["status"] = "rejected"
+        failures, _ = wave.acceptance(env.state, targets, {}, {})
+        self.assertTrue(any(f.startswith("testing junior") for f in failures), failures)
+
+    def test_acceptance_share_counts_new_stubs_only(self):
+        targets = wave2_targets({"testing": {"levels": {"middle": 10}}})
+        env = self.new_env()
+        planned_state(env, "testing", "middle", 4, status="verify-pass")
+        env.state["testing-middle-04"]["status"] = "rejected"
+        # 6 seeds + 3 survivors = 9/10 passes a share over the whole topic, but 3/4 new stubs does not.
+        failures, _ = wave.acceptance(env.state, targets, {"testing": {"middle": 6}}, {})
+        self.assertTrue(any("3/4" in f for f in failures), failures)
+        env.state["testing-middle-04"]["status"] = "verify-pass"
+        failures, _ = wave.acceptance(env.state, targets, {"testing": {"middle": 6}}, {})
+        self.assertEqual([], failures)
+
+    def test_a_shortfall_does_not_shrink_the_denominator(self):
+        targets = wave2_targets({"testing": {"levels": {"middle": 10}}})
+        env = self.new_env()
+        planned_state(env, "testing", "middle", 10, status="verify-pass")
+        for record in list(env.state.values())[:2]:
+            record["status"] = "shortfall"
+        failures, _ = wave.acceptance(env.state, targets, {}, {})
+        self.assertTrue(any("8/10" in f for f in failures), failures)
+
+    def test_wave_one_acceptance_is_unchanged_without_the_new_keys(self):
+        targets = small_targets({"testing": {"levels": {"middle": 4}}})
+        targets["acceptance"] = {"minShare": 0.75}
+        env = self.new_env()
+        planned_state(env, "testing", "middle", 3, status="verify-pass")
+        self.assertEqual([], wave.acceptance(env.state, targets, {}, {})[0])
+
+
+class ShortfallTests(unittest.TestCase):
+    def test_pick_shortfall_keeps_floors_and_the_topic_share(self):
+        targets = wave2_targets({"csharp": {"levels": {"junior": 3, "middle": 9}}})
+        env = WaveEnv(targets)
+        self.addCleanup(env.cleanup)
+        planned_state(env, "csharp", "junior", 3)
+        planned_state(env, "csharp", "middle", 9)
+        # ceil(0.85 x 12) = 11 must survive: one cut, from middle (floor 8 of 9); junior is held to its target.
+        picked = wave.pick_shortfall(env.state, targets, {}, 3)
+        self.assertEqual(["csharp-middle-01"], picked)
+
+    def test_pick_shortfall_orders_levels_and_spreads_over_topics(self):
+        targets = wave2_targets({"a": {"levels": {"junior": 10, "middle": 20, "senior": 20}},
+                                 "b": {"levels": {"middle": 30}}})
+        env = WaveEnv(targets)
+        self.addCleanup(env.cleanup)
+        planned_state(env, "a", "junior", 10)
+        planned_state(env, "a", "middle", 20)
+        planned_state(env, "a", "senior", 20)
+        planned_state(env, "b", "middle", 30)
+        picked = wave.pick_shortfall(env.state, targets, {}, 6)
+        self.assertEqual(6, len(picked))
+        self.assertTrue(all("-middle-" in s for s in picked), picked)
+        # Slack: a 50 - ceil(42.5) = 7, b 30 - ceil(25.5) = 4; each cut lowers the slack of its topic by one.
+        self.assertEqual(["a-middle-01", "a-middle-02", "a-middle-03", "a-middle-04", "b-middle-01", "a-middle-05"],
+                         picked)
+
+    def test_pick_shortfall_never_cuts_lead_or_architect(self):
+        targets = wave2_targets({"testing": {"levels": {"lead": 5, "architect": 3}}})
+        env = WaveEnv(targets)
+        self.addCleanup(env.cleanup)
+        planned_state(env, "testing", "lead", 5)
+        planned_state(env, "testing", "architect", 3)
+        self.assertEqual([], wave.pick_shortfall(env.state, targets, {}, 2))
+
+    def test_pick_shortfall_counts_existing_questions_in_the_cell(self):
+        targets = wave2_targets({"testing": {"levels": {"middle": 12}}})
+        env = WaveEnv(targets)
+        self.addCleanup(env.cleanup)
+        planned_state(env, "testing", "middle", 6)
+        # 6 existing + 6 new: the floor 8 leaves room for 4 cuts, but ceil(0.85 x 6) = 6 allows none.
+        self.assertEqual([], wave.pick_shortfall(env.state, targets, {"testing": {"middle": 6}}, 4))
+
+    def test_shortfall_command_is_a_dry_run_until_apply(self):
+        targets = wave2_targets({"csharp": {"levels": {"junior": 3, "middle": 9}}})
+        env = WaveEnv(targets)
+        self.addCleanup(env.cleanup)
+        planned_state(env, "csharp", "junior", 3)
+        planned_state(env, "csharp", "middle", 9)
+        env.save()
+        wave.write_json_atomic(env.wave_dir / "targets.json", targets)
+        dump = env.root / "dump.json"
+        dump.write_text(json.dumps({"questions": [], "readIssues": []}), encoding="utf-8")
+        base = ["--wave-dir", str(env.wave_dir), "--worktree", str(env.worktree), "--dump-file", str(dump),
+                "shortfall", "--count", "3"]
+        self.assertEqual(0, wave.main(base))
+        self.assertEqual("planned", env.load()["csharp-middle-01"]["status"])
+        self.assertEqual(0, wave.main(base + ["--apply"]))
+        record = env.load()["csharp-middle-01"]
+        self.assertEqual("shortfall", record["status"])
+        self.assertEqual("budget", record["failures"][-1]["reason"])
+        self.assertEqual(1, sum(1 for r in env.state.values() if r["status"] == "shortfall"))
+
+
+class PlanCountsCommandTests(unittest.TestCase):
+    def snapshot(self, root):
+        return {p.relative_to(root).as_posix(): p.read_bytes() for p in sorted(Path(root).rglob("*")) if p.is_file()}
+
+    def run_command(self, with_prompts):
+        targets = small_targets({"testing": {"levels": {"junior": 4}}})
+        targets["typeMix"] = {"open": 2, "single": 2, "multi": 0, "output": 0, "find-bug": 0, "situation": 0}
+        env = WaveEnv(targets)
+        self.addCleanup(env.cleanup)
+        env.add("testing-01")
+        env.save()
+        wave.write_json_atomic(env.wave_dir / "targets.json", targets)
+        wave.write_json_atomic(env.wave_dir / "ledger.json", {"submits": []})
+        if with_prompts:
+            (env.wave_dir / "prompts").mkdir()
+            (env.wave_dir / "prompts" / "outline.md").write_text("prompt", encoding="utf-8")
+        dump = env.root / "dump.json"
+        dump.write_text(json.dumps({"questions": [], "topics": {"dotnet": [
+            {"key": "testing", "locales": {"en": {"title": "Testing", "description": "Covers testing."}}}]},
+            "redirects": {"dotnet": []}, "readIssues": []}), encoding="utf-8")
+        before = self.snapshot(env.wave_dir)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = wave.main(["--wave-dir", str(env.wave_dir), "--worktree", str(env.worktree),
+                              "--dump-file", str(dump), "plan-counts"])
+        self.assertEqual(0, code)
+        self.assertEqual(before, self.snapshot(env.wave_dir))
+        return out.getvalue()
+
+    def test_plan_counts_writes_nothing(self):
+        text = self.run_command(with_prompts=False)
+        self.assertIn("testing junior: 0 / 4 / 4", text)
+        self.assertIn("testing: open 2, single 2", text)
+        self.assertNotIn("outline items", text)
+
+    def test_plan_counts_prints_outline_item_sizes_once_prompts_exist(self):
+        text = self.run_command(with_prompts=True)
+        self.assertRegex(text, r"outline-testing: \d+")
 
 
 if __name__ == "__main__":

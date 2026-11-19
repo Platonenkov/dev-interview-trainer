@@ -191,25 +191,66 @@ def actual_spent(ledger: dict) -> float | None:
     return float(latest["usd"]) - float(latest.get("baselineUsd", 0)) - held
 
 
+STAGES = ("outline", "dedupe", "gen", "verify", "repair")
+
+
+def _stage_share(shares: dict, stage: str | None, fallback: float) -> float:
+    return float(shares.get(stage, fallback)) if stage else fallback
+
+
 def ledger_check(ledger: dict, submit_estimate: float, forecast_remaining: float, budget: float,
-                 floor: float) -> tuple[bool, str]:
-    """True iff actual spent + outstanding estimates + this submit + forecast of remaining stages <= budget - floor."""
+                 floor: float, limits: dict | None = None, stage: str | None = None) -> tuple[bool, str]:
+    """True iff every active rule holds.
+
+    envelope: actual spent + outstanding estimates + this submit + forecast of remaining stages <= budget - floor.
+    With `limits` (the targets) and `actualStopUsd` set, two rules on real spend are added: `ceiling` books every
+    outstanding estimate and this submit at `maxActualShare`, `forecast` books them at the expected share of their
+    stage (`expectedActualShare`; a submit without a recorded stage counts at `maxActualShare`) and adds
+    `forecast_remaining`, which covers only the stages after this submit.
+    """
     spent = actual_spent(ledger)
     if spent is None:
         return False, "no budget reading: run review_budget and `wave.py budget --record <usd>` first"
-    outstanding = sum(float(s.get("estimateUsd", 0)) for s in _outstanding(ledger))
-    total = spent + outstanding + float(submit_estimate) + float(forecast_remaining)
+    limits = limits or {}
+    estimate = float(submit_estimate)
+    forecast = float(forecast_remaining)
+    outstanding_submits = _outstanding(ledger)
+    outstanding = sum(float(s.get("estimateUsd", 0)) for s in outstanding_submits)
+    total = spent + outstanding + estimate + forecast
     limit = float(budget) - float(floor)
-    message = (f"spent {spent:.2f} + outstanding {outstanding:.2f} + submit {float(submit_estimate):.2f} + "
-               f"forecast {float(forecast_remaining):.2f} = {total:.2f} vs limit {limit:.2f}")
-    return total <= limit + 1e-9, message
+    results = [("envelope", total <= limit + 1e-9,
+                f"spent {spent:.2f} + outstanding {outstanding:.2f} + submit {estimate:.2f} + "
+                f"forecast {forecast:.2f} = {total:.2f} vs limit {limit:.2f}")]
+    stop = limits.get("actualStopUsd")
+    if stop is not None:
+        stop = float(stop)
+        max_share = limits.get("maxActualShare")
+        shares = limits.get("expectedActualShare")
+        if max_share is not None:
+            max_share = float(max_share)
+            booked = spent + (outstanding + estimate) * max_share
+            results.append(("ceiling", booked <= stop + 1e-9,
+                            f"spent {spent:.2f} + (outstanding {outstanding:.2f} + submit {estimate:.2f}) x "
+                            f"{max_share:g} = {booked:.2f} vs actual stop {stop:.2f}"))
+        if shares:
+            fallback = float(max_share if max_share is not None else max(float(v) for v in shares.values()))
+            held = sum(float(s.get("estimateUsd", 0)) * _stage_share(shares, s.get("stage"), fallback)
+                       for s in outstanding_submits)
+            own = estimate * _stage_share(shares, stage, fallback)
+            booked = spent + held + own + forecast
+            results.append(("forecast", booked <= stop + 1e-9,
+                            f"spent {spent:.2f} + outstanding {held:.2f} + submit {own:.2f} + "
+                            f"remaining stages {forecast:.2f} = {booked:.2f} vs actual stop {stop:.2f}"))
+    failed = [name for name, ok, _ in results if not ok]
+    return not failed, "; ".join(f"{name}{'' if ok else ' FAILED'}: {text}" for name, ok, text in results)
 
 
 def submit_gate(targets: dict, ledger: dict, estimate: float, now: dt.datetime) -> list[str]:
-    """Cutoff and server caps; the budget rule is `ledger_check`."""
+    """Cutoff (when the targets set one) and server caps; the budget rules are `ledger_check`."""
     problems = []
-    if now >= parse_utc(targets["cutoffUtc"]):
-        problems.append(f"past the submit cutoff {targets['cutoffUtc']}")
+    cutoff = targets.get("cutoffUtc")
+    if cutoff and now >= parse_utc(cutoff):
+        problems.append(f"past the submit cutoff {cutoff}")
     if estimate > float(targets.get("capPerSubmitUsd", math.inf)):
         problems.append(f"estimate {estimate:.2f} exceeds the per-submit cap {targets['capPerSubmitUsd']}")
     readings = ledger.get("readings", [])
@@ -416,6 +457,9 @@ def check_outline(outlines: dict[str, list[dict]], remaining: dict, inventory: d
                 failures.append(f"{label}: level {stub.get('level')!r} is invalid")
             if stub.get("type") not in TYPES:
                 failures.append(f"{label}: type {stub.get('type')!r} is invalid")
+            if (stub.get("level") in ("lead", "architect")
+                    and stub.get("type") in policies.get("leadArchitectForbiddenTypes", [])):
+                failures.append(f"{label}: {stub['type']} is not allowed at level {stub['level']}")
             for source in stub.get("sources", []) or []:
                 if not str(source).startswith("https://"):
                     failures.append(f"{label}: source {source!r} is not an https URL")
@@ -1117,10 +1161,45 @@ def committed_files(worktree: Path, ref: str, directory: str) -> list[str]:
     return sorted(line for line in result.stdout.splitlines() if line.endswith(".yaml"))
 
 
+def wave_markers(state: dict) -> set[str]:
+    """Ids and paths of the wave's records: a draft of the wave never serves as a style sample."""
+    return {r["id"] for r in state.values()} | {r["path"] for r in state.values()}
+
+
+def _sample_files(worktree: Path, ref: str, directory: str, lister, skip: set[str],
+                  types: set[str]) -> list[str]:
+    """Committed questions of a directory, outside the wave, those of `types` first; each group in path order."""
+    preferred, rest = [], []
+    for file in sorted(lister(worktree, ref, directory)):
+        if file.endswith(("topics.yaml", "redirects.yaml")) or file in skip:
+            continue
+        path = worktree / file
+        scalars = top_level_scalars(path.read_text(encoding="utf-8")) if path.is_file() else {}
+        if scalars.get("id") in skip:
+            continue
+        (preferred if scalars.get("type") in types else rest).append(file)
+    return preferred + rest
+
+
 def context_files(topic: str, targets: dict, worktree: Path, wave_dir: Path, ref: str, extra: list[str],
-                  lister=committed_files) -> list[str]:
-    """`outline/<topic>.json` plus committed questions of the topic, then of its neighbours, within a size limit."""
+                  lister=committed_files, stub_types: set[str] | None = None,
+                  markers: set[str] | None = None) -> list[str]:
+    """`outline/<topic>.json` plus committed questions of the topic, then of its neighbours, within a size limit.
+
+    With `generationContext` in the targets the samples are capped instead: `topicSamples` questions of the topic
+    (the stubs' types first) and `neighbourSamples` per neighbour, none of them a draft of the wave.
+    """
     files = [wave_rel(wave_dir, worktree, "outline", f"{topic}.json"), *extra]
+    capped = targets.get("generationContext")
+    if capped is not None:
+        skip = markers or set()
+        names = [(topic, int(capped.get("topicSamples", 0)))]
+        names += [(n, int(capped.get("neighbourSamples", 0)))
+                  for n in targets["topics"].get(topic, {}).get("neighbours", [])]
+        for name, limit in names:
+            samples = _sample_files(worktree, ref, f"content/dotnet/{name}", lister, skip, stub_types or set())
+            files.extend(f for f in samples[:limit] if f not in files)
+        return files
     size = sum(_chars(worktree, f) for f in files if (worktree / f).is_file())
     for name in [topic, *targets["topics"].get(topic, {}).get("neighbours", [])]:
         for file in lister(worktree, ref, f"content/dotnet/{name}"):
@@ -1189,7 +1268,8 @@ def _group_order(targets: dict) -> dict[str, int]:
 def build_question_items(chunks: list[list[dict]], targets: dict, worktree: Path, wave_dir: Path, ref: str,
                          registry: dict,
                          stage: str, text_for, extra_files_for=None, lister=committed_files,
-                         id_prefix: str = "gen") -> tuple[list[tuple[str, dict]], dict]:
+                         id_prefix: str = "gen",
+                         markers: set[str] | None = None) -> tuple[list[tuple[str, dict]], dict]:
     """Items `<id_prefix>-<topic>-<k>` (k continues across task files) and their registry entries."""
     group_order = _group_order(targets)
     topic_order = {t: i for i, t in enumerate(targets["topics"])}
@@ -1203,7 +1283,9 @@ def build_question_items(chunks: list[list[dict]], targets: dict, worktree: Path
         item_id = f"{prefix}{next_item_number(registry, prefix, used)}"
         used.add(item_id)
         extra = extra_files_for(chunk) if extra_files_for else []
-        item = {"id": item_id, "text": text_for(chunk), "files": context_files(topic, targets, worktree, wave_dir, ref, extra, lister)}
+        files = context_files(topic, targets, worktree, wave_dir, ref, extra, lister,
+                              {r["type"] for r in chunk}, markers)
+        item = {"id": item_id, "text": text_for(chunk), "files": files}
         items.append((targets["topics"][topic].get("group", ""), item))
         entries[item_id] = {"stage": stage, "stubs": [r["stubId"] for r in chunk]}
     return items, entries
@@ -1222,8 +1304,8 @@ def base_task(model: str, instructions: str, shared: list[str], schema: dict, re
             "instructions": instructions, "sharedFiles": shared, "outputSchema": schema, "items": []}
 
 
-def build_gen_tasks(state: dict, targets: dict, ref: str, worktree: Path, wave_dir: Path, registry: dict, only: list[str] | None,
-                    max_estimate: float | None, today: str, lister=committed_files,
+def build_gen_tasks(state: dict, targets: dict, ref: str, worktree: Path, wave_dir: Path, registry: dict,
+                    only: list[str] | None, max_estimate: float | None, today: str, lister=committed_files,
                     retry: bool = False) -> tuple[list[dict], dict]:
     """Generation (or split retry) tasks; returns the task files' contents and the new registry entries."""
     pending = pending_stubs(registry, "gen") | pending_stubs(registry, "repair")
@@ -1252,7 +1334,8 @@ def build_gen_tasks(state: dict, targets: dict, ref: str, worktree: Path, wave_d
     task = base_task("claude-opus-5-5", gen_instructions(wave_dir, worktree), gen_shared(wave_dir, worktree),
                      GEN_SCHEMA, ref)
     items, entries = build_question_items(chunks, targets, worktree, wave_dir, ref, registry, "gen",
-                                          lambda c: gen_item_text(c, today), lister=lister)
+                                          lambda c: gen_item_text(c, today), lister=lister,
+                                          markers=wave_markers(state))
     tasks = []
     for chunk_items in split_by_estimate(task, items, worktree, max_estimate):
         tasks.append({**task, "items": chunk_items})
@@ -2565,7 +2648,8 @@ def build_verify_tasks(state: dict, targets: dict, ref: str, worktree: Path, wav
     task = base_task("claude-sonnet-5-5", verify_instructions(wave_dir, worktree), verify_shared(wave_dir, worktree),
                      VERDICT_SCHEMA, ref)
     items, entries = build_question_items(chunks, targets, worktree, wave_dir, ref, registry, "verify", text_for, files_for,
-                                          lister=no_neighbours, id_prefix=f"verify-r{round_}")
+                                          lister=no_neighbours, id_prefix=f"verify-r{round_}",
+                                          markers=wave_markers(state))
     for item_id, entry in entries.items():
         entry["round"] = round_
         entry["hashes"] = {s: state[s]["evidence"]["mech"]["hash"] for s in entry["stubs"]}
@@ -2844,7 +2928,7 @@ def build_repair_tasks(state: dict, targets: dict, ref: str, worktree: Path, wav
     task = base_task("claude-opus-5-5", repair_instructions(wave_dir, worktree), repair_shared(wave_dir, worktree),
                      GEN_SCHEMA, ref)
     items, entries = build_question_items(chunks, targets, worktree, wave_dir, ref, registry, "repair", text_for,
-                                          lister=lister, id_prefix="repair")
+                                          lister=lister, id_prefix="repair", markers=wave_markers(state))
     tasks = [{**task, "items": chunk_items} for chunk_items in split_by_estimate(task, items, worktree, max_estimate)]
     return tasks, entries, revised
 
@@ -2865,6 +2949,82 @@ def plan_counts(state: dict, targets: dict, seed_levels: dict, seed_types: dict)
         if abs(have - wanted) > targets["typeTolerance"]:
             out.append(f"type mix {type_name}: target {wanted} +-{targets['typeTolerance']}, planned {have}")
     return out
+
+
+# ---------------------------------------------------------------- shortfall by budget
+
+SHORTFALL_LEVEL_ORDER = ("middle", "junior", "senior")
+
+
+def pick_shortfall(state: dict, targets: dict, existing: dict, count: int) -> list[str]:
+    """Stubs to drop when the budget cannot pay for all of them; fewer than `count` when fewer qualify.
+
+    Only `planned` stubs are cut. After a cut the level cell must keep `min(target, floor)` and the topic must keep
+    ceil(minShare x planned new) stubs; lead and architect are never cut. Levels go middle, junior, senior; inside a
+    level the topic with the largest slack first, then by stubId. `existing` is per topic and level, as
+    `existing_counts` returns it.
+    """
+    acceptance_spec = targets.get("acceptance", {})
+    share = float(acceptance_spec.get("minShare", 0.85))
+    floors = acceptance_spec.get("levelFloors", {})
+    alive = [r for r in state.values() if r["status"] not in ("rejected", "shortfall")]
+    cells: dict[tuple[str, str], int] = {}
+    kept: dict[str, int] = {}
+    for topic in targets["topics"]:
+        for level in LEVELS:
+            cells[topic, level] = existing.get(topic, {}).get(level, 0) + sum(
+                1 for r in alive if r["topic"] == topic and r["level"] == level)
+        kept[topic] = sum(1 for r in alive if r["topic"] == topic)
+    planned_new = {
+        topic: sum(max(0, spec["levels"].get(lv, 0) - existing.get(topic, {}).get(lv, 0)) for lv in LEVELS)
+        for topic, spec in targets["topics"].items()}
+    candidates = sorted((r for r in alive if r["status"] == "planned" and r["level"] in SHORTFALL_LEVEL_ORDER),
+                        key=lambda r: r["stubId"])
+    chosen: list[str] = []
+    while len(chosen) < count:
+        best = None
+        for record in candidates:
+            topic, level = record["topic"], record["level"]
+            spec = targets["topics"][topic]
+            slack = kept[topic] - math.ceil(share * planned_new[topic])
+            if slack < 1 or cells[topic, level] - 1 < level_floor(spec, floors, level):
+                continue
+            key = (SHORTFALL_LEVEL_ORDER.index(level), -slack, record["stubId"])
+            if best is None or key < best[0]:
+                best = (key, record)
+        if best is None:
+            break
+        record = best[1]
+        chosen.append(record["stubId"])
+        candidates.remove(record)
+        cells[record["topic"], record["level"]] -= 1
+        kept[record["topic"]] -= 1
+    return chosen
+
+
+def plan_counts_report(state: dict, targets: dict, dump: dict, outline_task: dict | None) -> list[str]:
+    """Read-only planning sheet: existing / target / remaining per topic and level, type quotas, item sizes."""
+    levels, types = existing_counts(dump, {r["id"] for r in state.values()})
+    remaining = remaining_counts(targets, levels)
+    lines = ["topic level: existing / target / remaining"]
+    for topic, spec in targets["topics"].items():
+        for level in LEVELS:
+            lines.append(f"{topic} {level}: {levels.get(topic, {}).get(level, 0)} / "
+                         f"{spec['levels'].get(level, 0)} / {remaining[topic][level]}")
+    lines.append("")
+    lines.append("type quotas per topic (new stubs):")
+    try:
+        quotas = type_quotas(targets, remaining, types)
+        for topic, row in quotas.items():
+            lines.append(f"{topic}: " + ", ".join(f"{k} {row[k]}" for k in TYPES))
+    except WaveError as error:
+        lines.append(f"type quotas unavailable: {error}")
+    if outline_task is not None:
+        lines.append("")
+        lines.append("outline items (serialized bytes):")
+        for item in outline_task["items"]:
+            lines.append(f"{item['id']}: {_item_bytes(item)}")
+    return lines
 
 
 # ---------------------------------------------------------------- resolve, finalize, final gate
@@ -2892,10 +3052,18 @@ def unresolved(state: dict) -> list[dict]:
     return [r for r in state.values() if r["status"] not in done]
 
 
+def level_floor(spec: dict, floors: dict, level: str) -> int:
+    """Questions a level cell must hold: its floor, or its target when that is lower."""
+    target = spec["levels"].get(level, 0)
+    return min(target, floors[level]) if level in floors else target
+
+
 def acceptance(state: dict, targets: dict, seed_levels: dict, seed_types: dict) -> tuple[list[str], list[str]]:
     """(failures, shortfall lines) on the survivors plus the seeds."""
     failures, shortfall = [], []
     share = targets["acceptance"]["minShare"]
+    basis = targets["acceptance"].get("basis")
+    floors = targets["acceptance"].get("levelFloors", {})
     policies = targets["policies"]
     for topic, spec in targets["topics"].items():
         survivors = [r for r in state.values() if r["topic"] == topic and r["status"] in SURVIVOR_STATUSES]
@@ -2904,7 +3072,15 @@ def acceptance(state: dict, targets: dict, seed_levels: dict, seed_types: dict) 
         types = {t: seed_types.get(topic, {}).get(t, 0) + sum(1 for r in survivors if r["type"] == t) for t in TYPES}
         target = sum(spec["levels"].values())
         total = sum(levels.values())
-        if total < math.ceil(share * target):
+        if basis == "new":
+            planned = sum(1 for r in state.values() if r["topic"] == topic)
+            if len(survivors) < math.ceil(share * planned):
+                failures.append(f"{topic}: {len(survivors)}/{planned} new questions is below {share:.0%}")
+            for level in LEVELS:
+                needed = level_floor(spec, floors, level)
+                if levels[level] < needed:
+                    failures.append(f"{topic} {level}: {levels[level]} is below the floor {needed}")
+        elif total < math.ceil(share * target):
             failures.append(f"{topic}: {total}/{target} is below {share:.0%}")
         for level in ("junior", "middle"):
             if spec["levels"].get(level, 0) > 0 and levels[level] == 0:
@@ -3299,7 +3475,7 @@ def cmd_budget(args, wave_dir: Path) -> int:
     floor = targets["budgetFloorUsd"]
     forecast = float(ledger.get("forecastRemainingUsd") or 0)
     estimate = args.estimate or 0.0
-    ok, message = ledger_check(ledger, estimate, forecast, budget, floor)
+    ok, message = ledger_check(ledger, estimate, forecast, budget, floor, targets, args.stage)
     gate = submit_gate(targets, ledger, estimate, utc_now()) if args.estimate is not None else []
     print(message)
     for problem in gate:
@@ -3326,10 +3502,51 @@ def cmd_ledger_submit(args, wave_dir: Path) -> int:
     ledger.setdefault("submits", []).append({
         "name": args.name, "taskFile": task_path.as_posix(), "taskSha256": sha, "planId": args.plan_id,
         "batchId": args.batch_id, "estimateUsd": args.estimate, "ownerConfirmation": args.confirmation,
-        "submittedUtc": utc_stamp(), "dayUtc": utc_now().strftime("%Y-%m-%d"), "status": "submitted",
+        "stage": args.stage, "submittedUtc": utc_stamp(), "dayUtc": utc_now().strftime("%Y-%m-%d"),
+        "status": "submitted",
         "collectedUtc": None, "actualUsd": None})
     write_json_atomic(wave_dir / "ledger.json", ledger)
     print(f"recorded submit {args.name} batch {args.batch_id} estimate {args.estimate:.2f}")
+    return 0
+
+
+def cmd_shortfall(args, wave_dir: Path) -> int:
+    worktree = Path(args.worktree)
+    state = load_state(wave_dir / "state.json")
+    dump = load_dump(worktree, args.dump_file)
+    existing, _ = existing_counts(dump, {r["id"] for r in state.values()})
+    picked = pick_shortfall(state, load_targets(wave_dir), existing, args.count)
+    verb = "cut" if args.apply else "would cut"
+    for stub_id in picked:
+        print(f"{verb}: {stub_id} ({state[stub_id]['topic']} {state[stub_id]['level']})")
+    if len(picked) < args.count:
+        print(f"only {len(picked)} of {args.count} stubs can be cut without breaking the floors or the topic share")
+    if not args.apply:
+        print("dry run: pass --apply to mark them")
+    elif picked:
+        for stub_id in picked:
+            record = state[stub_id]
+            record["status"] = "shortfall"
+            record.setdefault("failures", []).append({
+                "stage": "shortfall", "batchId": None, "itemId": None, "resultKey": None, "reason": "budget",
+                "message": "cut to fit the budget", "utc": utc_stamp()})
+        save_state(wave_dir / "state.json", state)
+    return 0
+
+
+def cmd_plan_counts(args, wave_dir: Path) -> int:
+    worktree = Path(args.worktree)
+    targets = load_targets(wave_dir)
+    state = load_state(wave_dir / "state.json")
+    dump = load_dump(worktree, args.dump_file)
+    outline_task = None
+    if (wave_dir / "prompts" / "outline.md").is_file():
+        try:
+            outline_task = build_outline_task(dump, targets, "HEAD", wave_dir, worktree)
+        except WaveError as error:
+            print(f"outline items unavailable: {error}")
+    for line in plan_counts_report(state, targets, dump, outline_task):
+        print(line)
     return 0
 
 
@@ -3657,6 +3874,7 @@ def build_parser() -> argparse.ArgumentParser:
     budget.add_argument("--baseline", action="store_true",
                         help="mark this reading as the pre-wave baseline (spend not attributed to the wave)")
     budget.add_argument("--estimate", type=float, help="estimate of the next submit; exit 1 if it may not go")
+    budget.add_argument("--stage", choices=STAGES, help="stage of the next submit, for the completion forecast")
 
     ledger_submit = sub.add_parser("ledger-submit", help="record a tasks_submit in the ledger")
     ledger_submit.add_argument("--name", required=True)
@@ -3665,6 +3883,7 @@ def build_parser() -> argparse.ArgumentParser:
     ledger_submit.add_argument("--batch-id", required=True)
     ledger_submit.add_argument("--estimate", type=float, required=True)
     ledger_submit.add_argument("--confirmation", required=True)
+    ledger_submit.add_argument("--stage", choices=STAGES, help="stage of the batch; the completion forecast needs it")
 
     ledger_collect = sub.add_parser("ledger-collect", help="record a tasks_collect and its actual cost")
     ledger_collect.add_argument("--batch-id", required=True)
@@ -3725,6 +3944,11 @@ def build_parser() -> argparse.ArgumentParser:
     resolve_step.add_argument("--as", dest="as_status", required=True, choices=["owner-review", "shortfall"])
     resolve_step.add_argument("--reason", required=True)
 
+    shortfall = sub.add_parser("shortfall", help="pick (and with --apply mark) stubs to drop for budget reasons")
+    shortfall.add_argument("--count", type=int, required=True)
+    shortfall.add_argument("--apply", action="store_true", help="mark the stubs shortfall; a dry run otherwise")
+    sub.add_parser("plan-counts", help="read-only: counts, type quotas and outline item sizes")
+
     sub.add_parser("finalize", help="exit 1 while any record is open; check acceptance")
     gate = sub.add_parser("final-gate", help="whole-bank checks; bind every file to its pass; mark final")
     gate.add_argument("--seed-ref", default="main", help="ref whose content/dotnet files are the seeds")
@@ -3758,6 +3982,8 @@ COMMANDS = {
     "verdicts": cmd_verdicts,
     "repair-tasks": cmd_repair_tasks,
     "resolve": cmd_resolve,
+    "shortfall": cmd_shortfall,
+    "plan-counts": cmd_plan_counts,
     "finalize": cmd_finalize,
     "final-gate": cmd_final_gate,
     "report": cmd_report,

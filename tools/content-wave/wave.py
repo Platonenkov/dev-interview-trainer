@@ -3105,8 +3105,10 @@ def acceptance(state: dict, targets: dict, seed_levels: dict, seed_types: dict,
             planned = (planned_new or {}).get(topic)
             owed = sum(max(0, spec["levels"].get(lv, 0) - seed_levels.get(topic, {}).get(lv, 0)) for lv in LEVELS)
             if planned is None and owed > 0:
-                failures.append(f"{topic}: {owed} new question(s) are owed but no planned count is persisted "
-                                f"({PLAN_FILE}); run allocate")
+                # Without plan.json nothing was allocated at all; with it, the topic simply got no stubs.
+                reason = (f"no planned count is persisted ({PLAN_FILE}); run allocate" if not planned_new
+                          else "no stubs were planned for it")
+                failures.append(f"{topic}: {owed} new question(s) are owed but {reason}")
             elif planned and len(survivors) < math.ceil(share * planned):
                 failures.append(f"{topic}: {len(survivors)}/{planned} new questions is below {share:.0%}")
             for level in LEVELS:

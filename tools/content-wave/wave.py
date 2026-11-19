@@ -22,7 +22,6 @@ import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-WAVE_DIR = REPO_ROOT / "docs" / "content-wave-1"
 DEFAULT_SERVER_REPO = Path("E:/GIT/dev-interview-trainer")
 CLI_PROJECT = "tools/Trainer.ContentCli"
 
@@ -717,14 +716,32 @@ DEDUPE_SCHEMA = {
     "additionalProperties": False,
 }
 
-OUTLINE_INSTRUCTIONS = (
-    "Follow docs/content-wave-1/prompts/outline.md. Plan the question stubs of the topic named in the item, "
-    "using the counts, type plan, policies and stack inventory given there. Answer with the topic key and the stubs."
-)
-DEDUPE_INSTRUCTIONS = (
-    "Follow docs/content-wave-1/prompts/dedupe.md. Review every planned stub of every topic in the item against "
-    "each other and against the existing inventory. Answer with the findings; an empty list when nothing needs fixing."
-)
+def wave_rel(wave_dir: Path, worktree: Path, *parts: str) -> str:
+    """POSIX path of `wave_dir/parts` relative to the worktree, as task files and the server name repo files.
+
+    Both sides are resolved first: a relative `--wave-dir` must give the same text from any working directory.
+    """
+    target = Path(wave_dir).resolve().joinpath(*parts)
+    try:
+        return target.relative_to(Path(worktree).resolve()).as_posix()
+    except ValueError:
+        raise WaveError(f"{target} is outside the worktree {worktree}") from None
+
+
+def outline_instructions(wave_dir: Path, worktree: Path) -> str:
+    return (
+        f"Follow {wave_rel(wave_dir, worktree, 'prompts', 'outline.md')}. Plan the question stubs of the topic named "
+        "in the item, using the counts, type plan, policies and stack inventory given there. "
+        "Answer with the topic key and the stubs."
+    )
+
+
+def dedupe_instructions(wave_dir: Path, worktree: Path) -> str:
+    return (
+        f"Follow {wave_rel(wave_dir, worktree, 'prompts', 'dedupe.md')}. Review every planned stub of every topic in "
+        "the item against each other and against the existing inventory. "
+        "Answer with the findings; an empty list when nothing needs fixing."
+    )
 
 
 def _covers(dump: dict, stack: str = "dotnet") -> dict[str, str]:
@@ -754,7 +771,7 @@ def _policy_text(topic: str, spec: dict, policies: dict) -> str:
     return "no special policy; output only where a deterministic BCL-only snippet exists."
 
 
-def build_outline_task(dump: dict, targets: dict, ref: str) -> dict:
+def build_outline_task(dump: dict, targets: dict, ref: str, wave_dir: Path, worktree: Path) -> dict:
     existing_levels, existing_types = existing_counts(dump)
     remaining = remaining_counts(targets, existing_levels)
     quotas = type_quotas(targets, remaining, existing_types)
@@ -797,14 +814,15 @@ def build_outline_task(dump: dict, targets: dict, ref: str) -> dict:
         "model": "claude-opus-5-5",
         "effort": "high",
         "maxOutputTokens": MAX_OUTPUT_TOKENS,
-        "instructions": OUTLINE_INSTRUCTIONS,
-        "sharedFiles": ["docs/content-wave-1/prompts/outline.md", "docs/content-guide.md", "content/dotnet/topics.yaml"],
+        "instructions": outline_instructions(wave_dir, worktree),
+        "sharedFiles": [wave_rel(wave_dir, worktree, "prompts", "outline.md"), "docs/content-guide.md",
+                        "content/dotnet/topics.yaml"],
         "outputSchema": OUTLINE_SCHEMA,
         "items": items,
     }
 
 
-def build_dedupe_task(dump: dict, targets: dict, outlines: dict, ref: str) -> dict:
+def build_dedupe_task(dump: dict, targets: dict, outlines: dict, ref: str, wave_dir: Path, worktree: Path) -> dict:
     lines = ["Planned stubs (stubId | topic | level | type | angle | answerHinge):"]
     for topic in targets["topics"]:
         for stub in outlines.get(topic, []):
@@ -818,9 +836,9 @@ def build_dedupe_task(dump: dict, targets: dict, outlines: dict, ref: str) -> di
         "model": "claude-opus-5-5",
         "effort": "high",
         "maxOutputTokens": MAX_OUTPUT_TOKENS,
-        "instructions": DEDUPE_INSTRUCTIONS,
-        "sharedFiles": ["docs/content-wave-1/prompts/dedupe.md", "docs/content-wave-1/prompts/outline.md",
-                        "content/dotnet/topics.yaml"],
+        "instructions": dedupe_instructions(wave_dir, worktree),
+        "sharedFiles": [wave_rel(wave_dir, worktree, "prompts", "dedupe.md"),
+                        wave_rel(wave_dir, worktree, "prompts", "outline.md"), "content/dotnet/topics.yaml"],
         "outputSchema": DEDUPE_SCHEMA,
         "items": [{"id": "dedupe-all", "text": "\n".join(lines) + "\n", "files": ["content/dotnet/redirects.yaml"]}],
     }
@@ -1003,20 +1021,34 @@ GEN_SCHEMA = {
     "additionalProperties": False,
 }
 
-GEN_INSTRUCTIONS = (
-    "Follow docs/content-wave-1/prompts/generate.md. Write one complete question file for every stub in the item. "
-    "Answer with `questions` (one {stubId, yaml} per stub, raw YAML without an id line and without Markdown fences) "
-    "and `notes` (one {stubId, text} per claim you hold with less than full certainty; an empty list when none)."
-)
-REPAIR_INSTRUCTIONS = (
-    "Follow docs/content-wave-1/prompts/repair.md (and every rule of prompts/generate.md). Rewrite every question in "
-    "the item. Answer with `questions` (one complete {stubId, yaml} per question, no id line, no Markdown fences) and "
-    "`notes` (fixes that change level or type, rebuttals with their evidence; an empty list when none)."
-)
-GEN_SHARED = ["docs/content-wave-1/prompts/generate.md", "docs/content-guide.md",
-              "content/schema/question.schema.json", "content/dotnet/topics.yaml"]
-REPAIR_SHARED = ["docs/content-wave-1/prompts/repair.md", "docs/content-wave-1/prompts/generate.md",
-                 "docs/content-guide.md", "content/schema/question.schema.json"]
+def gen_instructions(wave_dir: Path, worktree: Path) -> str:
+    return (
+        f"Follow {wave_rel(wave_dir, worktree, 'prompts', 'generate.md')}. Write one complete question file for every "
+        "stub in the item. Answer with `questions` (one {stubId, yaml} per stub, raw YAML without an id line and "
+        "without Markdown fences) and `notes` (one {stubId, text} per claim you hold with less than full certainty; "
+        "an empty list when none)."
+    )
+
+
+def repair_instructions(wave_dir: Path, worktree: Path) -> str:
+    return (
+        f"Follow {wave_rel(wave_dir, worktree, 'prompts', 'repair.md')} (and every rule of prompts/generate.md). "
+        "Rewrite every question in the item. Answer with `questions` (one complete {stubId, yaml} per question, no id "
+        "line, no Markdown fences) and `notes` (fixes that change level or type, rebuttals with their evidence; "
+        "an empty list when none)."
+    )
+
+
+def gen_shared(wave_dir: Path, worktree: Path) -> list[str]:
+    return [wave_rel(wave_dir, worktree, "prompts", "generate.md"), "docs/content-guide.md",
+            "content/schema/question.schema.json", "content/dotnet/topics.yaml"]
+
+
+def repair_shared(wave_dir: Path, worktree: Path) -> list[str]:
+    return [wave_rel(wave_dir, worktree, "prompts", "repair.md"), wave_rel(wave_dir, worktree, "prompts", "generate.md"),
+            "docs/content-guide.md", "content/schema/question.schema.json"]
+
+
 PRICES = {"claude-opus-5-5": (2.00, 10.00), "claude-sonnet-5-5": (1.00, 5.00)}
 ITEM_FILES_SOFT_LIMIT = 250_000
 REGISTRY_FILE = "items.json"
@@ -1085,10 +1117,10 @@ def committed_files(worktree: Path, ref: str, directory: str) -> list[str]:
     return sorted(line for line in result.stdout.splitlines() if line.endswith(".yaml"))
 
 
-def context_files(topic: str, targets: dict, worktree: Path, ref: str, extra: list[str],
+def context_files(topic: str, targets: dict, worktree: Path, wave_dir: Path, ref: str, extra: list[str],
                   lister=committed_files) -> list[str]:
     """`outline/<topic>.json` plus committed questions of the topic, then of its neighbours, within a size limit."""
-    files = [f"docs/content-wave-1/outline/{topic}.json", *extra]
+    files = [wave_rel(wave_dir, worktree, "outline", f"{topic}.json"), *extra]
     size = sum(_chars(worktree, f) for f in files if (worktree / f).is_file())
     for name in [topic, *targets["topics"].get(topic, {}).get("neighbours", [])]:
         for file in lister(worktree, ref, f"content/dotnet/{name}"):
@@ -1154,7 +1186,8 @@ def _group_order(targets: dict) -> dict[str, int]:
     return order
 
 
-def build_question_items(chunks: list[list[dict]], targets: dict, worktree: Path, ref: str, registry: dict,
+def build_question_items(chunks: list[list[dict]], targets: dict, worktree: Path, wave_dir: Path, ref: str,
+                         registry: dict,
                          stage: str, text_for, extra_files_for=None, lister=committed_files,
                          id_prefix: str = "gen") -> tuple[list[tuple[str, dict]], dict]:
     """Items `<id_prefix>-<topic>-<k>` (k continues across task files) and their registry entries."""
@@ -1170,7 +1203,7 @@ def build_question_items(chunks: list[list[dict]], targets: dict, worktree: Path
         item_id = f"{prefix}{next_item_number(registry, prefix, used)}"
         used.add(item_id)
         extra = extra_files_for(chunk) if extra_files_for else []
-        item = {"id": item_id, "text": text_for(chunk), "files": context_files(topic, targets, worktree, ref, extra, lister)}
+        item = {"id": item_id, "text": text_for(chunk), "files": context_files(topic, targets, worktree, wave_dir, ref, extra, lister)}
         items.append((targets["topics"][topic].get("group", ""), item))
         entries[item_id] = {"stage": stage, "stubs": [r["stubId"] for r in chunk]}
     return items, entries
@@ -1189,7 +1222,7 @@ def base_task(model: str, instructions: str, shared: list[str], schema: dict, re
             "instructions": instructions, "sharedFiles": shared, "outputSchema": schema, "items": []}
 
 
-def build_gen_tasks(state: dict, targets: dict, ref: str, worktree: Path, registry: dict, only: list[str] | None,
+def build_gen_tasks(state: dict, targets: dict, ref: str, worktree: Path, wave_dir: Path, registry: dict, only: list[str] | None,
                     max_estimate: float | None, today: str, lister=committed_files,
                     retry: bool = False) -> tuple[list[dict], dict]:
     """Generation (or split retry) tasks; returns the task files' contents and the new registry entries."""
@@ -1216,8 +1249,9 @@ def build_gen_tasks(state: dict, targets: dict, ref: str, worktree: Path, regist
     if not records:
         raise WaveError("no stubs to generate")
     chunks = chunk_records(records, targets, force_single=retry)
-    task = base_task("claude-opus-5-5", GEN_INSTRUCTIONS, GEN_SHARED, GEN_SCHEMA, ref)
-    items, entries = build_question_items(chunks, targets, worktree, ref, registry, "gen",
+    task = base_task("claude-opus-5-5", gen_instructions(wave_dir, worktree), gen_shared(wave_dir, worktree),
+                     GEN_SCHEMA, ref)
+    items, entries = build_question_items(chunks, targets, worktree, wave_dir, ref, registry, "gen",
                                           lambda c: gen_item_text(c, today), lister=lister)
     tasks = []
     for chunk_items in split_by_estimate(task, items, worktree, max_estimate):
@@ -2382,11 +2416,18 @@ def links_fetch(state: dict, docs: dict[str, dict], wave_dir: Path, worktree: Pa
 
 # ---------------------------------------------------------------- fact-check (verify) tasks
 
-VERIFY_INSTRUCTIONS = (
-    "Follow docs/content-wave-1/prompts/verify.md. Fact-check every question in the item against the evidence given "
-    "there (sandbox result, numbered source, fetched link excerpts). Answer with exactly one verdict per stubId."
-)
-VERIFY_SHARED = ["docs/content-wave-1/prompts/verify.md", "docs/content-guide.md"]
+def verify_instructions(wave_dir: Path, worktree: Path) -> str:
+    return (
+        f"Follow {wave_rel(wave_dir, worktree, 'prompts', 'verify.md')}. Fact-check every question in the item against "
+        "the evidence given there (sandbox result, numbered source, fetched link excerpts). "
+        "Answer with exactly one verdict per stubId."
+    )
+
+
+def verify_shared(wave_dir: Path, worktree: Path) -> list[str]:
+    return [wave_rel(wave_dir, worktree, "prompts", "verify.md"), "docs/content-guide.md"]
+
+
 SURVIVOR_STATUSES = {"verify-pass", "owner-review", "final", "owner-edited"}
 
 
@@ -2521,8 +2562,9 @@ def build_verify_tasks(state: dict, targets: dict, ref: str, worktree: Path, wav
     def no_neighbours(worktree_, ref_, directory):
         return []
 
-    task = base_task("claude-sonnet-5-5", VERIFY_INSTRUCTIONS, VERIFY_SHARED, VERDICT_SCHEMA, ref)
-    items, entries = build_question_items(chunks, targets, worktree, ref, registry, "verify", text_for, files_for,
+    task = base_task("claude-sonnet-5-5", verify_instructions(wave_dir, worktree), verify_shared(wave_dir, worktree),
+                     VERDICT_SCHEMA, ref)
+    items, entries = build_question_items(chunks, targets, worktree, wave_dir, ref, registry, "verify", text_for, files_for,
                                           lister=no_neighbours, id_prefix=f"verify-r{round_}")
     for item_id, entry in entries.items():
         entry["round"] = round_
@@ -2799,8 +2841,9 @@ def build_repair_tasks(state: dict, targets: dict, ref: str, worktree: Path, wav
                   "question, without an id line.\n\n")
         return header + "\n\n".join(repair_block(r, docs.get(r["path"]), worktree, wave_dir) for r in chunk) + "\n"
 
-    task = base_task("claude-opus-5-5", REPAIR_INSTRUCTIONS, REPAIR_SHARED, GEN_SCHEMA, ref)
-    items, entries = build_question_items(chunks, targets, worktree, ref, registry, "repair", text_for,
+    task = base_task("claude-opus-5-5", repair_instructions(wave_dir, worktree), repair_shared(wave_dir, worktree),
+                     GEN_SCHEMA, ref)
+    items, entries = build_question_items(chunks, targets, worktree, wave_dir, ref, registry, "repair", text_for,
                                           lister=lister, id_prefix="repair")
     tasks = [{**task, "items": chunk_items} for chunk_items in split_by_estimate(task, items, worktree, max_estimate)]
     return tasks, entries, revised
@@ -3325,7 +3368,7 @@ def cmd_outline_tasks(args, wave_dir: Path) -> int:
     worktree = Path(args.worktree)
     targets = load_targets(wave_dir)
     dump = load_dump(worktree, args.dump_file)
-    task = build_outline_task(dump, targets, resolve_ref(worktree, args.ref))
+    task = build_outline_task(dump, targets, resolve_ref(worktree, args.ref), wave_dir, worktree)
     write_task(task, "outline", args, wave_dir)
     return 0
 
@@ -3357,7 +3400,7 @@ def cmd_dedupe_tasks(args, wave_dir: Path) -> int:
     missing = [t for t in targets["topics"] if t not in outlines]
     if missing:
         raise WaveError(f"outlines missing for: {', '.join(missing)}")
-    task = build_dedupe_task(dump, targets, outlines, resolve_ref(worktree, args.ref))
+    task = build_dedupe_task(dump, targets, outlines, resolve_ref(worktree, args.ref), wave_dir, worktree)
     write_task(task, "dedupe", args, wave_dir)
     return 0
 
@@ -3396,7 +3439,7 @@ def cmd_gen_tasks(args, wave_dir: Path) -> int:
     worktree = Path(args.worktree)
     state = load_state(wave_dir / "state.json")
     tasks, entries = build_gen_tasks(state, load_targets(wave_dir), resolve_ref(worktree, args.ref), worktree,
-                                     registry_for_build(args, args.name or "gen", wave_dir), _only(args), args.max_estimate,
+                                     wave_dir, registry_for_build(args, args.name or "gen", wave_dir), _only(args), args.max_estimate,
                                      utc_now().strftime("%Y-%m-%d"))
     write_tasks(tasks, entries, args.name or "gen", "gen", args, wave_dir)
     return 0
@@ -3412,7 +3455,7 @@ def cmd_retry_plan(args, wave_dir: Path) -> int:
         print("nothing to retry")
         return 0
     tasks, entries = build_gen_tasks(state, load_targets(wave_dir), resolve_ref(worktree, args.ref), worktree,
-                                     load_registry(wave_dir), None, args.max_estimate,
+                                     wave_dir, load_registry(wave_dir), None, args.max_estimate,
                                      utc_now().strftime("%Y-%m-%d"), retry=True)
     existing = len(list((wave_dir / "tasks").glob("gen-retry-*.json")))
     write_tasks(tasks, entries, args.name or f"gen-retry-{existing + 1}", "gen", args, wave_dir)
@@ -3603,7 +3646,7 @@ def cmd_owner_check(args, wave_dir: Path) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="wave.py", description=__doc__)
-    parser.add_argument("--wave-dir", default=str(WAVE_DIR))
+    parser.add_argument("--wave-dir", required=True, help="wave directory, e.g. docs/content-wave-2")
     parser.add_argument("--worktree", default=str(REPO_ROOT))
     parser.add_argument("--server-repo", default=str(DEFAULT_SERVER_REPO))
     parser.add_argument("--dump-file", help="use a saved `dump` JSON instead of running the content CLI")
@@ -3728,7 +3771,7 @@ def main(argv: list[str] | None = None) -> int:
     if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
         sys.stdout.reconfigure(encoding="utf-8")
     try:
-        return COMMANDS[args.command](args, Path(args.wave_dir))
+        return COMMANDS[args.command](args, Path(args.wave_dir).resolve())
     except WaveError as error:
         print(f"error: {error}", file=sys.stderr)
         return 1

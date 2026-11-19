@@ -376,9 +376,67 @@ class InventoryAndOutlineTests(unittest.TestCase):
         self.assertEqual(["csharp-02", "csharp-03", "csharp-04"], [s["stubId"] for s in stubs])
 
 
+class WaveDirTests(unittest.TestCase):
+    def test_task_instructions_name_the_wave_dir(self):
+        env = WaveEnv(wave="content-wave-2")
+        try:
+            wave_dir, worktree = env.wave_dir, env.worktree
+            for i, level in enumerate(("junior", "junior"), 1):
+                env.add(f"testing-{i:02d}", topic="testing", level=level, type_="open")
+            (wave_dir / "outline").mkdir(parents=True)
+            (wave_dir / "outline" / "testing.json").write_text("{}", encoding="utf-8")
+            full = json.loads((wave.REPO_ROOT / "docs" / "content-wave-1" / "targets.json").read_text(encoding="utf-8"))
+            dump = {"questions": [], "topics": {"dotnet": [
+                {"key": k, "locales": {"en": {"title": k, "description": f"Covers {k}."}}} for k in full["topics"]]},
+                "redirects": {"dotnet": []}, "readIssues": []}
+            outline = wave.build_outline_task(dump, full, "abc", wave_dir, worktree)
+            dedupe = wave.build_dedupe_task(dump, full, {}, "abc", wave_dir, worktree)
+            gen_tasks, entries = wave.build_gen_tasks(env.state, env.targets, "abc", worktree, wave_dir, {}, None, None,
+                                                      "2026-11-13", lister=lambda *a: [])
+            gen = gen_tasks[0]
+            repair = wave.base_task("claude-opus-5-5", wave.repair_instructions(wave_dir, worktree),
+                                    wave.repair_shared(wave_dir, worktree), wave.GEN_SCHEMA, "abc")
+            verify = wave.base_task("claude-sonnet-5-5", wave.verify_instructions(wave_dir, worktree),
+                                    wave.verify_shared(wave_dir, worktree), wave.VERDICT_SCHEMA, "abc")
+            strings = []
+            for task in (outline, dedupe, gen, repair, verify):
+                strings.append(task["instructions"])
+                strings.extend(task["sharedFiles"])
+                for item in task["items"]:
+                    strings.extend(item["files"])
+            self.assertTrue(strings)
+            self.assertTrue(all("content-wave-1" not in s for s in strings))
+            self.assertIn("docs/content-wave-2/prompts/verify.md", verify["sharedFiles"])
+            self.assertIn("docs/content-wave-2/prompts/outline.md", outline["sharedFiles"])
+            self.assertIn("docs/content-wave-2/prompts/dedupe.md", dedupe["sharedFiles"])
+            self.assertIn("docs/content-wave-2/prompts/generate.md", gen["sharedFiles"])
+            self.assertIn("docs/content-wave-2/prompts/repair.md", repair["sharedFiles"])
+            self.assertEqual(["docs/content-wave-2/outline/testing.json"], gen["items"][0]["files"])
+        finally:
+            env.cleanup()
+
+    def test_wave_dir_is_required(self):
+        with self.assertRaises(SystemExit):
+            wave.main(["budget"])
+
+    def test_relative_wave_dir_resolves_from_any_cwd(self):
+        previous = os.getcwd()
+        os.chdir(Path(wave.__file__).resolve().parent)
+        try:
+            relative = Path("../../docs/content-wave-2")
+            self.assertEqual("docs/content-wave-2/prompts/verify.md",
+                             wave.wave_rel(relative, wave.REPO_ROOT, "prompts", "verify.md"))
+        finally:
+            os.chdir(previous)
+
+    def test_wave_dir_outside_worktree_is_an_error(self):
+        with self.assertRaises(wave.WaveError):
+            wave.wave_rel(Path(tempfile.gettempdir()) / "elsewhere", wave.REPO_ROOT, "x")
+
+
 class OutlineTaskTests(unittest.TestCase):
     def test_type_quotas_sum_and_policies(self):
-        targets = json.loads((wave.WAVE_DIR / "targets.json").read_text(encoding="utf-8"))
+        targets = json.loads((wave.REPO_ROOT / "docs" / "content-wave-1" / "targets.json").read_text(encoding="utf-8"))
         remaining = {k: dict(v["levels"]) for k, v in targets["topics"].items()}
         existing_types = {"async": {"find-bug": 1, "open": 1, "single": 1, "multi": 1},
                           "concurrency": {"situation": 1}, "csharp": {"output": 1}}
@@ -401,7 +459,7 @@ class OutlineTaskTests(unittest.TestCase):
                 self.assertGreaterEqual(code, 0.35 * total, topic)
 
     def test_build_outline_task(self):
-        targets = json.loads((wave.WAVE_DIR / "targets.json").read_text(encoding="utf-8"))
+        targets = json.loads((wave.REPO_ROOT / "docs" / "content-wave-1" / "targets.json").read_text(encoding="utf-8"))
         dump = {
             "questions": [{"path": "dotnet/async/seed.yaml", "document": {
                 "slug": "seed", "topic": "async", "level": "middle", "type": "single",
@@ -411,7 +469,8 @@ class OutlineTaskTests(unittest.TestCase):
             "redirects": {"dotnet": [{"from": "async/gone", "to": "async/seed"}]},
             "readIssues": [],
         }
-        task = wave.build_outline_task(dump, targets, "abc123")
+        task = wave.build_outline_task(dump, targets, "abc123", wave.REPO_ROOT / "docs" / "content-wave-1",
+                                       wave.REPO_ROOT)
         self.assertEqual("abc123", task["ref"])
         self.assertEqual("claude-opus-5-5", task["model"])
         self.assertEqual(32000, task["maxOutputTokens"])
@@ -472,10 +531,10 @@ def model_yaml(record, **overrides):
 class WaveEnv:
     """A temp worktree with content/, a wave dir, state records and registered items."""
 
-    def __init__(self, targets=None):
+    def __init__(self, targets=None, wave="content-wave-1"):
         self.root = Path(tempfile.mkdtemp())
         self.worktree = self.root / "repo"
-        self.wave_dir = self.worktree / "docs" / "content-wave-1"
+        self.wave_dir = self.worktree / "docs" / wave
         (self.worktree / "content" / "dotnet").mkdir(parents=True)
         self.wave_dir.mkdir(parents=True)
         self.targets = targets or small_targets({"csharp": {"levels": {"junior": 4}, "codeHeavy": True},
@@ -725,7 +784,7 @@ class ApplyTests(unittest.TestCase):
         (self.env.worktree / "docs/content-wave-1/outline").mkdir(parents=True, exist_ok=True)
         (self.env.worktree / "docs/content-wave-1/outline/testing.json").write_text("{}", encoding="utf-8")
         tasks, entries = wave.build_gen_tasks(self.env.state, self.env.targets, "abc", self.env.worktree,
-                                              self.env.registry, None, None, "2026-11-13",
+                                              self.env.wave_dir, self.env.registry, None, None, "2026-11-13",
                                               lister=lambda *a: [], retry=True)
         self.assertEqual(1, len(tasks))
         self.assertEqual(2, len(tasks[0]["items"]))
@@ -754,10 +813,10 @@ class GenTaskTests(unittest.TestCase):
             outline.mkdir(parents=True)
             for topic in ("csharp", "testing"):
                 (outline / f"{topic}.json").write_text("{}", encoding="utf-8")
-            for shared in wave.GEN_SHARED:
+            for shared in wave.gen_shared(env.wave_dir, env.worktree):
                 (env.worktree / shared).parent.mkdir(parents=True, exist_ok=True)
                 (env.worktree / shared).write_text("x" * 1000, encoding="utf-8")
-            tasks, entries = wave.build_gen_tasks(env.state, env.targets, "abc", env.worktree, {}, None, None,
+            tasks, entries = wave.build_gen_tasks(env.state, env.targets, "abc", env.worktree, env.wave_dir, {}, None, None,
                                                   "2026-11-13", lister=lambda *a: [])
             stubs = sorted(e["stubs"] for e in entries.values())
             self.assertEqual([["csharp-01"], ["csharp-02"], ["testing-03", "testing-05"], ["testing-04"],
@@ -766,12 +825,12 @@ class GenTaskTests(unittest.TestCase):
             item = next(i for i in tasks[0]["items"] if entries[i["id"]]["stubs"] == ["testing-03", "testing-05"])
             self.assertIn('"stubId": "testing-03"', item["text"])
             self.assertEqual(["docs/content-wave-1/outline/testing.json"], item["files"])
-            split, _ = wave.build_gen_tasks(env.state, env.targets, "abc", env.worktree, {}, None, 0.70,
+            split, _ = wave.build_gen_tasks(env.state, env.targets, "abc", env.worktree, env.wave_dir, {}, None, 0.70,
                                             "2026-11-13", lister=lambda *a: [])
             self.assertGreater(len(split), 1)
             registry = {k: {**v, "applied": False} for k, v in entries.items()}
             with self.assertRaises(wave.WaveError):
-                wave.build_gen_tasks(env.state, env.targets, "abc", env.worktree, registry, None, None,
+                wave.build_gen_tasks(env.state, env.targets, "abc", env.worktree, env.wave_dir, registry, None, None,
                                      "2026-11-13", lister=lambda *a: [])
         finally:
             env.cleanup()
@@ -1479,7 +1538,8 @@ class EndToEndTests(unittest.TestCase):
                         "chunk": {"default": 2, "singleLevels": ["lead", "architect"], "singleTopics": []}})
         (self.env.wave_dir / "targets.json").write_text(json.dumps(targets), encoding="utf-8")
         (self.env.wave_dir / "ledger.json").write_text("{}", encoding="utf-8")
-        for shared in {*wave.GEN_SHARED, *wave.REPAIR_SHARED, *wave.VERIFY_SHARED}:
+        for shared in {*wave.gen_shared(self.env.wave_dir, self.repo), *wave.repair_shared(self.env.wave_dir, self.repo),
+                       *wave.verify_shared(self.env.wave_dir, self.repo)}:
             (self.repo / shared).parent.mkdir(parents=True, exist_ok=True)
             (self.repo / shared).write_text("placeholder\n", encoding="utf-8")
         git(self.repo, "init", "-q", "-b", "main")

@@ -821,8 +821,8 @@ class GenTaskTests(unittest.TestCase):
             for shared in wave.gen_shared(env.wave_dir, env.worktree):
                 (env.worktree / shared).parent.mkdir(parents=True, exist_ok=True)
                 (env.worktree / shared).write_text("x" * 1000, encoding="utf-8")
-            tasks, entries = wave.build_gen_tasks(env.state, env.targets, "abc", env.worktree, env.wave_dir, {}, None, None,
-                                                  "2026-11-13", lister=lambda *a: [])
+            tasks, entries = wave.build_gen_tasks(env.state, env.targets, "abc", env.worktree, env.wave_dir, {},
+                                                  None, None, "2026-11-13", lister=lambda *a: [])
             stubs = sorted(e["stubs"] for e in entries.values())
             self.assertEqual([["csharp-01"], ["csharp-02"], ["testing-03", "testing-05"], ["testing-04"],
                               ["testing-06"]], stubs)
@@ -1543,7 +1543,8 @@ class EndToEndTests(unittest.TestCase):
                         "chunk": {"default": 2, "singleLevels": ["lead", "architect"], "singleTopics": []}})
         (self.env.wave_dir / "targets.json").write_text(json.dumps(targets), encoding="utf-8")
         (self.env.wave_dir / "ledger.json").write_text("{}", encoding="utf-8")
-        for shared in {*wave.gen_shared(self.env.wave_dir, self.repo), *wave.repair_shared(self.env.wave_dir, self.repo),
+        for shared in {*wave.gen_shared(self.env.wave_dir, self.repo),
+                       *wave.repair_shared(self.env.wave_dir, self.repo),
                        *wave.verify_shared(self.env.wave_dir, self.repo)}:
             (self.repo / shared).parent.mkdir(parents=True, exist_ok=True)
             (self.repo / shared).write_text("placeholder\n", encoding="utf-8")

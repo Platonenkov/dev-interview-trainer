@@ -1089,7 +1089,8 @@ def gen_shared(wave_dir: Path, worktree: Path) -> list[str]:
 
 
 def repair_shared(wave_dir: Path, worktree: Path) -> list[str]:
-    return [wave_rel(wave_dir, worktree, "prompts", "repair.md"), wave_rel(wave_dir, worktree, "prompts", "generate.md"),
+    return [wave_rel(wave_dir, worktree, "prompts", "repair.md"),
+            wave_rel(wave_dir, worktree, "prompts", "generate.md"),
             "docs/content-guide.md", "content/schema/question.schema.json"]
 
 
@@ -1266,8 +1267,7 @@ def _group_order(targets: dict) -> dict[str, int]:
 
 
 def build_question_items(chunks: list[list[dict]], targets: dict, worktree: Path, wave_dir: Path, ref: str,
-                         registry: dict,
-                         stage: str, text_for, extra_files_for=None, lister=committed_files,
+                         registry: dict, stage: str, text_for, extra_files_for=None, lister=committed_files,
                          id_prefix: str = "gen",
                          markers: set[str] | None = None) -> tuple[list[tuple[str, dict]], dict]:
     """Items `<id_prefix>-<topic>-<k>` (k continues across task files) and their registry entries."""
@@ -2647,8 +2647,8 @@ def build_verify_tasks(state: dict, targets: dict, ref: str, worktree: Path, wav
 
     task = base_task("claude-sonnet-5-5", verify_instructions(wave_dir, worktree), verify_shared(wave_dir, worktree),
                      VERDICT_SCHEMA, ref)
-    items, entries = build_question_items(chunks, targets, worktree, wave_dir, ref, registry, "verify", text_for, files_for,
-                                          lister=no_neighbours, id_prefix=f"verify-r{round_}",
+    items, entries = build_question_items(chunks, targets, worktree, wave_dir, ref, registry, "verify", text_for,
+                                          files_for, lister=no_neighbours, id_prefix=f"verify-r{round_}",
                                           markers=wave_markers(state))
     for item_id, entry in entries.items():
         entry["round"] = round_
@@ -3656,8 +3656,8 @@ def cmd_gen_tasks(args, wave_dir: Path) -> int:
     worktree = Path(args.worktree)
     state = load_state(wave_dir / "state.json")
     tasks, entries = build_gen_tasks(state, load_targets(wave_dir), resolve_ref(worktree, args.ref), worktree,
-                                     wave_dir, registry_for_build(args, args.name or "gen", wave_dir), _only(args), args.max_estimate,
-                                     utc_now().strftime("%Y-%m-%d"))
+                                     wave_dir, registry_for_build(args, args.name or "gen", wave_dir), _only(args),
+                                     args.max_estimate, utc_now().strftime("%Y-%m-%d"))
     write_tasks(tasks, entries, args.name or "gen", "gen", args, wave_dir)
     return 0
 
@@ -3746,8 +3746,9 @@ def cmd_verify_tasks(args, wave_dir: Path) -> int:
     state = load_state(wave_dir / "state.json")
     docs, _, _ = _docs_and_seeds(worktree, args, state)
     tasks, entries = build_verify_tasks(state, load_targets(wave_dir), resolve_ref(worktree, args.ref), worktree,
-                                        wave_dir, registry_for_build(args, args.name or f"verify-r{args.round}", wave_dir), docs, args.round, _only(args),
-                                        args.max_estimate)
+                                        wave_dir,
+                                        registry_for_build(args, args.name or f"verify-r{args.round}", wave_dir),
+                                        docs, args.round, _only(args), args.max_estimate)
     write_tasks(tasks, entries, args.name or f"verify-r{args.round}", "verify", args, wave_dir)
     ledger = load_ledger(wave_dir)
     ledger.setdefault("verifyItems", {}).update({k: v["hashes"] for k, v in entries.items()})
@@ -3772,7 +3773,8 @@ def cmd_repair_tasks(args, wave_dir: Path) -> int:
     targets = load_targets(wave_dir)
     docs, seed_levels, seed_types = _docs_and_seeds(worktree, args, state)
     tasks, entries, revised = build_repair_tasks(state, targets, resolve_ref(worktree, args.ref), worktree, wave_dir,
-                                                 registry_for_build(args, args.name or "repair", wave_dir), docs, args.max_estimate)
+                                                 registry_for_build(args, args.name or "repair", wave_dir), docs,
+                                                 args.max_estimate)
     write_tasks(tasks, entries, args.name or "repair", "repair", args, wave_dir)
     save_state(wave_dir / "state.json", state)
     if revised:

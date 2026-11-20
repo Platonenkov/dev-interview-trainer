@@ -1,0 +1,137 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RMZQVW942CCW8TM7TX
+slug: large-in-process-cache-gc-mark-cost
+stack: dotnet
+topic: clr-gc
+level: architect
+type: single
+grading: auto
+tags: [gc, generations, full-gc, gc-pauses, caching]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: false
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/fundamentals
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/performance
+    lang: en
+    kind: docs
+  - url: https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/botr/garbage-collection.md
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему огромный кэш внутри процесса даёт длинные паузы полной сборки мусора и что устраняет причину?
+    prompt: |
+      Сервис на .NET 10 держит в памяти процесса кэш `Dictionary<string, CacheEntry>`, где `CacheEntry` - класс
+      с несколькими полями-ссылками (строки, вложенные объекты). Записей сотни миллионов, они живут часами и давно
+      находятся в поколении 2. Метрики показывают редкие, но длинные (до нескольких секунд) паузы полных сборок
+      мусора, и они совпадают со всплесками задержки ответов.
+
+      Какое изменение архитектуры устраняет первопричину этих пауз?
+    hint: Что приходится обойти сборщику мусора при полной сборке и от чего растёт объём этой работы?
+    options:
+      a: "Увеличить лимит памяти контейнера и жёсткий лимит кучи (`System.GC.HeapHardLimit`), чтобы полные сборки происходили реже."
+      b: "Вызывать `GC.Collect()` по расписанию в часы минимальной нагрузки, чтобы полные сборки не приходились на пик."
+      c: "Перестроить кэш так, чтобы в управляемой куче было на порядки меньше объектов и ссылок: хранить записи в больших массивах структур без полей-ссылок, держать сериализованные значения в крупных буферах или неуправляемой памяти либо вынести кэш из процесса (например, в Redis)."
+      d: "Включить `GCSettings.LatencyMode = GCLatencyMode.SustainedLowLatency` на всё время работы сервиса."
+      e: "Установить `GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce`, чтобы сборщик уплотнил кучу, в которой лежит кэш."
+    optionExplanations:
+      a: "Работа полной сборки определяется числом живых объектов и ссылок между ними, а не размером кучи. С большим лимитом полные сборки случаются реже, но каждая обходит те же сотни миллионов объектов, и пауза не становится короче, а кэш, которому позволили вырасти, сделает её ещё длиннее."
+      b: "`GC.Collect()` без аргументов запускает полную блокирующую сборку: она помечает тот же граф и даёт такую же паузу, только по расписанию. Естественные сборки поколения 2 в пик никуда не деваются: их запускает исчерпание бюджета выделений, а не время суток."
+      d: "Этот режим лишь просит сборщик избегать полных блокирующих сборок и выполнять поколение 2 в фоне. Фоновая пометка всё равно обходит весь кэш и тратит процессор, а при нехватке памяти блокирующая полная сборка всё равно происходит. Число объектов, которые надо обойти, не меняется."
+      e: "Записи кэша - маленькие объекты в куче малых объектов; в куче больших объектов (LOH, объекты от 85 000 байт) лежат только внутренние массивы самого словаря. Уплотнение не уменьшает число объектов, которые надо пометить, и лишь добавляет работы следующей полной сборке."
+    answer: "Перестроить кэш так, чтобы в управляемой куче было на порядки меньше объектов и ссылок: массивы структур без ссылок, сериализованные данные в крупных буферах или неуправляемой памяти либо внешний кэш. Стоимость полной сборки растёт с числом живых объектов и ссылок, а не с объёмом памяти."
+    explanation: |
+      Полная сборка (поколение 2) собирает все поколения. В фазе пометки сборщик начинает с корней и обходит каждый
+      достижимый объект, следуя по каждому его полю-ссылке, а в фазах планирования и уплотнения работает с выжившими
+      объектами. Поэтому её стоимость растёт с числом живых объектов и ссылок, а не с тем, сколько памяти свободно.
+      Записи кэша долго живут и находятся в поколении 2, значит каждая полная сборка заново обходит сотни миллионов
+      объектов, а при уплотнении ещё и перемещает их. Именно это и даёт секундные паузы.
+
+      Фоновая сборка мусора, включённая по умолчанию, выполняет большую часть пометки поколения 2 параллельно с
+      приложением, но она съедает процессор, а блокирующие полные сборки (например, при нехватке памяти или для
+      уплотнения) всё равно помечают весь граф во время паузы. Кроме того, если записи кэша часто обновляются
+      ссылками на новые объекты, сборкам младших поколений приходится просматривать эти ссылки из поколения 2.
+
+      Лечится это уменьшением числа управляемых объектов, а не настройками:
+
+      - **Массивы структур без полей-ссылок.** Для сборщика мусора такой массив - один объект, и внутри него нет
+        ссылок, по которым надо идти при пометке. Ключи отображаются в индексы, строки хранятся в общих буферах
+        как смещения.
+      - **Сериализованные значения в крупных буферах** (`byte[]` большими кусками) или в неуправляемой памяти
+        (`NativeMemory.Alloc`, отображаемые в память файлы): данные есть, объектов почти нет.
+      - **Внешний кэш** (Redis или отдельный процесс): куча сервиса остаётся маленькой.
+
+      У каждого варианта своя цена: сериализация при каждом чтении, сетевая задержка, ручное управление памятью и
+      более сложный код. Решение принимают по измерениям: число сборок поколения 2, длительность пауз, доля времени
+      в GC до и после изменения. Описанное поведение сборщика мусора - деталь реализации, проверенная для .NET 10.
+    linkTitles:
+      - "Основы сборки мусора"
+      - "Сборка мусора и производительность"
+      - "Устройство сборщика мусора CoreCLR (Book of the Runtime)"
+  en:
+    title: Why does a huge in-process cache cause long full garbage collection pauses, and what removes the cause?
+    prompt: |
+      A .NET 10 service keeps an in-process cache `Dictionary<string, CacheEntry>`, where `CacheEntry` is a class
+      with several reference fields (strings, nested objects). There are hundreds of millions of entries, they live
+      for hours and have long been in generation 2. Metrics show rare but long (up to several seconds) full garbage
+      collection pauses, and they match the spikes in response latency.
+
+      Which architectural change removes the root cause of these pauses?
+    hint: What does a full collection have to visit, and what makes that work grow?
+    options:
+      a: "Raise the container memory limit and the hard heap limit (`System.GC.HeapHardLimit`) so that full collections happen less often."
+      b: "Call `GC.Collect()` on a schedule during off-peak hours so that full collections do not hit the peak."
+      c: "Rework the cache so that the managed heap holds orders of magnitude fewer objects and references: store entries in large arrays of structs without reference fields, keep serialized values in large buffers or native memory, or move the cache out of process (for example to Redis)."
+      d: "Turn on `GCSettings.LatencyMode = GCLatencyMode.SustainedLowLatency` for the whole lifetime of the service."
+      e: "Set `GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce` so that the collector compacts the heap that holds the cache."
+    optionExplanations:
+      a: "The work of a full collection is set by the number of live objects and the references between them, not by the heap size. With a higher limit full collections happen less often, but each one walks the same hundreds of millions of objects, so the pause is no shorter, and a cache allowed to grow makes it even longer."
+      b: "`GC.Collect()` without arguments runs a full blocking collection: it marks the same graph and causes the same pause, just on a schedule. Natural generation 2 collections at peak do not go away: they are triggered by the allocation budget running out, not by the time of day."
+      d: "This mode only asks the collector to avoid full blocking collections and to run generation 2 in the background. Background marking still walks the whole cache and burns CPU, and under memory pressure a full blocking collection still happens. The number of objects to walk does not change."
+      e: "The cache entries are small objects on the small object heap; only the dictionary's own backing arrays are on the large object heap (LOH, objects of 85,000 bytes or more). Compaction does not reduce the number of objects to mark and only adds work to the next full collection."
+    answer: "Rework the cache so that the managed heap holds orders of magnitude fewer objects and references: arrays of reference-free structs, serialized data in large buffers or native memory, or an external cache. The cost of a full collection grows with the number of live objects and references, not with the amount of memory."
+    explanation: |
+      A full collection (generation 2) collects every generation. In the mark phase the collector starts from the
+      roots and walks every reachable object, following each of its reference fields, and the plan and compact
+      phases then work on the surviving objects. So its cost grows with the number of live objects and references,
+      not with how much memory is free. The cache entries are long-lived and sit in generation 2, so every full
+      collection walks hundreds of millions of objects again, and a compacting one also moves them. That is what
+      produces pauses of seconds.
+
+      Background garbage collection, which is on by default, runs most of generation 2 marking concurrently with the
+      application, but it consumes CPU, and blocking full collections (for example under memory pressure or to
+      compact) still mark the whole graph during the pause. Also, if cache entries are often updated with references
+      to new objects, younger-generation collections have to examine those references from generation 2.
+
+      The cure is fewer managed objects, not settings:
+
+      - **Arrays of structs without reference fields.** To the garbage collector such an array is one object, and
+        it contains no references to follow during marking. Keys map to indexes, strings are kept in shared buffers
+        as offsets.
+      - **Serialized values in large buffers** (`byte[]` in big chunks) or in native memory (`NativeMemory.Alloc`,
+        memory-mapped files): the data is there, the objects almost are not.
+      - **An external cache** (Redis or a separate process): the service heap stays small.
+
+      Each option has a price: serialization on every read, network latency, manual memory management and more
+      complex code. The decision is driven by measurements: the number of generation 2 collections, pause durations
+      and the share of time in GC before and after the change. The collector behaviour described here is an
+      implementation detail, checked for .NET 10.
+    linkTitles:
+      - "Fundamentals of garbage collection"
+      - "Garbage collection and performance"
+      - "CoreCLR garbage collector design (Book of the Runtime)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

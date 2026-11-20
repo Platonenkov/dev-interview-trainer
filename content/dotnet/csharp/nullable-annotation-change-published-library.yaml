@@ -1,0 +1,124 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RN96CY98HYZS0JSPD9
+slug: nullable-annotation-change-published-library
+stack: dotnet
+topic: csharp
+level: architect
+type: single
+grading: auto
+tags: [nullable-reference-types, breaking-changes, library-design, versioning]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/null-safety/nullable-reference-types
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/library-guidance/breaking-changes
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Ломает ли потребителей смена возвращаемого типа с string на string? в общем NuGet-пакете?"
+    prompt: |
+      Внутренний NuGet-пакет, собранный с `<Nullable>enable</Nullable>`, используют около 40 сервисов. В нём есть метод
+      `public string GetDisplayName(int userId)`. В следующей версии автор меняет объявление на
+      `public string? GetDisplayName(int userId)`, потому что пользователя может не быть, и в этом случае метод
+      теперь возвращает `null`. Часть сервисов собирается с `<TreatWarningsAsErrors>true</TreatWarningsAsErrors>`.
+
+      Какое утверждение об этом изменении верно?
+    hint: "Отличается ли сигнатура метода в IL для `string` и `string?`? И кто читает аннотацию `?` - CLR при вызове метода или компилятор при сборке потребителя?"
+    options:
+      a: "Это двоичное критическое изменение: в сигнатуре метода меняется возвращаемый тип, поэтому сервисы, собранные с предыдущей версией пакета, получат `MissingMethodException`, пока их не пересоберут."
+      b: "Изменение двоично совместимо: в IL обе версии возвращают `System.String`, а аннотация хранится в атрибуте, который читает только компилятор. Но сервисы, которые пересоберутся с включённым nullable-контекстом, получат предупреждения вроде CS8602, а сборка с предупреждениями как ошибками упадёт, поэтому это изменение контракта."
+      c: "Это вообще не критическое изменение: аннотация - лишь подсказка, она не влияет ни на сборку, ни на выполнение потребителей, поэтому её можно выпустить в патч-версии без предупреждения."
+      d: "Затронуты только сервисы с `<Nullable>disable</Nullable>`: их сборка упадёт, потому что они не умеют работать с возвращаемым типом `string?`, а сервисы с включённым nullable и так ожидают `null` от любого ссылочного типа."
+    optionExplanations:
+      a: "`?` у ссылочного типа не меняет тип в сигнатуре: в IL метод по-прежнему возвращает `System.String`, а аннотация записана в атрибуты `NullableAttribute` и `NullableContextAttribute`. Во время выполнения метод находится по сигнатуре, поэтому уже собранные сервисы его находят и продолжают работать без пересборки."
+      c: "Аннотация - часть контракта, который читает компилятор потребителя. После пересборки код, который обращается к членам результата или присваивает его переменной типа `string`, получает предупреждения, а с предупреждениями как ошибками сборка падает. Главное же - метод теперь действительно возвращает `null`, и уже собранный код без проверки получит `NullReferenceException` во время выполнения. Тихий выпуск в патч-версии прячет это изменение контракта."
+      d: "Всё наоборот. В отключённом nullable-контексте компилятор не выдаёт nullable-предупреждений, поэтому такие сервисы собираются как раньше (хотя могут получить `NullReferenceException` во время выполнения). Предупреждения появляются именно в сервисах с включённым nullable: там `string` означает, что значение никогда не равно `null`, и компилятор отслеживает поток значения `string?`."
+    answer: "Изменение двоично совместимо, потому что аннотация - это метаданные только для компилятора, но при пересборке потребители с включённым nullable получают предупреждения, а сборка с предупреждениями как ошибками падает."
+    explanation: |
+      Ссылочные типы, допускающие значение NULL, не вводят новых типов в CLR. `string` и `string?` в сигнатуре метода -
+      один и тот же `System.String`, а разница записана в атрибуты сборки, которые читает компилятор, собирающий
+      потребителя. Поэтому смену аннотации нужно оценивать по разным видам совместимости, которые выделяет руководство
+      Microsoft по библиотекам .NET:
+
+      - **Двоичная совместимость сохраняется.** Сигнатура не изменилась, сервисы, собранные с предыдущей версией,
+        загружают пакет и вызывают метод без пересборки.
+      - **Совместимость на уровне исходного кода ломается частично.** При пересборке с включённым nullable-контекстом
+        выражение `name.Length` даёт CS8602 (разыменование ссылки, которая может быть `null`), а
+        `string name = GetDisplayName(id);` даёт CS8600. В обычной сборке это предупреждения, но при
+        `TreatWarningsAsErrors` сборка падает, и обновление пакета блокирует команды, которые его не планировали.
+      - **Поведение меняется.** Аннотацию поменяли потому, что метод стал возвращать `null`. Это и есть настоящее
+        изменение контракта: потребители, которые не пересобрались или собираются без nullable-контекста, не получат
+        никаких предупреждений и узнают о нём по `NullReferenceException` в production.
+
+      Для архитектора из этого следует: смену аннотации в общем пакете нужно версионировать и объявлять как изменение
+      контракта, а не как косметику. Часто безопаснее не менять семантику существующего метода, а добавить новый,
+      например `FindDisplayName` с возвращаемым типом `string?`, а старый оставить с гарантией, что результат никогда
+      не равен `null`, и пометить `[Obsolete]`. Ослабление требований к параметру (`string` на `string?`) и усиление
+      гарантии возврата (`string?` на `string`) обычно безопасны для вызывающего кода, обратные изменения дают
+      предупреждения.
+
+      Так это работает начиная с C# 8, в том числе в .NET 10.
+    linkTitles:
+      - "Ссылочные типы, допускающие значение NULL"
+      - "Критические изменения (руководство по библиотекам .NET)"
+  en:
+    title: "Does changing a return type from string to string? in a shared NuGet package break consumers?"
+    prompt: |
+      An internal NuGet package compiled with `<Nullable>enable</Nullable>` is used by about 40 services. It has the
+      method `public string GetDisplayName(int userId)`. In the next version the author changes the declaration to
+      `public string? GetDisplayName(int userId)`, because the user may be missing, and in that case the method now
+      returns `null`. Some of the services build with `<TreatWarningsAsErrors>true</TreatWarningsAsErrors>`.
+
+      Which statement about this change is true?
+    hint: "Does the IL signature of the method differ for `string` and `string?`? And who reads the `?` annotation - the CLR when the method is called, or the compiler when the consumer is built?"
+    options:
+      a: "It is a binary breaking change: the return type in the method signature changes, so services compiled against the previous version of the package get `MissingMethodException` until they are rebuilt."
+      b: "It is binary compatible: in IL both versions return `System.String`, and the annotation is stored in an attribute that only the compiler reads. But services that rebuild with a nullable context enabled get warnings such as CS8602, and a build with warnings as errors fails, so it is a contract change."
+      c: "It is not a breaking change at all: the annotation is only a hint, it affects neither the build nor the execution of consumers, so it can ship in a patch release without notice."
+      d: "Only services with `<Nullable>disable</Nullable>` are affected: their build fails because they cannot handle a `string?` return type, while services with nullable enabled already expect `null` from any reference type."
+    optionExplanations:
+      a: "The `?` on a reference type does not change the type in the signature: in IL the method still returns `System.String`, and the annotation is written into the `NullableAttribute` and `NullableContextAttribute` attributes. At run time the method is bound by its signature, so services that are already compiled find it and keep working without a rebuild."
+      c: "The annotation is part of the contract that the consumer's compiler reads. After a rebuild, code that accesses members of the result or assigns it to a `string` variable gets warnings, and with warnings as errors the build fails. More importantly, the method really returns `null` now, and already compiled code without a check will get `NullReferenceException` at run time. Shipping it quietly in a patch release hides this contract change."
+      d: "It is the other way round. In a disabled nullable context the compiler reports no nullable warnings, so such services build as before (though they may get `NullReferenceException` at run time). The warnings appear precisely in services with nullable enabled: there `string` means that the value is never `null`, and the compiler tracks the flow of a `string?` value."
+    answer: "The change is binary compatible because the annotation is metadata used only by the compiler, but on rebuild consumers with nullable enabled get warnings, and a build with warnings as errors fails."
+    explanation: |
+      Nullable reference types introduce no new types in the CLR. `string` and `string?` in a method signature are
+      the same `System.String`, and the difference is recorded in assembly attributes read by the compiler that
+      builds the consumer. So an annotation change has to be judged against the different kinds of compatibility
+      that the Microsoft .NET library guidance distinguishes:
+
+      - **Binary compatibility is kept.** The signature did not change, so services compiled against the previous
+        version load the package and call the method without a rebuild.
+      - **Source compatibility breaks for some consumers.** When rebuilt with a nullable context enabled, the
+        expression `name.Length` produces CS8602 (dereference of a possibly `null` reference), and
+        `string name = GetDisplayName(id);` produces CS8600. In a normal build these are warnings, but with
+        `TreatWarningsAsErrors` the build fails, and a package update blocks teams that did not plan for it.
+      - **Behaviour changes.** The annotation was changed because the method started returning `null`. That is the
+        real contract change: consumers that are not rebuilt, or build without a nullable context, get no warnings
+        at all and find out through `NullReferenceException` in production.
+
+      For an architect this means an annotation change in a shared package must be versioned and announced as a
+      contract change, not treated as cosmetics. It is often safer not to change the semantics of the existing
+      method but to add another one, for example `FindDisplayName` returning `string?`, keep the old one with its
+      guarantee that the result is never `null`, and mark it `[Obsolete]`. Relaxing a parameter (`string` to
+      `string?`) and strengthening a return guarantee (`string?` to `string`) are usually safe for callers; the
+      opposite changes produce warnings.
+
+      This is how it works since C# 8, including on .NET 10.
+    linkTitles:
+      - "Nullable reference types"
+      - "Breaking changes (.NET library guidance)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

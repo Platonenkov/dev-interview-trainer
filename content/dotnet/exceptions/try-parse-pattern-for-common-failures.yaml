@@ -1,0 +1,102 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPD78F4XTPWBXCKTR9
+slug: try-parse-pattern-for-common-failures
+stack: dotnet
+topic: exceptions
+level: middle
+type: single
+grading: auto
+tags: [exception-design, try-parse, performance, api-design]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/design-guidelines/exceptions-and-performance
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.int32.tryparse
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какую форму API выбрать для разбора ввода, который часто бывает неверным?
+    prompt: |
+      Вы проектируете публичный метод библиотеки, который разбирает код скидки, введённый пользователем, в тип
+      `DiscountCode`. Метод вызывается на каждый запрос, то есть на горячем пути, и по статистике заметная доля
+      вызовов получает неверный ввод: опечатки, лишние пробелы, просроченный формат.
+
+      Какую форму API рекомендуют рекомендации Microsoft по проектированию библиотек .NET (Framework Design Guidelines)?
+    hint: Сколько стоит выброс исключения, если неверный ввод приходит в заметной доле вызовов, и всем ли вызывающим нужен один и тот же способ узнать о неудаче?
+    options:
+      a: "Только метод `DiscountCode Parse(string s)`, который выбрасывает `FormatException`, а вызывающий код оборачивает вызов в `try`/`catch`"
+      b: "Пара методов: `DiscountCode Parse(string s)` выбрасывает исключение при неверном вводе, а `bool TryParse(string s, out DiscountCode result)` в этом случае возвращает `false` без исключения"
+      c: "Метод `int Parse(string s, out DiscountCode result)`, который возвращает код ошибки: `0` - успех, остальные значения - причина отказа"
+      d: "Только `bool TryParse(string s, out DiscountCode result)` без выбрасывающего метода, чтобы исключения в этом API не возникали вовсе"
+    optionExplanations:
+      a: "Неверный ввод здесь - обычный сценарий, а не исключительная ситуация. Выброс и перехват исключения намного дороже возврата значения, и на горячем пути с частыми ошибками это заметно бьёт по производительности. Кроме того, исключения не предназначены для обычного управления потоком выполнения."
+      c: "Рекомендации прямо запрещают переходить на коды ошибок из-за опасений за производительность исключений. Код возврата легко молча проигнорировать, и он не вписывается в остальные API .NET, которые сообщают об ошибках исключениями."
+      d: "Рекомендации требуют для каждого метода по шаблону Try-Parse предоставлять и выбрасывающий вариант. Вызывающему коду, для которого неверное значение - ошибка (например, обязательная настройка), нужно исключение с описанием причины, иначе он будет писать `if (!TryParse(...)) throw ...` и терять подробности."
+    answer: "Пара методов: выбрасывающий `Parse` и `bool TryParse(string s, out DiscountCode result)`, который при неверном вводе возвращает `false`."
+    explanation: |
+      Рекомендации по проектированию разбирают как раз такой случай: член API может выбрасывать исключение в
+      распространённых сценариях, и это грозит проблемами с производительностью. Решение - шаблон Try-Parse:
+      метод с префиксом `Try` и возвращаемым типом `bool`, который сообщает о хорошо определённом случае неудачи
+      результатом `false`, а полученное значение отдаёт через параметр `out`. Неудача становится частью контракта
+      метода, поэтому исключение для неё не нужно.
+
+      Рядом с `TryParse` нужно оставить выбрасывающий `Parse`: не для всех вызывающих неверный ввод - нормальный
+      случай, и тем, для кого это ошибка, удобнее получить исключение с описанием причины. Так устроены типы BCL:
+      `int.Parse` и `int.TryParse`, `Guid.Parse` и `Guid.TryParse`, `DateTime.Parse` и `DateTime.TryParse`.
+
+      Шаблон Tester-Doer (сначала проверка вроде `IsValid(s)`, затем `Parse(s)`) для разбора подходит хуже:
+      ввод пришлось бы анализировать дважды. Рекомендации называют Try-Parse более быстрым вариантом для
+      особенно требовательных к производительности API.
+    linkTitles:
+      - "Исключения и производительность"
+      - "Метод Int32.TryParse"
+  en:
+    title: Which API shape do you choose for parsing input that is often invalid?
+    prompt: |
+      You are designing a public library method that parses a discount code entered by a user into a
+      `DiscountCode` type. The method is called on every request, so it is on a hot path, and the statistics show
+      that a large share of calls get invalid input: typos, extra spaces, an outdated format.
+
+      Which API shape do Microsoft's .NET Framework Design Guidelines recommend?
+    hint: How much does throwing an exception cost when invalid input arrives in a large share of calls, and do all callers need the same way of learning about the failure?
+    options:
+      a: "Only a `DiscountCode Parse(string s)` method that throws `FormatException`, with callers wrapping the call in `try`/`catch`"
+      b: "A pair of methods: `DiscountCode Parse(string s)` throws on invalid input, and `bool TryParse(string s, out DiscountCode result)` returns `false` in that case without throwing"
+      c: "A method `int Parse(string s, out DiscountCode result)` that returns an error code: `0` means success, other values give the reason for the failure"
+      d: "Only `bool TryParse(string s, out DiscountCode result)` with no throwing method, so the API never throws at all"
+    optionExplanations:
+      a: "Invalid input is a normal scenario here, not an exceptional one. Throwing and catching an exception is far more expensive than returning a value, and on a hot path with frequent failures this noticeably hurts performance. Exceptions are also not meant for regular control flow."
+      c: "The guidelines explicitly say not to switch to error codes because of concerns about exception performance. A return code is easy to ignore silently, and it does not fit the rest of the .NET APIs, which report errors with exceptions."
+      d: "The guidelines require an exception-throwing member for every member that uses the Try-Parse pattern. A caller for whom an invalid value is an error (for example, a required setting) needs an exception that describes the reason; otherwise it writes `if (!TryParse(...)) throw ...` and loses the details."
+    answer: "A pair of methods: a throwing `Parse` and `bool TryParse(string s, out DiscountCode result)`, which returns `false` on invalid input."
+    explanation: |
+      The design guidelines cover exactly this case: a member may throw in common scenarios, which risks
+      performance problems. The answer is the Try-Parse pattern: a method with the `Try` prefix and a `bool`
+      return type that reports a well-defined failure case by returning `false` and hands back the parsed value
+      through an `out` parameter. The failure becomes part of the method's contract, so no exception is needed
+      for it.
+
+      Keep the throwing `Parse` next to `TryParse`: invalid input is not a normal case for every caller, and
+      callers that treat it as an error are better served by an exception that describes the reason. The BCL
+      types follow this shape: `int.Parse` and `int.TryParse`, `Guid.Parse` and `Guid.TryParse`,
+      `DateTime.Parse` and `DateTime.TryParse`.
+
+      The Tester-Doer pattern (a check such as `IsValid(s)` first, then `Parse(s)`) fits parsing worse: the
+      input would be analyzed twice. The guidelines present Try-Parse as the faster option for especially
+      performance-sensitive APIs.
+    linkTitles:
+      - "Exceptions and performance"
+      - "Int32.TryParse method"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

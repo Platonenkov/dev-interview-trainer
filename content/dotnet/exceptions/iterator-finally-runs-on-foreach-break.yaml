@@ -1,0 +1,143 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPRZHTW9S38K7WDWSD
+slug: iterator-finally-runs-on-foreach-break
+stack: dotnet
+topic: exceptions
+level: senior
+type: output
+grading: auto
+tags: [finally, iterators, yield, foreach, dispose]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    foreach (int n in Numbers())
+    {
+        Console.Write($"item{n} ");
+        break;
+    }
+    Console.Write("after");
+
+    static IEnumerable<int> Numbers()
+    {
+        try
+        {
+            yield return 1;
+            yield return 2;
+        }
+        finally
+        {
+            Console.Write("finally ");
+        }
+    }
+expect:
+  kind: output
+  value: "item1 finally after"
+acceptedOutputs: ["item1 finally after"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "item1 finally after" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "item1 after" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "item1 after finally" }
+  - id: d
+    correct: false
+    expect: { kind: output, value: "item1 item2 finally after" }
+  - id: e
+    correct: false
+    expect: { kind: compile-error }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/statements/yield
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/language-specification/statements
+    lang: en
+    kind: spec
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/language-specification/classes
+    lang: en
+    kind: spec
+locales:
+  ru:
+    title: Выполнится ли finally в методе-итераторе, если прервать foreach через break?
+    prompt: |
+      Метод-итератор `Numbers` возвращает элементы через `yield return` внутри `try` с блоком `finally`.
+      Цикл `foreach` берёт первый элемент и сразу выходит через `break`. Что выведет эта программа в .NET 10?
+    hint: Во что компилятор разворачивает `foreach` и что он делает с перечислителем при выходе из цикла любым способом?
+    options:
+      a: "item1 finally after"
+      b: "item1 after"
+      c: "item1 after finally"
+      d: "item1 item2 finally after"
+      e: Ошибка компиляции
+    optionExplanations:
+      b: "Итератор не остаётся навсегда приостановленным внутри `try`: при выходе из `foreach` вызывается `Dispose` перечислителя, а `Dispose` выполняет ожидающий блок `finally`."
+      c: "`Dispose` вызывается в скрытом `finally` самого цикла `foreach`, то есть сразу при выходе из цикла, до следующего оператора. Отложенной очистки, например через финализатор, у итератора нет."
+      d: "После `break` метод `MoveNext` больше не вызывается, поэтому итератор не доходит до `yield return 2`. Очистка через `Dispose` выполняет только блок `finally`, а не оставшийся код `try`."
+      e: "`yield return` разрешён внутри `try`, у которого есть только `finally`. Запрещены `yield return` в `try` с блоком `catch` (CS1626) и `yield` внутри самого `finally` (CS1625)."
+    answer: "item1 finally after"
+    explanation: |
+      По спецификации C# оператор `foreach` разворачивается в цикл по перечислителю, обёрнутый в
+      `try`/`finally`, и в этом `finally` перечислитель освобождается вызовом `Dispose`. `IEnumerator<T>`
+      всегда наследует `IDisposable`, поэтому выход из цикла через `break`, `return` или исключение тоже
+      приводит к вызову `Dispose`.
+
+      Перечислитель, сгенерированный для метода-итератора, - это конечный автомат. После первого `MoveNext`
+      он приостановлен на `yield return 1` внутри `try`, и блок `finally` в этот момент не выполняется.
+      По спецификации C# вызов `Dispose` в таком состоянии выполняет ожидающие блоки `finally` так, как если
+      бы последний выполненный `yield return` был `yield break`, и переводит автомат в завершённое состояние.
+      Поэтому порядок такой: `item1 ` из тела цикла, затем `finally ` из `Dispose`, и только потом `after`.
+
+      Отсюда практическое следствие: блоки `finally` и `using` в итераторе освобождают ресурсы, только если
+      потребитель вызвал `Dispose`. `foreach` делает это сам, а код, который вручную вызывает
+      `GetEnumerator()` и `MoveNext()` без `using`, оставит `finally` невыполненным. Результат проверен для
+      .NET 10; это поведение задано спецификацией языка.
+    linkTitles:
+      - "Оператор yield"
+      - "Спецификация C#: операторы (foreach)"
+      - "Спецификация C#: классы (итераторы)"
+  en:
+    title: Does finally in an iterator method run when foreach exits with break?
+    prompt: |
+      The iterator method `Numbers` returns items with `yield return` inside a `try` that has a `finally` block.
+      The `foreach` loop takes the first item and immediately exits with `break`. What does this program print in .NET 10?
+    hint: What does the compiler turn `foreach` into, and what does it do with the enumerator when the loop is left in any way?
+    options:
+      a: "item1 finally after"
+      b: "item1 after"
+      c: "item1 after finally"
+      d: "item1 item2 finally after"
+      e: Compile error
+    optionExplanations:
+      b: "The iterator does not stay suspended inside `try` forever: leaving `foreach` calls `Dispose` on the enumerator, and `Dispose` runs the pending `finally` block."
+      c: "`Dispose` is called in the hidden `finally` of the `foreach` loop itself, so it runs as soon as the loop is left, before the next statement. An iterator has no deferred cleanup such as a finalizer."
+      d: "After `break`, `MoveNext` is not called again, so the iterator never reaches `yield return 2`. Cleanup through `Dispose` runs only the `finally` block, not the rest of the `try` code."
+      e: "`yield return` is allowed inside a `try` that has only a `finally`. What is forbidden is `yield return` in a `try` with a `catch` clause (CS1626) and `yield` inside the `finally` itself (CS1625)."
+    answer: "item1 finally after"
+    explanation: |
+      According to the C# specification, a `foreach` statement expands into a loop over the enumerator wrapped
+      in `try`/`finally`, and that `finally` releases the enumerator by calling `Dispose`. `IEnumerator<T>`
+      always extends `IDisposable`, so leaving the loop through `break`, `return` or an exception also leads
+      to a `Dispose` call.
+
+      The enumerator generated for an iterator method is a state machine. After the first `MoveNext` it is
+      suspended at `yield return 1` inside `try`, and the `finally` block does not run at that point.
+      According to the C# specification, calling `Dispose` in that state runs the pending `finally` blocks as
+      if the last executed `yield return` were a `yield break`, and moves the state machine to its finished
+      state. So the order is: `item1 ` from the loop body, then `finally ` from `Dispose`, and only then `after`.
+
+      The practical consequence: `finally` and `using` blocks in an iterator release resources only if the
+      consumer calls `Dispose`. `foreach` does it for you, while code that calls `GetEnumerator()` and
+      `MoveNext()` by hand without `using` leaves the `finally` unexecuted. The result was checked for .NET 10;
+      the behaviour is defined by the language specification.
+    linkTitles:
+      - "The yield statement"
+      - "C# specification: Statements (foreach)"
+      - "C# specification: Classes (iterators)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

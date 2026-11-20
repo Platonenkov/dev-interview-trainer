@@ -1,0 +1,154 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RRJZTJF6B2PXWAN9WS
+slug: shared-library-span-overloads-api
+stack: dotnet
+topic: types-memory
+level: lead
+type: open
+grading: self
+tags: [span, memory, api-design, overloads, ref-struct, async]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/memory-and-spans/memory-t-usage-guidelines
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/memory-and-spans/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/compatibility/library-change-rules
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Стоит ли добавлять в общую библиотеку перегрузки с ReadOnlySpan<char> и Memory<T> и как выбрать тип параметра каждого метода?
+    prompt: |
+      Ваша команда сопровождает внутреннюю NuGet-библиотеку (разбор, форматирование, контрольные суммы), которой
+      пользуются около десяти команд. Её API принимает `string` и `byte[]`. Команда высоконагруженного сервиса просит
+      добавить перегрузки с `ReadOnlySpan<char>`, `Span<byte>` и `Memory<byte>`, чтобы не платить аллокациями за
+      `Substring` и `ToArray`.
+
+      Стоит ли добавлять такие перегрузки? По каким правилам вы выберете тип параметра для каждого метода и как
+      внедрите изменение? Ответ дан для C# 14 и .NET 10.
+    hint: Чем ограничен `Span<T>` как `ref struct` и что будет с каждой новой публичной перегрузкой через пару лет?
+    answer: |
+      1. **Решение: да, но выборочно.** Добавлять перегрузки со span для синхронных методов на горячих путях, которые
+         подтверждены профилями потребителей (разбор, форматирование, поиск, хеширование). Перегрузки со `string` и
+         `byte[]` оставить: у большинства вызывающих на руках именно строка или массив, и для них это самый удобный
+         вызов. Не дублировать каждый метод: каждая публичная перегрузка - это постоянная часть API для многих команд,
+         удалить или изменить её потом - ломающее изменение, а тесты и документация удваиваются.
+      2. **Правила выбора типа параметра:**
+         - синхронный метод, который только читает данные во время вызова, - `ReadOnlySpan<T>` (для текста
+           `ReadOnlySpan<char>`). Он принимает строку, массив, срез и буфер из `stackalloc`;
+         - синхронный метод, который пишет результат, - буфер вызывающего кода `Span<T>` и шаблон Try, как в BCL:
+           `bool TryFormat(Span<char> destination, out int charsWritten)`;
+         - асинхронный метод или данные, нужные после `await`, - `ReadOnlyMemory<T>` или `Memory<T>`, как в
+           `Stream.ReadAsync(Memory<byte>, CancellationToken)`. Span - это `ref struct`: его нельзя сохранить в поле
+           класса, захватить в лямбде или держать живым через `await` (с C# 13 локальная переменная-span в
+           асинхронном методе допустима, но только если она не используется через границу `await`);
+         - тип, который сохраняет буфер (конструктор, свойство), - `Memory<T>`, и в документации явно сказано, что
+           объект пользуется этой памятью, пока он жив. Если время жизни буфера не удаётся описать, надёжнее
+           скопировать данные в собственный массив;
+         - передача владения - `IMemoryOwner<T>`: получатель обязан вызвать `Dispose` или передать владение
+           дальше. Обычный параметр `Memory<T>` означает временный доступ: метод не трогает память после возврата,
+           а асинхронный метод - после завершения задачи;
+         - если метод не пишет в буфер, выбирать read-only вариант;
+         - не принимать `Memory<T>` в синхронном методе «на всякий случай»: из `Memory<T>` всегда можно получить
+           `.Span`, а обратное невозможно, поэтому span-параметр подходит большему числу вызывающих.
+      3. **Реализация.** Одна реализация живёт в перегрузке со span, а перегрузки со `string` и массивом её вызывают.
+         Проверку на `null` оставить в перегрузке со `string`: `AsSpan()` для `null` возвращает пустой span, и без
+         явного `ArgumentNullException` поведение для существующих вызывающих тихо изменится.
+      4. **Совместимость и процесс.**
+         - Проверить, что после перекомпиляции потребители связываются с теми же перегрузками: аргумент `string`
+           по-прежнему выбирает перегрузку со `string`, но в C# 14 массивы неявно преобразуются в span в большем
+           числе контекстов, поэтому вызовы из кода потребителей стоит покрыть тестами.
+         - Отслеживать публичный API (например, анализатор публичного API или проверка пакета) и проводить ревью
+           каждой новой перегрузки как отдельного решения.
+         - Подтвердить выигрыш бенчмарком (BenchmarkDotNet с `MemoryDiagnoser`) на сценарии команды, которая
+           просила изменение.
+         - Если библиотека также собирается под `netstandard2.0` для потребителей на .NET Framework, учесть, что
+           там span приходит из пакета `System.Memory` и работает медленнее, чем в .NET 10.
+    explanation: |
+      `Span<T>` и `ReadOnlySpan<T>` - дешёвое представление любого непрерывного участка памяти: массива, строки,
+      стека или неуправляемой памяти. Поэтому один span-параметр обслуживает сразу все источники и позволяет
+      передать срез без `Substring` и `ToArray`. Цена - ограничения `ref struct`: span существует только на стеке.
+      `Memory<T>` эти ограничения снимает, его можно хранить в куче и проносить через `await`, но доступ к данным
+      идёт через `.Span`, и у него сложнее семантика времени жизни. Отсюда главное правило рекомендаций Microsoft:
+      для синхронного API предпочитать `Span<T>`, а `Memory<T>` брать только тогда, когда без хранения или
+      асинхронности не обойтись.
+
+      Решение уровня lead здесь не в синтаксисе, а в цене поверхности API. Внутренняя библиотека с многими
+      потребителями живёт годами: перегрузку нельзя тихо убрать, а новая перегрузка может изменить выбор метода у
+      существующего кода. Поэтому перегрузки добавляют там, где выигрыш измерен, реализацию держат в одном месте,
+      правила владения памятью фиксируют в документации и проверяют на ревью API. Описанное верно для C# 14 и .NET 10.
+    linkTitles:
+      - "Рекомендации по использованию Memory<T> и Span<T>"
+      - "Типы, связанные с памятью и диапазонами"
+      - "Правила изменений с точки зрения совместимости"
+  en:
+    title: Should a shared library add ReadOnlySpan<char> and Memory<T> overloads, and how do you choose the parameter type of each method?
+    prompt: |
+      Your team maintains an internal NuGet library (parsing, formatting, checksums) used by about ten teams. Its API
+      takes `string` and `byte[]`. A team with a high-load service asks you to add overloads with
+      `ReadOnlySpan<char>`, `Span<byte>` and `Memory<byte>` so that they stop paying allocations for `Substring` and
+      `ToArray`.
+
+      Should you add these overloads? Which rules decide the parameter type of each method, and how do you roll the
+      change out? The answer is given for C# 14 and .NET 10.
+    hint: What limits does `Span<T>` have as a `ref struct`, and what happens to every new public overload a couple of years later?
+    answer: |
+      1. **Decision: yes, but selectively.** Add span overloads for synchronous methods on hot paths confirmed by the
+         consumers' profiles (parsing, formatting, searching, hashing). Keep the `string` and `byte[]` overloads:
+         most callers hold exactly a string or an array, and for them it is the most convenient call. Do not
+         duplicate every method: each public overload is a permanent part of the API for many teams, removing or
+         changing it later is a breaking change, and tests and documentation double.
+      2. **Rules for the parameter type:**
+         - a synchronous method that only reads the data during the call takes `ReadOnlySpan<T>` (`ReadOnlySpan<char>`
+           for text). It accepts a string, an array, a slice and a `stackalloc` buffer;
+         - a synchronous method that writes a result takes a caller-provided `Span<T>` and follows the Try pattern,
+           as the BCL does: `bool TryFormat(Span<char> destination, out int charsWritten)`;
+         - an async method, or data needed after an `await`, takes `ReadOnlyMemory<T>` or `Memory<T>`, as in
+           `Stream.ReadAsync(Memory<byte>, CancellationToken)`. A span is a `ref struct`: it cannot be stored in a class
+           field, captured in a lambda or kept alive across `await` (since C# 13 a span local is allowed in an async
+           method, but only if it is not used across an `await` boundary);
+         - a type that stores the buffer (constructor, property) takes `Memory<T>`, and the documentation states that
+           the object uses that memory for as long as it lives. If the buffer lifetime cannot be described, copying
+           the data into the type's own array is safer;
+         - ownership transfer uses `IMemoryOwner<T>`: the receiver must call `Dispose` or pass ownership on. A plain
+           `Memory<T>` parameter means temporary access: the method does not touch the memory after it returns, and
+           an async method does not touch it after its task completes;
+         - if the method does not write to the buffer, choose the read-only variant;
+         - do not take `Memory<T>` in a synchronous method "just in case": a `Memory<T>` can always give a `.Span`,
+           but not the other way round, so a span parameter fits more callers.
+      3. **Implementation.** A single implementation lives in the span overload, and the `string` and array
+         overloads call it. Keep the `null` check in the `string` overload: `AsSpan()` on `null` returns an empty
+         span, and without an explicit `ArgumentNullException` the behaviour for existing callers silently changes.
+      4. **Compatibility and process.**
+         - Check that after recompiling, consumers bind to the same overloads: a `string` argument still picks the
+           `string` overload, but in C# 14 arrays convert implicitly to spans in more contexts, so cover calls from
+           consumer code with tests.
+         - Track the public API (for example, a public API analyzer or package validation) and review each new
+           overload as a separate decision.
+         - Confirm the gain with a benchmark (BenchmarkDotNet with `MemoryDiagnoser`) on the scenario of the team
+           that asked for the change.
+         - If the library also targets `netstandard2.0` for .NET Framework consumers, remember that there span comes
+           from the `System.Memory` package and is slower than on .NET 10.
+    explanation: |
+      `Span<T>` and `ReadOnlySpan<T>` are a cheap view over any contiguous memory: an array, a string, the stack or
+      unmanaged memory. So one span parameter serves every source and lets a caller pass a slice without `Substring`
+      or `ToArray`. The price is the `ref struct` restrictions: a span exists only on the stack. `Memory<T>` lifts
+      these restrictions, it can be stored on the heap and carried across `await`, but data access goes through
+      `.Span`, and its lifetime semantics are more complex. Hence the main rule of the Microsoft guidelines: prefer
+      `Span<T>` for a synchronous API, and use `Memory<T>` only when storage or asynchrony makes it unavoidable.
+
+      The lead-level decision here is not about syntax but about the cost of API surface. An internal library with
+      many consumers lives for years: an overload cannot be quietly removed, and a new overload can change which
+      method existing code binds to. So overloads are added where the gain is measured, the implementation is kept
+      in one place, memory ownership rules are written down in the documentation and checked in API review. This
+      holds for C# 14 and .NET 10.
+    linkTitles:
+      - "Memory<T> and Span<T> usage guidelines"
+      - "Memory- and span-related types"
+      - "Change rules for compatibility"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

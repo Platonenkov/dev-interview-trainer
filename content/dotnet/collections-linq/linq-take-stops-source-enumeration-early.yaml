@@ -1,0 +1,127 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RMG8R15V2EX08ZCS1W
+slug: linq-take-stops-source-enumeration-early
+stack: dotnet
+topic: collections-linq
+level: middle
+type: output
+grading: auto
+tags: [linq, take, deferred-execution, iterators, yield]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    List<int> result = Numbers()
+        .Where(n => n % 2 == 0)
+        .Take(2)
+        .ToList();
+    Console.Write($"| {string.Join(",", result)}");
+
+    static IEnumerable<int> Numbers()
+    {
+        for (int i = 1; i <= 6; i++)
+        {
+            Console.Write($"{i} ");
+            yield return i;
+        }
+    }
+expect:
+  kind: output
+  value: "1 2 3 4 | 2,4"
+acceptedOutputs: ["1 2 3 4 | 2,4"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "1 2 3 4 | 2,4" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "1 2 3 4 5 6 | 2,4" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "1 2 3 4 5 | 2,4" }
+  - id: d
+    correct: false
+    expect: { kind: compile-error }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/linq/deferred-execution-lazy-evaluation
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.linq.enumerable.take
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Сколько элементов прочитает из источника цепочка Where, Take(2) и ToList?
+    prompt: |
+      Метод-итератор `Numbers` печатает каждое число перед тем, как вернуть его через `yield return`.
+      Результат фильтруется через `Where`, ограничивается через `Take(2)` и материализуется через `ToList`.
+      Что выведет эта программа в консоль?
+    hint: Кто в этой цепочке решает, когда запросить у источника следующий элемент, и нужен ли кому-то из операторов весь источник целиком?
+    options:
+      a: "1 2 3 4 | 2,4"
+      b: "1 2 3 4 5 6 | 2,4"
+      c: "1 2 3 4 5 | 2,4"
+      d: Ошибка компиляции
+    optionExplanations:
+      b: "Так было бы, если бы каждый оператор отрабатывал целиком, прежде чем передать результат следующему: сначала `Where` прочитал бы все шесть чисел, а потом `Take` выбрал бы два. В LINQ to Objects `Where` и `Take` потоковые: они запрашивают элементы у источника по одному и только тогда, когда следующий элемент нужен потребителю."
+      c: "`Take(2)` не заглядывает вперёд, чтобы проверить, есть ли ещё элементы. Получив второй подходящий элемент, он сразу завершает перебор и больше не вызывает `MoveNext` у `Where`, поэтому число `5` итератор так и не выдаёт."
+      d: "Код корректен: статическая локальная функция может быть итератором с `yield return`, её можно объявить после операторов верхнего уровня, а `Where`, `Take` и `ToList` доступны благодаря неявной директиве `using System.Linq`."
+    answer: "1 2 3 4 | 2,4"
+    explanation: |
+      Вызовы `Numbers()`, `Where` и `Take` ничего не выполняют: они только строят цепочку объектов-запросов.
+      Работу запускает `ToList`, который перебирает результат `Take`. Элементы протягиваются по цепочке по
+      одному: `ToList` просит элемент у `Take`, `Take` просит у `Where`, `Where` просит у итератора `Numbers`.
+
+      Итератор печатает `1` и выдаёт его, `Where` отбрасывает нечётное число и просит следующее. Печатается `2`,
+      число проходит фильтр и попадает в список. Затем печатается `3` (отброшено) и `4` (прошло фильтр). Теперь
+      у `Take(2)` уже два элемента, и он завершает перебор, не запрашивая больше ничего. Цикл внутри `Numbers`
+      так и остаётся на числе `4`: числа `5` и `6` никогда не вычисляются и не печатаются. После этого
+      `Console.Write` печатает `| 2,4`.
+
+      Практический вывод: в потоковых цепочках LINQ to Objects объём работы определяет потребитель. `Take`,
+      `First` или `Any` над дорогим или бесконечным источником читают его ровно настолько, насколько нужно.
+      Это верно только пока в цепочке нет буферизующих операторов: например, `OrderBy` или `Reverse` перед
+      `Take` прочитали бы весь источник. Поведение проверено на .NET 10.
+    linkTitles:
+      - Отложенное выполнение и ленивые вычисления в LINQ
+      - Метод Enumerable.Take
+  en:
+    title: How many source elements does a Where, Take(2) and ToList chain read?
+    prompt: |
+      The iterator method `Numbers` prints each number before it returns it with `yield return`.
+      The result is filtered with `Where`, limited with `Take(2)` and materialized with `ToList`.
+      What does this program print to the console?
+    hint: Who in this chain decides when to ask the source for the next element, and does any of the operators need the whole source at once?
+    options:
+      a: "1 2 3 4 | 2,4"
+      b: "1 2 3 4 5 6 | 2,4"
+      c: "1 2 3 4 5 | 2,4"
+      d: Compile error
+    optionExplanations:
+      b: "That would happen if each operator ran to completion before handing its result to the next one: `Where` would first read all six numbers and then `Take` would pick two. In LINQ to Objects `Where` and `Take` stream: they ask the source for elements one at a time and only when the consumer needs the next one."
+      c: "`Take(2)` does not look ahead to check whether more elements exist. As soon as it has the second matching element it ends the iteration and never calls `MoveNext` on `Where` again, so the iterator never produces the number `5`."
+      d: "The code is valid: a static local function can be an iterator with `yield return`, it may be declared after top-level statements, and `Where`, `Take` and `ToList` are available through the implicit `using System.Linq` directive."
+    answer: "1 2 3 4 | 2,4"
+    explanation: |
+      The calls to `Numbers()`, `Where` and `Take` execute nothing: they only build a chain of query objects.
+      The work starts in `ToList`, which enumerates the result of `Take`. Elements are pulled through the chain
+      one at a time: `ToList` asks `Take` for an element, `Take` asks `Where`, and `Where` asks the `Numbers`
+      iterator.
+
+      The iterator prints `1` and yields it, `Where` rejects the odd number and asks for the next one. `2` is
+      printed, passes the filter and goes into the list. Then `3` is printed (rejected) and `4` (passes). Now
+      `Take(2)` already has two elements, so it ends the iteration and asks for nothing more. The loop inside
+      `Numbers` stays suspended at `4`: the numbers `5` and `6` are never computed or printed. After that
+      `Console.Write` prints `| 2,4`.
+
+      The practical takeaway: in a streaming LINQ to Objects chain the consumer decides how much work is done.
+      `Take`, `First` or `Any` over an expensive or infinite source read only as much of it as they need. This
+      holds only while the chain contains no buffering operators: for example, `OrderBy` or `Reverse` before
+      `Take` would read the whole source. The behaviour is verified on .NET 10.
+    linkTitles:
+      - Deferred execution and lazy evaluation in LINQ
+      - Enumerable.Take method
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

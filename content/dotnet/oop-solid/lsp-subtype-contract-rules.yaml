@@ -1,0 +1,131 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPSBVJKY2P9A8SRDNT
+slug: lsp-subtype-contract-rules
+stack: dotnet
+topic: oop-solid
+level: senior
+type: multi
+grading: auto
+tags: [solid, liskov-substitution, design-by-contract, inheritance]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: true
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+links:
+  - url: https://www.cs.cmu.edu/~wing/publications/LiskovWing94.pdf
+    lang: en
+    kind: article
+  - url: https://en.wikipedia.org/wiki/Liskov_substitution_principle
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Какие изменения в переопределённом методе нарушают принцип подстановки Лисков?
+    prompt: |
+      В базовом классе `OrderSource` есть виртуальный метод
+      `IReadOnlyList<Order> Find(string customerId, int limit)` с таким документированным контрактом:
+
+      - обязательства вызывающего (предусловия): `customerId` не `null`, `limit` от 1 до 100;
+      - гарантии метода (постусловия): результат не `null` и содержит не больше `limit` заказов, порядок
+        заказов не гарантируется;
+      - исключения: только `OrderSourceUnavailableException`, когда хранилище недоступно.
+
+      Код написан в расчёте на этот контракт и получает экземпляры разных наследников. Какие из
+      переопределений `Find` нарушают подстановку наследника вместо `OrderSource`? Выберите все подходящие.
+    hint: Для каждого варианта спросите себя, может ли вызывающий код, который соблюдает контракт базового класса и полагается только на его гарантии, получить неожиданное поведение.
+    options:
+      a: "Выбрасывает `ArgumentOutOfRangeException`, если `limit` больше 50."
+      b: "Возвращает `null`, если у клиента нет заказов."
+      c: "Выбрасывает `InvalidOperationException`, если перед вызовом не был вызван метод `Warmup()`."
+      d: "Принимает `limit` до 1000, а не до 100."
+      e: "Всегда возвращает заказы, отсортированные по дате."
+    optionExplanations:
+      d: "Это ослабление предусловия: наследник принимает больше входных данных, чем базовый класс. Вызывающий код по контракту передаёт значения от 1 до 100, а их наследник обрабатывает так же, поэтому подстановка не ломается."
+      e: "Это усиление постусловия: наследник даёт гарантию, которой у базового класса не было. Код, написанный под базовый контракт, на порядок не полагается, поэтому лишняя гарантия ему не мешает."
+    answer: "Варианты a, b и c: усиление предусловия, ослабление постусловия и исключение, которого нет в контракте базового класса."
+    explanation: |
+      Лисков и Уинг формулируют требование к подтипу так: свойство, которое можно доказать для объектов
+      базового типа, должно выполняться и для объектов подтипа. Из него следуют поведенческие правила для
+      методов, сформулированные в духе проектирования по контракту:
+
+      - **предусловия нельзя усиливать.** Вариант a требует `limit <= 50`, хотя вызывающий код вправе
+        передать 80. Корректный по базовому контракту вызов падает. Вариант d, наоборот, принимает больше, и
+        это безопасно;
+      - **постусловия нельзя ослаблять.** Вариант b возвращает `null`, хотя базовый класс обещал результат,
+        отличный от `null`, и вызывающий код получит `NullReferenceException` при первом обращении к
+        результату. Вариант e добавляет гарантию сортировки, и это безопасно;
+      - **инварианты нельзя ослаблять**, а подтип не должен допускать изменений состояния, которые базовый
+        тип запрещает (правило истории, которое ввели именно Лисков и Уинг).
+
+      Помимо поведенческих правил, к сигнатурам методов подтипа обычно предъявляют требование: метод подтипа
+      не выбрасывает новых исключений, кроме подтипов исключений, которые выбрасывает метод базового типа.
+      Вариант c нарушает его: `InvalidOperationException` не входит в контракт, и вызывающий код его не
+      ожидает и не обрабатывает. По сути это ещё и скрытое усиление предусловия: появилось новое обязательство
+      вызвать `Warmup()`. Вариант a тоже выбрасывает исключение, которого нет в контракте.
+
+      Компилятор C# проверяет только сигнатуры: все пять переопределений компилируются, а проверяемых
+      исключений в C# нет. Контракт живёт в документации и тестах, поэтому полезно прогонять общий набор
+      тестов базового контракта на каждом наследнике.
+    linkTitles:
+      - "Барбара Лисков, Жаннетт Уинг: A Behavioral Notion of Subtyping"
+      - "Принцип подстановки Лисков (Википедия)"
+  en:
+    title: Which changes in an overriding method break the Liskov substitution principle?
+    prompt: |
+      The base class `OrderSource` has a virtual method
+      `IReadOnlyList<Order> Find(string customerId, int limit)` with this documented contract:
+
+      - caller obligations (preconditions): `customerId` is not `null`, `limit` is from 1 to 100;
+      - method guarantees (postconditions): the result is not `null` and contains at most `limit` orders,
+        the order of the orders is not guaranteed;
+      - exceptions: only `OrderSourceUnavailableException`, when the storage is unavailable.
+
+      Code is written against this contract and receives instances of different derived classes. Which of
+      these overrides of `Find` break substituting the derived class for `OrderSource`? Select all that apply.
+    hint: For each option ask whether calling code that follows the base class contract and relies only on its guarantees can see unexpected behaviour.
+    options:
+      a: "Throws `ArgumentOutOfRangeException` when `limit` is greater than 50."
+      b: "Returns `null` when the customer has no orders."
+      c: "Throws `InvalidOperationException` if `Warmup()` was not called before."
+      d: "Accepts `limit` up to 1000 instead of up to 100."
+      e: "Always returns the orders sorted by date."
+    optionExplanations:
+      d: "This weakens the precondition: the derived class accepts more input than the base class. Calling code passes values from 1 to 100 under the contract, and the derived class handles them the same way, so substitution does not break."
+      e: "This strengthens the postcondition: the derived class gives a guarantee the base class did not have. Code written against the base contract does not rely on the order, so the extra guarantee does not hurt it."
+    answer: "Options a, b and c: a strengthened precondition, a weakened postcondition and an exception the base class contract does not allow."
+    explanation: |
+      Liskov and Wing state the subtype requirement like this: a property that can be proved for objects of
+      the base type must also hold for objects of the subtype. It leads to behavioural rules for methods,
+      stated in design-by-contract terms:
+
+      - **preconditions cannot be strengthened.** Option a requires `limit <= 50`, although the caller may
+        pass 80. A call that is valid under the base contract fails. Option d, on the contrary, accepts more,
+        and that is safe;
+      - **postconditions cannot be weakened.** Option b returns `null`, although the base class promised a
+        result that is not `null`, and the caller gets a `NullReferenceException` the first time it uses the
+        result. Option e adds a sorting guarantee, and that is safe;
+      - **invariants cannot be weakened**, and a subtype must not allow state changes that the base type
+        forbids (the history rule, which Liskov and Wing introduced).
+
+      Besides the behavioural rules, the signature requirements commonly stated for the principle say that a
+      subtype method throws no new exceptions, except subtypes of exceptions thrown by the base method.
+      Option c breaks this: `InvalidOperationException` is not in the contract, and the caller does not expect
+      or handle it. In effect it is also a hidden stronger precondition: a new obligation to call `Warmup()`
+      first. Option a also throws an exception that the contract does not list.
+
+      The C# compiler checks only signatures: all five overrides compile, and C# has no checked exceptions.
+      The contract lives in documentation and tests, so it pays to run one shared test suite for the base
+      contract against every derived class.
+    linkTitles:
+      - "Barbara Liskov, Jeannette Wing: A Behavioral Notion of Subtyping"
+      - "Liskov substitution principle (Wikipedia)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

@@ -1,0 +1,138 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RN6KYDRGG12JH4Q5B3
+slug: language-features-needing-runtime-support
+stack: dotnet
+topic: csharp
+level: lead
+type: multi
+grading: auto
+tags: [language-version, langversion, net-framework, default-interface-methods, static-abstract-members, polyfills]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+  - id: f
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/configure-language-version
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.runtime.compilerservices.runtimefeature
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/advanced-topics/interface-implementation/static-virtual-interface-members
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какие возможности C# не заработают в библиотеке под .NET Framework 4.8 даже с повышенным LangVersion?
+    prompt: |
+      Команда поддерживает библиотеку, которая по-прежнему собирается под `net48`, и хочет указать в проекте
+      `<LangVersion>` выше версии по умолчанию, чтобы писать на современном C#. Выберите все возможности,
+      которые нельзя использовать при цели .NET Framework 4.8 ни при каких настройках проекта, потому что
+      им нужна поддержка самой среды выполнения, а не только компилятора.
+    hint: Для каждой возможности спросите себя, может ли компилятор сам превратить её в обычный IL, пусть даже с несколькими вспомогательными типами, которые можно объявить в своём проекте, или среде выполнения придётся понимать что-то новое.
+    options:
+      a: "Реализация метода по умолчанию в интерфейсе (C# 8): `interface ILogger { void Log(string m) => Console.WriteLine(m); }`"
+      b: "Статический абстрактный член интерфейса (C# 11): `interface IParser<T> { static abstract T Parse(string s); }`"
+      c: "Позиционная запись (C# 9): `public record Point(int X, int Y);`"
+      d: "switch-выражение с шаблоном свойств и реляционным шаблоном (C# 8 и C# 9): `var fee = order switch { { Total: > 100 } => 0m, _ => 5m };`"
+      e: "Асинхронный поток (C# 8): `await foreach (var item in source)` по `IAsyncEnumerable<T>`"
+      f: "Обязательный член (C# 11): `public required string Name { get; init; }`"
+    optionExplanations:
+      c: "Запись компилятор превращает в обычный класс с методами равенства, `ToString` и `Deconstruct`. Не хватает только типа `System.Runtime.CompilerServices.IsExternalInit` для методов доступа `init`: его достаточно объявить в проекте как `internal` класс (polyfill), и записи работают на .NET Framework."
+      d: "Сопоставление с образцом - чисто компиляторная возможность: switch-выражение, шаблоны свойств и реляционные шаблоны переписываются в обычные проверки типов, сравнения и переходы, никаких новых типов или возможностей CLR не нужно."
+      e: "Асинхронным потокам нужны типы `IAsyncEnumerable<T>`, `IAsyncEnumerator<T>` и `IAsyncDisposable`, которых нет в .NET Framework. Это вопрос библиотеки, а не среды выполнения: их даёт пакет `Microsoft.Bcl.AsyncInterfaces`."
+      f: "Для `required` компилятору нужны атрибуты `RequiredMemberAttribute` и `CompilerFeatureRequiredAttribute` (плюс `SetsRequiredMembersAttribute`, если им помечают конструкторы, и `IsExternalInit` для `init`). Их можно объявить в самом проекте, после чего возможность работает: проверка обязательных членов выполняется компилятором в вызывающем коде."
+    answer: Реализация метода по умолчанию в интерфейсе и статический абстрактный член интерфейса.
+    explanation: |
+      `LangVersion` меняет только синтаксис, который принимает компилятор. Код всё равно исполняет CLR
+      .NET Framework 4.8 со своей базовой библиотекой `mscorlib`. Поэтому возможности языка делятся на три группы:
+
+      - **Чисто компиляторные.** Сопоставление с образцом, switch-выражения, локальные функции и многое другое
+        превращаются в обычный IL и работают на любой платформе.
+      - **Требующие типов, которых нет в .NET Framework.** `init` и записи ищут `IsExternalInit`, `required` -
+        несколько атрибутов, `await foreach` - интерфейсы `IAsyncEnumerable<T>` и `IAsyncDisposable`. Компилятор
+        находит эти типы по полному имени, поэтому хватает собственного `internal` объявления (polyfill) или
+        пакета вроде `Microsoft.Bcl.AsyncInterfaces`.
+      - **Требующие изменений в самой CLR.** Методы интерфейса с реализацией по умолчанию и статические
+        абстрактные и виртуальные члены интерфейсов меняют правила загрузки типов и диспетчеризации вызовов.
+        Класс `RuntimeFeature` описывает их как возможности среды выполнения: поля
+        `DefaultImplementationsOfInterfaces` и `VirtualStaticsInInterfaces`. Компилятор проверяет, объявляет ли
+        их базовая библиотека целевой платформы, и для .NET Framework выдаёт ошибку о том, что целевая среда
+        выполнения возможность не поддерживает. Polyfill здесь не поможет: среда выполнения просто не умеет
+        выполнять такой код. По той же причине недоступны, например, ковариантные возвращаемые типы (C# 9,
+        поле `CovariantReturnsOfClasses`).
+
+      Для решения лида важна и политика поддержки: для .NET Framework версия языка по умолчанию - C# 7.3.
+      Документация указывает, что версия языка новее той, что связана с целевой платформой, не поддерживается и
+      может приводить к ошибкам при компиляции и выполнении: версия по умолчанию выбрана так, чтобы возможности
+      языка совпадали с поддержкой среды выполнения. Если команда всё же повышает `LangVersion`, это стоит
+      оформить явным решением: фиксированный набор polyfill-типов, запрет возможностей, требующих поддержки CLR,
+      и сборка на CI. Устойчивый путь - многоцелевая сборка, например `net48;net10.0`, и постепенный отказ от
+      .NET Framework. Описанное поведение проверено для компилятора из SDK .NET 10.
+    linkTitles:
+      - Настройка версии языка C#
+      - Класс RuntimeFeature
+      - Статические виртуальные члены интерфейсов
+  en:
+    title: Which C# features cannot work in a .NET Framework 4.8 library even with a raised LangVersion?
+    prompt: |
+      A team maintains a library that still builds for `net48` and wants to set `<LangVersion>` above the
+      default to write modern C#. Select every feature that cannot be used when targeting .NET Framework 4.8
+      under any project settings, because it needs support from the runtime itself, not only from the compiler.
+    hint: For each feature, ask whether the compiler can lower it to ordinary IL by itself, possibly with a few helper types you can declare in your own project, or whether the runtime has to understand something new.
+    options:
+      a: "Default interface method implementation (C# 8): `interface ILogger { void Log(string m) => Console.WriteLine(m); }`"
+      b: "Static abstract interface member (C# 11): `interface IParser<T> { static abstract T Parse(string s); }`"
+      c: "Positional record (C# 9): `public record Point(int X, int Y);`"
+      d: "Switch expression with a property pattern and a relational pattern (C# 8 and C# 9): `var fee = order switch { { Total: > 100 } => 0m, _ => 5m };`"
+      e: "Async stream (C# 8): `await foreach (var item in source)` over `IAsyncEnumerable<T>`"
+      f: "Required member (C# 11): `public required string Name { get; init; }`"
+    optionExplanations:
+      c: "The compiler turns a record into an ordinary class with equality members, `ToString` and `Deconstruct`. The only missing piece is the type `System.Runtime.CompilerServices.IsExternalInit` for `init` accessors: declaring it in the project as an `internal` class (a polyfill) is enough, and records work on .NET Framework."
+      d: "Pattern matching is a pure compiler feature: a switch expression, property patterns and relational patterns are rewritten into ordinary type checks, comparisons and branches, with no new types or CLR features required."
+      e: "Async streams need the types `IAsyncEnumerable<T>`, `IAsyncEnumerator<T>` and `IAsyncDisposable`, which .NET Framework lacks. That is a library question, not a runtime one: the `Microsoft.Bcl.AsyncInterfaces` package provides them."
+      f: "For `required` the compiler needs the attributes `RequiredMemberAttribute` and `CompilerFeatureRequiredAttribute` (plus `SetsRequiredMembersAttribute` if constructors are marked with it, and `IsExternalInit` for `init`). They can be declared in the project itself, and then the feature works: required members are checked by the compiler in the calling code."
+    answer: The default interface method implementation and the static abstract interface member.
+    explanation: |
+      `LangVersion` changes only the syntax the compiler accepts. The code is still executed by the
+      .NET Framework 4.8 CLR with its own base library `mscorlib`. So language features fall into three groups:
+
+      - **Pure compiler features.** Pattern matching, switch expressions, local functions and much more become
+        ordinary IL and work on any platform.
+      - **Features that need types .NET Framework lacks.** `init` and records look for `IsExternalInit`,
+        `required` for several attributes, `await foreach` for the `IAsyncEnumerable<T>` and `IAsyncDisposable`
+        interfaces. The compiler finds these types by full name, so your own `internal` declaration (a polyfill)
+        or a package such as `Microsoft.Bcl.AsyncInterfaces` is enough.
+      - **Features that need changes in the CLR itself.** Default interface method implementations and static
+        abstract and virtual interface members change the rules of type loading and call dispatch. The
+        `RuntimeFeature` class describes them as runtime features: the fields
+        `DefaultImplementationsOfInterfaces` and `VirtualStaticsInInterfaces`. The compiler checks whether the
+        base library of the target platform declares them, and for .NET Framework it reports an error that the
+        target runtime does not support the feature. A polyfill cannot help: the runtime simply cannot execute
+        such code. For the same reason, covariant return types (C# 9, the `CovariantReturnsOfClasses` field), for
+        example, are unavailable too.
+
+      For a lead's decision the support policy matters as well: the default language version for .NET Framework
+      is C# 7.3. The documentation states that a language version newer than the one associated with the target
+      framework is not supported and can lead to compile-time and run-time errors: the default is chosen so that
+      language features match what the runtime supports. If the team raises `LangVersion` anyway, make it an
+      explicit decision: a fixed set of polyfill types, a ban on features that need CLR support, and a CI build.
+      The durable path is multi-targeting, for example `net48;net10.0`, and a gradual move away from
+      .NET Framework. The behaviour described is checked for the compiler in the .NET 10 SDK.
+    linkTitles:
+      - Configure the C# language version
+      - RuntimeFeature class
+      - Static virtual members in interfaces
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

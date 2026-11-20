@@ -1,0 +1,129 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RN4NR1PJ2FE8CNMTCY
+slug: frozendictionary-for-startup-reference-data
+stack: dotnet
+topic: collections-linq
+level: lead
+type: single
+grading: auto
+tags: [collections, frozen-collections, frozendictionary, choosing-a-collection, thread-safety]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: false
+  - id: c
+    correct: false
+  - id: d
+    correct: true
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.collections.frozen.frozendictionary-2
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.collections.immutable.immutabledictionary-2
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.dictionary-2
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.collections.concurrent.concurrentdictionary-2
+    lang: en
+    kind: docs
+  - url: https://github.com/dotnet/runtime/blob/main/src/libraries/System.Collections.Immutable/src/System/Collections/Immutable/ImmutableDictionary_2.cs
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какую коллекцию выбрать по умолчанию для справочных данных, которые строятся один раз при старте и читаются из многих потоков?
+    prompt: |
+      Команда пишет внутренний гайдлайн для справочных данных: коды стран, таблица валют, сопоставление тарифов
+      и т. п. Данные загружаются один раз при старте приложения, после этого не меняются и читаются миллионы раз
+      из многих потоков, обрабатывающих запросы. Приложения работают на .NET 8 и выше (целевая версия - .NET 10).
+      Какую коллекцию стоит закрепить в гайдлайне как вариант по умолчанию?
+    hint: Какие возможности каждой коллекции действительно нужны данным, которые после старта никто не меняет, и за что вы будете платить, не пользуясь этим?
+    options:
+      a: "`Dictionary<TKey, TValue>`, отданный наружу как `IReadOnlyDictionary<TKey, TValue>`"
+      b: "`ConcurrentDictionary<TKey, TValue>`"
+      c: "`ImmutableDictionary<TKey, TValue>`"
+      d: "`FrozenDictionary<TKey, TValue>`, созданный через `ToFrozenDictionary`"
+    optionExplanations:
+      a: "Документация `Dictionary<TKey, TValue>` допускает нескольких одновременных читателей, пока коллекцию никто не изменяет, так что сам по себе он не опасен. Но `IReadOnlyDictionary<TKey, TValue>` - только представление: код, у которого есть ссылка, может привести её обратно к `Dictionary` и изменить данные, и тогда конкурентное чтение ломается. Неизменяемость держится на дисциплине, а не на типе, и поиск никак не оптимизирован под сценарий только для чтения."
+      b: "`ConcurrentDictionary<TKey, TValue>` рассчитан на конкурентные добавления и обновления из многих потоков, а этим данным конкурентная запись не нужна вовсе. При этом он не даёт гарантии только для чтения: его публичный API (`TryAdd`, `AddOrUpdate`, `TryRemove`) провоцирует запись в справочник, который по замыслу неизменяем, а поиск не оптимизирован под сценарий, где данные никогда не меняются."
+      c: "`ImmutableDictionary<TKey, TValue>` рассчитан на дешёвое получение изменённых версий: `Add`, `SetItem` и `Remove` возвращают новый словарь, который разделяет внутреннюю структуру со старым. Для этого в реализации dotnet/runtime он устроен как сбалансированное дерево, упорядоченное по хеш-кодам ключей, поэтому поиск спускается по дереву за O(log n) и медленнее, чем в хеш-таблице. Справочнику, который строится один раз, дешёвые модификации не нужны, а более медленный поиск оплачивается при каждом чтении."
+    answer: "`FrozenDictionary<TKey, TValue>`, созданный через `ToFrozenDictionary`."
+    explanation: |
+      `FrozenDictionary<TKey, TValue>` из пространства имён `System.Collections.Frozen` появился в .NET 8 и
+      доступен в .NET 10. Документация описывает его как неизменяемый словарь только для чтения, оптимизированный
+      для быстрого поиска и перечисления, и прямо называет целевой сценарий: словарь создаётся редко, например при
+      старте приложения, а используется часто на протяжении всей жизни процесса. Компромисс тоже назван явно:
+      создание относительно дорогое, и детали ключей влияют на время построения (поэтому инициализировать его
+      стоит только доверенными ключами), зато поиск очень быстрый.
+
+      Для гайдлайна важны три свойства:
+
+      - **Неизменяемость гарантирована типом.** У коллекции нет публичных методов изменения, а изменяющие члены
+        интерфейсов вроде `IDictionary<TKey, TValue>` выбрасывают `NotSupportedException`. Поэтому одновременное
+        чтение из любого числа потоков безопасно без блокировок, и никто не сломает справочник случайной записью.
+      - **Цена платится один раз.** Дорогое построение происходит при старте, а выигрыш получают миллионы чтений.
+      - **Обновление - заменой целиком.** Если справочник всё же нужно перезагружать на лету, строят новый
+        `FrozenDictionary` и атомарно подменяют ссылку на него (например, поле с `volatile` или `Interlocked.Exchange`),
+        а читатели продолжают работать со старым экземпляром до конца операции.
+
+      Границы правила тоже стоит записать: если данные меняются часто, frozen-коллекция не подходит, потому что
+      каждое изменение означает полное перестроение. Для очень больших справочников время построения при старте
+      нужно измерить, чтобы оно не ухудшило время запуска.
+    linkTitles:
+      - "Класс FrozenDictionary<TKey,TValue>"
+      - "Класс ImmutableDictionary<TKey,TValue>"
+      - "Класс Dictionary<TKey,TValue>"
+      - "Класс ConcurrentDictionary<TKey,TValue>"
+      - "Исходный код ImmutableDictionary<TKey,TValue> в dotnet/runtime"
+  en:
+    title: Which collection should be the default for reference data built once at startup and read from many threads?
+    prompt: |
+      A team is writing an internal guideline for reference data: country codes, a currency table, tariff mappings
+      and so on. The data is loaded once at application startup, never changes afterwards, and is read millions of
+      times from many request-handling threads. The applications run on .NET 8 and later (the target is .NET 10).
+      Which collection should the guideline name as the default?
+    hint: Which capabilities of each collection does data that nobody changes after startup actually need, and what would you pay for without using it?
+    options:
+      a: "`Dictionary<TKey, TValue>` exposed as `IReadOnlyDictionary<TKey, TValue>`"
+      b: "`ConcurrentDictionary<TKey, TValue>`"
+      c: "`ImmutableDictionary<TKey, TValue>`"
+      d: "`FrozenDictionary<TKey, TValue>` created with `ToFrozenDictionary`"
+    optionExplanations:
+      a: "The `Dictionary<TKey, TValue>` documentation allows multiple concurrent readers as long as the collection is not modified, so it is not unsafe by itself. But `IReadOnlyDictionary<TKey, TValue>` is only a view: code holding the reference can cast it back to `Dictionary` and change the data, and then concurrent reads break. Immutability rests on discipline, not on the type, and lookups are not optimized for a read-only scenario."
+      b: "`ConcurrentDictionary<TKey, TValue>` is designed for concurrent adds and updates from many threads, and this data never needs concurrent writes. It also gives no read-only guarantee: its public API (`TryAdd`, `AddOrUpdate`, `TryRemove`) invites writes to a reference table that is meant to be immutable, and its lookups are not optimized for data that never changes."
+      c: "`ImmutableDictionary<TKey, TValue>` is built for producing modified versions cheaply: `Add`, `SetItem` and `Remove` return a new dictionary that shares its internal structure with the old one. To make that possible, the dotnet/runtime implementation is a balanced tree ordered by the keys' hash codes, so a lookup walks down the tree in O(log n) and is slower than in a hash table. Reference data built once does not need cheap modifications, while the slower lookup is paid on every read."
+    answer: "`FrozenDictionary<TKey, TValue>` created with `ToFrozenDictionary`."
+    explanation: |
+      `FrozenDictionary<TKey, TValue>` from the `System.Collections.Frozen` namespace was introduced in .NET 8 and
+      is available in .NET 10. The documentation describes it as an immutable, read-only dictionary optimized for
+      fast lookup and enumeration, and names its target scenario directly: the dictionary is created rarely, for
+      example at application startup, and used frequently for the rest of the process lifetime. It also names the
+      trade-off: creation has a relatively high cost, and the details of the keys affect construction time (so it
+      should only be initialized with trusted keys), but lookup performance is excellent.
+
+      Three properties matter for the guideline:
+
+      - **Immutability is guaranteed by the type.** The collection exposes no public mutating methods, and the
+        mutating members of interfaces such as `IDictionary<TKey, TValue>` throw `NotSupportedException`. So any
+        number of threads can read it at once without locks, and nobody can break the reference data with a stray write.
+      - **The cost is paid once.** The expensive build happens at startup, and millions of reads get the benefit.
+      - **Refresh means full replacement.** If the reference data must be reloaded at run time, build a new
+        `FrozenDictionary` and swap the reference atomically (for example a `volatile` field or
+        `Interlocked.Exchange`), while readers keep using the old instance until they finish.
+
+      The guideline should also state the limits: if the data changes often, a frozen collection does not fit,
+      because every change means a full rebuild. For very large reference sets, measure the build time at startup
+      so it does not hurt startup time.
+    linkTitles:
+      - "FrozenDictionary<TKey,TValue> class"
+      - "ImmutableDictionary<TKey,TValue> class"
+      - "Dictionary<TKey,TValue> class"
+      - "ConcurrentDictionary<TKey,TValue> class"
+      - "ImmutableDictionary<TKey,TValue> source in dotnet/runtime"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

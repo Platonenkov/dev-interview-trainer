@@ -1,0 +1,129 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RMRHYFVAFPW163R1R7
+slug: orderby-buffers-entire-source-before-first-element
+stack: dotnet
+topic: collections-linq
+level: senior
+type: output
+grading: auto
+tags: [linq, orderby, deferred-execution, iterators]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    foreach (int n in Source().OrderBy(x => x))
+    {
+        Console.Write($"got {n}");
+        break;
+    }
+
+    static IEnumerable<int> Source()
+    {
+        foreach (int n in new[] { 3, 1, 2 })
+        {
+            Console.Write($"read {n}, ");
+            yield return n;
+        }
+    }
+expect:
+  kind: output
+  value: "read 3, read 1, read 2, got 1"
+acceptedOutputs: ["read 3, read 1, read 2, got 1"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "read 3, read 1, read 2, got 1" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "read 3, got 3" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "read 3, read 1, got 1" }
+  - id: d
+    correct: false
+    expect: { kind: compile-error }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.linq.enumerable.orderby
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/linq/deferred-execution-lazy-evaluation
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Сколько элементов источника прочитает OrderBy, прежде чем foreach получит первый элемент?
+    prompt: |
+      Итератор `Source` печатает каждый элемент, который отдаёт. Его результат сортируется через `OrderBy`,
+      а цикл `foreach` выходит через `break` сразу после первого полученного элемента.
+      Что выведет эта программа в консоль?
+    hint: Может ли оператор сортировки знать, какой элемент наименьший, пока не увидел все элементы источника?
+    options:
+      a: "read 3, read 1, read 2, got 1"
+      b: "read 3, got 3"
+      c: "read 3, read 1, got 1"
+      d: Ошибка компиляции
+    optionExplanations:
+      b: "Так работали бы потоковые операторы вроде `Where` или `Select`: они отдают элемент сразу, как только прочитали его из источника. `OrderBy` так не может: первым он обязан отдать наименьший ключ, а не первый прочитанный элемент."
+      c: "`OrderBy` не знает, что `1` - наименьшее значение, пока не прочитал источник до конца: следующий элемент мог бы оказаться ещё меньше. Поэтому он читает все три элемента, а не останавливается на первом подходящем."
+      d: "Код корректен. Локальную функцию можно вызывать до её объявления, в локальной функции допустим `yield return`, а `OrderBy` подключается неявной директивой `using System.Linq`."
+    answer: "read 3, read 1, read 2, got 1"
+    explanation: |
+      `OrderBy` использует отложенное выполнение: вызов `Source().OrderBy(x => x)` только создаёт объект-запрос
+      и не читает источник. Но, в отличие от `Where`, `Select` или `Take`, это не потоковый оператор. Чтобы
+      отдать первый элемент отсортированной последовательности, нужно знать все ключи, поэтому на первом
+      вызове `MoveNext` он перечисляет источник до конца, складывает элементы в буфер, сортирует их и только
+      потом отдаёт наименьший.
+
+      Отсюда порядок вывода: итератор печатает `read 3, `, `read 1, `, `read 2, `, после чего цикл получает
+      `1`, печатает `got 1` и выходит через `break`. Ранний выход из цикла ничего не экономит: весь источник
+      к этому моменту уже прочитан.
+
+      Практические следствия: память на буфер пропорциональна размеру источника, задержка до первого элемента
+      включает чтение всего источника и сортировку, а `OrderBy` над бесконечной последовательностью не отдаст
+      ни одного элемента. Если нужен только минимум или первые несколько элементов, а источник дорогой или
+      большой, сортировку стоит заменить на `Min`/`MinBy` или ограничить объём данных до неё. Отложенное
+      выполнение не означает потоковое: оператор может откладывать работу до перечисления, но выполнять её
+      целиком при первом обращении.
+    linkTitles:
+      - Метод Enumerable.OrderBy
+      - Отложенное выполнение и ленивые вычисления в LINQ
+  en:
+    title: How many source elements does OrderBy read before foreach gets the first element?
+    prompt: |
+      The iterator `Source` prints every element it yields. Its result is sorted with `OrderBy`, and the
+      `foreach` loop exits with `break` right after the first element it receives.
+      What does this program print to the console?
+    hint: Can a sorting operator know which element is the smallest before it has seen every element of the source?
+    options:
+      a: "read 3, read 1, read 2, got 1"
+      b: "read 3, got 3"
+      c: "read 3, read 1, got 1"
+      d: Compile error
+    optionExplanations:
+      b: "That is how streaming operators such as `Where` or `Select` behave: they yield an element as soon as they read it from the source. `OrderBy` cannot do that: it must yield the smallest key first, not the first element it read."
+      c: "`OrderBy` does not know that `1` is the smallest value until it has read the source to the end: the next element could be even smaller. So it reads all three elements instead of stopping at the first good candidate."
+      d: "The code is valid. A local function can be called before its declaration, `yield return` is allowed in a local function, and `OrderBy` is available through the implicit `using System.Linq` directive."
+    answer: "read 3, read 1, read 2, got 1"
+    explanation: |
+      `OrderBy` uses deferred execution: the call `Source().OrderBy(x => x)` only creates a query object and
+      does not read the source. But unlike `Where`, `Select` or `Take`, it is not a streaming operator. To
+      yield the first element of a sorted sequence it must know every key, so on the first `MoveNext` call it
+      enumerates the source to the end, stores the elements in a buffer, sorts them and only then yields the
+      smallest one.
+
+      Hence the order of the output: the iterator prints `read 3, `, `read 1, `, `read 2, `, then the loop
+      receives `1`, prints `got 1` and exits with `break`. Leaving the loop early saves nothing: the whole
+      source has already been read by then.
+
+      Practical consequences: the buffer takes memory proportional to the size of the source, the delay before
+      the first element includes reading the whole source and sorting it, and `OrderBy` over an infinite
+      sequence never yields a single element. If you only need the minimum or the first few elements and the
+      source is expensive or large, replace the sort with `Min`/`MinBy` or reduce the data before sorting.
+      Deferred does not mean streaming: an operator can postpone its work until enumeration and still do all
+      of it on the first access.
+    linkTitles:
+      - Enumerable.OrderBy method
+      - Deferred execution and lazy evaluation in LINQ
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

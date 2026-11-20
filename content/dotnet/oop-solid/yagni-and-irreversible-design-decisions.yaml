@@ -1,0 +1,146 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPZH32TCC43077VRR2
+slug: yagni-and-irreversible-design-decisions
+stack: dotnet
+topic: oop-solid
+level: lead
+type: open
+grading: self
+tags: [yagni, api-design, breaking-changes, technical-decisions]
+links:
+  - url: https://martinfowler.com/bliki/Yagni.html
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/dotnet/core/compatibility/library-change-rules
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Когда вопреки YAGNI стоит заложить гибкость до того, как потребность подтвердилась?
+    prompt: |
+      Ваша команда ссылается на YAGNI («вам это не понадобится») и отклоняет любое предварительное
+      проектирование: «сделаем самое простое, понадобится - переделаем». Как лид, вы согласны с принципом,
+      но видите случаи, где такой подход дорого обходится.
+
+      Что на самом деле запрещает YAGNI, и по какому критерию вы решите, где вложиться в гибкость заранее,
+      а где дождаться реальной потребности? Приведите примеры из .NET-разработки.
+    hint: |
+      Сравните, во что обойдётся ошибка в решении, если код меняете только вы, и если от него уже зависят
+      чужие клиенты, данные или сборки.
+    answer: |
+      - **На что направлен YAGNI.** В описании Мартина Фаулера принцип касается предполагаемых функций
+        (presumptive features): возможностей, которые строят сейчас ради потребности, которую только ожидают.
+        Такая функция стоит времени на разработку, задерживает то, что нужно сейчас, утяжеляет каждое следующее
+        изменение и часто оказывается не той, что понадобилась. Фаулер прямо оговаривает: YAGNI не относится к
+        работе, которая делает код проще для изменения, и он работает только тогда, когда менять код дёшево -
+        есть рефакторинг, автотесты и частые поставки.
+      - **Критерий - цена отката, а не вероятность функции.** Для каждого решения спросить: если мы ошиблись,
+        сколько стоит изменить это потом и кому кроме нас придётся меняться? Внутри сервиса рефакторинг - это
+        коммит. На опубликованной границе это миграция для чужих команд, клиентов или данных.
+      - **Где вложиться заранее:**
+        - опубликованные контракты: HTTP- и gRPC-API, схемы сообщений и событий, которые читают другие команды
+          или внешние клиенты. Стратегия версионирования с первой версии, только аддитивная эволюция,
+          толерантные читатели, внутренние модели не выставляются наружу;
+        - сохранённые данные: схема базы с большим объёмом данных, сериализованные события в хранилище
+          событий, форматы файлов, внешние идентификаторы. Маркер версии формата, возможность миграции, ключи,
+          не завязанные на детали, которые вероятно изменятся;
+        - публичная поверхность библиотеки (NuGet): после выпуска удаление и переименование членов, смена
+          сигнатур и добавление параметров ломают потребителей. Поверхность проектируется осознанно, держится
+          минимальной, а форма выбирается такой, чтобы её можно было расширять добавлением (например, тип
+          параметров-опций вместо растущего списка аргументов).
+      - **Что ждёт реальной потребности:** внутренние классы, приватные абстракции, интерфейсы с одной
+        реализацией, механизмы плагинов, «универсальная» конфигурация на будущее, лишние слои внутри сервиса.
+        Всё это покрыто тестами и дёшево переделывается, когда потребность появится.
+      - **Вложение - это запас, а не функция.** Даже на необратимой границе заранее строят не саму
+        предполагаемую возможность, а место для неё: поле версии, минимальную поверхность, точку расширения.
+        Сама функция по-прежнему ждёт.
+      - **Как это закрепить в команде.** На дизайн-ревью явно классифицировать решение как обратимое или
+        необратимое. Необратимые получают короткий дизайн и ADR с рассмотренными вариантами, обратимые -
+        самое простое решение. И поддерживать то, на чём держится YAGNI: тесты и время на рефакторинг.
+    explanation: |
+      Команда путает два вопроса: «понадобится ли эта функция?» и «сколько будет стоить изменение?». YAGNI
+      отвечает на первый: не строить возможности впрок, потому что прогнозы часто ошибочны, а ненужный код
+      приходится сопровождать. Но аргумент «понадобится - переделаем» молча предполагает, что переделка дешёвая.
+      Это верно для кода, которым владеет одна команда и который покрыт тестами, и неверно там, где от решения
+      уже зависят другие.
+
+      Цена изменения резко растёт на границах, которые вы не контролируете. Правила совместимости для
+      библиотек .NET показывают это наглядно: после публикации многие изменения публичной поверхности
+      считаются ломающими, а добавление нового обычно допустимо. Отсюда асимметрия: расширять дёшево,
+      убирать и менять дорого. Поэтому YAGNI и осторожность с необратимыми решениями не противоречат друг
+      другу: минимальная опубликованная поверхность - это одновременно и «не делать лишнего», и лучшая
+      страховка на будущее. То же относится к контрактам сервисов и к форматам данных: старые клиенты и
+      миллионы сохранённых записей нельзя отрефакторить одним коммитом.
+
+      Сильный ответ лида не выбирает сторону «YAGNI всегда» или «проектируем заранее», а вводит критерий
+      обратимости и делает его частью процесса, чтобы спор шёл о цене ошибки, а не о вкусах.
+    linkTitles:
+      - "Martin Fowler: Yagni"
+      - "Правила изменений для совместимости"
+  en:
+    title: When is it right to design for flexibility before the need is confirmed, despite YAGNI?
+    prompt: |
+      Your team cites YAGNI ("you aren't gonna need it") to reject any up-front design: "build the simplest
+      thing, and if we need more, we will rework it". As the lead you agree with the principle, but you see
+      cases where this approach turns out expensive.
+
+      What does YAGNI actually rule out, and by which criterion do you decide where to invest in flexibility
+      early and where to wait for the real need? Give examples from .NET development.
+    hint: |
+      Compare what a wrong decision costs when only you change the code, and when other people's clients,
+      data or assemblies already depend on it.
+    answer: |
+      - **What YAGNI targets.** In Martin Fowler's description the principle is about presumptive features:
+        capabilities built now for a need that is only expected. Such a feature costs the time to build it,
+        delays what is needed now, makes every later change heavier, and often turns out not to be what was
+        needed. Fowler states explicitly that YAGNI does not apply to work that makes the code easier to
+        change, and that it works only when changing code is cheap: refactoring, automated tests and frequent
+        delivery.
+      - **The criterion is the cost of reversal, not the likelihood of the feature.** For each decision ask:
+        if we are wrong, what does it cost to change later, and who besides us has to change? Inside a service
+        a refactoring is a commit. At a published boundary it is a migration for other teams, clients or data.
+      - **Where to invest up front:**
+        - published contracts: HTTP and gRPC APIs, message and event schemas read by other teams or external
+          clients. A versioning strategy from the first version, additive evolution only, tolerant readers,
+          internal models are not exposed;
+        - persisted data: a database schema with a lot of data, serialized events in an event store, file
+          formats, external identifiers. A format version marker, a way to migrate, keys that do not depend on
+          details likely to change;
+        - the public surface of a library (NuGet): once released, removing and renaming members, changing
+          signatures and adding parameters break consumers. The surface is designed deliberately, kept minimal,
+          and given a shape that can grow by addition (for example an options type instead of a growing list of
+          arguments).
+      - **What waits for the real need:** internal classes, private abstractions, interfaces with a single
+        implementation, plugin mechanisms, "universal" configuration for the future, extra layers inside a
+        service. All of this is covered by tests and cheap to rework once the need appears.
+      - **The investment is room, not a feature.** Even at an irreversible boundary you build not the presumed
+        capability itself but a place for it: a version field, a minimal surface, an extension point. The
+        feature itself still waits.
+      - **How to make it stick in the team.** In design review classify each decision explicitly as reversible
+        or irreversible. Irreversible ones get a short design and an ADR with the options considered,
+        reversible ones get the simplest solution. And keep what YAGNI relies on: tests and time for
+        refactoring.
+    explanation: |
+      The team mixes up two questions: "will we need this feature?" and "how much will the change cost?".
+      YAGNI answers the first one: do not build capabilities in advance, because forecasts are often wrong and
+      unneeded code has to be maintained. But the argument "if we need it, we will rework it" silently assumes
+      that the rework is cheap. That is true for code owned by one team and covered by tests, and false where
+      others already depend on the decision.
+
+      The cost of change rises sharply at boundaries you do not control. The compatibility rules for .NET
+      libraries show it clearly: after publication many changes to the public surface count as breaking, while
+      adding something new is usually allowed. Hence the asymmetry: extending is cheap, removing and changing
+      is expensive. That is why YAGNI and caution with irreversible decisions do not contradict each other: a
+      minimal published surface is both "do not build what you do not need" and the best insurance for the
+      future. The same holds for service contracts and data formats: old clients and millions of stored
+      records cannot be refactored in one commit.
+
+      A strong lead answer does not pick the side "always YAGNI" or "design everything up front". It
+      introduces the reversibility criterion and makes it part of the process, so the debate is about the cost
+      of being wrong, not about taste.
+    linkTitles:
+      - "Martin Fowler: Yagni"
+      - "Change rules for compatibility"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

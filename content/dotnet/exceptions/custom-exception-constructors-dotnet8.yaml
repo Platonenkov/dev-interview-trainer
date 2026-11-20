@@ -1,0 +1,108 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPRQHZGVWAVVDD0TSG
+slug: custom-exception-constructors-dotnet8
+stack: dotnet
+topic: exceptions
+level: middle
+type: single
+grading: auto
+tags: [exception-design, custom-exceptions, serialization, syslib0051]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/exceptions/how-to-create-user-defined-exceptions
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/fundamentals/syslib-diagnostics/syslib0051
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какие конструкторы объявить у собственного типа исключения в .NET 8 и более поздних версиях?
+    prompt: |
+      Вы добавляете в библиотеку для .NET 10 новый публичный тип `OrderProcessingException`, производный от
+      `Exception`. Какой набор конструкторов он должен объявить по рекомендациям Microsoft для .NET 8 и более
+      поздних версий?
+    hint: Какими способами вызывающий код создаёт исключение - без текста, с текстом, с обёрткой другого исключения?
+    options:
+      a: "Три публичных конструктора: без параметров, `(string message)` и `(string message, Exception innerException)`; два последних передают аргументы в `base(message)` и `base(message, innerException)`."
+      b: "Те же три конструктора, плюс атрибут `[Serializable]` и защищённый конструктор `(SerializationInfo info, StreamingContext context)`, вызывающий `base(info, context)`."
+      c: "Только `(string message, Exception innerException)`: если вложенного исключения нет, вызывающий код передаёт `null`."
+      d: "Только конструктор с данными предметной области, например `(int orderId)`, который сам формирует сообщение."
+    optionExplanations:
+      b: "Конструктор с `SerializationInfo` и `StreamingContext` нужен для устаревшей сериализации исключений через `ISerializable`, которая в первую очередь обслуживала remoting, а remoting в .NET Core не поддерживается. Начиная с .NET 8 такие API `Exception` помечены устаревшими с кодом SYSLIB0051, и вызов `base(info, context)` даёт предупреждение при компиляции. Новый тип не должен объявлять ни этот конструктор, ни атрибут `[Serializable]`."
+      c: "Вызывающий код вынужден передавать `null` там, где вложенного исключения нет, и не может создать исключение без собственного текста. Стандартный набор состоит из трёх конструкторов, и этот лишь один из них."
+      d: "Так нельзя передать собственное сообщение и, главное, исходное исключение: при обёртке низкоуровневой ошибки причина теряется. Конструкторы с данными предметной области добавляют к стандартному набору, а не вместо него."
+    answer: "Три публичных конструктора: без параметров, `(string message)` и `(string message, Exception innerException)`; конструктор сериализации не добавляется."
+    explanation: |
+      Стандартный набор из трёх конструкторов покрывает все способы создать исключение: без текста (тогда
+      используется сообщение по умолчанию), с собственным сообщением и с сообщением плюс исходным исключением,
+      которое сохраняется в `InnerException`. Конструктор без параметров неявно вызывает конструктор `Exception`
+      без параметров, а два других передают аргументы через `base(message)` и `base(message, innerException)`.
+      Конструкторы и свойства с данными предметной области, например идентификатором заказа, можно добавить к
+      этому набору, но не вместо него.
+
+      Четвёртый, защищённый конструктор с параметрами `SerializationInfo` и `StreamingContext` вместе с атрибутом
+      `[Serializable]` и переопределением `GetObjectData` раньше добавляли ради сериализации исключений через
+      `ISerializable`. Она нужна была прежде всего для remoting, а поддержку remoting убрали ещё в .NET Core 1.0.
+      Начиная с .NET 8 эти API `Exception` помечены устаревшими с кодом SYSLIB0051: вызов `base(info, context)`
+      в собственном конструкторе даёт предупреждение при компиляции, а при сборке с предупреждениями как ошибками
+      ломает сборку. Поэтому в новых типах для .NET 8 и более поздних версий, включая .NET 10, этот конструктор
+      не объявляют.
+
+      Если существующая библиотека не может убрать эти члены из-за требований совместимости API, рекомендуется
+      пометить собственные конструктор сериализации и `GetObjectData` атрибутом
+      `[Obsolete(DiagnosticId = "SYSLIB0051")]`.
+    linkTitles:
+      - "Как создавать пользовательские исключения"
+      - "SYSLIB0051: API поддержки устаревшей сериализации помечены как устаревшие"
+  en:
+    title: Which constructors should a custom exception type declare in .NET 8 and later?
+    prompt: |
+      You are adding a new public type `OrderProcessingException`, derived from `Exception`, to a library that
+      targets .NET 10. Which set of constructors should it declare according to Microsoft's guidance for
+      .NET 8 and later versions?
+    hint: In which ways does calling code create an exception - without text, with text, wrapping another exception?
+    options:
+      a: "Three public constructors: parameterless, `(string message)` and `(string message, Exception innerException)`; the last two pass their arguments to `base(message)` and `base(message, innerException)`."
+      b: "The same three constructors, plus the `[Serializable]` attribute and a protected `(SerializationInfo info, StreamingContext context)` constructor that calls `base(info, context)`."
+      c: "Only `(string message, Exception innerException)`: when there is no inner exception, the caller passes `null`."
+      d: "Only a constructor with domain data, for example `(int orderId)`, that builds the message itself."
+    optionExplanations:
+      b: "The constructor with `SerializationInfo` and `StreamingContext` exists for legacy `ISerializable`-based exception serialization, which mainly served remoting, and remoting is not supported in .NET Core. Starting with .NET 8 these `Exception` APIs are marked obsolete with diagnostic SYSLIB0051, and calling `base(info, context)` produces a compile-time warning. A new type should declare neither this constructor nor the `[Serializable]` attribute."
+      c: "Callers are forced to pass `null` where there is no inner exception, and cannot create the exception without their own text. The standard set has three constructors, and this is only one of them."
+      d: "Callers cannot pass their own message and, more importantly, the original exception: when a low-level failure is wrapped, its cause is lost. Constructors with domain data are added to the standard set, not used instead of it."
+    answer: "Three public constructors: parameterless, `(string message)` and `(string message, Exception innerException)`; no serialization constructor."
+    explanation: |
+      The standard set of three constructors covers every way to create an exception: without text (the default
+      message is used), with a custom message, and with a message plus the original exception, which is stored
+      in `InnerException`. The parameterless constructor implicitly calls the parameterless `Exception`
+      constructor, and the other two pass their arguments through `base(message)` and
+      `base(message, innerException)`. Constructors and properties with domain data, such as an order id, can be
+      added to this set, but not instead of it.
+
+      The fourth, protected constructor with `SerializationInfo` and `StreamingContext` parameters, together with
+      the `[Serializable]` attribute and an override of `GetObjectData`, used to be added for `ISerializable`-based
+      exception serialization. It was meant primarily for remoting, and remoting support was dropped in
+      .NET Core 1.0. Starting with .NET 8 these `Exception` APIs are marked obsolete with diagnostic SYSLIB0051:
+      calling `base(info, context)` from your own constructor produces a compile-time warning, and a build that
+      treats warnings as errors fails. So new types for .NET 8 and later versions, including .NET 10, do not
+      declare this constructor.
+
+      If an existing library cannot remove these members because of API compatibility requirements, the
+      recommendation is to mark its own serialization constructor and `GetObjectData` with
+      `[Obsolete(DiagnosticId = "SYSLIB0051")]`.
+    linkTitles:
+      - "How to create user-defined exceptions"
+      - "SYSLIB0051: Legacy serialization support APIs are obsolete"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

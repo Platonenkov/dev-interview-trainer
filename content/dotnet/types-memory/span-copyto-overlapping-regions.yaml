@@ -1,0 +1,122 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RRAPHXHKKC5ZA2PRQQ
+slug: span-copyto-overlapping-regions
+stack: dotnet
+topic: types-memory
+level: senior
+type: output
+grading: auto
+tags: [span, copyto, overlapping-memory, arrays]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    int[] numbers = { 1, 2, 3, 4, 5 };
+    Span<int> span = numbers;
+
+    // shift the first four elements one position to the right
+    span.Slice(0, 4).CopyTo(span.Slice(1));
+
+    Console.Write(string.Join(" ", numbers));
+expect:
+  kind: output
+  value: "1 1 2 3 4"
+acceptedOutputs: ["1 1 2 3 4"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "1 1 2 3 4" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "1 1 1 1 1" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "1 2 3 4 5" }
+  - id: d
+    correct: false
+    expect: { kind: exception, value: System.ArgumentException }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.span-1.copyto
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.array.copy
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что выведет массив после Span<T>.CopyTo в перекрывающийся участок того же массива?
+    prompt: |
+      Что выведет эта программа в консоль? Источник `span.Slice(0, 4)` и приёмник `span.Slice(1)` - два
+      представления над одним и тем же массивом, и их участки памяти перекрываются.
+    hint: Если копировать поэлементно от начала к концу, что окажется в `numbers[2]` к моменту, когда его нужно прочитать? Учитывает ли это `CopyTo`?
+    options:
+      a: "1 1 2 3 4"
+      b: "1 1 1 1 1"
+      c: "1 2 3 4 5"
+      d: Исключение `ArgumentException`
+    optionExplanations:
+      b: "Так получилось бы при наивном цикле `dst[i] = src[i]` от начала к концу: каждый шаг затирает элемент, который ещё предстоит прочитать, и значение `1` размножается по всему массиву. `CopyTo` корректно обрабатывает перекрытие, как `memmove`, и копирует исходные значения целиком."
+      c: "Так было бы, если бы `Slice` возвращал копию данных и запись шла во временный буфер. Но срез - это представление над тем же массивом, поэтому `CopyTo` пишет прямо в `numbers`."
+      d: "`CopyTo` выбрасывает `ArgumentException`, только если приёмник короче источника. Здесь длина обоих срезов равна 4, а перекрытие участков не считается ошибкой."
+    answer: "1 1 2 3 4"
+    explanation: |
+      `Span<int> span = numbers;` и оба среза не копируют данные: источник `span.Slice(0, 4)` покрывает
+      элементы 0..3, приёмник `span.Slice(1)` - элементы 1..4 того же массива. Длины совпадают (4 и 4), поэтому
+      `CopyTo` не выбрасывает исключение.
+
+      Документация `Span<T>.CopyTo` гарантирует, что метод копирует весь источник в приёмник, даже если они
+      перекрываются. Значит, в элементы 1..4 попадают исходные значения `1, 2, 3, 4`, а не уже перезаписанные.
+      Результат такой же, как у `memmove`: перекрытие обрабатывается корректно независимо от того, в каком
+      направлении и какими блоками среда выполнения копирует память внутри. Поэтому массив становится
+      `1, 1, 2, 3, 4`.
+
+      Наивный цикл `for (int i = 0; i < 4; i++) dst[i] = src[i];` дал бы `1 1 1 1 1`: на шаге 0 он записывает
+      `1` в `numbers[1]`, на шаге 1 читает уже изменённый `numbers[1]` и так далее. Сдвиг влево тем же циклом
+      сработал бы правильно, поэтому ошибка в ручном коде проявляется только в одном направлении. `Array.Copy`
+      тоже корректно обрабатывает перекрытие внутри одного массива: он ведёт себя так, будто исходные значения
+      сначала сохранили во временном месте.
+
+      Поведение проверено на .NET 10.
+    linkTitles:
+      - Метод Span<T>.CopyTo
+      - Метод Array.Copy
+  en:
+    title: What does the array print after Span<T>.CopyTo into an overlapping region of the same array?
+    prompt: |
+      What does this program print to the console? The source `span.Slice(0, 4)` and the destination
+      `span.Slice(1)` are two views over the same array, and their memory regions overlap.
+    hint: If you copy element by element from start to end, what will `numbers[2]` hold by the time it has to be read? Does `CopyTo` take that into account?
+    options:
+      a: "1 1 2 3 4"
+      b: "1 1 1 1 1"
+      c: "1 2 3 4 5"
+      d: "`ArgumentException`"
+    optionExplanations:
+      b: "That is what a naive `dst[i] = src[i]` loop from start to end would produce: each step overwrites an element that still has to be read, and the value `1` spreads across the whole array. `CopyTo` handles the overlap correctly, like `memmove`, and copies the original values in full."
+      c: "That would happen if `Slice` returned a copy of the data and the write went to a temporary buffer. But a slice is a view over the same array, so `CopyTo` writes directly into `numbers`."
+      d: "`CopyTo` throws `ArgumentException` only when the destination is shorter than the source. Here both slices have length 4, and overlapping regions are not an error."
+    answer: "1 1 2 3 4"
+    explanation: |
+      `Span<int> span = numbers;` and both slices copy no data: the source `span.Slice(0, 4)` covers elements 0..3,
+      the destination `span.Slice(1)` covers elements 1..4 of the same array. The lengths match (4 and 4), so
+      `CopyTo` does not throw.
+
+      The `Span<T>.CopyTo` documentation guarantees that the method copies all of the source to the destination
+      even if they overlap. So elements 1..4 receive the original values `1, 2, 3, 4`, not values that were already
+      overwritten. The result is the same as with `memmove`: the overlap is handled correctly, whichever direction
+      and block size the runtime uses internally. So the array becomes `1, 1, 2, 3, 4`.
+
+      A naive loop `for (int i = 0; i < 4; i++) dst[i] = src[i];` would give `1 1 1 1 1`: at step 0 it writes `1`
+      into `numbers[1]`, at step 1 it reads the already modified `numbers[1]`, and so on. A left shift with the
+      same loop would work correctly, so the bug in hand-written code shows up in only one direction. `Array.Copy`
+      also handles overlap within one array correctly: it behaves as if the original values were first kept in a
+      temporary location.
+
+      The behaviour is verified on .NET 10.
+    linkTitles:
+      - Span<T>.CopyTo method
+      - Array.Copy method
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

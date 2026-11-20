@@ -1,0 +1,145 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNHEGZ0ZXTVERGND7B
+slug: quadratic-lookup-in-reconciliation-job
+stack: dotnet
+topic: collections-linq
+level: lead
+type: situation
+grading: self
+tags: [complexity, hashset, dictionary, performance, code-review]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/collections/selecting-a-collection-class
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.hashset-1
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.linq.enumerable.tolookup
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Ночная задача сверки стала в 50 раз медленнее после роста данных - что делать техлиду?
+    prompt: |
+      Ночная задача сверки сопоставляет строки банковской выписки с платежами в системе. За год объём данных вырос
+      примерно в семь раз, а задача стала работать в пятьдесят раз дольше: вместо 10 минут - больше восьми часов,
+      и к началу рабочего дня отчёт не готов.
+
+      Профилировщик показывает, что почти всё время уходит в `Enumerable.Where` и `List<T>.Contains` внутри
+      вложенных циклов. Для каждой строки выписки код ищет платёж через
+      `payments.Where(p => p.Reference == line.Reference).FirstOrDefault()`, а затем проверяет
+      `matchedIds.Contains(payment.Id)`, где `matchedIds` - это `List<Guid>`, который пополняется по ходу работы.
+
+      Вы техлид. Что вы сделаете и как не допустить повторения?
+    hint: Сравните, во сколько раз выросли данные и во сколько раз выросло время. Какая зависимость времени от объёма даёт такое соотношение, и сколько раз код проходит по списку платежей?
+    answer: |
+      1. **Снять острую боль и назначить ответственного.** Сообщить потребителям отчёта, когда он будет готов,
+         при необходимости временно запустить сверку раньше или частями. Не выкатывать "быстрые" правки без проверки:
+         ошибка в сверке денег хуже опоздания.
+      2. **Подтвердить диагноз.** Данные выросли в 7 раз, время - в 49-50 раз: это квадратичный рост. Для каждой
+         из n строк выписки `Where(...).FirstOrDefault()` линейно перебирает m платежей, а `List<Guid>.Contains`
+         линейно перебирает уже сопоставленные идентификаторы. Итог - O(n * m) сравнений, и каждый рост данных
+         умножает время на квадрат.
+      3. **Исправить алгоритм, а не железо.** Один раз построить индекс по одной из сторон и искать в нём:
+         - `var paymentsByReference = payments.ToLookup(p => p.Reference);` - если ссылка может повторяться;
+           `ToDictionary` при дубликате ключа выбросит исключение;
+         - `HashSet<Guid> matchedIds = new();` вместо `List<Guid>`; `matchedIds.Add(id)` сразу говорит, был ли
+           элемент уже в множестве.
+
+         Построение индекса стоит O(m), каждый поиск - в среднем O(1), вся сверка - O(n + m). Сохранить семантику:
+         тот же способ сравнения ключей (при сравнении без учёта регистра передать `StringComparer.OrdinalIgnoreCase`),
+         та же обработка дубликатов и отсутствующих платежей. Альтернативы - сортировка обеих сторон и слияние
+         (O(n log n + m log m)) или соединение на стороне базы, если обе стороны лежат в ней.
+      4. **Доказать корректность и скорость.** Прогнать старую и новую версии на одном снимке данных и сравнить
+         результаты сверки построчно. Бенчмарк на нескольких объёмах (например, x1, x2, x4) должен показать
+         линейный рост, а прогон на данных объёма production - уложиться в окно.
+      5. **Не допустить повторения.** Пункт чек-листа code review: поиск по значению (`Contains`, `Where`/`First`/`Any`,
+         `IndexOf`) в списке внутри цикла по другой коллекции, растущей вместе с данными. Нагрузочный тест задачи на
+         масштабированных данных в CI или перед релизом. Метрика длительности задачи и числа обработанных записей с
+         алертом, когда время растёт быстрее объёма. Разбор без поиска виноватых и короткий рассказ команде о
+         сложности операций коллекций.
+    explanation: |
+      Главный сигнал здесь - соотношение роста: данные в 7 раз, время в 50 раз. Линейный алгоритм замедлился бы
+      примерно в 7 раз, квадратичный - в 49. Код был квадратичным с самого начала, просто на малых объёмах это не
+      было заметно, поэтому проблема и прошла ревью и тесты.
+
+      `Where(...).FirstOrDefault()` и `List<T>.Contains` по отдельности выглядят безобидно, но каждый из них - полный
+      или частичный проход по коллекции. Внутри цикла это умножается на число итераций. `HashSet<T>` и
+      `Dictionary<TKey, TValue>` находят элемент по хеш-коду в среднем за O(1), поэтому один проход для построения
+      индекса плюс n быстрых поисков дают линейную сложность. `ToLookup` строит такой же индекс, но допускает
+      несколько значений на ключ. Цена - дополнительная память на индекс размера O(m); для ночной задачи это обычно
+      приемлемо, а если нет, данные делят на части по диапазону ключей или переносят соединение в базу.
+
+      Задача лида не только переписать цикл. Нужно доказать, что сверка даёт те же результаты, и поставить
+      механические проверки: ревью замечает такие места плохо, а тест на объёме, близком к production, и алерт на
+      длительность ловят следующий квадратичный участок раньше, чем опоздавший отчёт. При этом правило не значит
+      "всё переводить на `HashSet<T>`": для коллекций из десятка элементов, которые не растут с данными, линейный
+      поиск нормален.
+    linkTitles:
+      - "Выбор класса коллекции"
+      - "Класс HashSet<T>"
+      - "Метод Enumerable.ToLookup"
+  en:
+    title: A nightly reconciliation job became 50 times slower after data growth - what does a tech lead do?
+    prompt: |
+      A nightly reconciliation job matches bank statement lines with payments in the system. Over a year the data
+      volume grew about seven times, and the job became fifty times slower: more than eight hours instead of
+      10 minutes, so the report is not ready when the working day starts.
+
+      The profiler shows that almost all the time is spent in `Enumerable.Where` and `List<T>.Contains` inside
+      nested loops. For every statement line the code looks up a payment with
+      `payments.Where(p => p.Reference == line.Reference).FirstOrDefault()`, and then checks
+      `matchedIds.Contains(payment.Id)`, where `matchedIds` is a `List<Guid>` that grows as the job runs.
+
+      You are the tech lead. What do you do, and how do you prevent a repeat?
+    hint: Compare how many times the data grew with how many times the run time grew. What dependency of time on volume gives that ratio, and how many times does the code walk the list of payments?
+    answer: |
+      1. **Relieve the immediate pain and assign an owner.** Tell the report's consumers when it will be ready, and
+         if needed start the reconciliation earlier or in parts for now. Do not ship an unchecked "quick" fix:
+         a mistake in reconciling money is worse than a late report.
+      2. **Confirm the diagnosis.** Data grew 7 times, time grew 49-50 times: that is quadratic growth. For each of
+         the n statement lines `Where(...).FirstOrDefault()` scans the m payments linearly, and
+         `List<Guid>.Contains` scans the already matched ids linearly. The result is O(n * m) comparisons, and every
+         growth in data multiplies the time by its square.
+      3. **Fix the algorithm, not the hardware.** Build an index over one side once and look things up in it:
+         - `var paymentsByReference = payments.ToLookup(p => p.Reference);` if a reference can repeat;
+           `ToDictionary` throws on a duplicate key;
+         - `HashSet<Guid> matchedIds = new();` instead of `List<Guid>`; `matchedIds.Add(id)` tells you at once
+           whether the element was already in the set.
+
+         Building the index costs O(m), each lookup is O(1) on average, the whole reconciliation is O(n + m). Keep
+         the semantics: the same key comparison (pass `StringComparer.OrdinalIgnoreCase` if the old code ignored
+         case), the same handling of duplicates and missing payments. Alternatives are sorting both sides and
+         merging (O(n log n + m log m)) or joining in the database if both sides live there.
+      4. **Prove correctness and speed.** Run the old and the new version on the same data snapshot and compare the
+         reconciliation results line by line. A benchmark at several sizes (for example x1, x2, x4) must show linear
+         growth, and a run on production-sized data must fit the window.
+      5. **Prevent a repeat.** A code review checklist item: a lookup by value (`Contains`, `Where`/`First`/`Any`,
+         `IndexOf`) in a list inside a loop over another collection that grows with the data. A load test of the job
+         on scaled data in CI or before release. A metric for job duration and processed record count, with an
+         alert when time grows faster than volume. A blameless post-mortem and a short talk for the team on the
+         complexity of collection operations.
+    explanation: |
+      The key signal is the growth ratio: data 7 times, time 50 times. A linear algorithm would have slowed down
+      about 7 times, a quadratic one 49 times. The code was quadratic from the start; on small volumes it simply
+      did not show, which is why it passed review and tests.
+
+      `Where(...).FirstOrDefault()` and `List<T>.Contains` each look harmless, but each is a full or partial pass
+      over the collection. Inside a loop that cost is multiplied by the number of iterations. `HashSet<T>` and
+      `Dictionary<TKey, TValue>` find an element by its hash code in O(1) on average, so one pass to build the index
+      plus n fast lookups gives linear complexity. `ToLookup` builds the same kind of index but allows several
+      values per key. The price is extra memory for an index of size O(m); for a nightly job that is usually
+      acceptable, and if it is not, the data is split into key ranges or the join moves to the database.
+
+      The lead's job is not only to rewrite the loop. You have to prove that the reconciliation gives the same
+      results and put mechanical checks in place: review is poor at spotting such places, while a test on
+      production-like volume and an alert on duration catch the next quadratic spot before a late report does. The
+      rule does not mean "move everything to `HashSet<T>`": for a collection of a dozen elements that does not grow
+      with the data, a linear search is fine.
+    linkTitles:
+      - "Selecting a collection class"
+      - "HashSet<T> class"
+      - "Enumerable.ToLookup method"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

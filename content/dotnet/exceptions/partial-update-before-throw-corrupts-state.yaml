@@ -1,0 +1,179 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPA9TGTQ4W96JJBRPN
+slug: partial-update-before-throw-corrupts-state
+stack: dotnet
+topic: exceptions
+level: senior
+type: find-bug
+grading: auto
+tags: [exception-design, exception-safety, state-consistency, validation]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    var payer = new Account { Id = "A", Balance = 100 };
+    var payee = new Account { Id = "B", Balance = 50, IsFrozen = true };
+
+    try
+    {
+        Transfer(payer, payee, 30);
+    }
+    catch (InvalidOperationException ex)
+    {
+        Console.WriteLine($"Transfer failed: {ex.Message}");
+    }
+
+    Console.WriteLine($"Total: {payer.Balance + payee.Balance}");
+
+    static void Transfer(Account debit, Account credit, int amount)
+    {
+        debit.Balance -= amount;
+        EnsureCanReceive(credit);
+        credit.Balance += amount;
+    }
+
+    static void EnsureCanReceive(Account account)
+    {
+        if (account.IsFrozen)
+        {
+            throw new InvalidOperationException($"Account {account.Id} is frozen");
+        }
+    }
+
+    class Account
+    {
+        public string Id = "";
+        public int Balance;
+        public bool IsFrozen;
+    }
+bugLineSets: [[17], [17, 18]]
+fixedSource: |
+  var payer = new Account { Id = "A", Balance = 100 };
+  var payee = new Account { Id = "B", Balance = 50, IsFrozen = true };
+
+  try
+  {
+      Transfer(payer, payee, 30);
+  }
+  catch (InvalidOperationException ex)
+  {
+      Console.WriteLine($"Transfer failed: {ex.Message}");
+  }
+
+  Console.WriteLine($"Total: {payer.Balance + payee.Balance}");
+
+  static void Transfer(Account debit, Account credit, int amount)
+  {
+      EnsureCanReceive(credit);
+      debit.Balance -= amount;
+      credit.Balance += amount;
+  }
+
+  static void EnsureCanReceive(Account account)
+  {
+      if (account.IsFrozen)
+      {
+          throw new InvalidOperationException($"Account {account.Id} is frozen");
+      }
+  }
+
+  class Account
+  {
+      public string Id = "";
+      public int Balance;
+      public bool IsFrozen;
+  }
+fixedExpect: { kind: output, value: "Transfer failed: Account B is frozen\nTotal: 150" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/exceptions/best-practices-for-exceptions
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/design-guidelines/exception-throwing
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строку, из-за которой неудачный перевод уменьшает общий баланс
+    prompt: |
+      Метод `Transfer` переводит деньги со счёта `A` на счёт `B`. Счёт `B` заморожен, поэтому перевод должен
+      завершиться исключением, а балансы обоих счетов - остаться прежними: общая сумма до перевода равна 150.
+      Вызывающий код перехватывает исключение и выводит общую сумму. Программа выводит:
+
+      ```text
+      Transfer failed: Account B is frozen
+      Total: 120
+      ```
+
+      Щёлкните по строке с дефектом.
+    hint: Какие изменения состояния уже выполнены в момент, когда исключение покидает `Transfer`?
+    answer: Строка 17, `debit.Balance -= amount;`. Списание выполняется до проверки, которая может выбросить исключение, поэтому после исключения счета остаются в наполовину изменённом состоянии.
+    explanation: |
+      `Transfer` сначала уменьшает баланс счёта `A` (строка 17), а затем вызывает `EnsureCanReceive` (строка 18).
+      Проверка выбрасывает `InvalidOperationException`, управление покидает метод, и строка 19 с зачислением
+      уже не выполняется. Исключение корректно перехвачено, но 30 единиц списаны и никуда не зачислены:
+      общая сумма стала 120 вместо 150. Вызывающий код видит ошибку и вправе считать, что перевод не
+      состоялся, хотя на самом деле половина операции осталась в силе.
+
+      Сама проверка в строке 18 - не дефект: отказ для замороженного счёта - нормальное поведение. Дефект в
+      порядке действий: состояние меняется раньше операции, которая может завершиться исключением. Метод
+      должен давать строгую гарантию безопасности исключений (strong exception guarantee): либо операция
+      выполнена целиком, либо состояние такое же, как до вызова. Рекомендации .NET по исключениям говорят о
+      том же: вызывающий код должен иметь возможность считать, что выброшенное исключение не оставило
+      побочных эффектов.
+
+      Способы это обеспечить:
+
+      - выполнить все проверки до первого изменения состояния, как в исправленном коде;
+      - если изменение всё же может упасть после частичного обновления, откатить его в `catch` и
+        повторно выбросить исключение через `throw;`;
+      - вычислить новые значения во временных переменных и применить их операциями, которые не могут
+        выбросить исключение;
+      - для данных в базе - выполнять оба изменения в одной транзакции.
+
+      Блок `finally` здесь не поможет: он выполняется и при успехе, а откат нужен только при неудаче.
+    linkTitles:
+      - "Рекомендации по работе с исключениями"
+      - "Рекомендации по выбрасыванию исключений"
+  en:
+    title: Find the line that makes a failed transfer shrink the total balance
+    prompt: |
+      The `Transfer` method moves money from account `A` to account `B`. Account `B` is frozen, so the transfer
+      should end with an exception and both balances should stay as they were: the total before the transfer
+      is 150. The caller catches the exception and prints the total. The program prints:
+
+      ```text
+      Transfer failed: Account B is frozen
+      Total: 120
+      ```
+
+      Click the line that contains the defect.
+    hint: Which state changes have already been made at the moment the exception leaves `Transfer`?
+    answer: Line 17, `debit.Balance -= amount;`. The debit runs before the check that can throw, so after the exception the accounts are left half-updated.
+    explanation: |
+      `Transfer` first decreases the balance of account `A` (line 17) and then calls `EnsureCanReceive`
+      (line 18). The check throws `InvalidOperationException`, control leaves the method, and line 19 with the
+      credit never runs. The exception is caught correctly, but 30 units are debited and credited nowhere: the
+      total is now 120 instead of 150. The caller sees an error and is entitled to assume the transfer did not
+      happen, while in fact half of the operation is still in effect.
+
+      The check on line 18 is not the defect: refusing a frozen account is the intended behavior. The defect is
+      the order: the state changes before an operation that can throw. The method should give the strong
+      exception guarantee: either the operation completes entirely, or the state is the same as before the
+      call. The .NET exception best practices say the same thing: callers should be able to assume that a
+      thrown exception left no side effects.
+
+      Ways to achieve it:
+
+      - run every check before the first state change, as in the fixed code;
+      - if a change can still fail after a partial update, roll it back in `catch` and rethrow with `throw;`;
+      - compute the new values in temporary variables and apply them with operations that cannot throw;
+      - for data in a database, make both changes in one transaction.
+
+      A `finally` block does not help here: it runs on success too, while the rollback is needed only on
+      failure.
+    linkTitles:
+      - "Best practices for exceptions"
+      - "Exception throwing guidelines"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

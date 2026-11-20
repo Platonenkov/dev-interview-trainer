@@ -1,0 +1,175 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RP57V7RHY6HKP9PT4S
+slug: exceptions-vs-result-type-team-policy
+stack: dotnet
+topic: exceptions
+level: lead
+type: open
+grading: self
+tags: [exceptions, result-pattern, error-handling, api-design, adr]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/exceptions/best-practices-for-exceptions
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/design-guidelines/exception-throwing
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Переводить ли бизнес-ошибки с исключений на тип Result: как выбрать политику для команды?"
+    prompt: |
+      Половина команды предлагает перевести все бизнес-ошибки (валидация, «не найдено», недостаточно средств,
+      конфликт версий) с исключений на возвращаемый тип `Result<T>`, другая половина против. Сервис уже работает
+      в production, и в коде смешаны оба подхода. Как вы примете решение, где проведёте границу между
+      исключением и результатом и как внедрите политику в команде?
+    hint: |
+      Для каждого вида сбоя спросите: кто должен на него реагировать и насколько часто он случается при
+      нормальной работе?
+    answer: |
+      **Решение**
+
+      1. **Начать с данных, а не со спора.** Собрать, какие исключения сервис выбрасывает и где их перехватывают.
+         Исключение, которое ловится в том же или соседнем методе и превращается в ответ, - это управление потоком
+         выполнения через исключения. Частоту посмотреть по метрикам рантайма: исключение на каждом десятом
+         запросе и исключение раз в неделю - разные случаи.
+      2. **Провести границу по контракту метода.** Критерий: ожидается ли, что непосредственный вызывающий код
+         обработает этот исход и выберет ветку?
+         - Да (валидация, «не найдено», недостаточно средств, бизнес-конфликт) - это законный результат операции,
+           он становится частью сигнатуры: `Result<T>` с закрытым набором типизированных ошибок или паттерн `Try...`.
+         - Нет (нарушенный инвариант, `null` там, где его быть не может, недоступная база, тайм-аут) - исключение.
+           Вызывающий код не может сделать с ним ничего разумного, оно уходит к границе приложения или к политике
+           повторов.
+      3. **Применять по слоям и единообразно.** Доменный слой и слой приложения возвращают результат для
+         бизнес-исходов. Инфраструктура выбрасывает исключения и не заворачивает их в `Result`. Граница
+         (контроллер, обработчик сообщения) переводит ошибки результата в конкретные ответы (400, 404, 409), а
+         исключения - в 500 через центральный обработчик. Один и тот же исход не должен быть исключением в одном
+         модуле и результатом в другом.
+      4. **Чего не делать.** Не возвращать объект `Exception` как значение: руководство по проектированию .NET
+         прямо запрещает публичным членам возвращать исключения через возвращаемое значение или `out`-параметр.
+         Не писать `catch (Exception ex)` с превращением в `Result.Fail(ex.Message)`: теряется стек вызовов, а
+         ошибки программирования маскируются под бизнес-исход. Не делать публичные члены, которые выбрасывают
+         исключение или нет в зависимости от настройки.
+      5. **Один тип на всю команду.** Один `Result` (свой или из одной выбранной библиотеки), ошибки - типизированные
+         коды или записи, а не строки. В C# 14 (.NET 10) нет встроенных размеченных объединений, и компилятор не
+         заставляет проверять возвращённое значение, поэтому без соглашений и code review результат легко
+         проигнорировать.
+
+      **Внедрение**
+
+      - ADR: критерий, таблица «исключение или результат» для типичных случаев, шаблон перевода на границе.
+      - Новый код и один пилотный модуль пишутся по правилу сразу; старый код переводится, когда его всё равно
+        меняют. Массового переписывания нет.
+      - Публичные API общих библиотек не меняются молча: замена исключения на результат ломает потребителей.
+        Это отдельное решение - новая версия или новый метод рядом, по образцу пары `Parse` и `TryParse`.
+      - Пункт в чек-листе code review: «это ожидаемый исход, и кто его обрабатывает?».
+      - Через несколько итераций проверить: стало ли меньше исключений на запрос, проще ли читать обработчики, не
+        появились ли проигнорированные результаты. По итогам поправить ADR.
+    explanation: |
+      Обе половины команды отчасти правы. Руководство по проектированию .NET называет исключения основным
+      способом сообщать об ошибках и прямо советует не возвращать коды ошибок, а о сбоях выполнения сообщать
+      выбросом исключения. Причина видна и без цитаты: код ошибки можно не проверить, и сбой пройдёт
+      незамеченным, а исключение нельзя пропустить молча, и оно несёт стек вызовов. Но то же руководство просит
+      по возможности не использовать исключения для обычного потока управления и учитывать стоимость выброса:
+      по его оценке, больше 100 исключений в секунду заметно сказываются на производительности большинства
+      приложений. Рекомендации по работе с исключениями добавляют, что частый случай ошибки можно считать
+      обычным потоком управления и возвращать для него `null` или `default`, а вместо дорогого исключения
+      вызывать методы `Try*`, как `Int32.TryParse`.
+
+      Противоречие снимается определением сбоя. Руководство называет сбоем ситуацию, когда член типа не может
+      сделать то, для чего он предназначен. Если «заказ не найден» - законный ответ метода поиска, то это не сбой,
+      а результат, так же как `false` у `TryParse`. Поэтому решение принимается про контракт каждого метода, а не
+      про стиль кода вообще.
+
+      Крайности одинаково плохи. `Result` для всего превращает сбои инфраструктуры в значения, которые нужно
+      вручную протаскивать через каждый слой, теряет стек вызовов, а забытая проверка молча глотает ошибку - ровно
+      та слабость кодов ошибок, о которой сказано выше. Исключения для всего прячут бизнес-логику в блоках
+      `catch` и дают лишнюю стоимость на горячих путях.
+
+      Для лида главное - единообразие и постепенность. Смешанные правила хуже любого чистого подхода, а массовое
+      переписывание рискованно и не даёт пользователям ничего. Политика задаётся по слоям одним критерием,
+      записывается в ADR и проверяется на code review. Ответ про синтаксис относится к C# 14 и .NET 10.
+    linkTitles:
+      - "Рекомендации по работе с исключениями"
+      - "Руководство по проектированию: выброс исключений"
+  en:
+    title: "Should business failures move from exceptions to a Result type, and how do you set the team policy?"
+    prompt: |
+      Half of the team wants to move all business failures (validation, "not found", insufficient funds, version
+      conflicts) from exceptions to a `Result<T>` return type, the other half is against it. The service already
+      runs in production, and the code mixes both approaches. How do you make the decision, where do you draw the
+      line between an exception and a result, and how do you roll the policy out in the team?
+    hint: |
+      For each kind of failure, ask who is supposed to react to it and how often it happens in normal operation.
+    answer: |
+      **Decision**
+
+      1. **Start with data, not with the argument.** Collect which exceptions the service throws and where they are
+         caught. An exception caught in the same or a neighbouring method and turned into a response is control
+         flow through exceptions. Check the frequency in the runtime metrics: an exception on every tenth request
+         and an exception once a week are different cases.
+      2. **Draw the line by the method contract.** The criterion: is the immediate caller expected to handle this
+         outcome and choose a branch?
+         - Yes (validation, "not found", insufficient funds, a business conflict): it is a legitimate result of the
+           operation and becomes part of the signature, a `Result<T>` with a closed set of typed errors or the
+           `Try...` pattern.
+         - No (a broken invariant, `null` where it cannot be, an unavailable database, a timeout): an exception.
+           The caller can do nothing sensible with it, so it travels to the application boundary or to a retry
+           policy.
+      3. **Apply it per layer, consistently.** The domain and application layers return results for business
+         outcomes. Infrastructure throws exceptions and does not wrap them into `Result`. The boundary (a controller,
+         a message handler) maps result errors to specific responses (400, 404, 409) and exceptions to 500 through
+         the central handler. The same outcome must not be an exception in one module and a result in another.
+      4. **What not to do.** Do not return an `Exception` object as a value: the .NET design guidelines explicitly
+         forbid public members that return exceptions as the return value or an `out` parameter. Do not write
+         `catch (Exception ex)` that converts into `Result.Fail(ex.Message)`: the stack trace is lost, and
+         programming errors are disguised as business outcomes. Do not create public members that throw or not
+         depending on an option.
+      5. **One type for the whole team.** One `Result` (your own or from one chosen library), with errors as typed
+         codes or records, not strings. C# 14 (.NET 10) has no built-in discriminated unions, and the compiler does
+         not force the caller to inspect a returned value, so without conventions and code review a result is easy
+         to ignore.
+
+      **Rollout**
+
+      - An ADR: the criterion, an "exception or result" table for typical cases, the mapping template at the
+        boundary.
+      - New code and one pilot module follow the rule from day one; old code is converted when it is changed
+        anyway. No mass rewrite.
+      - Public APIs of shared libraries are not changed silently: replacing an exception with a result breaks
+        consumers. That is a separate decision, a new version or a new method alongside, following the `Parse`
+        and `TryParse` pair.
+      - A code review checklist item: "is this an expected outcome, and who handles it?".
+      - After a few iterations check: are there fewer exceptions per request, are handlers easier to read, have
+        ignored results appeared? Adjust the ADR accordingly.
+    explanation: |
+      Both halves of the team are partly right. The .NET design guidelines call exceptions the primary means of
+      reporting errors, say directly not to return error codes, and ask you to report execution failures by
+      throwing exceptions. The reason is clear even without a quote: an error code can go unchecked and the
+      failure goes unnoticed, while an exception cannot be skipped silently and carries a stack trace. But the
+      same guidelines ask you to avoid exceptions for normal control flow where possible and to consider the cost
+      of throwing: by their estimate, throw rates above 100 per second are likely to noticeably affect the
+      performance of most applications. The best practices for exceptions add that a common error case can be
+      treated as normal control flow and answered with `null` or `default`, and that `Try*` methods such as
+      `Int32.TryParse` avoid a costly exception.
+
+      The contradiction disappears with the definition of a failure. The guidelines call it a failure when a member
+      cannot do what it was designed to do. If "order not found" is a legitimate answer of a lookup method, it is
+      not a failure but a result, just like `false` from `TryParse`. So the decision is made about the contract of
+      each method, not about coding style in general.
+
+      Both extremes are equally bad. `Result` for everything turns infrastructure failures into values that must
+      be passed by hand through every layer, loses the stack trace, and a forgotten check silently swallows an
+      error - exactly the weakness of error codes described above. Exceptions for everything hide business
+      logic in `catch` blocks and add cost on hot paths.
+
+      For a lead the key points are consistency and gradual change. Mixed rules are worse than either pure
+      approach, and a mass rewrite is risky and gives users nothing. The policy is set per layer with one
+      criterion, written into an ADR and checked in code review. The statements about syntax refer to C# 14 and
+      .NET 10.
+    linkTitles:
+      - "Best practices for exceptions"
+      - "Design guidelines: exception throwing"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

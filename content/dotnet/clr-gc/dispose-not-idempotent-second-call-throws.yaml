@@ -1,0 +1,166 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RM2S2FJH59E8XQS2SB
+slug: dispose-not-idempotent-second-call-throws
+stack: dotnet
+topic: clr-gc
+level: middle
+type: find-bug
+grading: auto
+tags: [idisposable, dispose-pattern, objectdisposedexception, streamwriter, using]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    MemoryStream output = new MemoryStream();
+    SaveReport(output);
+    Console.WriteLine(output.Length);
+
+    static void SaveReport(Stream target)
+    {
+        using ReportFile report = new ReportFile(target);
+        report.Write("Total: 3");
+        report.Dispose();
+    }
+
+    class ReportFile : IDisposable
+    {
+        private readonly StreamWriter _writer;
+
+        public ReportFile(Stream target)
+        {
+            _writer = new StreamWriter(target, leaveOpen: true);
+        }
+
+        public void Write(string text) => _writer.Write(text);
+
+        public void Dispose()
+        {
+            _writer.Flush();
+            _writer.Dispose();
+        }
+    }
+bugLineSets: [[25], [24], [23]]
+fixedSource: |
+  MemoryStream output = new MemoryStream();
+  SaveReport(output);
+  Console.WriteLine(output.Length);
+
+  static void SaveReport(Stream target)
+  {
+      using ReportFile report = new ReportFile(target);
+      report.Write("Total: 3");
+      report.Dispose();
+  }
+
+  class ReportFile : IDisposable
+  {
+      private readonly StreamWriter _writer;
+      private bool _disposed;
+
+      public ReportFile(Stream target)
+      {
+          _writer = new StreamWriter(target, leaveOpen: true);
+      }
+
+      public void Write(string text) => _writer.Write(text);
+
+      public void Dispose()
+      {
+          if (_disposed)
+          {
+              return;
+          }
+          _writer.Flush();
+          _writer.Dispose();
+          _disposed = true;
+      }
+  }
+fixedExpect: { kind: output, value: "8" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/implementing-dispose
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.idisposable.dispose
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите ошибку, из-за которой повторный вызов Dispose выбрасывает ObjectDisposedException
+    prompt: |
+      Класс `ReportFile` пишет отчёт в поток через `StreamWriter`. Метод `SaveReport` освобождает отчёт явно,
+      как только запись закончена, а объявление `using` оставлено как страховка на случай исключения.
+      Программа должна вывести длину потока `8`, но завершается с необработанным исключением
+      `System.ObjectDisposedException` и ничего не выводит.
+
+      Щёлкните по строке с дефектом. Если не хватает оператора, щёлкните по строке, после которой он должен стоять.
+    hint: Проследите, что происходит с полем `_writer` при каждом вызове `ReportFile.Dispose`.
+    answer: |
+      Строка 25 (или строка 24, после которой не хватает проверки, либо объявление метода в строке 23) - `ReportFile.Dispose` не запоминает, что объект уже освобождён, и при втором вызове вызывает `Flush` у уже освобождённого `StreamWriter`.
+    explanation: |
+      Объявление `using` компилятор превращает в `try`/`finally`, и `Dispose` вызывается в конце области
+      видимости, то есть при выходе из `SaveReport`. Но в строке 9 отчёт уже освобождён явно. Первый вызов
+      сбрасывает буфер и освобождает `_writer`. Второй вызов, из `finally`, снова выполняет `_writer.Flush()`,
+      а освобождённый `StreamWriter` при записи и сбросе буфера выбрасывает `ObjectDisposedException`.
+      Исключение не перехватывается, поэтому строка 3 так и не выполняется.
+
+      Вызывающий код здесь ни при чём: контракт `IDisposable` разрешает вызывать `Dispose` сколько угодно раз.
+      Документация требует, чтобы `Dispose` был идемпотентным: вызовы после первого ничего не делают и не
+      выбрасывают исключений. Двойной вызов в реальном коде возникает легко - явное раннее освобождение плюс
+      `using`, два владельца одного объекта, контейнер DI и ручной вызов.
+
+      Исправление - поле-флаг `_disposed`. В начале `Dispose` стоит проверка `if (_disposed) return;`, а после
+      освобождения ресурсов флаг ставится в `true`. Тогда второй вызов возвращается сразу, не трогая уже
+      освобождённый `_writer`, и программа выводит `8`: в .NET 10 кодировка `StreamWriter` по умолчанию -
+      UTF-8 без BOM, а `"Total: 3"` - это 8 ASCII-символов. Параметр `leaveOpen: true` оставляет `MemoryStream`
+      открытым, поэтому `Length` читается без ошибки.
+
+      Отдельно заметим, что `_writer.Flush()` здесь избыточен: `StreamWriter.Dispose` сам сбрасывает буфер и
+      безопасен при повторном вызове. Но надёжное решение - флаг на уровне класса: как только в `Dispose`
+      появится любое другое действие над освобождённым ресурсом, без флага ошибка вернётся. Остальные члены
+      класса после освобождения, наоборот, могут и должны выбрасывать `ObjectDisposedException`, например через
+      `ObjectDisposedException.ThrowIf(_disposed, this)`.
+    linkTitles:
+      - "Реализация метода Dispose"
+      - "Метод IDisposable.Dispose"
+  en:
+    title: Find the bug that makes a second Dispose call throw ObjectDisposedException
+    prompt: |
+      The `ReportFile` class writes a report to a stream through a `StreamWriter`. The `SaveReport` method
+      disposes the report explicitly as soon as writing is done, and the `using` declaration stays as a safety
+      net in case of an exception. The program should print the stream length `8`, but it ends with an unhandled
+      `System.ObjectDisposedException` and prints nothing.
+
+      Click the line that contains the defect. If a statement is missing, click the line after which it belongs.
+    hint: Trace what happens to the `_writer` field on every call to `ReportFile.Dispose`.
+    answer: |
+      Line 25 (or line 24, after which a check is missing, or the method declaration on line 23) - `ReportFile.Dispose` does not remember that the object is already disposed, so the second call runs `Flush` on a `StreamWriter` that is already disposed.
+    explanation: |
+      The compiler turns a `using` declaration into `try`/`finally`, and `Dispose` is called at the end of the
+      scope, that is when `SaveReport` returns. But on line 9 the report has already been disposed explicitly.
+      The first call flushes the buffer and disposes `_writer`. The second call, from `finally`, runs
+      `_writer.Flush()` again, and a disposed `StreamWriter` throws `ObjectDisposedException` on writing and
+      flushing. Nothing catches the exception, so line 3 never runs.
+
+      The calling code is not at fault: the `IDisposable` contract allows `Dispose` to be called any number of
+      times. The documentation requires `Dispose` to be idempotent: calls after the first one do nothing and
+      throw no exceptions. A double call is easy to get in real code - an explicit early dispose plus `using`,
+      two owners of one object, a DI container plus a manual call.
+
+      The fix is a `_disposed` flag field. `Dispose` starts with the check `if (_disposed) return;`, and the
+      flag is set to `true` after the resources are released. Then the second call returns at once without
+      touching the disposed `_writer`, and the program prints `8`: on .NET 10 the default encoding of
+      `StreamWriter` is UTF-8 without a BOM, and `"Total: 3"` is 8 ASCII characters. `leaveOpen: true` keeps the
+      `MemoryStream` open, so reading `Length` does not fail.
+
+      Note also that `_writer.Flush()` is redundant here: `StreamWriter.Dispose` flushes the buffer itself and
+      is safe to call twice. But the class-level flag is the robust fix: as soon as `Dispose` gains any other
+      action on a released resource, the bug comes back without it. The other members of the class, on the
+      contrary, may and should throw `ObjectDisposedException` after disposal, for example through
+      `ObjectDisposedException.ThrowIf(_disposed, this)`.
+    linkTitles:
+      - "Implement a Dispose method"
+      - "IDisposable.Dispose method"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

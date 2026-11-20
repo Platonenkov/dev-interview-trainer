@@ -1,0 +1,102 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPJ82JQXREW9GHZAMW
+slug: shared-library-types-internal-by-default
+stack: dotnet
+topic: oop-solid
+level: lead
+type: single
+grading: auto
+tags: [encapsulation, library-design, breaking-changes, access-modifiers]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/core/compatibility/library-change-rules
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/classes-and-structs/access-modifiers
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какую видимость по умолчанию выбрать для новых типов в общей NuGet-библиотеке?
+    prompt: |
+      Ваша команда сопровождает NuGet-пакет, который используют десятки команд компании. Пакет развивается
+      быстро, и вы хотите, чтобы будущие версии реже ломали потребителей. Вы вводите правило для новых
+      типов, которые появляются в пакете.
+
+      Какая политика видимости по умолчанию лучше всего ограничивает будущие ломающие изменения?
+    hint: Сравните, какое изменение видимости можно сделать в следующей версии без последствий для уже собранного кода потребителей, а какое нельзя.
+    options:
+      a: "Делать новые типы `public`, чтобы командам было доступно всё сразу, а неудачные типы позже помечать `[Obsolete]` и убирать из публичного API."
+      b: "Делать новые типы `internal` и переводить тип в `public` осознанно, когда у потребителя появилась подтверждённая потребность, с ревью публичного API."
+      c: "Делать новые типы `public`, но размещать служебные в пространстве имён `*.Internal` и помечать `[EditorBrowsable(EditorBrowsableState.Never)]`, чтобы их не использовали."
+      d: "Делать новые типы `internal` и добавлять `InternalsVisibleTo` для сборок каждой команды, которой они понадобились."
+    optionExplanations:
+      a: "Сделать тип публичным легко, а вернуть назад нельзя: удаление или понижение видимости публичного типа ломает код, который уже на него ссылается, даже если перед этим тип был помечен `[Obsolete]`. Политика заранее раздувает контракт, который придётся поддерживать."
+      c: "Тип остаётся `public`: потребители могут скомпилироваться с ним, и многие так и сделают. Пространство имён и атрибут влияют только на подсказки в IDE, а не на контракт, поэтому любое изменение такого типа всё равно ломает чужой код."
+      d: "`InternalsVisibleTo` открывает внешним командам все внутренние члены сборки без каких-либо гарантий совместимости. Любой рефакторинг внутреннего кода может сломать их, а список дружественных сборок приходится вести вручную. Этот механизм уместен для собственных тестов, а не для потребителей пакета."
+    answer: "Новые типы по умолчанию `internal`, перевод в `public` - осознанное решение под подтверждённую потребность потребителя."
+    explanation: |
+      Правила совместимости .NET-библиотек асимметричны. Добавление публичного API, в том числе повышение
+      видимости типа или члена, считается совместимым изменением: код, собранный со старой версией, продолжает
+      работать. Удаление публичного типа или понижение его видимости запрещено: потребители, собранные со
+      старой версией, падают во время выполнения при загрузке типа, а при пересборке получают ошибки компиляции.
+
+      Поэтому каждый `public` тип - это обещание поддерживать его форму во всех следующих версиях пакета (по
+      крайней мере до следующей мажорной версии). `internal` оставляет свободу менять, переименовывать и удалять
+      тип, а перевести его в `public` можно в любой момент без ломающего изменения. Для типов верхнего уровня
+      C# и так использует `internal` по умолчанию, если модификатор не указан; политика лишь требует не
+      открывать тип «на всякий случай».
+
+      На уровне процесса это обычно подкрепляют инструментами: файлами публичного API из
+      `Microsoft.CodeAnalysis.PublicApiAnalyzers`, которые делают каждое изменение контракта видимым в code
+      review, и проверкой пакета (`EnablePackageValidation`) против предыдущей опубликованной версии.
+    linkTitles:
+      - "Правила изменений для совместимости библиотек"
+      - "Модификаторы доступа (руководство по C#)"
+  en:
+    title: Which default visibility should new types get in a shared NuGet library?
+    prompt: |
+      Your team maintains a NuGet package used by dozens of teams across the company. The package evolves
+      quickly, and you want future versions to break consumers less often. You are introducing a rule for new
+      types added to the package.
+
+      Which default visibility policy best limits future breaking changes?
+    hint: Compare which visibility change you can make in the next version without affecting consumer code that is already compiled, and which one you cannot.
+    options:
+      a: "Make new types `public` so every team has everything at once, and later mark unsuccessful types `[Obsolete]` and remove them from the public API."
+      b: "Make new types `internal` and promote a type to `public` deliberately when a consumer has a confirmed need, with a public API review."
+      c: "Make new types `public`, but put helper types in a `*.Internal` namespace and mark them `[EditorBrowsable(EditorBrowsableState.Never)]` so nobody uses them."
+      d: "Make new types `internal` and add `InternalsVisibleTo` for the assemblies of every team that needs them."
+    optionExplanations:
+      a: "Making a type public is easy, but it cannot be undone: removing a public type or reducing its visibility breaks code that already references it, even if the type was marked `[Obsolete]` first. The policy inflates up front a contract you will have to support."
+      c: "The type is still `public`: consumers can compile against it, and many will. The namespace and the attribute only affect IDE suggestions, not the contract, so any change to such a type still breaks other people's code."
+      d: "`InternalsVisibleTo` exposes every internal member of the assembly to external teams with no compatibility guarantee. Any refactoring of internal code can break them, and the list of friend assemblies has to be maintained by hand. The mechanism fits your own tests, not package consumers."
+    answer: "New types are `internal` by default; promoting one to `public` is a deliberate decision driven by a confirmed consumer need."
+    explanation: |
+      The compatibility rules for .NET libraries are asymmetric. Adding public API, including increasing the
+      visibility of a type or member, is a compatible change: code compiled against the old version keeps
+      working. Removing a public type or reducing its visibility is disallowed: consumers compiled against the
+      old version fail at run time when the type is loaded, and get compile errors when they rebuild.
+
+      So every `public` type is a promise to keep its shape in all later versions of the package (at least
+      until the next major version). `internal` keeps the freedom to change, rename and delete the type, and
+      promoting it to `public` is possible at any time without a breaking change. C# already makes top-level
+      types `internal` when no modifier is written; the policy only forbids opening a type "just in case".
+
+      In practice the process is backed by tooling: public API files from
+      `Microsoft.CodeAnalysis.PublicApiAnalyzers`, which make every contract change visible in code review, and
+      package validation (`EnablePackageValidation`) against the previously shipped version.
+    linkTitles:
+      - "Change rules for library compatibility"
+      - "Access modifiers (C# programming guide)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

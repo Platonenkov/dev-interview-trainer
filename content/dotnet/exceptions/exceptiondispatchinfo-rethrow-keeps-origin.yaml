@@ -1,0 +1,143 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RP2MSMAS28XHDDQHQ7
+slug: exceptiondispatchinfo-rethrow-keeps-origin
+stack: dotnet
+topic: exceptions
+level: middle
+type: output
+grading: auto
+tags: [exceptiondispatchinfo, rethrow, stack-trace]
+code:
+  language: csharp
+  harness: program
+  source: |
+    using System.Runtime.CompilerServices;
+    using System.Runtime.ExceptionServices;
+
+    class Program
+    {
+        static void Main()
+        {
+            try
+            {
+                Rethrow();
+            }
+            catch (Exception ex)
+            {
+                Console.Write(ex.StackTrace.Contains("ThrowOriginal"));
+            }
+        }
+
+        static void Rethrow()
+        {
+            ExceptionDispatchInfo captured = null;
+            try
+            {
+                ThrowOriginal();
+            }
+            catch (InvalidOperationException ex)
+            {
+                captured = ExceptionDispatchInfo.Capture(ex);
+            }
+
+            // Thrown later, outside the catch block
+            captured.Throw();
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static void ThrowOriginal()
+        {
+            throw new InvalidOperationException("original");
+        }
+    }
+expect:
+  kind: output
+  value: "True"
+acceptedOutputs: ["True"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "True" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "False" }
+  - id: c
+    correct: false
+    expect: { kind: exception, value: System.InvalidOperationException }
+  - id: d
+    correct: false
+    expect: { kind: compile-error }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.runtime.exceptionservices.exceptiondispatchinfo
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/exceptions/best-practices-for-exceptions
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Сохраняет ли ExceptionDispatchInfo.Throw исходную трассировку стека при повторном выбросе?
+    prompt: |
+      Метод `Rethrow` перехватывает исключение, сохраняет его через `ExceptionDispatchInfo.Capture` и выбрасывает
+      повторно уже после выхода из блока `catch`. Вызывающий код проверяет, есть ли в `StackTrace` метод, который
+      выбросил исключение изначально. Что выведет эта программа в .NET 10?
+    hint: Что именно запоминает `ExceptionDispatchInfo.Capture`, кроме ссылки на сам объект исключения?
+    options:
+      a: "True"
+      b: "False"
+      c: Необработанное исключение `InvalidOperationException`
+      d: Ошибка компиляции
+    optionExplanations:
+      b: "`False` получилось бы при `throw ex;`: такой выброс начинает трассировку заново с точки повторного выброса. `ExceptionDispatchInfo.Throw` восстанавливает сохранённую трассировку, поэтому кадр `ThrowOriginal` в ней остаётся."
+      c: "`captured.Throw()` действительно выбрасывает `InvalidOperationException`, но вызов `Rethrow()` в `Main` обёрнут в `try` с `catch (Exception ex)`, поэтому исключение перехвачено и программа завершается нормально."
+      d: "Код корректен: `ExceptionDispatchInfo.Capture` и метод экземпляра `Throw` существуют в `System.Runtime.ExceptionServices`, а присваивание `null` локальной переменной допустимо."
+    answer: "True"
+    explanation: |
+      `ExceptionDispatchInfo.Capture(ex)` сохраняет не только ссылку на исключение, но и состояние его трассировки стека на момент захвата. Метод `Throw` выбрасывает тот же объект исключения, восстанавливает сохранённую трассировку и дописывает к ней кадры из точки повторного выброса. В итоговом `StackTrace` сначала идут кадры исходного выброса (`ThrowOriginal`, `Rethrow`), затем строка-разделитель `--- End of stack trace from previous location ---`, затем кадры из точки повторного выброса (`Rethrow`, `Main`). Поэтому `Contains("ThrowOriginal")` возвращает `True`.
+
+      Сравните с альтернативами:
+
+      - `throw;` сохраняет трассировку, но допустим только внутри блока `catch`.
+      - `throw ex;` можно написать и вне блока `catch`, но трассировка начнётся заново с места этого оператора, и кадр `ThrowOriginal` потеряется: вывод был бы `False`.
+
+      `ExceptionDispatchInfo` нужен как раз тогда, когда исключение надо выбросить позже или даже в другом потоке, не теряя причину сбоя.
+
+      Атрибут `MethodImpl(MethodImplOptions.NoInlining)` на `ThrowOriginal` нужен только для стабильности примера: он не даёт JIT встроить метод и убрать его кадр из трассировки. Результат проверен для .NET 10.
+    linkTitles:
+      - "Класс ExceptionDispatchInfo"
+      - "Рекомендации по работе с исключениями"
+  en:
+    title: Does ExceptionDispatchInfo.Throw keep the original stack trace when rethrowing?
+    prompt: |
+      The `Rethrow` method catches an exception, saves it with `ExceptionDispatchInfo.Capture` and throws it again
+      after leaving the `catch` block. The caller checks whether `StackTrace` contains the method that originally
+      threw the exception. What does this program print in .NET 10?
+    hint: What exactly does `ExceptionDispatchInfo.Capture` remember besides the reference to the exception object?
+    options:
+      a: "True"
+      b: "False"
+      c: Unhandled `InvalidOperationException`
+      d: Compile error
+    optionExplanations:
+      b: "`False` is what `throw ex;` would give: that statement starts the stack trace again from the rethrow point. `ExceptionDispatchInfo.Throw` restores the captured trace, so the `ThrowOriginal` frame stays in it."
+      c: "`captured.Throw()` does throw `InvalidOperationException`, but the call to `Rethrow()` in `Main` is wrapped in a `try` with `catch (Exception ex)`, so the exception is caught and the program ends normally."
+      d: "The code is valid: `ExceptionDispatchInfo.Capture` and the instance method `Throw` exist in `System.Runtime.ExceptionServices`, and assigning `null` to a local variable is allowed."
+    answer: "True"
+    explanation: |
+      `ExceptionDispatchInfo.Capture(ex)` stores not only a reference to the exception but also the state of its stack trace at the moment of capture. The `Throw` method throws the same exception object, restores the captured trace and appends the frames from the rethrow point. The final `StackTrace` first lists the frames of the original throw (`ThrowOriginal`, `Rethrow`), then the separator line `--- End of stack trace from previous location ---`, then the frames from the rethrow point (`Rethrow`, `Main`). That is why `Contains("ThrowOriginal")` returns `True`.
+
+      Compare the alternatives:
+
+      - `throw;` keeps the stack trace, but it is allowed only inside a `catch` block.
+      - `throw ex;` can also be written outside a `catch` block, but the trace starts again at that statement and the `ThrowOriginal` frame is lost: the output would be `False`.
+
+      `ExceptionDispatchInfo` exists for exactly the case where an exception must be thrown later, or even on another thread, without losing the cause of the failure.
+
+      The `MethodImpl(MethodImplOptions.NoInlining)` attribute on `ThrowOriginal` only keeps the example stable: it stops the JIT from inlining the method and removing its frame from the trace. The result was checked for .NET 10.
+    linkTitles:
+      - "ExceptionDispatchInfo class"
+      - "Best practices for exceptions"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

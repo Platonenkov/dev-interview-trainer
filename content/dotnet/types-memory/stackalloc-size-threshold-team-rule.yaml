@@ -1,0 +1,137 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RRDR9KDNWR9YP898K8
+slug: stackalloc-size-threshold-team-rule
+stack: dotnet
+topic: types-memory
+level: lead
+type: single
+grading: auto
+tags: [stackalloc, span, stack, arraypool, coding-guidelines]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/stackalloc
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/fundamentals/code-analysis/quality-rules/ca2014
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.buffers.arraypool-1
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.stackoverflowexception
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какое правило для stackalloc закрепить в соглашениях команды для общего кода?
+    prompt: |
+      В общей библиотеке, которой пользуются несколько команд, всё чаще встречается `stackalloc` для временных
+      буферов при разборе строк и бинарных данных. Вы хотите закрепить в соглашениях по коду одно правило для
+      `stackalloc`, которое будут проверять на code review. Какое из предложенных правил стоит принять?
+      Ответ дан для C# 14 и .NET 10.
+    hint: Подумайте, кто определяет размер буфера, сколько места на стеке осталось у вызывающего кода и когда именно освобождается память, выделенная через `stackalloc`.
+    options:
+      a: "Разрешить `stackalloc` любого размера, вычисленного из входных данных (`stackalloc byte[input.Length]`): память на стеке не нагружает сборщик мусора и освобождается автоматически"
+      b: "Разрешить `stackalloc` только с небольшим постоянным максимумом (например, 1024 байта) и только вне циклов; если нужно больше, брать буфер из `ArrayPool<T>` или создавать массив в куче"
+      c: "Разрешить `stackalloc` любого размера, но оборачивать вызов в `try`/`catch (StackOverflowException)` и при переполнении повторять операцию с массивом в куче"
+      d: "Выделять буфер через `stackalloc` внутри цикла на каждой итерации: так буфер живёт только одну итерацию и освобождается в её конце, поэтому стек не растёт"
+      e: "Полностью запретить `stackalloc` в общем коде: он работает только в `unsafe`-контексте с указателями, и любой его вызов делает код небезопасным"
+    optionExplanations:
+      a: "Объём памяти на стеке ограничен и зависит от среды выполнения, а занят он ещё и всей цепочкой вызовов выше. Если размер буфера не ограничен сверху и задаётся входными данными, достаточно большой строки или файла, чтобы получить переполнение стека. Это и ошибка, и потенциальная уязвимость: злоумышленник может намеренно уронить процесс."
+      c: "`StackOverflowException` нельзя перехватить блоком `try`/`catch`: процесс завершается. Повторить операцию с массивом в куче уже некому."
+      d: "Память `stackalloc` освобождается не в конце итерации, а только при возврате из метода. Каждая итерация добавляет новый блок, и длинный цикл может переполнить стек. Именно это ловит правило анализатора CA2014: выделять буфер нужно один раз до цикла и переиспользовать его."
+      e: "Результат `stackalloc` можно присвоить `Span<T>` или `ReadOnlySpan<T>` без `unsafe`-контекста и указателей. Полный запрет лишает общий код дешёвых временных буферов без аллокаций, а проблема решается ограничением размера, а не запретом."
+    answer: "Разрешить `stackalloc` только с небольшим постоянным максимумом и вне циклов, а для больших размеров брать буфер из `ArrayPool<T>` или из кучи."
+    explanation: |
+      У `stackalloc` три свойства, из которых и вытекает правило:
+
+      - **Стек ограничен.** Объём доступной памяти на стеке зависит от среды, в которой выполняется код, и его
+        делит вся цепочка вызовов. Если выделить слишком много, возникает `StackOverflowException`, а это
+        исключение нельзя перехватить блоком `try`/`catch`: процесс завершается.
+      - **Буфер живёт до возврата из метода.** Явно освободить его нельзя, поэтому `stackalloc` в цикле
+        накапливает блоки на каждой итерации. Для этого есть правило анализатора CA2014.
+      - **Верхняя граница размера должна быть небольшой константой.** Если размер не ограничен сверху и
+        задаётся входными данными, максимальное потребление стека неизвестно на code review и его определяет
+        вызывающий код или внешний клиент.
+
+      Документация по `stackalloc` рекомендует ограничивать размер: объявить константу-порог
+      (`MaxStackLimit = 1024` в примере), выделять память на стеке через `stackalloc byte[inputLength]`, только
+      если нужная длина не превышает порог, а иначе использовать массив нужной длины. Сам размер при этом может
+      зависеть от входных данных, фиксирована лишь его верхняя граница на ветке со стеком. В общем коде вместо
+      `new byte[length]` на запасной ветке удобно брать буфер из `ArrayPool<byte>.Shared.Rent`: метод
+      возвращает буфер не меньше запрошенной длины, поэтому работают со срезом нужного размера, а сам буфер
+      возвращают через `Return` в блоке `finally`. Документация также предупреждает, что порог ограничивает
+      только ветку со `stackalloc`: если входные данные недоверенные, ветке с кучей нужна своя проверка длины.
+
+      Порог документация советует выбирать консервативно, потому что доступный стек зависит от среды: общий
+      код может вызываться глубоко в стеке, рекурсивно или в потоке с маленьким стеком. Для команды важно, что
+      правило проверяемое: постоянная верхняя граница, нет `stackalloc` в цикле, есть путь с пулом или кучей.
+      Часть про циклы автоматически проверяет анализатор CA2014.
+    linkTitles:
+      - "Выражение stackalloc"
+      - "CA2014: не используйте stackalloc в циклах"
+      - "Класс ArrayPool<T>"
+      - "Класс StackOverflowException"
+  en:
+    title: Which rule for stackalloc should a team adopt in its coding guidelines for shared code?
+    prompt: |
+      In a shared library used by several teams, `stackalloc` appears more and more often for temporary buffers
+      when parsing strings and binary data. You want to add one rule for `stackalloc` to the coding guidelines
+      so that it can be checked in code review. Which of the proposed rules should you adopt?
+      The answer is given for C# 14 and .NET 10.
+    hint: Think about who decides the buffer size, how much stack space the calling code has left, and when exactly memory allocated with `stackalloc` is released.
+    options:
+      a: "Allow `stackalloc` of any size computed from the input (`stackalloc byte[input.Length]`): stack memory puts no load on the garbage collector and is released automatically"
+      b: "Allow `stackalloc` only with a small constant maximum (for example 1024 bytes) and only outside loops; when more is needed, rent a buffer from `ArrayPool<T>` or create an array on the heap"
+      c: "Allow `stackalloc` of any size, but wrap the call in `try`/`catch (StackOverflowException)` and retry the operation with a heap array on overflow"
+      d: "Allocate the buffer with `stackalloc` inside the loop on every iteration: that way the buffer lives for one iteration only and is released at its end, so the stack does not grow"
+      e: "Ban `stackalloc` in shared code completely: it works only in an `unsafe` context with pointers, and any use of it makes the code unsafe"
+    optionExplanations:
+      a: "The amount of stack memory is limited and depends on the environment the code runs in, and the whole call chain above also uses it. If the buffer size has no upper bound and is set by the input, a large enough string or file is all it takes to overflow the stack. That is both a bug and a potential vulnerability: an attacker can crash the process on purpose."
+      c: "A `StackOverflowException` cannot be caught with a `try`/`catch` block: the process terminates. Nothing is left to retry the operation with a heap array."
+      d: "Memory from `stackalloc` is released not at the end of the iteration but only when the method returns. Every iteration adds a new block, and a long loop can overflow the stack. This is exactly what analyzer rule CA2014 catches: allocate the buffer once before the loop and reuse it."
+      e: "The result of `stackalloc` can be assigned to a `Span<T>` or `ReadOnlySpan<T>` without an `unsafe` context or pointers. A full ban takes cheap allocation-free temporary buffers away from shared code, while the real problem is solved by limiting the size, not by banning the feature."
+    answer: "Allow `stackalloc` only with a small constant maximum and outside loops, and rent a buffer from `ArrayPool<T>` or use the heap for larger sizes."
+    explanation: |
+      Three properties of `stackalloc` lead to the rule:
+
+      - **The stack is limited.** The amount of available stack memory depends on the environment the code runs
+        in, and the whole call chain shares it. Allocating too much causes a `StackOverflowException`, and that
+        exception cannot be caught with a `try`/`catch` block: the process terminates.
+      - **The buffer lives until the method returns.** It cannot be freed explicitly, so `stackalloc` in a loop
+        piles up a block on every iteration. Analyzer rule CA2014 exists for this.
+      - **The upper bound of the size must be a small constant.** If the size is unbounded and set by the input,
+        the maximum stack usage is unknown in code review and is decided by the caller or an external client.
+
+      The `stackalloc` documentation recommends capping the size: declare a threshold constant
+      (`MaxStackLimit = 1024` in the example), call `stackalloc byte[inputLength]` only when the required length
+      is within it, and otherwise use an array of the required length. The size itself may still come from the
+      input; only its upper bound on the stack path is fixed. In shared code, `ArrayPool<byte>.Shared.Rent` can
+      replace `new byte[length]` on the fallback path: it returns a buffer of at least the requested length, so
+      you work with a slice of the needed size and give the buffer back with `Return` in a `finally` block. The
+      documentation also warns that the threshold caps only the `stackalloc` branch: if the input is untrusted,
+      the heap branch needs its own length check.
+
+      The documentation advises choosing the limit conservatively, because available stack depends on the
+      environment: shared code may be called deep in the stack, recursively or on a thread with a small stack.
+      For the team, what matters is that the rule is checkable: a constant upper bound, no `stackalloc` in a loop,
+      a pool or heap path for larger sizes. Analyzer rule CA2014 checks the loop part automatically.
+    linkTitles:
+      - "stackalloc expression"
+      - "CA2014: Do not use stackalloc in loops"
+      - "ArrayPool<T> class"
+      - "StackOverflowException class"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

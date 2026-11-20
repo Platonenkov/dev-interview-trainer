@@ -1,0 +1,139 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RRFD10898QWY87F298
+slug: dictionary-struct-value-update-lost
+stack: dotnet
+topic: types-memory
+level: middle
+type: find-bug
+grading: auto
+tags: [struct, mutable-struct, dictionary, collectionsmarshal, copying]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    string[] words = { "dog", "cat", "dog", "dog" };
+    Dictionary<string, Stats> stats = new();
+    foreach (string word in words)
+    {
+        if (!stats.ContainsKey(word))
+        {
+            stats[word] = new Stats();
+        }
+        Stats entry = stats[word];
+        entry.Count++;
+    }
+    Console.WriteLine(stats["dog"].Count);
+
+    struct Stats
+    {
+        public int Count;
+    }
+bugLineSets: [[10], [9], [9, 10]]
+fixedSource: |
+  using System.Runtime.InteropServices;
+
+  string[] words = { "dog", "cat", "dog", "dog" };
+  Dictionary<string, Stats> stats = new();
+  foreach (string word in words)
+  {
+      ref Stats entry = ref CollectionsMarshal.GetValueRefOrAddDefault(stats, word, out _);
+      entry.Count++;
+  }
+  Console.WriteLine(stats["dog"].Count);
+
+  struct Stats
+  {
+      public int Count;
+  }
+fixedExpect: { kind: output, value: "3" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.runtime.interopservices.collectionsmarshal.getvaluereforadddefault
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/struct
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему счётчик в структуре, которая хранится в Dictionary, остаётся нулевым?
+    prompt: |
+      Программа считает, сколько раз встречается каждое слово, и должна вывести `3` - число вхождений `dog`.
+      Вместо этого она выводит `0`, без исключений и ошибок компиляции. Щёлкните по строке с дефектом.
+    hint: "`Stats` - структура. Что именно оказывается в переменной `entry` после чтения из словаря и куда попадает увеличение `Count`?"
+    answer: |
+      Строка 10: `entry.Count++` увеличивает счётчик у локальной копии, и эта копия никогда не записывается
+      обратно в словарь. Копия создаётся в строке 9 (`Stats entry = stats[word];`), поэтому выбор строки 9
+      или обеих строк тоже принимается. Исправление - записать значение обратно (`stats[word] = entry;`) или
+      менять элемент на месте через `ref`, полученный из `CollectionsMarshal.GetValueRefOrAddDefault`.
+    explanation: |
+      `Stats` - изменяемая структура, то есть тип значения. Индексатор `Dictionary<TKey, TValue>` возвращает
+      значение элемента, а для структуры это означает копию всех её полей. Присваивание `Stats entry = stats[word];`
+      кладёт эту копию в локальную переменную, и `entry.Count++` меняет только её. Элемент внутри словаря
+      остаётся таким, каким его записала строка 7, со значением `Count`, равным `0`. На следующей итерации
+      копия создаётся заново, а предыдущая просто пропадает.
+
+      Компилятор молчит, потому что `entry` - обычная локальная переменная, и изменять её поле разрешено. Если
+      бы код писал `stats[word].Count++` напрямую, компилятор отказался бы его собирать (CS1612): результат
+      индексатора - значение, а не переменная. Перенос этого выражения в локальную переменную убирает ошибку
+      компиляции, но не делает изменение видимым в словаре.
+
+      Варианты исправления:
+
+      - записать изменённую копию обратно: `stats[word] = entry;` после увеличения. Это два поиска по ключу
+        на каждое слово, но код простой и безопасный;
+      - получить ссылку на сам элемент словаря через `CollectionsMarshal.GetValueRefOrAddDefault` (так сделано
+        в исправленном коде). Метод возвращает `ref` на значение и при отсутствии ключа добавляет элемент со
+        значением по умолчанию, поэтому отдельная проверка `ContainsKey` не нужна, а поиск выполняется один раз.
+        Пока эта ссылка используется, в словарь нельзя добавлять и из него нельзя удалять элементы;
+      - сделать `Stats` классом: тогда индексатор возвращает ссылку на тот же объект, и изменение видно в словаре.
+
+      Общий урок: изменяемая структура как значение коллекции почти всегда ведёт к потерянным обновлениям.
+      Неизменяемая `readonly struct` с явной записью нового значения делает такую ошибку невозможной.
+      `CollectionsMarshal.GetValueRefOrAddDefault` доступен начиная с .NET 6, поведение проверяется на .NET 10.
+    linkTitles:
+      - "Метод CollectionsMarshal.GetValueRefOrAddDefault"
+      - "Типы структур"
+  en:
+    title: Why does a counter in a struct stored in a Dictionary stay at zero?
+    prompt: |
+      The program counts how many times each word occurs and should print `3`, the number of occurrences of `dog`.
+      Instead it prints `0`, with no exception and no compile error. Click the line that contains the defect.
+    hint: "`Stats` is a struct. What exactly ends up in the variable `entry` after the read from the dictionary, and where does the increment of `Count` go?"
+    answer: |
+      Line 10: `entry.Count++` increments the counter on a local copy, and that copy is never written back to the
+      dictionary. The copy is made on line 9 (`Stats entry = stats[word];`), so selecting line 9 or both lines is
+      also accepted. The fix is to write the value back (`stats[word] = entry;`) or to update the entry in place
+      through the `ref` returned by `CollectionsMarshal.GetValueRefOrAddDefault`.
+    explanation: |
+      `Stats` is a mutable struct, that is, a value type. The `Dictionary<TKey, TValue>` indexer returns the value
+      of the entry, and for a struct that means a copy of all its fields. The assignment `Stats entry = stats[word];`
+      puts that copy into a local variable, and `entry.Count++` changes only the copy. The entry inside the
+      dictionary stays as line 7 wrote it, with `Count` equal to `0`. On the next iteration a new copy is made, and
+      the previous one is simply discarded.
+
+      The compiler says nothing, because `entry` is an ordinary local variable and changing its field is allowed.
+      If the code wrote `stats[word].Count++` directly, the compiler would refuse to build it (CS1612): the result
+      of the indexer is a value, not a variable. Moving that expression into a local removes the compile error, but
+      it does not make the change visible in the dictionary.
+
+      Ways to fix it:
+
+      - write the changed copy back: `stats[word] = entry;` after the increment. That is two key lookups per word,
+        but the code is simple and safe;
+      - get a reference to the dictionary entry itself with `CollectionsMarshal.GetValueRefOrAddDefault` (this is
+        what the fixed code does). The method returns a `ref` to the value and, if the key is missing, adds an entry
+        with the default value, so a separate `ContainsKey` check is not needed and the lookup happens once. While
+        that reference is in use, entries must not be added to or removed from the dictionary;
+      - make `Stats` a class: then the indexer returns a reference to the same object, and the change is visible in
+        the dictionary.
+
+      The general lesson: a mutable struct as a collection value almost always leads to lost updates. An immutable
+      `readonly struct` with an explicit write of the new value makes this mistake impossible.
+      `CollectionsMarshal.GetValueRefOrAddDefault` is available since .NET 6; the behaviour is checked on .NET 10.
+    linkTitles:
+      - "CollectionsMarshal.GetValueRefOrAddDefault method"
+      - "Structure types"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

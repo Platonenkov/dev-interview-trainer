@@ -1,0 +1,126 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RP68RX2JPQ433KRNTH
+slug: library-exception-change-compatibility
+stack: dotnet
+topic: exceptions
+level: lead
+type: single
+grading: auto
+tags: [exception-design, breaking-changes, library-design, versioning]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/core/compatibility/library-change-rules
+    lang: en
+    kind: docs
+  - url: https://github.com/dotnet/runtime/blob/main/docs/coding-guidelines/breaking-change-rules.md
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какое изменение исключений публичного метода библиотеки можно выпустить в минорной версии без поломки совместимости?
+    prompt: |
+      Вы лид команды, которая выпускает общую NuGet-библиотеку. Сервисы других команд обновляются на её
+      минорные версии без правок кода и обрабатывают задокументированные исключения публичных методов в своих
+      блоках `catch`. Вы формулируете правило для code review: какие изменения исключений допустимы в минорной
+      версии, а какие ждут мажорной.
+
+      В следующую минорную версию предлагают несколько изменений в существующих путях выполнения публичных
+      методов. Какое из них можно принять, потому что по правилам совместимости .NET оно не считается
+      критическим (breaking) изменением?
+    hint: Подумайте о блоках `catch`, которые потребители библиотеки уже написали под задокументированные типы исключений.
+    options:
+      a: "Для строки неверного формата выбрасывать `FormatException` вместо задокументированного `ArgumentException`."
+      b: "Для отрицательного `count` выбрасывать `ArgumentOutOfRangeException` вместо задокументированного `ArgumentException`."
+      c: "После `Dispose` выбрасывать `InvalidOperationException` вместо задокументированного `ObjectDisposedException`."
+      d: "Оборачивать все исключения метода, включая задокументированный `IOException`, в собственный `StorageException`, унаследованный напрямую от `Exception`, сохраняя исходное исключение в `InnerException`."
+    optionExplanations:
+      a: "`FormatException` не наследуется от `ArgumentException`, поэтому существующие `catch (ArgumentException)` у потребителей перестанут его ловить, и исключение уйдёт выше по стеку. Это новое исключение в существующем пути выполнения, правила его запрещают."
+      c: "`InvalidOperationException` - базовый класс `ObjectDisposedException`, а не наследник. Код с `catch (ObjectDisposedException)` больше не совпадёт с выбрасываемым типом. Разрешена замена только на более производный тип, а не на базовый."
+      d: "`StorageException` унаследован напрямую от `Exception`, а не от `IOException`, поэтому `catch (IOException)` у потребителей перестанет срабатывать, даже если исходное исключение доступно через `InnerException`. Для существующего кода это новый, несовместимый тип исключения."
+    answer: "Выбрасывать `ArgumentOutOfRangeException` вместо задокументированного `ArgumentException`."
+    explanation: |
+      В C# исключения не входят в сигнатуру метода, поэтому компилятор и проверка API ничего не заметят: это
+      поведенческое изменение, и оценивать его приходится по правилам совместимости. Правила .NET разрешают
+      выбрасывать исключение, более производное, чем уже существующее, потому что прежний код обработки
+      продолжает его ловить. `ArgumentOutOfRangeException` наследуется от `ArgumentException`, поэтому каждый
+      `catch (ArgumentException)` у потребителей срабатывает как раньше, а новый код может ловить более точный
+      тип. Тот же приём использован в самой платформе: в .NET Framework 4 методы получения культуры стали
+      выбрасывать `CultureNotFoundException`, наследника `ArgumentException`.
+
+      Остальные варианты меняют тип на такой, который существующие `catch` не поймают: на несвязанный
+      (`FormatException`, собственный `StorageException`, унаследованный от `Exception`) или на базовый
+      (`InvalidOperationException` вместо `ObjectDisposedException`). Правила относят это к случаю "выбросить
+      исключение в любом другом случае, не перечисленном выше" и запрещают.
+
+      Кроме более производного исключения, правила разрешают и другие изменения: выбросить более конкретное
+      исключение вместо `NotSupportedException`, `NotImplementedException` или `NullReferenceException`,
+      выбросить исключение в новом пути выполнения, до которого существующий код не может дойти, убрать
+      исключение ради более надёжного поведения и изменить текст сообщения. От себя добавим: код, который
+      сравнивает точный тип через `GetType()`, сломается даже при разрешённой замене. Правила этот случай не
+      рассматривают, поэтому такие проверки у потребителей стоит считать хрупкими.
+
+      Для лида практический вывод такой: задокументированные исключения - часть контракта библиотеки. Их
+      изменения нужно отдельно проверять на code review и описывать в release notes, а несовместимые изменения
+      откладывать до мажорной версии.
+    linkTitles:
+      - "Изменения API .NET, влияющие на совместимость"
+      - "Правила критических изменений в dotnet/runtime"
+  en:
+    title: Which change to the exceptions of a public library method can ship in a minor version without breaking compatibility?
+    prompt: |
+      You lead a team that ships a shared NuGet library. Other teams' services move to its minor versions
+      without code changes and handle the documented exceptions of its public methods in their own `catch`
+      blocks. You are writing a code review rule: which exception changes are acceptable in a minor version and
+      which wait for a major one.
+
+      For the next minor version several changes are proposed in existing code paths of public methods. Which
+      of them can you accept, because it is not a breaking change according to the .NET compatibility rules?
+    hint: Think about the `catch` blocks that the library's consumers have already written for the documented exception types.
+    options:
+      a: "For a malformed string, throw `FormatException` instead of the documented `ArgumentException`."
+      b: "For a negative `count`, throw `ArgumentOutOfRangeException` instead of the documented `ArgumentException`."
+      c: "After `Dispose`, throw `InvalidOperationException` instead of the documented `ObjectDisposedException`."
+      d: "Wrap every exception of the method, including the documented `IOException`, in a custom `StorageException` that derives directly from `Exception`, keeping the original exception in `InnerException`."
+    optionExplanations:
+      a: "`FormatException` does not derive from `ArgumentException`, so consumers' existing `catch (ArgumentException)` blocks stop catching it and the exception propagates further up the stack. This is a new exception in an existing code path, which the rules disallow."
+      c: "`InvalidOperationException` is the base class of `ObjectDisposedException`, not a subclass. Code with `catch (ObjectDisposedException)` no longer matches the thrown type. Only a more derived type is allowed, not a base type."
+      d: "`StorageException` derives directly from `Exception`, not from `IOException`, so consumers' `catch (IOException)` stops working, even though the original exception is reachable through `InnerException`. For existing code this is a new, incompatible exception type."
+    answer: "Throw `ArgumentOutOfRangeException` instead of the documented `ArgumentException`."
+    explanation: |
+      In C# exceptions are not part of a method signature, so neither the compiler nor an API check notices the
+      change: it is a behavioral change, and you judge it by the compatibility rules. The .NET rules allow
+      throwing an exception that is more derived than an existing one, because previous exception handling code
+      keeps handling it. `ArgumentOutOfRangeException` derives from `ArgumentException`, so every consumer's
+      `catch (ArgumentException)` works as before, and new code can catch the more precise type. The platform
+      itself did this: in .NET Framework 4 the culture retrieval methods began to throw
+      `CultureNotFoundException`, a subclass of `ArgumentException`.
+
+      The other options change the type to one that existing `catch` blocks do not catch: an unrelated type
+      (`FormatException`, a custom `StorageException` derived from `Exception`) or a base type
+      (`InvalidOperationException` instead of `ObjectDisposedException`). The rules classify this as "throwing
+      an exception in any other case not listed above" and disallow it.
+
+      Besides a more derived exception, the rules allow other changes: throwing a more specific exception
+      instead of `NotSupportedException`, `NotImplementedException` or `NullReferenceException`, throwing an
+      exception in a new code path that existing code cannot reach, removing an exception to enable more robust
+      behavior, and changing the text of a message. Our own remark: code that compares the exact type with
+      `GetType()` breaks even with an allowed replacement. The rules do not cover this case, so treat such
+      checks in consumer code as fragile.
+
+      The practical takeaway for a lead: documented exceptions are part of the library's contract. Changes to
+      them deserve explicit attention in code review and a line in the release notes, and incompatible changes
+      wait for a major version.
+    linkTitles:
+      - ".NET API changes that affect compatibility"
+      - "Breaking change rules in dotnet/runtime"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

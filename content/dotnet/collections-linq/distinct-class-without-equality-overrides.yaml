@@ -1,0 +1,147 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RMJEQ7JZDN3N6XVRVJ
+slug: distinct-class-without-equality-overrides
+stack: dotnet
+topic: collections-linq
+level: middle
+type: output
+grading: auto
+tags: [linq, distinct, equality-comparer, records, hashing]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    PointClass[] classes =
+    {
+        new PointClass(1, 2),
+        new PointClass(1, 2),
+        new PointClass(1, 2)
+    };
+    PointRecord[] records =
+    {
+        new PointRecord(1, 2),
+        new PointRecord(1, 2),
+        new PointRecord(1, 2)
+    };
+
+    Console.Write($"{classes.Distinct().Count()} {records.Distinct().Count()}");
+
+    class PointClass
+    {
+        public PointClass(int x, int y)
+        {
+            X = x;
+            Y = y;
+        }
+
+        public int X { get; }
+        public int Y { get; }
+    }
+
+    record PointRecord(int X, int Y);
+expect:
+  kind: output
+  value: "3 1"
+acceptedOutputs: ["3 1"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "3 1" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "1 1" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "3 3" }
+  - id: d
+    correct: false
+    expect: { kind: compile-error }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.linq.enumerable.distinct
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.equalitycomparer-1.default
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что выведет Distinct().Count() для трёх одинаковых объектов обычного класса и трёх одинаковых записей record?
+    prompt: |
+      Что выведет эта программа в консоль? Класс `PointClass` не переопределяет `Equals` и `GetHashCode`,
+      а `PointRecord` объявлен как позиционная запись `record`. В обоих массивах по три объекта с одинаковыми
+      значениями `X = 1` и `Y = 2`.
+    hint: Как `Distinct` без явного компаратора решает, что два элемента равны, и что для этого предоставляет обычный класс, а что - запись?
+    options:
+      a: "3 1"
+      b: "1 1"
+      c: "3 3"
+      d: Ошибка компиляции
+    optionExplanations:
+      b: "`Distinct` не сравнивает свойства объектов через отражение. Он использует `EqualityComparer<PointClass>.Default`, а для класса без переопределений это сравнение ссылок, унаследованное от `object`. Три вызова `new` дают три разные ссылки, поэтому для классов результат 3, а не 1."
+      c: "Для записи компилятор генерирует `Equals`, `GetHashCode` и реализацию `IEquatable<PointRecord>`, которые сравнивают значения свойств. Три записи с одинаковыми `X` и `Y` равны, поэтому `Distinct` оставляет одну."
+      d: "Код корректен: объявления класса и записи допустимы после операторов верхнего уровня, а `Distinct` и `Count` - методы расширения из `System.Linq`, которое подключено неявными директивами `using`."
+    answer: "3 1"
+    explanation: |
+      `Distinct` без аргумента-компаратора сравнивает элементы с помощью `EqualityComparer<T>.Default`. Этот
+      компаратор использует `IEquatable<T>`, если тип его реализует, а иначе - переопределения `Object.Equals` и
+      `Object.GetHashCode`. Элементы считаются одинаковыми, только если у них совпадают хеш-коды и `Equals`
+      возвращает `true`.
+
+      `PointClass` ничего не переопределяет, поэтому действуют реализации `object`: равенство ссылок и хеш-код,
+      привязанный к конкретному объекту. Три вызова `new PointClass(1, 2)` создают три разных объекта, и
+      `Distinct` оставляет все три, хотя значения свойств совпадают.
+
+      Для `record` компилятор генерирует `Equals`, `GetHashCode`, операторы `==` и `!=` и реализацию
+      `IEquatable<PointRecord>`, основанные на значениях полей. Три записи с одинаковыми `X` и `Y` равны,
+      поэтому после `Distinct` остаётся одна. Итог - `3 1`.
+
+      Если нужно убрать дубликаты обычного класса по значению, есть три пути: переопределить `Equals` и
+      `GetHashCode` (или реализовать `IEquatable<T>`), передать свой `IEqualityComparer<T>` в перегрузку
+      `Distinct(comparer)` или использовать `DistinctBy` с ключом, например `DistinctBy(p => (p.X, p.Y))`.
+      То же правило действует для `HashSet<T>`, ключей `Dictionary<TKey, TValue>`, `GroupBy`, `Union` и
+      `Contains`: все они по умолчанию опираются на `EqualityComparer<T>.Default`.
+    linkTitles:
+      - Метод Enumerable.Distinct
+      - Свойство EqualityComparer<T>.Default
+  en:
+    title: What does Distinct().Count() print for three equal-looking instances of a plain class and three equal records?
+    prompt: |
+      What does this program print to the console? The class `PointClass` does not override `Equals` or
+      `GetHashCode`, while `PointRecord` is declared as a positional `record`. Each array holds three objects
+      with the same values `X = 1` and `Y = 2`.
+    hint: How does `Distinct` without an explicit comparer decide that two elements are equal, and what does a plain class provide for that compared with a record?
+    options:
+      a: "3 1"
+      b: "1 1"
+      c: "3 3"
+      d: Compile error
+    optionExplanations:
+      b: "`Distinct` does not compare object properties through reflection. It uses `EqualityComparer<PointClass>.Default`, and for a class without overrides that is reference equality inherited from `object`. Three `new` calls produce three different references, so the class result is 3, not 1."
+      c: "For a record the compiler generates `Equals`, `GetHashCode` and an `IEquatable<PointRecord>` implementation that compare property values. Three records with the same `X` and `Y` are equal, so `Distinct` keeps one."
+      d: "The code is valid: class and record declarations are allowed after top-level statements, and `Distinct` and `Count` are extension methods from `System.Linq`, which is imported by the implicit `using` directives."
+    answer: "3 1"
+    explanation: |
+      `Distinct` without a comparer argument compares elements with `EqualityComparer<T>.Default`. That comparer
+      uses `IEquatable<T>` when the type implements it, and otherwise the overrides of `Object.Equals` and
+      `Object.GetHashCode`. Elements count as duplicates only when their hash codes match and `Equals` returns
+      `true`.
+
+      `PointClass` overrides nothing, so the `object` implementations apply: reference equality and a hash code
+      tied to the specific object. Three calls to `new PointClass(1, 2)` create three different objects, and
+      `Distinct` keeps all three even though the property values match.
+
+      For a `record` the compiler generates `Equals`, `GetHashCode`, the `==` and `!=` operators and an
+      `IEquatable<PointRecord>` implementation based on the field values. Three records with the same `X` and
+      `Y` are equal, so one remains after `Distinct`. The result is `3 1`.
+
+      To remove duplicates of a plain class by value there are three options: override `Equals` and
+      `GetHashCode` (or implement `IEquatable<T>`), pass your own `IEqualityComparer<T>` to the
+      `Distinct(comparer)` overload, or use `DistinctBy` with a key such as `DistinctBy(p => (p.X, p.Y))`.
+      The same rule applies to `HashSet<T>`, `Dictionary<TKey, TValue>` keys, `GroupBy`, `Union` and
+      `Contains`: by default they all rely on `EqualityComparer<T>.Default`.
+    linkTitles:
+      - Enumerable.Distinct method
+      - EqualityComparer<T>.Default property
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

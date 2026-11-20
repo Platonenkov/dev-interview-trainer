@@ -1,0 +1,193 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPRQVZM755WNAEPZ3X
+slug: platform-base-classes-across-services
+stack: dotnet
+topic: oop-solid
+level: architect
+type: open
+grading: self
+tags: [inheritance, composition, fragile-base-class, platform-design, middleware]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/design-guidelines/virtual-members
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/design-guidelines/designing-for-extensibility
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/middleware/?view=aspnetcore-10.0
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему обязательные базовые классы платформы для тридцати сервисов со временем становятся проблемой?
+    prompt: |
+      Платформенная команда выпускает пакет с классами `BaseController`, `BaseService` и `BaseEntity`, и все
+      тридцать сервисов компании обязаны от них наследоваться. В базовых классах живут логирование, обработка
+      ошибок, проверка прав, аудит и общие поля сущностей. Первые месяцы это экономит время.
+
+      Почему через несколько лет такая схема превращается в обузу для всей организации и что бы вы предложили
+      вместо неё? Как перейти на новую схему, не останавливая тридцать команд?
+    hint: Кто на самом деле владеет контрактом базового класса и кто платит, когда платформенная команда меняет его внутренности?
+    answer: |
+      **Почему это становится обузой**
+      - **Базовый класс - это опубликованный фреймворк без дисциплины фреймворка.** Каждый `protected` и
+        `virtual` член, сигнатура конструктора и порядок, в котором базовые методы вызывают переопределения,
+        становятся контрактом, от которого зависят тридцать кодовых баз. Платформенная команда не видит всех
+        переопределений и не может понять, какое внутреннее изменение окажется ломающим. Проблема хрупкого
+        базового класса перестаёт быть локальной: один рефакторинг `BaseController` ломает сервисы, код которых
+        никто в платформенной команде не читал.
+      - **Любое изменение превращается в согласованный релиз.** Новая зависимость в конструкторе `BaseService`
+        требует поменять конструктор каждого наследника. Сервисы либо обновляются одновременно, либо фиксируют
+        старую версию, и в боевой среде живут несколько версий «платформы» с разным поведением.
+      - **Базовые классы разрастаются до «божественного объекта».** Наследование - единственный канал повторного
+        использования, поэтому потребность каждой команды уходит в общий базовый класс. Каждый сервис платит за
+        все функции сразу: зависимости, время запуска, поведение, которое он не просил.
+      - **Единственный базовый класс уже занят, а стиль заморожен.** `BaseController` привязывает все сервисы к
+        MVC-контроллерам и к одному способу обработки ошибок. Перевести сервис на minimal API или другой
+        конвейер значит бороться с базовым классом.
+      - **`BaseEntity` переносит решения платформы в модель предметной области.** Тип ключа, поля аудита и мягкое
+        удаление зафиксированы для всех сущностей всех сервисов. Сущность с ключом `Guid`, составным ключом или без
+        аудита не вписывается, а изменение базы меняет схему хранения в тридцати базах данных.
+      - **Поведение скрыто.** Логирование, проверки прав и транзакции в базовых методах не видны при чтении кода
+        сервиса, а тест наследника требует поднять всё окружение базового класса.
+
+      **Что предложить вместо этого**
+      - **Сквозное поведение HTTP - в конвейер.** Компоненты middleware и глобальные фильтры для идентификатора
+        корреляции, преобразования исключений в стандартные ответы об ошибках (problem details) и логирования
+        запросов. Сервис подключает их одной строкой, например методами расширения пакета платформы вида
+        `builder.AddPlatformDefaults()` и `app.UsePlatformDefaults()`, и может отключить или заменить отдельную часть.
+      - **Поведение сервисов - через декораторы и маленькие интерфейсы.** Повторы, кэширование и метрики
+        оборачивают интерфейсы через DI. Вместо `protected`-хелперов - узкие абстракции вроде `IClock` и
+        `ICurrentUser`.
+      - **Общие черты сущностей - через маленькие интерфейсы по желанию.** `IAuditable`, `ISoftDeletable` и
+        обработчик сохранения в EF Core (перехватчик `SaveChangesInterceptor`, глобальные фильтры запросов). Каждый
+        сервис сам проектирует свои сущности.
+      - **Соглашения - через шаблоны проектов, анализаторы и архитектурные тесты**, а не через обязательный
+        базовый тип.
+      - **Там, где наследование действительно уместно, - немного осознанных точек расширения:** абстрактные члены с
+        документированным контрактом, остальное `sealed` или невиртуальное, семантическое версионирование и
+        политика устаревания.
+
+      **Как мигрировать**
+      1. Заморозить базовые классы: никаких новых членов.
+      2. Сделать эквиваленты на композиции и превратить базовые классы в тонкие адаптеры, которые делегируют им.
+      3. Переводить сервисы по одному, начиная с тех, кому база мешает больше всего.
+      4. Пометить базовые классы `[Obsolete]` и удалить после перехода последнего сервиса.
+
+      Критерий успеха: сервис может обновить пакет платформы без изменений в своём коде.
+    explanation: |
+      Рекомендации по проектированию .NET называют виртуальные члены дорогими в проектировании, тестировании и
+      сопровождении: переопределение может выполнить произвольный код, а контракт такого члена трудно описать
+      точно. Поэтому рекомендации советуют не делать члены виртуальными без веской причины и ограничивать
+      расширяемость только необходимым. Там же отмечено, что расширяемость обычно можно добавить позже, а убрать
+      её без ломающих изменений нельзя. Эти правила написаны для авторов фреймворков, и платформенная команда с
+      тридцатью сервисами-потребителями и есть автор фреймворка, только без процессов, которые обычно защищают
+      фреймворк: анализа совместимости, документированных точек расширения, политики версий.
+
+      На уровне одного класса хрупкий базовый класс - неприятность для одного разработчика. На уровне
+      организации наследование связывает графики релизов, решения по хранению данных и архитектурный стиль
+      тридцати команд с решениями одной команды. Чем больше наследников, тем дороже любое изменение базы, и тем
+      сильнее платформа застывает.
+
+      Композиция меняет направление контроля: сервис сам собирает нужное поведение из независимых частей и
+      зависит только от их публичных контрактов. Часть можно обновить, заменить или отключить, не трогая
+      остальное. Конвейер middleware в ASP.NET Core - удачный пример: каждый компонент решает одну задачу, а
+      порядок и состав конвейера определяет приложение.
+
+      У композиции есть цена: явная регистрация в каждом сервисе и немного повторяющегося кода подключения. Её
+      снижают одним методом расширения и шаблоном проекта. Базовые классы внутри одного сервиса, которым владеет
+      одна команда, по-прежнему нормальны: проблема именно в обязательном наследовании между командами. Сильный
+      ответ отделяет то, что действительно общее (поведение вокруг запроса и инфраструктура), от того, что
+      принадлежит сервису (модель предметной области), и включает план постепенного перехода.
+    linkTitles:
+      - "Рекомендации по виртуальным членам"
+      - "Проектирование с учётом расширяемости"
+      - "Middleware в ASP.NET Core (.NET 10)"
+  en:
+    title: Why do mandatory platform base classes for thirty services become a liability over time?
+    prompt: |
+      A platform team ships a package with `BaseController`, `BaseService` and `BaseEntity` classes, and all
+      thirty services of the company must inherit from them. The base classes contain logging, error handling,
+      permission checks, auditing and common entity fields. In the first months this saves time.
+
+      Why does this scheme turn into a liability for the whole organisation after a few years, and what would
+      you offer instead? How do you move to the new scheme without stopping thirty teams?
+    hint: Who really owns the contract of the base class, and who pays when the platform team changes its internals?
+    answer: |
+      **Why it becomes a liability**
+      - **The base class is a published framework without framework discipline.** Every `protected` and
+        `virtual` member, constructor signature and the order in which base methods call overrides becomes a
+        contract that thirty codebases depend on. The platform team cannot see all overrides and cannot tell
+        which internal change is breaking. The fragile base class problem stops being local: one refactoring of
+        `BaseController` breaks services whose code nobody on the platform team has read.
+      - **Every change becomes a coordinated release.** A new constructor dependency in `BaseService` forces
+        every derived class to change its constructor. Services either upgrade together or pin an old version,
+        and several versions of the "platform" with different behaviour run in production.
+      - **The base classes grow into god objects.** Inheritance is the only reuse channel, so every team's need
+        goes into the shared base. Every service pays for all features at once: dependencies, startup time,
+        behaviour it did not ask for.
+      - **The single base class slot is taken and the style is frozen.** `BaseController` ties every service to
+        MVC controllers and to one way of handling errors. Moving a service to minimal APIs or another pipeline
+        means fighting the base class.
+      - **`BaseEntity` moves platform decisions into the domain model.** The key type, audit fields and soft
+        delete are fixed for every entity of every service. An entity with a `Guid` key, a composite key or no
+        auditing does not fit, and changing the base changes the storage schema of thirty databases.
+      - **Behaviour is hidden.** Logging, permission checks and transactions in base methods are invisible when
+        reading the service code, and a test of a derived class needs the whole environment of the base.
+
+      **What to offer instead**
+      - **Cross-cutting HTTP behaviour goes into the pipeline.** Middleware components and global filters for
+        the correlation id, mapping exceptions to standard error responses (problem details) and request
+        logging. A service turns them on with one line, for example with platform package extension methods
+        such as `builder.AddPlatformDefaults()` and `app.UsePlatformDefaults()`, and can disable or replace a
+        single part.
+      - **Service behaviour comes through decorators and small interfaces.** Retries, caching and metrics wrap
+        interfaces through DI. Instead of `protected` helpers, use narrow abstractions such as `IClock` and
+        `ICurrentUser`.
+      - **Common entity traits come through small opt-in interfaces.** `IAuditable`, `ISoftDeletable` and a save
+        handler in EF Core (a `SaveChangesInterceptor`, global query filters). Each service designs its own
+        entities.
+      - **Conventions are enforced by project templates, analyzers and architecture tests**, not by a mandatory
+        base type.
+      - **Where inheritance is truly appropriate, offer a few deliberate extension points:** abstract members with
+        a documented contract, everything else `sealed` or non-virtual, semantic versioning and a deprecation
+        policy.
+
+      **How to migrate**
+      1. Freeze the base classes: no new members.
+      2. Build composition equivalents and turn the base classes into thin adapters that delegate to them.
+      3. Move services one at a time, starting with those the base hurts most.
+      4. Mark the base classes `[Obsolete]` and delete them once the last service has moved.
+
+      Success criterion: a service can upgrade the platform package without changing its own code.
+    explanation: |
+      The .NET design guidelines call virtual members costly to design, test and maintain: an override can run
+      arbitrary code, and the contract of such a member is hard to define precisely. That is why the guidelines
+      advise against making members virtual without a good reason and recommend limiting extensibility to what
+      is necessary. They also note that extensibility can usually be added later, but never taken away without
+      breaking changes. These rules are written for framework authors, and a platform team with thirty consumer
+      services is a framework author, only without the processes that usually protect a framework:
+      compatibility review, documented extension points, a versioning policy.
+
+      At the level of one class, a fragile base class is a nuisance for one developer. At the level of an
+      organisation, inheritance ties the release schedules, storage decisions and architectural style of thirty
+      teams to the decisions of one team. The more derived classes there are, the more expensive any change to
+      the base becomes, and the more the platform freezes.
+
+      Composition reverses the direction of control: the service assembles the behaviour it needs from
+      independent parts and depends only on their public contracts. A part can be upgraded, replaced or turned
+      off without touching the rest. The ASP.NET Core middleware pipeline is a good example: each component
+      solves one task, and the application decides the order and content of the pipeline.
+
+      Composition has a cost: explicit registration in each service and some repeated wiring code. One extension
+      method and a project template reduce it. Base classes inside one service owned by one team are still fine:
+      the problem is mandatory inheritance across teams. A strong answer separates what is truly shared
+      (behaviour around the request and infrastructure) from what belongs to the service (the domain model), and
+      includes a plan for a gradual transition.
+    linkTitles:
+      - "Virtual member design guidelines"
+      - "Designing for extensibility"
+      - "ASP.NET Core middleware (.NET 10)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

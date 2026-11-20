@@ -1,0 +1,180 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RMRYSDC6C2CS0DXRS2
+slug: static-dictionary-attached-data-keeps-keys-alive
+stack: dotnet
+topic: clr-gc
+level: senior
+type: find-bug
+grading: auto
+tags: [memory-leak, conditionalweaktable, weak-reference, gc-roots, dictionary]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    using System.Runtime.CompilerServices;
+
+    WeakReference trackedOrder = ImportOrder();
+    GC.Collect();
+    GC.WaitForPendingFinalizers();
+    GC.Collect();
+    Console.WriteLine(trackedOrder.IsAlive);
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static WeakReference ImportOrder()
+    {
+        Order order = new Order(42);
+        Annotations.Attach(order, "csv-import");
+        return new WeakReference(order);
+    }
+
+    static class Annotations
+    {
+        private static readonly Dictionary<object, Metadata> s_metadata = new Dictionary<object, Metadata>();
+
+        public static void Attach(object target, string source) => s_metadata[target] = new Metadata(source);
+
+        public static Metadata Find(object target) =>
+            s_metadata.TryGetValue(target, out Metadata metadata) ? metadata : null;
+    }
+
+    class Order
+    {
+        public Order(int id) => Id = id;
+        public int Id { get; }
+    }
+
+    class Metadata
+    {
+        public Metadata(string source) => Source = source;
+        public string Source { get; }
+    }
+bugLineSets: [[19], [21]]
+fixedSource: |
+  using System.Runtime.CompilerServices;
+
+  WeakReference trackedOrder = ImportOrder();
+  GC.Collect();
+  GC.WaitForPendingFinalizers();
+  GC.Collect();
+  Console.WriteLine(trackedOrder.IsAlive);
+
+  [MethodImpl(MethodImplOptions.NoInlining)]
+  static WeakReference ImportOrder()
+  {
+      Order order = new Order(42);
+      Annotations.Attach(order, "csv-import");
+      return new WeakReference(order);
+  }
+
+  static class Annotations
+  {
+      private static readonly ConditionalWeakTable<object, Metadata> s_metadata = new ConditionalWeakTable<object, Metadata>();
+
+      public static void Attach(object target, string source) => s_metadata.AddOrUpdate(target, new Metadata(source));
+
+      public static Metadata Find(object target) =>
+          s_metadata.TryGetValue(target, out Metadata metadata) ? metadata : null;
+  }
+
+  class Order
+  {
+      public Order(int id) => Id = id;
+      public int Id { get; }
+  }
+
+  class Metadata
+  {
+      public Metadata(string source) => Source = source;
+      public string Source { get; }
+  }
+fixedExpect: { kind: output, value: "False" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.runtime.compilerservices.conditionalweaktable-2
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/fundamentals
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему статический словарь с дополнительными данными к объектам не даёт сборщику мусора освободить эти объекты?
+    prompt: |
+      Класс `Annotations` прикрепляет к произвольным объектам дополнительные данные (`Metadata`), не меняя их типы.
+      Метод `ImportOrder` создаёт заказ, прикрепляет к нему метаданные и возвращает слабую ссылку на заказ.
+      Больше заказ никому не нужен, поэтому после полной сборки мусора программа на .NET 10 должна вывести `False`.
+      Вместо этого она выводит `True`, а в реальном сервисе память растёт с каждым импортированным заказом.
+
+      Щёлкните по строке, из-за которой заказ остаётся достижимым.
+    hint: Какие ссылки на заказ остаются достижимыми из корней после выхода из `ImportOrder`?
+    answer: "Строка 19 (или строка 21) - статическое поле `Dictionary<object, Metadata>` хранит свои ключи сильными ссылками, а строка 21 кладёт в него заказ ключом, поэтому каждый объект, к которому прикрепили данные, достижим из корня навсегда."
+    explanation: |
+      Статические поля - это корни сборщика мусора. Поле `s_metadata` ссылается на словарь, словарь - на свои
+      записи, а каждая запись хранит ключ обычной (сильной) ссылкой. Получается цепочка
+      «статическое поле -> словарь -> ключ», поэтому заказ остаётся достижимым, полная сборка его не освобождает,
+      и `IsAlive` возвращает `True`. Словарь не знает, что ключ больше никому не нужен: запись исчезнет только
+      после явного `Remove`, а этого вызова в коде нет.
+
+      Для задачи «прикрепить данные к чужому объекту на время его жизни» в BCL есть
+      `ConditionalWeakTable<TKey, TValue>`. Она не удерживает ключ: ключ не остаётся живым только из-за того, что
+      лежит в таблице, а значение живёт ровно столько, сколько ключ. Когда на ключ не остаётся других ссылок,
+      таблица сама удаляет запись, и значение тоже становится мусором. Причём ссылка из значения на ключ не
+      продлевает жизнь ключа, в отличие от словаря со `WeakReference` в качестве ключа, где пришлось бы вручную
+      чистить мёртвые записи. Кроме того, `ConditionalWeakTable` сравнивает ключи по ссылке
+      (`Object.ReferenceEquals`), а не через `Equals` и `GetHashCode`, что для прикреплённых данных и нужно.
+
+      Исправление затрагивает обе строки: в строке 19 объявить поле типа `ConditionalWeakTable<object, Metadata>`,
+      а в строке 21 вызывать `s_metadata.AddOrUpdate(target, new Metadata(source))`. Метод `TryGetValue` в `Find`
+      есть и у таблицы, поэтому он не меняется. После этого программа выводит `False`. Поэтому принимаются оба
+      ответа: строка 19 выбирает коллекцию, которая держит ключи сильно, а строка 21 кладёт в неё заказ.
+      Добавить `Remove` в подходящем месте тоже освободило бы запись, но для данных, привязанных к чужим объектам,
+      обычно нет надёжного момента для такого вызова, поэтому правильнее сменить коллекцию.
+
+      Метод `ImportOrder` помечен `NoInlining`, чтобы в главном методе не осталось локальной переменной со ссылкой
+      на заказ и результат не зависел от того, как JIT продлевает жизнь локальных переменных. В снимке кучи такая
+      утечка видна как путь до корня через статическое поле словаря.
+    linkTitles:
+      - "Класс ConditionalWeakTable<TKey,TValue>"
+      - "Основы сборки мусора"
+  en:
+    title: Why does a static dictionary of extra data attached to objects keep the garbage collector from freeing those objects?
+    prompt: |
+      The `Annotations` class attaches extra data (`Metadata`) to arbitrary objects without changing their types.
+      The `ImportOrder` method creates an order, attaches metadata to it and returns a weak reference to the order.
+      Nobody needs the order after that, so after a full garbage collection the program on .NET 10 should print
+      `False`. Instead it prints `True`, and in the real service memory grows with every imported order.
+
+      Click the line that keeps the order reachable.
+    hint: Which references to the order are still reachable from roots after `ImportOrder` returns?
+    answer: "Line 19 (or line 21) - the static `Dictionary<object, Metadata>` field holds its keys with strong references, and line 21 stores the order in it as a key, so every object that gets data attached stays reachable from a root forever."
+    explanation: |
+      Static fields are garbage collector roots. The `s_metadata` field refers to the dictionary, the dictionary
+      refers to its entries, and each entry holds its key with an ordinary (strong) reference. That gives the
+      chain "static field -> dictionary -> key", so the order stays reachable, a full collection does not free
+      it, and `IsAlive` returns `True`. The dictionary cannot know that nobody else needs the key: the entry goes
+      away only after an explicit `Remove`, and the code never calls it.
+
+      For the task "attach data to someone else's object for that object's lifetime" the BCL has
+      `ConditionalWeakTable<TKey, TValue>`. It does not persist keys: a key is not kept alive only because it is in
+      the table, and the value lives exactly as long as the key. Once no other references to the key exist, the
+      table removes the entry itself, and the value becomes garbage too. A reference from the value back to the
+      key does not extend the key's lifetime, unlike a dictionary keyed by `WeakReference`, where you would also
+      have to purge dead entries by hand. In addition, `ConditionalWeakTable` compares keys by reference
+      (`Object.ReferenceEquals`), not through `Equals` and `GetHashCode`, which is exactly what attached data needs.
+
+      The fix touches both lines: declare the field on line 19 as `ConditionalWeakTable<object, Metadata>` and
+      call `s_metadata.AddOrUpdate(target, new Metadata(source))` on line 21. The table also has `TryGetValue`, so
+      `Find` does not change. After that the program prints `False`. That is why both answers are accepted:
+      line 19 chooses a collection that holds its keys strongly, and line 21 puts the order into it. Adding a
+      `Remove` call somewhere would also release the entry, but data attached to someone else's objects usually
+      has no reliable moment for such a call, so changing the collection is the right fix.
+
+      `ImportOrder` is marked `NoInlining` so that no local variable in the main method refers to the order and
+      the result does not depend on how the JIT extends the lifetime of locals. In a heap snapshot this leak shows
+      up as a path to a root through the static field of the dictionary.
+    linkTitles:
+      - "ConditionalWeakTable<TKey,TValue> class"
+      - "Fundamentals of garbage collection"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

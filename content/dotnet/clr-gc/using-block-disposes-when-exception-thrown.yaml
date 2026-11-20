@@ -1,0 +1,132 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RM4K12TH8ASADMKNKP
+slug: using-block-disposes-when-exception-thrown
+stack: dotnet
+topic: clr-gc
+level: junior
+type: output
+grading: auto
+tags: [idisposable, using-statement, exceptions, try-finally]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    try
+    {
+        Work();
+    }
+    catch (InvalidOperationException)
+    {
+        Console.Write("catch");
+    }
+
+    static void Work()
+    {
+        using (var resource = new Resource())
+        {
+            Console.Write("throw ");
+            throw new InvalidOperationException();
+        }
+    }
+
+    class Resource : IDisposable
+    {
+        // Prints a word when the resource is disposed
+        public void Dispose() => Console.Write("dispose ");
+    }
+expect:
+  kind: output
+  value: "throw dispose catch"
+acceptedOutputs: ["throw dispose catch"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "throw dispose catch" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "throw catch dispose" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "throw catch" }
+  - id: d
+    correct: false
+    expect: { kind: exception, value: System.InvalidOperationException }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/statements/using
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/using-objects
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что выведет программа, если внутри блока using выбрасывается исключение, которое ловит вызывающий код?
+    prompt: |
+      Что выведет эта программа в консоль? Метод `Work` выбрасывает исключение внутри блока `using`,
+      а вызывающий код перехватывает его в `catch`. `Dispose`, выброс исключения и блок `catch` печатают
+      каждый своё слово.
+    hint: Во что компилятор разворачивает оператор `using` и что происходит с этим кодом, когда исключение покидает блок?
+    options:
+      a: "throw dispose catch"
+      b: "throw catch dispose"
+      c: "throw catch"
+      d: Необработанное исключение `InvalidOperationException`
+    optionExplanations:
+      b: "`Dispose` не откладывается до окончания обработки исключения. Он вызывается из блока `finally` метода `Work`, пока исключение покидает этот метод, то есть раньше, чем начнёт выполняться тело `catch` в вызывающем коде."
+      c: Исключение не отменяет освобождение ресурса. Оператор `using` превращается в `try`/`finally`, а блок `finally` выполняется и при обычном выходе из блока, и при выходе из-за исключения.
+      d: Исключение перехватывает `catch (InvalidOperationException)` в вызывающем коде. `Dispose` не выбрасывает собственного исключения и не мешает исходному дойти до обработчика, поэтому программа завершается нормально.
+    answer: "throw dispose catch"
+    explanation: |
+      Компилятор переписывает оператор `using` в блок `try`/`finally`: тело `using` становится блоком `try`,
+      а вызов `Dispose` для ресурса (с проверкой на `null`) попадает в `finally`. Поэтому ресурс освобождается
+      при любом выходе из блока, в том числе когда блок покидает исключение.
+
+      Порядок событий в программе:
+
+      1. Внутри `using` печатается `throw ` и выбрасывается `InvalidOperationException`.
+      2. Исключение покидает блок `try` внутри `Work`, и выполняется `finally`: `Dispose` печатает `dispose `.
+      3. Исключение выходит из `Work` в вызывающий код, и только теперь выполняется тело `catch`: печатается `catch`.
+
+      Блоки `finally` на пути от места выброса до обработчика выполняются до того, как управление попадёт
+      в тело `catch`. Поэтому к моменту обработки исключения ресурс уже освобождён. Это и есть главная
+      гарантия `using`: освобождение не зависит от того, завершился ли код успешно.
+    linkTitles:
+      - Оператор using
+      - Использование объектов, реализующих IDisposable
+  en:
+    title: What does a program print when code inside a using block throws and the caller catches the exception?
+    prompt: |
+      What does this program print to the console? The `Work` method throws an exception inside a `using`
+      block, and the calling code catches it in `catch`. `Dispose`, the throw and the `catch` block each print
+      a word.
+    hint: What does the compiler turn a `using` statement into, and what happens to that code when an exception leaves the block?
+    options:
+      a: "throw dispose catch"
+      b: "throw catch dispose"
+      c: "throw catch"
+      d: Unhandled `InvalidOperationException`
+    optionExplanations:
+      b: "`Dispose` is not postponed until the exception has been handled. It is called from the `finally` block of the `Work` method while the exception leaves that method, which is before the body of the `catch` in the calling code starts running."
+      c: An exception does not cancel the release of the resource. A `using` statement becomes `try`/`finally`, and the `finally` block runs both on a normal exit from the block and on an exit caused by an exception.
+      d: The exception is caught by `catch (InvalidOperationException)` in the calling code. `Dispose` throws no exception of its own and does not stop the original one from reaching the handler, so the program ends normally.
+    answer: "throw dispose catch"
+    explanation: |
+      The compiler rewrites a `using` statement into a `try`/`finally` block: the body of `using` becomes the
+      `try` block, and the `Dispose` call for the resource (with a `null` check) goes into `finally`. That is why
+      the resource is released on any exit from the block, including when an exception leaves it.
+
+      The order of events in the program:
+
+      1. Inside `using`, `throw ` is printed and `InvalidOperationException` is thrown.
+      2. The exception leaves the `try` block inside `Work`, and `finally` runs: `Dispose` prints `dispose `.
+      3. The exception leaves `Work` for the calling code, and only now does the `catch` body run: `catch` is printed.
+
+      The `finally` blocks on the path from the throw to the handler run before control reaches the body of
+      `catch`. So by the time the exception is handled, the resource is already released. This is the main
+      guarantee of `using`: the release does not depend on whether the code finished successfully.
+    linkTitles:
+      - The using statement
+      - Using objects that implement IDisposable
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

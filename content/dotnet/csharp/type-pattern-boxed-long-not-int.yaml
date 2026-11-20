@@ -1,0 +1,127 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNX9P723D69EKM6760
+slug: type-pattern-boxed-long-not-int
+stack: dotnet
+topic: csharp
+level: middle
+type: find-bug
+grading: auto
+tags: [pattern-matching, type-pattern, boxing]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    Dictionary<string, object> settings = new()
+    {
+        ["TimeoutSeconds"] = 30L
+    };
+
+    int timeout = GetInt(settings, "TimeoutSeconds", 10);
+    Console.WriteLine(timeout);
+
+    static int GetInt(Dictionary<string, object> values, string key, int fallback)
+    {
+        if (values.TryGetValue(key, out object value) && value is int number)
+        {
+            return number;
+        }
+
+        return fallback;
+    }
+bugLineSets: [[11]]
+fixedSource: |
+  Dictionary<string, object> settings = new()
+  {
+      ["TimeoutSeconds"] = 30L
+  };
+
+  int timeout = GetInt(settings, "TimeoutSeconds", 10);
+  Console.WriteLine(timeout);
+
+  static int GetInt(Dictionary<string, object> values, string key, int fallback)
+  {
+      if (!values.TryGetValue(key, out object value))
+      {
+          return fallback;
+      }
+
+      return value switch
+      {
+          int i => i,
+          long l => checked((int)l),
+          _ => fallback
+      };
+  }
+fixedExpect: { kind: output, value: "30" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/patterns
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/is
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строку, из-за которой таймаут 30 из словаря настроек превращается в значение по умолчанию 10
+    prompt: |
+      Настройки хранятся в `Dictionary<string, object>`. Загрузчик настроек, который менять нельзя, записывает
+      целые числа как `long`, поэтому в словаре лежит упакованное значение `30L`. Метод `GetInt` должен прочитать
+      таймаут и вернуть `10`, только если ключа нет. Программа должна вывести `30`, но выводит `10`, причём без
+      исключений и предупреждений. Щёлкните по строке с дефектом.
+    hint: Шаблон `is int` преобразует значение к `int` или только проверяет, какого типа объект лежит в `object`?
+    answer: |
+      Строка 11, шаблон `value is int number`: в `object` упаковано значение типа `long`, а шаблон типа проверяет
+      тип объекта во время выполнения и не выполняет числовых преобразований, поэтому сопоставление не удаётся
+      и метод возвращает `fallback`.
+    explanation: |
+      Литерал `30L` имеет тип `long`. При записи в словарь со значениями `object` он упаковывается, и в куче
+      лежит объект типа `System.Int64`. Шаблон типа `value is int number` проверяет, совместим ли тип объекта во
+      время выполнения с `int`. Оператор `is` учитывает только тождественные и ссылочные преобразования, а также
+      упаковку и распаковку, но не числовые преобразования и не пользовательские операторы. Упакованный `long` -
+      это не упакованный `int`, поэтому условие ложно, и метод молча возвращает значение по умолчанию.
+
+      Неявное преобразование `int` в `long` и явное `long` в `int` существуют только для неупакованных значений.
+      Распаковка требует точного совпадения типа: приведение `(int)value` здесь выбросило бы
+      `InvalidCastException`. Шаблон `is` просто возвращает `false`, поэтому ошибка не видна, пока кто-то не
+      заметит, что настройка не применяется.
+
+      Исправление - явно обработать типы, которые реально приходят из источника: например, выражение `switch`
+      с ветками `int i => i` и `long l => checked((int)l)`. `checked` выбросит `OverflowException`, если число
+      не помещается в `int`, вместо того чтобы молча обрезать его. Поведение проверено на .NET 10.
+    linkTitles:
+      - "Сопоставление шаблонов: шаблоны объявления и типа"
+      - "Оператор is"
+  en:
+    title: Find the line that turns a timeout of 30 from a settings dictionary into the default 10
+    prompt: |
+      Settings are stored in a `Dictionary<string, object>`. The settings loader, which cannot be changed,
+      stores whole numbers as `long`, so the dictionary holds the boxed value `30L`. The `GetInt` method should
+      read the timeout and return `10` only when the key is missing. The program should print `30`, but it
+      prints `10`, with no exception and no warning. Click the line that contains the defect.
+    hint: Does the pattern `is int` convert the value to `int`, or does it only check the type of the object stored in `object`?
+    answer: |
+      Line 11, the pattern `value is int number`: the `object` holds a boxed `long`, and a type pattern checks
+      the run-time type of the object without any numeric conversion, so the match fails and the method returns
+      `fallback`.
+    explanation: |
+      The literal `30L` has the type `long`. When it is stored in a dictionary with `object` values it is boxed,
+      and the heap holds an object of type `System.Int64`. The type pattern `value is int number` checks whether
+      the run-time type of the object is compatible with `int`. The `is` operator considers only identity and
+      reference conversions plus boxing and unboxing, not numeric conversions and not user-defined operators.
+      A boxed `long` is not a boxed `int`, so the condition is false and the method silently returns the default.
+
+      The implicit conversion from `int` to `long` and the explicit one from `long` to `int` exist only for
+      unboxed values. Unboxing requires the exact type: the cast `(int)value` here would throw
+      `InvalidCastException`. The `is` pattern just returns `false`, so the defect stays hidden until someone
+      notices that the setting is not applied.
+
+      The fix is to handle explicitly the types the source really produces: for example, a `switch` expression
+      with the arms `int i => i` and `long l => checked((int)l)`. `checked` throws `OverflowException` when the
+      number does not fit into `int`, instead of silently truncating it. The behaviour is verified on .NET 10.
+    linkTitles:
+      - "Pattern matching: declaration and type patterns"
+      - "The is operator"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

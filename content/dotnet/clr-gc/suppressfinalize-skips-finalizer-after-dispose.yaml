@@ -1,0 +1,173 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RMN23JMS9JVST32779
+slug: suppressfinalize-skips-finalizer-after-dispose
+stack: dotnet
+topic: clr-gc
+level: senior
+type: output
+grading: auto
+tags: [finalizers, finalization, idisposable, suppress-finalize, garbage-collection]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    using System.Runtime.CompilerServices;
+
+    CreateAndAbandon();
+    GC.Collect();
+    GC.WaitForPendingFinalizers();
+    Console.Write("Done");
+
+    // Kept out of line so that no local of the caller references the objects
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static void CreateAndAbandon()
+    {
+        Resource first = new Resource("A");
+        Resource second = new Resource("B");
+        first.Dispose();
+    }
+
+    class Resource : IDisposable
+    {
+        private readonly string _name;
+
+        public Resource(string name) => _name = name;
+
+        public void Dispose()
+        {
+            Console.Write($"Dispose {_name} ");
+            GC.SuppressFinalize(this);
+        }
+
+        ~Resource() => Console.Write($"Finalize {_name} ");
+    }
+expect:
+  kind: output
+  value: "Dispose A Finalize B Done"
+acceptedOutputs: ["Dispose A Finalize B Done"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "Dispose A Finalize B Done" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "Dispose A Finalize A Finalize B Done" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "Dispose A Done" }
+  - id: d
+    correct: false
+    expect: { kind: output, value: "Dispose A Done Finalize B" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.gc.suppressfinalize
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/implementing-dispose
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.gc.waitforpendingfinalizers
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.object.finalize
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Чьи финализаторы выполнятся, если один из двух брошенных объектов вызвал Dispose с GC.SuppressFinalize?
+    prompt: |
+      Что выведет эта программа в консоль при запуске на .NET 10? Оба объекта создаются в отдельном методе,
+      поэтому после возврата из него на них не остаётся ни одной ссылки. `Dispose` вызывается только для
+      первого объекта.
+    hint: Что именно сообщает сборщику мусора вызов `GC.SuppressFinalize(this)` и что делает `GC.WaitForPendingFinalizers` с потоком, который его вызвал?
+    options:
+      a: "Dispose A Finalize B Done"
+      b: "Dispose A Finalize A Finalize B Done"
+      c: "Dispose A Done"
+      d: "Dispose A Done Finalize B"
+    optionExplanations:
+      b: "`GC.SuppressFinalize(this)` просит среду выполнения не вызывать финализатор указанного объекта. Объект `A` вызвал его в `Dispose`, поэтому его финализатор не выполняется, хотя сам объект собирается."
+      c: "Для объекта `B` никто не вызывал `Dispose`, а значит, и `GC.SuppressFinalize`. Полная сборка `GC.Collect()` находит его недостижимым и ставит в очередь на финализацию, а `GC.WaitForPendingFinalizers()` дожидается, пока финализатор отработает. Поэтому `Finalize B` будет напечатано."
+      d: "`GC.WaitForPendingFinalizers()` приостанавливает вызывающий поток, пока поток финализации не опустошит очередь финализаторов. Финализатор `B` завершается до того, как основной поток доходит до `Console.Write(\"Done\")`."
+    answer: "Dispose A Finalize B Done"
+    explanation: |
+      Если тип переопределяет `Finalize` (в C# - объявляет `~Resource()`), среда выполнения заносит каждый его
+      экземпляр во внутреннюю очередь финализации. Сборка, обнаружившая такой объект недостижимым, не может
+      сразу освободить его память: она переносит запись в список объектов, готовых к финализации, отдельный
+      поток финализации вызывает `~Resource()`, и только одна из следующих сборок освобождает память. Поэтому
+      брошенному объекту с финализатором нужно как минимум две сборки мусора.
+
+      - Объект `A`: `Dispose` вызвал `GC.SuppressFinalize(this)`. Этот метод выставляет бит в заголовке
+        объекта, который среда выполнения проверяет перед вызовом финализаторов. Поэтому `A` собирается как
+        обычный объект, и `~Resource()` для него не вызывается.
+      - Объект `B`: `Dispose` для него никто не вызывал, поэтому `GC.Collect()` находит его недостижимым и
+        ставит в очередь на финализацию, а `GC.WaitForPendingFinalizers()` держит основной поток, пока поток
+        финализации не напечатает `Finalize B`.
+
+      Итог: `Dispose A Finalize B Done`. Объекты создаются в отдельном методе с
+      `MethodImplOptions.NoInlining`, чтобы ни одна локальная переменная вызывающего метода не держала их
+      достижимыми во время `GC.Collect()`.
+
+      Детали, которые стоит знать: `SuppressFinalize` не действует, если сборщик мусора уже передал объект
+      потоку финализации, а `GC.ReRegisterForFinalize` снимает подавление и снова включает финализацию.
+
+      В этом смысл стандартного шаблона освобождения: `Dispose` освобождает ресурсы детерминированно и
+      вызывает `GC.SuppressFinalize`, потому что финализатор больше не нужен. Финализатор остаётся страховкой
+      на случай, если `Dispose` забыли вызвать. Подавление ещё и экономит работу: объекту не нужна лишняя
+      сборка и вызов в потоке финализации. Поведение описано для .NET 10.
+    linkTitles:
+      - Метод GC.SuppressFinalize
+      - Реализация метода Dispose
+      - Метод GC.WaitForPendingFinalizers
+      - Метод Object.Finalize
+  en:
+    title: Whose finalizers run when one of two abandoned objects called Dispose with GC.SuppressFinalize?
+    prompt: |
+      What does this program print to the console when it runs on .NET 10? Both objects are created in a
+      separate method, so after it returns no reference to them is left. `Dispose` is called only on the
+      first object.
+    hint: What exactly does `GC.SuppressFinalize(this)` tell the garbage collector, and what does `GC.WaitForPendingFinalizers` do to the thread that calls it?
+    options:
+      a: "Dispose A Finalize B Done"
+      b: "Dispose A Finalize A Finalize B Done"
+      c: "Dispose A Done"
+      d: "Dispose A Done Finalize B"
+    optionExplanations:
+      b: "`GC.SuppressFinalize(this)` asks the runtime not to call the finalizer of that object. Object `A` called it in `Dispose`, so its finalizer does not run, even though the object itself is collected."
+      c: "Nobody called `Dispose` on object `B`, so it never called `GC.SuppressFinalize` either. The full collection `GC.Collect()` finds it unreachable and queues it for finalization, and `GC.WaitForPendingFinalizers()` waits until its finalizer has run. So `Finalize B` is printed."
+      d: "`GC.WaitForPendingFinalizers()` suspends the calling thread until the finalizer thread has emptied the queue of finalizers. The finalizer of `B` finishes before the main thread reaches `Console.Write(\"Done\")`."
+    answer: "Dispose A Finalize B Done"
+    explanation: |
+      When a type overrides `Finalize` (in C#, declares `~Resource()`), the runtime records every instance of it
+      in an internal finalization queue. A collection that finds such an object unreachable cannot reclaim its
+      memory right away: it moves the entry to a list of objects ready for finalization, a dedicated finalizer
+      thread calls `~Resource()`, and only a later collection reclaims the memory. So an abandoned object with a
+      finalizer needs at least two garbage collections.
+
+      - Object `A`: `Dispose` called `GC.SuppressFinalize(this)`. That method sets a bit in the object header
+        which the runtime checks before calling finalizers. So `A` is collected as an ordinary object and
+        `~Resource()` is never called for it.
+      - Object `B`: nobody called `Dispose` on it, so `GC.Collect()` finds it unreachable and queues it for
+        finalization, and `GC.WaitForPendingFinalizers()` holds the main thread until the finalizer thread has
+        printed `Finalize B`.
+
+      The result is `Dispose A Finalize B Done`. The objects are created in a separate method marked with
+      `MethodImplOptions.NoInlining`, so that no local variable of the calling method keeps them reachable
+      during `GC.Collect()`.
+
+      Details worth knowing: `SuppressFinalize` has no effect if the garbage collector has already handed the
+      object to the finalizer thread, and `GC.ReRegisterForFinalize` undoes the suppression and turns
+      finalization back on.
+
+      This is the point of the standard dispose pattern: `Dispose` releases resources deterministically and
+      calls `GC.SuppressFinalize` because the finalizer is no longer needed. The finalizer stays as a safety net
+      in case `Dispose` is never called. Suppression also saves work: the object needs no extra collection and
+      no call on the finalizer thread. The behaviour is described for .NET 10.
+    linkTitles:
+      - GC.SuppressFinalize method
+      - Implement a Dispose method
+      - GC.WaitForPendingFinalizers method
+      - Object.Finalize method
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

@@ -1,0 +1,141 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPMNXNP3ADHX42RMSD
+slug: array-as-ilist-add-throws-not-supported
+stack: dotnet
+topic: oop-solid
+level: middle
+type: output
+grading: auto
+tags: [solid, liskov-substitution, arrays, ilist]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    IList<int> numbers = new int[] { 1, 2, 3 };
+    AppendZero(numbers);
+    Console.WriteLine(numbers.Count);
+
+    static void AppendZero(IList<int> list)
+    {
+        list.Add(0);
+    }
+expect:
+  kind: exception
+  value: System.NotSupportedException
+options:
+  - id: a
+    correct: false
+    expect: { kind: output, value: "4" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "3" }
+  - id: c
+    correct: true
+    expect: { kind: exception, value: System.NotSupportedException }
+  - id: d
+    correct: false
+    expect: { kind: exception, value: System.IndexOutOfRangeException }
+  - id: e
+    correct: false
+    expect: { kind: compile-error }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.array
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.icollection-1.add
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что произойдёт при вызове Add у массива, переданного как IList<int>?
+    prompt: |
+      Массив `int[]` сохранён в переменной типа `IList<int>` и передан методу, который добавляет в список элемент.
+      Что произойдёт при запуске этой программы (.NET 10)?
+    hint: Может ли массив изменить свою длину после создания?
+    options:
+      a: "Выведет `4`"
+      b: "Выведет `3`: вызов `Add` будет молча проигнорирован"
+      c: "Исключение `NotSupportedException`"
+      d: "Исключение `IndexOutOfRangeException`"
+      e: Ошибка компиляции
+    optionExplanations:
+      a: "Длина массива фиксируется при создании. `Add` не может создать новый массив и подменить ссылку в переменной вызывающего кода, поэтому четвёртый элемент не появится."
+      b: "Реализация `Add` у массива не молчит: о неподдерживаемой операции она сообщает исключением, и до `Console.WriteLine` программа не доходит."
+      d: "`IndexOutOfRangeException` возникает при обращении по индексу за границами массива. `Add` не обращается к элементам по индексу: он сразу сообщает, что операция не поддерживается."
+      e: "Одномерный массив `int[]` реализует `IList<int>`, поэтому неявное преобразование допустимо. Вызов `list.Add(0)` компилятор проверяет только по объявлению интерфейса, где метод `Add` есть."
+    answer: "Программа завершится необработанным исключением `NotSupportedException`: у массива фиксированный размер."
+    explanation: |
+      Одномерные массивы с нулевой нижней границей реализуют `IList<T>`, `ICollection<T>` и `IEnumerable<T>`.
+      Реализации этих интерфейсов среда выполнения подставляет массивам сама, поэтому присваивание `int[]`
+      переменной типа `IList<int>` компилируется без явного приведения. Но размер массива фиксирован, и члены,
+      которые добавляют, вставляют или удаляют элементы, при вызове через такой интерфейс выбрасывают
+      `NotSupportedException`. Компилятор этого не видит: для него `list.Add(0)` - обычный вызов метода интерфейса.
+
+      С точки зрения принципа подстановки Лисков это показательный случай из BCL. Формально контракт соблюдён:
+      документация `ICollection<T>.Add` допускает `NotSupportedException`, если коллекция доступна только для
+      чтения, а документация класса `Array` прямо предупреждает, что при приведении массива к этим интерфейсам
+      члены добавления, вставки и удаления выбрасывают это исключение. Однако метод, который принимает `IList<T>`
+      и рассчитывает, что `Add` работает, ломается на массиве: подтип не выполняет ожидания клиента, и ошибка
+      проявляется только во время выполнения.
+
+      Отсюда практические выводы:
+
+      - метод, который меняет размер коллекции, должен требовать тип, где добавление гарантировано (например,
+        `List<T>`), или явно учитывать, что `Add` у `IList<T>` может выбросить `NotSupportedException`;
+      - метод, которому достаточно читать элементы, лучше объявлять с параметром `IReadOnlyList<T>`, тогда
+        массив подходит без сюрпризов;
+      - если нужен изменяемый список из массива, его копируют: `new List<int>(array)` или `array.ToList()`.
+
+      Поведение описано для .NET 10.
+    linkTitles:
+      - "Класс Array"
+      - "Метод ICollection<T>.Add"
+  en:
+    title: What happens when Add is called on an array passed as IList<int>?
+    prompt: |
+      An `int[]` array is stored in a variable of type `IList<int>` and passed to a method that adds an item to the list.
+      What happens when this program runs (.NET 10)?
+    hint: Can an array change its length after it is created?
+    options:
+      a: "It prints `4`"
+      b: "It prints `3`: the `Add` call is silently ignored"
+      c: "`NotSupportedException`"
+      d: "`IndexOutOfRangeException`"
+      e: Compile error
+    optionExplanations:
+      a: "The length of an array is fixed when it is created. `Add` cannot create a new array and replace the reference held by the caller, so no fourth element appears."
+      b: "The array's `Add` implementation is not silent: it reports the unsupported operation with an exception, and the program never reaches `Console.WriteLine`."
+      d: "`IndexOutOfRangeException` is thrown when an index outside the array bounds is accessed. `Add` does not access elements by index: it reports at once that the operation is not supported."
+      e: "A single-dimensional `int[]` array implements `IList<int>`, so the implicit conversion is allowed. The compiler checks `list.Add(0)` only against the interface declaration, which does have an `Add` method."
+    answer: "The program ends with an unhandled `NotSupportedException`: an array has a fixed size."
+    explanation: |
+      Single-dimensional, zero-based arrays implement `IList<T>`, `ICollection<T>` and `IEnumerable<T>`. The
+      runtime provides these interface implementations to arrays itself, so assigning an `int[]` to an
+      `IList<int>` variable compiles without an explicit cast. But an array has a fixed size, and the members that
+      add, insert or remove elements throw `NotSupportedException` when called through such an interface. The
+      compiler cannot see this: to it, `list.Add(0)` is an ordinary interface method call.
+
+      From the Liskov substitution point of view this is a telling case from the BCL. Formally the contract holds:
+      the documentation of `ICollection<T>.Add` allows `NotSupportedException` when the collection is read-only,
+      and the documentation of the `Array` class warns explicitly that when an array is cast to these interfaces,
+      the members that add, insert or remove elements throw this exception. Still, a method that takes `IList<T>`
+      and expects `Add` to work breaks on an array: the subtype does not meet the client's expectations, and the
+      failure shows up only at run time.
+
+      Practical conclusions:
+
+      - a method that changes the size of a collection should require a type where adding is guaranteed (for
+        example, `List<T>`), or explicitly handle the fact that `Add` on an `IList<T>` may throw
+        `NotSupportedException`;
+      - a method that only reads elements is better declared with an `IReadOnlyList<T>` parameter, and then an
+        array fits without surprises;
+      - if you need a mutable list built from an array, copy it: `new List<int>(array)` or `array.ToList()`.
+
+      The behaviour is described for .NET 10.
+    linkTitles:
+      - "Array class"
+      - "ICollection<T>.Add method"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

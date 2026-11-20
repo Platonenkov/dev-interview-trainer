@@ -1,0 +1,156 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RN23Y4MMZ0QEWY0MK0
+slug: lazy-vs-materialized-return-contract
+stack: dotnet
+topic: collections-linq
+level: lead
+type: open
+grading: self
+tags: [linq, deferred-execution, ienumerable, api-design, code-analysis]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/linq/deferred-execution-lazy-evaluation
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/fundamentals/code-analysis/quality-rules/ca1851
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/design-guidelines/guidelines-for-collections
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Какое правило задать команде: когда метод может вернуть ленивый IEnumerable<T>, а когда обязан вернуть материализованный результат?"
+    prompt: |
+      Вы ведёте команду, которая отвечает за несколько сервисов и общих библиотек. На code review постоянно
+      встречаются методы, которые возвращают `IEnumerable<T>`, собранный из LINQ или `yield return`, а в баг-трекере -
+      ошибки, где запрос выполнился дважды или упал, потому что его источник уже был освобождён.
+
+      Какое правило вы установите: когда метод может вернуть ленивый `IEnumerable<T>`, а когда обязан вернуть
+      материализованный результат? Как вы добьётесь, чтобы правило соблюдалось?
+    hint: Подумайте, чего вызывающий код не может узнать из сигнатуры `IEnumerable<T> GetItems()`, и какие инструменты умеют проверять, как последовательность потребляется.
+    answer: |
+      - **Принцип.** Ленивость результата - часть контракта метода, а не деталь реализации. Ленивый `IEnumerable<T>`
+        означает: работа выполняется позже, при каждом перечислении, в контексте вызывающего кода и только пока
+        источник данных жив. Тип возвращаемого значения должен показывать, какой контракт получает вызывающий.
+      - **По умолчанию - материализовать.** Метод возвращает готовый результат с типом `IReadOnlyList<T>` или
+        `IReadOnlyCollection<T>`, собранный внутри метода через `ToList()` или `ToArray()`. Такой результат можно
+        перечислять сколько угодно раз, у него есть `Count`, а все исключения возникают внутри метода, а не где-то
+        у потребителя.
+      - **Ленивый результат разрешён, только если выполнены все условия:**
+        - вызывающему действительно выгоден потоковый режим: данных много или их количество не ограничено,
+          потребитель может остановиться рано (`First`, `Take`), конвейер не должен держать всё в памяти;
+        - источник остаётся валидным всё время перечисления: метод не освобождает перед возвратом reader,
+          `DbContext`, соединение или блокировку, либо итератор сам владеет ресурсом и освобождает его;
+        - повторное перечисление дёшево и без побочных эффектов, либо в документации явно сказано
+          «перечислять один раз».
+        Для потоковой передачи с вводом-выводом явная форма - `IAsyncEnumerable<T>`.
+      - **Сделать контракт видимым.** Ленивые методы документируются (XML-комментарий: выполнение отложено, источник
+        читается при каждом перечислении). Материализованные методы не прячут `List<T>` за типом `IEnumerable<T>`,
+        а возвращают тип коллекции.
+      - **Закрепить.**
+        - Записать правило в руководство команды и в чек-лист code review: не возвращать ленивую
+          последовательность из метода, который освобождает её источник; не перечислять `IEnumerable<T>` дважды.
+        - Включить анализатор CA1851 (возможное многократное перечисление `IEnumerable`) в `.editorconfig`,
+          например `dotnet_diagnostic.CA1851.severity = warning`: в SDK .NET 10 он по умолчанию выключен.
+          В CI предупреждения считать ошибками.
+        - Тесты на публичные методы, которые перечисляют результат дважды и после выхода из области видимости
+          источника.
+      - **Без фанатизма.** Правило касается публичных API и границ между слоями. Приватные помощники и цепочки LINQ
+        внутри одного метода могут оставаться ленивыми.
+    explanation: |
+      Отложенное выполнение означает, что запрос выполняется не в момент вызова метода, а когда результат начинают
+      перечислять. Из этого следуют все проблемы, которые видит команда:
+
+      - исключение переезжает из метода-источника в место перечисления, и стек вызовов указывает не туда;
+      - изменения источника между вызовом и перечислением попадают в результат;
+      - каждое перечисление повторяет всю работу и её побочные эффекты, например запросы к базе или по HTTP;
+      - если источник освобождён при выходе из метода, перечисление падает с `ObjectDisposedException` или похожей
+        ошибкой.
+
+      Материализация тоже не бесплатна: она занимает память под весь результат, откладывает выдачу первого элемента
+      и лишает потребителя возможности остановиться рано. Поэтому правило - не «никогда не возвращать
+      `IEnumerable<T>`», а «ленивость выбирается осознанно и видна в контракте». Руководство Microsoft по
+      проектированию коллекций в том же духе рекомендует для возвращаемых коллекций только для чтения типы вроде
+      `ReadOnlyCollection<T>`, а `IEnumerable<T>` - лишь в редких случаях.
+
+      Возвращать именно `IReadOnlyList<T>`, а не `List<T>`, полезно по двум причинам: тип не приглашает
+      вызывающего менять коллекцию и оставляет автору свободу перейти, например, на массив.
+
+      Важно понимать границы инструментов. CA1851 проверяет сторону потребителя: он находит метод, который
+      перечисляет один и тот же `IEnumerable<T>` больше одного раза, и может давать ложные срабатывания, потому что
+      не знает, ленивая ли последовательность на самом деле. Сторону производителя, то есть ленивый запрос поверх
+      освобождённого ресурса, анализатор не ловит, поэтому её закрывают code review и тесты.
+    linkTitles:
+      - "Отложенное выполнение и ленивые вычисления в LINQ"
+      - "CA1851: возможное многократное перечисление коллекции IEnumerable"
+      - "Рекомендации по проектированию коллекций"
+  en:
+    title: What team rule decides when a method may return a lazy IEnumerable<T> and when it must return a materialized result?
+    prompt: |
+      You lead a team that owns several services and shared libraries. In code review you keep seeing methods that
+      return `IEnumerable<T>` built with LINQ or `yield return`, and the bug tracker has issues where a query ran twice
+      or failed because its source had already been disposed.
+
+      What rule would you set for when a method may return a lazy `IEnumerable<T>` and when it must return a
+      materialized result? How would you make sure the rule is followed?
+    hint: Think about what the caller cannot tell from the signature `IEnumerable<T> GetItems()`, and which tools can check how a sequence is consumed.
+    answer: |
+      - **The principle.** Whether a result is lazy is part of the method's contract, not an implementation detail.
+        A lazy `IEnumerable<T>` means: the work happens later, on every enumeration, in the caller's context, and only
+        while the data source is still alive. The return type must show which contract the caller gets.
+      - **Default: materialize.** The method returns a finished result typed as `IReadOnlyList<T>` or
+        `IReadOnlyCollection<T>`, built inside the method with `ToList()` or `ToArray()`. Such a result can be
+        enumerated any number of times, it has `Count`, and all exceptions happen inside the method rather than
+        somewhere in the consumer.
+      - **A lazy result is allowed only when all of these hold:**
+        - the caller really benefits from streaming: the data is large or unbounded, the consumer may stop early
+          (`First`, `Take`), the pipeline should not hold everything in memory;
+        - the source stays valid for the whole enumeration: the method does not dispose a reader, a `DbContext`,
+          a connection or a lock before returning, or the iterator itself owns the resource and disposes it;
+        - re-enumeration is cheap and free of side effects, or the documentation explicitly says
+          "enumerate once".
+        For streaming with I/O the explicit form is `IAsyncEnumerable<T>`.
+      - **Make the contract visible.** Lazy methods are documented (an XML comment: execution is deferred, the source
+        is read on every enumeration). Materialized methods do not hide a `List<T>` behind `IEnumerable<T>`; they
+        return a collection type.
+      - **Enforce it.**
+        - Write the rule into the team guidelines and the code review checklist: do not return a lazy sequence from
+          a method that disposes its source; do not enumerate an `IEnumerable<T>` twice.
+        - Enable analyzer CA1851 (possible multiple enumerations of `IEnumerable`) in `.editorconfig`, for example
+          `dotnet_diagnostic.CA1851.severity = warning`: in the .NET 10 SDK it is disabled by default. Treat warnings
+          as errors in CI.
+        - Tests for public methods that enumerate the result twice and after the source's scope has ended.
+      - **Stay pragmatic.** The rule targets public APIs and boundaries between layers. Private helpers and LINQ
+        chains inside a single method may stay lazy.
+    explanation: |
+      Deferred execution means the query runs not when the method is called but when the result is enumerated.
+      Every problem the team sees follows from that:
+
+      - an exception moves from the producing method to the place of enumeration, and the stack trace points to the
+        wrong place;
+      - changes to the source between the call and the enumeration show up in the result;
+      - every enumeration repeats all the work and its side effects, such as database or HTTP calls;
+      - if the source is disposed when the method returns, enumeration fails with `ObjectDisposedException` or a
+        similar error.
+
+      Materialization is not free either: it holds the whole result in memory, delays the first element and takes
+      away the consumer's ability to stop early. So the rule is not "never return `IEnumerable<T>`" but "laziness is
+      a deliberate choice and is visible in the contract". The Microsoft design guidelines for collections take the
+      same line: for read-only collections returned from members they recommend types such as
+      `ReadOnlyCollection<T>`, and `IEnumerable<T>` only in rare cases.
+
+      Returning `IReadOnlyList<T>` rather than `List<T>` helps for two reasons: the type does not invite the caller
+      to modify the collection, and it leaves the author free to switch, for example, to an array.
+
+      It matters to know where the tools stop. CA1851 checks the consumer side: it finds a method that enumerates the
+      same `IEnumerable<T>` more than once, and it can report false positives because it does not know whether the
+      sequence is actually lazy. The producer side, a lazy query over a disposed resource, is not caught by the
+      analyzer, so code review and tests cover it.
+    linkTitles:
+      - "Deferred execution and lazy evaluation in LINQ"
+      - "CA1851: Possible multiple enumerations of IEnumerable collection"
+      - "Guidelines for collections"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

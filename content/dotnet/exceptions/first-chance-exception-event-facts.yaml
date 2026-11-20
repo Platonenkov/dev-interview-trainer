@@ -1,0 +1,125 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RP17B2GDS03PHM7S4X
+slug: first-chance-exception-event-facts
+stack: dotnet
+topic: exceptions
+level: senior
+type: multi
+grading: auto
+tags: [first-chance-exception, appdomain, diagnostics, logging, production]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+  - id: e
+    correct: true
+  - id: f
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.appdomain.firstchanceexception
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.runtime.exceptionservices.firstchanceexceptioneventargs
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.appdomain.unhandledexception
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что верно о событии AppDomain.FirstChanceException при логировании всех исключений?
+    prompt: |
+      Команда хочет логировать все исключения сервиса на .NET 10 и подписывается на
+      `AppDomain.CurrentDomain.FirstChanceException`. Выберите все верные утверждения об этом событии.
+    hint: Подумайте, в какой момент жизни исключения среда выполнения вызывает это событие и что ей в этот момент уже известно.
+    options:
+      a: "Событие возникает и для исключений, которые потом перехватываются блоком `catch`, в том числе для исключений, выброшенных и перехваченных внутри библиотек и самой платформы."
+      b: "Событие возникает, только когда к процессу подключён отладчик; в production без отладчика оно не срабатывает."
+      c: "Событие возникает до того, как среда выполнения начнёт искать обработчик в стеке вызовов, то есть раньше, чем вычисляются фильтры `when` и выполняются блоки `catch` и `finally`."
+      d: "Обработчик события может подавить исключение, например установив флаг в `FirstChanceExceptionEventArgs`, и тогда поиск `catch` не начнётся."
+      e: "Если код логирования внутри обработчика сам выбросит исключение и сам же его перехватит, `FirstChanceException` возникнет и для этого исключения, и обработчик будет повторно вызван в том же потоке."
+      f: "Событие возникает только для исключений, которые так и не были перехвачены, поэтому в логе окажутся лишь настоящие сбои."
+    optionExplanations:
+      b: "Название пришло из терминологии отладчиков, но событие - обычное событие `AppDomain`. Среда выполнения вызывает его для каждого выброшенного управляемого исключения независимо от того, подключён ли отладчик и какая сборка - Debug или Release."
+      d: "Событие - только уведомление. У `FirstChanceExceptionEventArgs` есть лишь свойство `Exception` и нет флага обработки, поэтому обработчик может посмотреть на исключение, но не может пометить его обработанным или остановить поиск `catch`: после возврата из обработчиков среда выполнения ищет обработчик как обычно."
+      f: "Так ведёт себя `AppDomain.UnhandledException`, а не `FirstChanceException`. Событие первого шанса срабатывает в момент выброса, когда ещё неизвестно, перехватит ли исключение какой-нибудь `catch`."
+    answer: "Верны утверждения a, c и e: событие срабатывает для каждого выброшенного исключения, включая перехваченные, до поиска обработчика, в том числе для исключений, выброшенных внутри самого обработчика; обработчик может только наблюдать за исключением, но не подавить его."
+    explanation: |
+      `FirstChanceException` возникает при выбросе исключения в управляемом коде, до того как среда
+      выполнения начнёт искать обработчик в стеке вызовов. В этот момент ещё неизвестно, будет ли исключение
+      перехвачено, поэтому событие срабатывает для всех исключений: и для тех, что станут необработанными, и
+      для тех, что тут же поймает `catch` в вашем коде, в библиотеке или в самой платформе.
+
+      Отсюда практические следствия для идеи "логировать всё":
+
+      - **Шум.** В лог попадут исключения, которые код ожидает и обрабатывает сам, например
+        `OperationCanceledException` при отмене запроса. Лог первого шанса полезен как диагностический
+        сигнал, но не заменяет логирование в `catch` и обработку `AppDomain.UnhandledException`.
+      - **Цена.** Обработчик вызывается на каждый выброс, поэтому тяжёлая запись в лог замедляет и без того
+        дорогие исключения на горячем пути.
+      - **Только наблюдение.** Аргументы события дают доступ к объекту исключения, но не позволяют пометить
+        его обработанным или изменить дальнейший поиск `catch`.
+      - **Повторный вход.** Исключение, выброшенное внутри обработчика, - такое же выброшенное исключение, как
+        любое другое: для него тоже возникает событие, и обработчик вызывается снова в том же потоке, даже если
+        логгер сам перехватывает это исключение. Если обработчик сбоит при каждом вызове, каждый вызов порождает
+        следующий, и рекурсия может закончиться переполнением стека. Поэтому обработчик обычно защищают флагом
+        повторного входа в рамках потока (например, полем с `[ThreadStatic]`) и блоком `try`/`catch` вокруг записи.
+
+      Поведение описано для .NET 10.
+    linkTitles:
+      - "Событие AppDomain.FirstChanceException"
+      - "Класс FirstChanceExceptionEventArgs"
+      - "Событие AppDomain.UnhandledException"
+  en:
+    title: What is true about AppDomain.FirstChanceException when you log every exception?
+    prompt: |
+      A team wants to log every exception of a .NET 10 service and subscribes to
+      `AppDomain.CurrentDomain.FirstChanceException`. Select all true statements about this event.
+    hint: Think about the moment in an exception's life when the runtime raises this event and what it already knows at that moment.
+    options:
+      a: "The event is raised for exceptions that are later caught by a `catch` block too, including exceptions thrown and caught inside libraries and the framework itself."
+      b: "The event is raised only when a debugger is attached to the process; in production without a debugger it never fires."
+      c: "The event is raised before the runtime starts searching the call stack for a handler, that is, before `when` filters are evaluated and before `catch` and `finally` blocks run."
+      d: "The event handler can suppress the exception, for example by setting a flag on `FirstChanceExceptionEventArgs`, and then no search for a `catch` takes place."
+      e: "If the logging code inside the handler throws an exception and catches it itself, `FirstChanceException` is raised for that exception too, and the handler is entered again on the same thread."
+      f: "The event is raised only for exceptions that are never caught, so the log contains only real failures."
+    optionExplanations:
+      b: "The name comes from debugger terminology, but this is an ordinary `AppDomain` event. The runtime raises it for every managed exception that is thrown, whether or not a debugger is attached and whether the build is Debug or Release."
+      d: "The event is only a notification. `FirstChanceExceptionEventArgs` exposes just the `Exception` property and has no handled flag, so the handler can look at the exception but cannot mark it handled or stop the search for a `catch`: after the handlers return, the runtime searches for a handler as usual."
+      f: "That describes `AppDomain.UnhandledException`, not `FirstChanceException`. The first-chance event fires at the moment of the throw, when it is not yet known whether any `catch` will handle the exception."
+    answer: "Statements a, c and e are true: the event fires for every thrown exception, including caught ones, before the handler search, and that includes exceptions thrown inside the handler itself; the handler can only observe the exception, not suppress it."
+    explanation: |
+      `FirstChanceException` is raised when an exception is thrown in managed code, before the runtime starts
+      searching the call stack for a handler. At that moment nobody knows yet whether the exception will be
+      caught, so the event fires for all exceptions: those that will end up unhandled and those that a `catch`
+      in your code, in a library or in the framework will catch right away.
+
+      This has practical consequences for the "log everything" idea:
+
+      - **Noise.** The log gets exceptions that code expects and handles itself, for example
+        `OperationCanceledException` when a request is cancelled. A first-chance log is a useful diagnostic
+        signal, but it does not replace logging in `catch` blocks and handling `AppDomain.UnhandledException`.
+      - **Cost.** The handler runs on every throw, so heavy logging slows down exceptions, which are already
+        expensive, on a hot path.
+      - **Observation only.** The event arguments give access to the exception object, but they do not let you
+        mark it handled or change the subsequent search for a `catch`.
+      - **Re-entrancy.** An exception thrown inside the handler is a thrown exception like any other: the event
+        fires for it too, and the handler is called again on the same thread, even if the logger catches that
+        exception itself. If the handler fails on every call, each call triggers the next one, and the recursion
+        can end in a stack overflow. That is why the handler is usually protected with a per-thread re-entrancy
+        flag (for example a `[ThreadStatic]` field) and a `try`/`catch` around the write.
+
+      The behaviour is described for .NET 10.
+    linkTitles:
+      - "AppDomain.FirstChanceException event"
+      - "FirstChanceExceptionEventArgs class"
+      - "AppDomain.UnhandledException event"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

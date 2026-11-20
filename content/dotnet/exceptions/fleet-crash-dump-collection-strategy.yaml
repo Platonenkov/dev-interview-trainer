@@ -1,0 +1,180 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPE25BBJZ4MM0FDKW5
+slug: fleet-crash-dump-collection-strategy
+stack: dotnet
+topic: exceptions
+level: architect
+type: open
+grading: self
+tags: [dumps, crash-dumps, diagnostics, symbols, production, observability]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/collect-dumps-crash
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/symbols
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-symbol
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как спроектировать сбор и анализ дампов при падении для сотен экземпляров .NET-сервисов?
+    prompt: |
+      В компании работают несколько сотен экземпляров сервисов на .NET 10 в нескольких кластерах Kubernetes,
+      ими владеют десятки команд. Сейчас падения разбирают как повезёт: контейнер перезапускается, дамп, если
+      он вообще был, пропадает вместе с ним, и никто не может сказать, новое это падение или то же самое, что
+      месяц назад.
+
+      Спроектируйте сбор и анализ дампов для всего парка так, чтобы схема работала и через несколько лет. Что
+      настраивается на экземплярах, куда попадают дампы, кто может их читать и как дамп превращается в задачу
+      для нужной команды?
+    hint: |
+      Проследите путь одного дампа: куда он пишется в момент падения, что нужно, чтобы прочитать его через год,
+      и как отличить 500 дампов одной ошибки от 500 разных ошибок.
+    answer: |
+      1. **Сбор - настройка платформы по умолчанию, а не выбор команды.** Базовый образ или шаблон развёртывания
+         задаёт переменные среды выполнения на каждом экземпляре: `DOTNET_DbgEnableMiniDump=1`, тип дампа в
+         `DOTNET_DbgMiniDumpType`, `DOTNET_DbgMiniDumpName` с подстановками вроде `%e` (имя исполняемого файла),
+         `%p` (PID), `%h` (хост) и `%t` (время), указывающий на отдельный том, и `DOTNET_EnableCrashReport=1`
+         для JSON-отчёта о падении рядом с дампом. Тип дампа - решение на уровне парка: `Heap` (тип 2, по
+         умолчанию; вся память, кроме отображённых образов модулей) для большинства сервисов; `Full` (тип 4) -
+         там, где в дампе нужны и образы модулей, а также для приложений, опубликованных одним файлом или через
+         Native AOT: они поддерживают только полные дампы. Из этого выбора следует бюджет на размер. Лимит памяти
+         контейнера и размер тома оставляют запас на запись дампа, иначе сам дамп приведёт к убийству контейнера
+         или переполнит диск узла.
+      2. **Понимать, что эта настройка не покрывает.** Процесс, который убили снаружи (OOM kill, `SIGKILL` после
+         истечения grace period), не успевает записать дамп. Такие случаи закрываются метриками и дампами по
+         триггеру с живого процесса (например, правилами сбора `dotnet-monitor` по памяти или CPU), которые
+         дальше идут по тому же конвейеру.
+      3. **Отправить и не хранить локально.** Агент на узле или sidecar выгружает каждый новый дамп и отчёт о
+         падении в центральное хранилище, добавляет метаданные (сервис, версия, коммит, digest образа, версия
+         среды выполнения, кластер, под, время) и удаляет локальный файл. Он ограничивает поток: под в цикле
+         перезапусков не должен присылать тысячу одинаковых дампов; после первых нескольких дампов на сигнатуру
+         и версию достаточно отчётов о падении.
+      4. **Обращаться с дампами как с чувствительными данными.** Дампы `Heap` и `Full` содержат токены, строки
+         подключения и персональные данные. Хранилище отдельное, зашифрованное, в нужном регионе; доступ на
+         чтение выдаётся команде-владельцу по запросу, на время и с аудитом; срок хранения дампов короткий
+         (например, недели), отчётов и сигнатур - дольше; удаление автоматическое. Большинство людей работают
+         с извлечёнными стеками, а не с самим дампом.
+      5. **Архивировать символы каждой сборки.** CI публикует файлы символов (`.pdb`) каждой выпущенной сборки
+         на сервер символов или в хранилище артефактов с ключом по сборке, вместе с Source Link, чтобы кадры стека
+         указывали на точный коммит. Модули, символы и DAC официальных сборок среды выполнения скачиваются с
+         сервера символов Microsoft через `dotnet-symbol`. Для среды выполнения из других источников (собранной
+         из исходников или сборки конкретного дистрибутива Linux) загрузка даёт 404, поэтому команда сама
+         архивирует её бинарные файлы (`dotnet`, `libcoreclr.so`, `libmscordaccore.so`) и символы. Символы
+         хранятся не меньше, чем любой дамп или поддерживаемая версия, которой они нужны.
+      6. **Автоматическая сортировка по сигнатуре стека.** Обработчик открывает каждый новый дамп (скриптом через
+         `dotnet-dump analyze` или инструментом на основе ClrMD) или читает отчёт о падении, берёт тип исключения
+         и верхние кадры упавшего потока, нормализует их (без смещений, адресов и номеров лямбд) и хеширует в
+         сигнатуру. Падения группируются по сигнатуре и считаются по версиям и кластерам, а новая сигнатура после
+         развёртывания открывает задачу для команды-владельца со ссылками на дампы.
+      7. **Сохранить работоспособность на годы.** Конвейером владеет платформенная команда; настройка проверяется
+         при каждом обновлении среды выполнения (имена переменных, типы дампов, версии инструментов анализа);
+         искусственное падение в тестовой среде при каждом релизе платформы проверяет всю цепочку целиком - от
+         падения до задачи.
+    explanation: |
+      В масштабе парка трудно не снять дамп, а всё, что вокруг него. Дамп, который нельзя прочитать, бесполезен:
+      без точных файлов символов (`.pdb`) этой сборки и подходящих бинарных файлов среды выполнения аналитик
+      видит адреса вместо методов, а через год сборочного агента, у которого они были, уже нет. Дамп, который
+      никто не нашёл, тоже бесполезен: если он остался на узле, он исчезает вместе с контейнером. Поэтому сбор
+      включается шаблоном, а выгрузка, символы и сортировка - части одного конвейера.
+
+      Группировка по сигнатуре превращает поток файлов в короткий список ошибок. Сотни экземпляров одного сервиса
+      падают из-за одной ошибки одновременно; без группировки каждое падение выглядит отдельным инцидентом, а с ней
+      команда видит "сигнатура X, 400 падений, началось с версии 2.3.1". Стабильной между сборками сигнатуру
+      делает именно нормализация кадров.
+
+      Размер, приватность и стоимость тянут в одну сторону: богатый дамп собирать редко, хранить недолго и
+      ограничивать доступ к нему; дешёвые артефакты (отчёты о падении, сигнатуры, счётчики) хранить долго и
+      показывать широко. Хороший проект называет эти компромиссы явно: тип дампа, выборка на сигнатуру, срок
+      хранения, круг читателей. При этом тип дампа не всегда свободный выбор: дамп `Heap` уже содержит почти всю
+      память процесса, `Full` добавляет образы модулей, а приложения одним файлом и Native AOT требуют `Full`.
+
+      Описанная настройка относится к .NET 10 на Linux, переменные используют префикс `DOTNET_`. Имена переменных
+      и поддерживаемые подстановки стоит перепроверять при каждом обновлении среды выполнения.
+    linkTitles:
+      - "Сбор дампов при падении"
+      - "Символы в .NET"
+      - "Утилита dotnet-symbol: загрузка символов для дампов"
+  en:
+    title: How do you design crash dump collection and analysis for hundreds of .NET service instances?
+    prompt: |
+      Your company runs several hundred instances of .NET 10 services in several Kubernetes clusters, owned by
+      dozens of teams. Today crashes are investigated by luck: the container restarts, the dump, if there was one,
+      is lost with it, and nobody can tell whether a crash is new or the same one seen a month ago.
+
+      Design crash dump collection and analysis for the whole fleet so that it still works several years from
+      now. What is configured on the instances, where do dumps go, who can read them, and how does a dump turn
+      into a ticket for the right team?
+    hint: |
+      Follow the path of one dump: where it is written at the moment of the crash, what you need to read it a year
+      later, and how you tell 500 dumps of one bug from 500 different bugs.
+    answer: |
+      1. **Collection is a platform default, not a team choice.** The base image or the deployment template sets
+         the runtime variables on every instance: `DOTNET_DbgEnableMiniDump=1`, the dump type in
+         `DOTNET_DbgMiniDumpType`, `DOTNET_DbgMiniDumpName` with placeholders such as `%e` (executable name),
+         `%p` (PID), `%h` (host) and `%t` (time) pointing to a dedicated volume, and `DOTNET_EnableCrashReport=1`
+         for a JSON crash report next to the dump. The dump type is a fleet decision: `Heap` (type 2, the default;
+         all memory except mapped module images) for most services; `Full` (type 4) where the dump must also
+         contain the module images, and for apps published as a single file or with Native AOT, which support only
+         full dumps. The size budget follows from that choice. The container memory limit and the volume size
+         leave headroom for writing the dump, otherwise the dump itself gets the container killed or fills the
+         node disk.
+      2. **Know what this does not cover.** A process killed from the outside (an OOM kill, `SIGKILL` after the
+         grace period) gets no chance to write a dump. Those cases are covered by metrics and by triggered dumps
+         taken from a live process (for example `dotnet-monitor` collection rules on memory or CPU), which then
+         go through the same pipeline.
+      3. **Ship it and do not keep it locally.** An agent on the node or a sidecar uploads every new dump and
+         crash report to central storage, attaches metadata (service, version, commit, image digest, runtime
+         version, cluster, pod, time) and deletes the local file. It rate-limits: a pod in a crash loop must not
+         send a thousand identical dumps; after the first few dumps per signature and version, crash reports are
+         enough.
+      4. **Treat dumps as sensitive data.** `Heap` and `Full` dumps contain tokens, connection strings and personal
+         data. The storage is separate, encrypted and in the required region; read access is granted to the
+         owning team on request, for a limited time and with an audit trail; retention is short for dumps (for
+         example weeks) and longer for crash reports and signatures; deletion is automatic. Most people work with
+         the extracted stacks, not with the dump itself.
+      5. **Archive the symbols of every build.** CI publishes the symbol files (`.pdb`) of every released build to
+         a symbol server or an artifact store keyed by build, together with Source Link, so stack frames point to
+         the exact commit. Modules, symbols and the DAC of official runtime builds are downloaded from the Microsoft
+         symbol server with `dotnet-symbol`. For a runtime from another source (built from source or built for a
+         particular Linux distro) the download returns 404, so the team archives its binaries (`dotnet`,
+         `libcoreclr.so`, `libmscordaccore.so`) and symbols itself. Symbols are kept at least as long as any dump
+         or supported version that needs them.
+      6. **Automated triage by stack signature.** A worker opens each new dump (a scripted `dotnet-dump analyze`
+         or a ClrMD-based tool) or reads the crash report, takes the exception type and the top frames of the
+         faulting thread, normalizes them (no offsets, addresses or lambda numbers) and hashes them into a
+         signature. Crashes are grouped by signature and counted per version and cluster, and a new signature
+         after a deployment opens a ticket for the owning team with links to the dumps.
+      7. **Keep it working for years.** The platform team owns the pipeline; the configuration is checked on every
+         runtime upgrade (variable names, dump types, analysis tool versions); a synthetic crash in a staging
+         environment on every platform release proves the whole chain end to end, from the crash to the ticket.
+    explanation: |
+      At fleet scale the hard part is not taking a dump but everything around it. A dump nobody can read is
+      worthless: without the exact symbol files (`.pdb`) of that build and the matching runtime binaries, the
+      analyst sees addresses instead of methods, and a year later the build agent that had them is gone. A dump
+      nobody finds is worthless too: if it stays on the node, it disappears with the container. That is why
+      collection is switched on by the template, and shipping, symbols and triage are parts of one pipeline.
+
+      Grouping by signature turns a stream of files into a short list of bugs. Hundreds of instances of one
+      service crash on the same bug at the same time; without grouping every crash looks like a separate incident,
+      and with it the team sees "signature X, 400 crashes, started with version 2.3.1". It is the normalization of
+      the frames that keeps the signature stable between builds.
+
+      Size, privacy and cost pull in the same direction: collect a rich dump rarely, keep it briefly and restrict
+      access to it; keep cheap artifacts (crash reports, signatures, counts) for a long time and share them widely.
+      A good design names these trade-offs explicitly: dump type, sampling per signature, retention and who may
+      read. The dump type is not always a free choice: a `Heap` dump already holds almost all process memory,
+      `Full` adds the module images, and single-file and Native AOT apps require `Full`.
+
+      The configuration described here is for .NET 10 on Linux, and the variables use the `DOTNET_` prefix. Re-check
+      the variable names and supported placeholders on every runtime upgrade.
+    linkTitles:
+      - "Collect dumps on crash"
+      - "Symbols in .NET"
+      - "dotnet-symbol utility: downloading symbols for dumps"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

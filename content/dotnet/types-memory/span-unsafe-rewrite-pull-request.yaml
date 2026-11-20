@@ -1,0 +1,140 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RRMNTB90CX146HB41C
+slug: span-unsafe-rewrite-pull-request
+stack: dotnet
+topic: types-memory
+level: lead
+type: situation
+grading: self
+tags: [span, unsafe-code, stackalloc, code-review, benchmarking]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/memory-and-spans/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/unsafe-code
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.runtime.interopservices.memorymarshal
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Разработчик прислал большой pull request, где парсер переписан на Span<T>, stackalloc и unsafe: что делает лид?"
+    prompt: |
+      Опытный разработчик открыл большой pull request: парсер файлов заказов, которые присылают партнёры,
+      полностью переписан с использованием `Span<T>`, `stackalloc`, `MemoryMarshal` и указателей в блоках `unsafe`.
+      В описании сказано, что новый парсер "намного быстрее", но замеров нет. Кроме автора, код в команде
+      никто толком не понимает, и ревьюеры готовы поставить approve, потому что тесты зелёные.
+
+      Вы лид команды, проект на .NET 10. Что вы сделаете с этим pull request и какие правила введёте,
+      чтобы такие изменения дальше принимались предсказуемо?
+    hint: "Что должно быть доказано, прежде чем команда возьмёт на себя сопровождение такого кода, и что произойдёт, если ошибка в работе с указателем встретится с битым файлом партнёра?"
+    answer: |
+      1. **Не мержить как есть, но и не отклонять с порога.** Поговорить с автором: цель (ускорить парсер)
+         разумная, вопрос в доказательствах и цене сопровождения. Попросить разбить изменение на несколько
+         небольших pull request, которые можно проверить по отдельности.
+      2. **Потребовать доказательство выгоды.** Профилирование под реальной нагрузкой должно показать, что парсер
+         действительно горячий участок и заметная доля времени или CPU уходит именно туда. Затем бенчмарк
+         (BenchmarkDotNet с `MemoryDiagnoser`) старой и новой версии на реалистичных файлах и замер сквозного
+         сценария. Порог "значимого" выигрыша договорить заранее. Если выигрыш на уровне шума или парсер не узкое
+         место, сложный код не принимается.
+      3. **Сначала корректность.** Набор эталонных файлов, на которых старый и новый парсер должны давать
+         одинаковый результат (дифференциальное тестирование), граничные тесты (пустой файл, обрезанная строка,
+         очень длинная строка, не-ASCII символы, некорректные числа) и фаззинг входа: файлы приходят извне,
+         это недоверенные данные.
+      4. **Лестница безопасности.** Предпочитать безопасные API: `Span<T>`/`ReadOnlySpan<T>`, `Slice`, `IndexOf`,
+         `SequenceEqual`, перегрузки `TryParse` для span. `stackalloc` - только с небольшим постоянным пределом
+         и запасным буфером из `ArrayPool<T>`. `MemoryMarshal`, `Unsafe` и указатели допускаются только там, где
+         бенчмарк показал, что безопасной версии недостаточно, и каждый такой участок сопровождается комментарием
+         с инвариантами (почему индекс в границах, кто владеет памятью).
+      5. **Изолировать небезопасный код.** Небольшой внутренний модуль с узким API, `AllowUnsafeBlocks` включён
+         только в этом проекте, отдельные владельцы в CODEOWNERS.
+      6. **Убрать единственного носителя знаний.** Обязательный второй ревьюер, который действительно понимает
+         код (парное ревью, разбор с автором), короткая запись решения (ADR) с замерами. Старый парсер оставить
+         за флагом на время раскатки, чтобы откатиться без релиза.
+      7. **Закрепить правило для команды.** Низкоуровневые оптимизации принимаются только с профилем, бенчмарком,
+         тестами границ и двумя понимающими ревьюерами.
+    explanation: |
+      Главный риск здесь не в `Span<T>` как таковом. Безопасные операции над span проверяют границы: ошибка с
+      индексом даёт исключение, которое видно в логах. `MemoryMarshal` и `Unsafe` позволяют обойти эти проверки
+      и систему типов, а код в блоках `unsafe` по документации не проверяется средой выполнения на безопасность
+      и требует опции компилятора `AllowUnsafeBlocks`. Ошибка в таком коде проявляется не исключением, а
+      чтением или порчей чужой памяти, причём только на определённых входных данных. Для парсера файлов от
+      внешних партнёров это ещё и вопрос безопасности, поэтому граничные тесты и фаззинг обязательны.
+
+      С `stackalloc` своя ловушка: если размер буфера зависит от входа, длинная строка может переполнить стек,
+      а `StackOverflowException` нельзя перехватить, процесс просто завершается. Поэтому нужен постоянный
+      небольшой предел и запасной буфер из пула.
+
+      Часто безопасная версия на span даёт большую часть выигрыша: JIT во многих циклах по span убирает
+      проверки границ, а методы поиска и сравнения в BCL на .NET 10 векторизованы. Поэтому порядок такой:
+      сначала доказать, что парсер узкое место, затем попробовать безопасные API и только потом, точечно,
+      спускаться ниже. Сложность кода - это долг, который платит вся команда годами, и если код понимает
+      один человек, команда фактически не может его сопровождать. Решение лида - не "да" или "нет" одному
+      pull request, а прозрачный критерий, по которому такие изменения принимаются всегда.
+    linkTitles:
+      - "Типы, связанные с памятью и диапазонами (Span<T>, Memory<T>)"
+      - "Небезопасный код, типы указателей и указатели на функции"
+      - "Класс MemoryMarshal"
+  en:
+    title: "A developer opens a large pull request that rewrites a parser with Span<T>, stackalloc and unsafe code: what does the lead do?"
+    prompt: |
+      An experienced developer opened a large pull request: the parser for order files sent by partners has been
+      fully rewritten with `Span<T>`, `stackalloc`, `MemoryMarshal` and pointers in `unsafe` blocks. The description
+      says the new parser is "much faster", but there are no measurements. Apart from the author, nobody on the
+      team really understands the code, and the reviewers are ready to approve because the tests are green.
+
+      You are the team lead, and the project is on .NET 10. What do you do with this pull request, and which rules
+      do you introduce so that such changes are accepted predictably from now on?
+    hint: "What must be proven before the team takes on maintaining this code, and what happens if a pointer bug meets a malformed partner file?"
+    answer: |
+      1. **Do not merge it as is, but do not reject it outright.** Talk to the author: the goal (a faster parser)
+         is reasonable; the question is evidence and maintenance cost. Ask to split the change into several small
+         pull requests that can be reviewed separately.
+      2. **Require proof of the gain.** Profiling under real load must show that the parser really is a hot path
+         and that a noticeable share of time or CPU goes there. Then a benchmark (BenchmarkDotNet with
+         `MemoryDiagnoser`) of the old and new versions on realistic files, and a measurement of the end-to-end
+         scenario. Agree on the threshold for a "meaningful" gain up front. If the gain is within noise or the
+         parser is not the bottleneck, the complex code is not accepted.
+      3. **Correctness first.** A corpus of reference files on which the old and new parser must produce the
+         same result (differential testing), boundary tests (empty file, truncated line, very long line, non-ASCII
+         characters, malformed numbers) and fuzzing of the input: the files come from outside, so they are
+         untrusted data.
+      4. **A ladder of safety.** Prefer safe APIs: `Span<T>`/`ReadOnlySpan<T>`, `Slice`, `IndexOf`, `SequenceEqual`,
+         the span overloads of `TryParse`. `stackalloc` only with a small constant limit and a fallback buffer from
+         `ArrayPool<T>`. `MemoryMarshal`, `Unsafe` and pointers are allowed only where a benchmark showed that the
+         safe version is not enough, and every such spot carries a comment with its invariants (why the index is
+         in bounds, who owns the memory).
+      5. **Isolate the unsafe code.** A small internal module with a narrow API, `AllowUnsafeBlocks` enabled only
+         in that project, dedicated owners in CODEOWNERS.
+      6. **Remove the single holder of knowledge.** A mandatory second reviewer who really understands the code
+         (pair review, a walkthrough with the author), and a short decision record (ADR) with the measurements.
+         Keep the old parser behind a flag during the rollout, so you can roll back without a release.
+      7. **Turn it into a team rule.** Low-level optimizations are accepted only with a profile, a benchmark,
+         boundary tests and two reviewers who understand them.
+    explanation: |
+      The main risk is not `Span<T>` itself. Safe span operations check bounds: an index bug produces an exception
+      that shows up in the logs. `MemoryMarshal` and `Unsafe` let you bypass those checks and the type system, and
+      code in `unsafe` blocks is, according to the documentation, not verified as safe by the runtime and requires
+      the `AllowUnsafeBlocks` compiler option. A bug in such code shows up not as an exception but as reading or
+      corrupting someone else's memory, and only on certain inputs. For a parser of files from external partners
+      this is also a security issue, which is why boundary tests and fuzzing are mandatory.
+
+      `stackalloc` has its own trap: if the buffer size depends on the input, a long line can overflow the stack,
+      and a `StackOverflowException` cannot be caught, the process simply terminates. That is why you need a small
+      constant limit and a fallback buffer from the pool.
+
+      A safe span-based version often gets most of the gain: in many loops over a span the JIT removes bounds
+      checks, and the search and comparison methods of the BCL on .NET 10 are vectorized. So the order is: first
+      prove that the parser is the bottleneck, then try the safe APIs, and only then go lower, in specific spots.
+      Code complexity is a debt the whole team pays for years, and if only one person understands the code, the
+      team effectively cannot maintain it. The lead's decision is not a "yes" or "no" for one pull request, but a
+      transparent criterion by which such changes are always accepted.
+    linkTitles:
+      - "Memory- and span-related types (Span<T>, Memory<T>)"
+      - "Unsafe code, pointer types, and function pointers"
+      - "MemoryMarshal class"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

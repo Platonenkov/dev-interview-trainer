@@ -1,0 +1,111 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RM8TCGQ5H6KNF3VMED
+slug: safehandle-over-custom-finalizer-standard
+stack: dotnet
+topic: clr-gc
+level: lead
+type: single
+grading: auto
+tags: [safehandle, finalization, unmanaged-resources, idisposable, interop]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.runtime.interopservices.safehandle
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/implementing-dispose
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какой подход к обёртке неуправляемых дескрипторов ОС закрепить как стандарт команды?
+    prompt: |
+      Сервисы команды вызывают нативные API через P/Invoke и работают с дескрипторами ОС: файлами, событиями,
+      дескрипторами, которые возвращает сторонняя нативная библиотека. Сейчас каждый класс-владелец хранит
+      дескриптор в поле `IntPtr` и пишет собственный финализатор, и на code review в этих финализаторах
+      регулярно находят ошибки. Вы как техлид пишете единый стандарт для кода на .NET 10. Какой подход вы закрепите?
+    hint: Сколько копий кода, закрывающего дескриптор, должно быть в кодовой базе и кто защищает дескриптор, пока с ним идёт нативный вызов?
+    options:
+      a: "Оставить поля `IntPtr`, но требовать в каждом классе-владельце полный шаблон освобождения: финализатор, вызывающий `Dispose(false)`, метод `Dispose(bool)`, закрывающий дескриптор, и `GC.SuppressFinalize(this)` в `Dispose()`."
+      b: "Оборачивать каждый вид дескриптора в класс, производный от `SafeHandle` (или брать готовый, например `SafeFileHandle`), с переопределёнными `ReleaseHandle` и `IsInvalid`, и использовать его в сигнатурах P/Invoke. Классы-владельцы хранят этот объект, финализатора не имеют, а их `Dispose` только освобождает дескриптор."
+      c: "Оставить поля `IntPtr` без финализаторов и требовать `using` для каждого владельца: в .NET 10 финализаторы всё равно не вызываются при завершении процесса, поэтому пользы от них нет."
+      d: "Регистрировать каждый открытый дескриптор в статическом реестре и закрывать их все в обработчике `AppDomain.ProcessExit`, чтобы ни один дескриптор не потерялся."
+    optionExplanations:
+      a: "Шаблон сам по себе верный, но логика освобождения копируется в каждый класс-владелец, и каждая копия может содержать ошибку. Поле `IntPtr` никак не защищено от того, что финализатор закроет дескриптор, пока другой поток ещё выполняет с ним нативный вызов, после чего ОС может выдать то же значение дескриптора другому объекту. Кроме того, каждый владелец становится финализируемым, и весь его граф объектов переживает лишнюю сборку мусора."
+      c: "При завершении процесса финализаторы действительно не вызываются, но во время работы процесса после сборки мусора они выполняются. Без страховки каждый забытый `Dispose` означает утечку дескриптора до конца жизни процесса, и долгоживущий сервис со временем исчерпает дескрипторы."
+      d: "Статическое поле - это корень сборщика мусора: дескрипторы и их владельцы живут до завершения процесса. Для долгоживущего сервиса это гарантированная утечка, а не защита. Дескриптор нужно освобождать, когда владелец закончил с ним работать, а не в конце жизни процесса."
+    answer: "Оборачивать каждый вид дескриптора в класс, производный от `SafeHandle` (или брать готовый), использовать его в P/Invoke, а классы-владельцы делать без финализатора: их `Dispose` просто освобождает `SafeHandle`."
+    explanation: |
+      Документация по реализации `Dispose` прямо советует не писать собственный финализатор для неуправляемого
+      ресурса, а обернуть дескриптор в объект `SafeHandle`. Для стандарта команды это выгодно по нескольким причинам.
+
+      - **Одно место для освобождения.** Код закрытия дескриптора живёт только в `ReleaseHandle` одного класса
+        на вид дескриптора. Его один раз внимательно проверяют на review, а не ищут ошибки в десятках финализаторов.
+      - **Критическая финализация.** `SafeHandle` наследует `CriticalFinalizerObject`, поэтому страховка на случай
+        забытого `Dispose` уже встроена. Среди объектов, собранных одной сборкой, обычные финализаторы выполняются
+        раньше критических, так что финализатор владельца ещё может пользоваться дескриптором.
+      - **Защита во время нативного вызова.** `SafeHandle` ведёт счётчик ссылок, и маршалер P/Invoke увеличивает
+        его на время вызова. Дескриптор не закроется, пока с ним работает нативный код, и ОС не выдаст то же
+        значение другому объекту посреди вызова.
+      - **Простые владельцы.** Класс, который хранит `SafeHandle`, не нуждается в финализаторе: его `Dispose`
+        вызывает `Dispose` у дескриптора. Такие объекты не финализируемые и освобождаются первой же сборкой,
+        которая найдёт их недостижимыми.
+
+      Для внедрения стандарта достаточно правила на review: поле `IntPtr` с дескриптором и финализатор в
+      прикладном классе требуют обоснования. Для частых случаев уже есть готовые типы в
+      `Microsoft.Win32.SafeHandles`, например `SafeFileHandle` и `SafeWaitHandle`. Описание соответствует .NET 10.
+    linkTitles:
+      - "Класс SafeHandle"
+      - "Реализация метода Dispose"
+  en:
+    title: Which approach to wrapping unmanaged OS handles should a team adopt as its standard?
+    prompt: |
+      The team's services call native APIs through P/Invoke and work with OS handles: files, events, handles
+      returned by a third-party native library. Today every owning class stores its handle in an `IntPtr` field
+      and writes its own finalizer, and code reviews keep finding mistakes in those finalizers. As tech lead you
+      are writing one team standard for .NET 10 code. Which approach do you adopt?
+    hint: How many copies of the code that closes a handle should the codebase have, and what protects a handle while a native call is using it?
+    options:
+      a: "Keep `IntPtr` fields, but require the full dispose pattern in every owning class: a finalizer that calls `Dispose(false)`, a `Dispose(bool)` that closes the handle, and `GC.SuppressFinalize(this)` in `Dispose()`."
+      b: "Wrap each kind of handle in a class derived from `SafeHandle` (or use a ready one such as `SafeFileHandle`) that overrides `ReleaseHandle` and `IsInvalid`, and use it in P/Invoke signatures. Owning classes hold that object, have no finalizer, and their `Dispose` only disposes the handle."
+      c: "Keep `IntPtr` fields without finalizers and require `using` for every owner: on .NET 10 finalizers are not called at process exit anyway, so they add nothing."
+      d: "Register every opened handle in a static registry and close them all in an `AppDomain.ProcessExit` handler, so no handle is ever lost."
+    optionExplanations:
+      a: "The pattern itself is correct, but the release logic is copied into every owning class, and each copy can be wrong. An `IntPtr` field has no protection against the finalizer closing the handle while another thread is still inside a native call with it, after which the OS may hand the same handle value to a different object. Every owner also becomes finalizable, so its whole object graph survives an extra garbage collection."
+      c: "Finalizers are indeed not called at process exit, but they do run during the life of the process after a garbage collection. Without that safety net every forgotten `Dispose` leaks the handle until the process ends, and a long-running service eventually runs out of handles."
+      d: "A static field is a garbage collector root: the handles and their owners live until the process exits. For a long-running service that is a guaranteed leak, not protection. A handle must be released when its owner is done with it, not at the end of the process."
+    answer: "Wrap each kind of handle in a class derived from `SafeHandle` (or use a ready one), use it in P/Invoke, and give owning classes no finalizer: their `Dispose` simply disposes the `SafeHandle`."
+    explanation: |
+      The documentation on implementing `Dispose` explicitly recommends not writing your own finalizer for an
+      unmanaged resource and wrapping the handle in a `SafeHandle` object instead. As a team standard this pays off
+      for several reasons.
+
+      - **One place for release.** The code that closes a handle lives only in `ReleaseHandle` of one class per
+        kind of handle. It is reviewed carefully once, instead of hunting for bugs in dozens of finalizers.
+      - **Critical finalization.** `SafeHandle` derives from `CriticalFinalizerObject`, so the safety net for a
+        forgotten `Dispose` is built in. Among objects collected in the same collection, ordinary finalizers run
+        before critical ones, so an owner's finalizer can still use the handle.
+      - **Protection during a native call.** `SafeHandle` keeps a reference count, and the P/Invoke marshaller
+        increments it for the duration of the call. The handle is not closed while native code is using it, and
+        the OS cannot hand the same value to another object in the middle of the call.
+      - **Simple owners.** A class that holds a `SafeHandle` needs no finalizer: its `Dispose` calls `Dispose` on
+        the handle. Such objects are not finalizable and are freed by the first collection that finds them
+        unreachable.
+
+      To roll the standard out, a review rule is enough: an `IntPtr` field holding a handle, or a finalizer in an
+      application class, needs a justification. Common cases already have ready types in
+      `Microsoft.Win32.SafeHandles`, such as `SafeFileHandle` and `SafeWaitHandle`. The description matches .NET 10.
+    linkTitles:
+      - "SafeHandle class"
+      - "Implement a Dispose method"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

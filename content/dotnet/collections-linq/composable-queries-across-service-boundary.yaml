@@ -1,0 +1,151 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNP604EN18Q813FHKP
+slug: composable-queries-across-service-boundary
+stack: dotnet
+topic: collections-linq
+level: architect
+type: open
+grading: self
+tags: [iqueryable, odata, api-design, service-boundaries, expression-trees]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.linq.iqueryable
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/advanced-topics/expression-trees/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/web-api/overview/odata-support-in-aspnet-web-api/odata-security-guidance
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Стоит ли внутренним сервисам открывать клиентам компонуемые запросы в стиле IQueryable или OData?"
+    prompt: |
+      Несколько команд предлагают, чтобы внутренние сервисы отдавали клиентам компонуемые запросы вместо
+      фиксированных операций чтения: эндпоинт, принимающий параметры в стиле OData (`$filter`, `$orderby`,
+      `$expand`, `$top`), или библиотеку, которая отдаёт другим модулям `IQueryable<T>` над данными сервиса.
+      Сторонники говорят, что так не придётся добавлять эндпоинт под каждый новый экран.
+
+      Какие компромиссы такое решение несёт на горизонте нескольких лет и десятков клиентов и что вы решите
+      как архитектор?
+    hint: Кто после публикации такого эндпоинта решает, какой запрос уйдёт в базу, кто платит за его выполнение и кто теперь владеет схемой хранения?
+    answer: |
+      - **Решение.** По умолчанию остаются фиксированные, спроектированные под сценарий контракты запросов.
+        Компонуемые запросы допускаются как исключение: для конкретных сценариев чтения (списки, поиск,
+        фильтры в бэк-офисе), только поверх отдельной опубликованной модели чтения и только с жёсткими
+        ограничениями. Произвольная аналитика уходит в отдельное хранилище (реплика, хранилище данных), а не
+        в операционный сервис.
+      - **Связность со схемой.** Компонуемый запрос ссылается на поля и навигации. После публикации каждое поле
+        и каждая связь, по которым клиенты фильтруют, сортируют или раскрывают данные, становятся частью
+        контракта. Переименование столбца, разбиение таблицы, денормализация или переезд в другое хранилище
+        превращаются в ломающее изменение для клиентов, которых вы даже не знаете: по API уже не видно, какие
+        комбинации реально используются.
+      - **Неограниченная стоимость.** Форму запроса выбирает клиент, а платят сервис и его база. Фильтр по
+        неиндексированному столбцу, сортировка по вычисляемому полю, глубокий `$expand` или большой `$top`
+        дают полные сканирования, тяжёлые соединения и расход памяти. Индексы невозможно спроектировать под
+        открытое множество запросов, кэш планов засоряется множеством форм, а отчёт одного клиента замедляет
+        всех остальных.
+      - **Безопасность.** Поверхность запроса охватывает всё, что видно в модели. Раскрытие навигаций может
+        обойти авторизацию, которая задумывалась для фиксированных операций, поэтому правила доступа к строкам
+        и полям приходится встраивать в сам конвейер запроса, а не в отдельные эндпоинты.
+      - **Эксплуатация и развитие.** Бесконечное множество запросов трудно тестировать, кэшировать, нагрузку
+        трудно привязать к клиенту и закрыть SLO, хранилище трудно сменить. Передача `IQueryable<T>` через
+        границу модуля к тому же протаскивает ORM наружу: запрос выполняет вызывающий код позже, возможно уже
+        после освобождения `DbContext`, а переводится ли оператор в SQL, выясняется только во время выполнения.
+      - **Когда это окупается.** Много клиентов с действительно разнообразными потребностями чтения одних и тех
+        же данных, стабильная модель чтения, доступ только на чтение. Условия: белый список полей и операторов,
+        максимальный размер страницы и серверная пагинация, ограничение глубины раскрытия и сложности выражения,
+        таймауты запросов, лимиты на клиента, мониторинг форм запросов и версионирование модели чтения отдельно
+        от схемы хранения.
+      - **Цена фиксированных контрактов.** Новый экран может потребовать новый эндпоинт, но это цена явного
+        контракта: его можно покрыть индексом, тестом и метрикой и менять хранилище под ним. Промежуточный
+        вариант - типизированный контракт поиска с явным перечнем фильтров и ключей сортировки, которые сервис
+        сам переводит в выражения.
+    explanation: |
+      `IQueryable<T>` привлекателен тем, что запрос хранится как дерево выражений, а провайдер переводит его
+      в язык источника данных. На границе сервиса это же свойство и становится проблемой: дерево пишет клиент,
+      а переводится оно против хранилища сервера, то есть клиент фактически программирует чужую базу данных.
+      Внутри одного процесса и одной команды это удобная абстракция, через границу сервиса - удалённый язык
+      запросов, который придётся поддерживать годами.
+
+      Поэтому выбор идёт между гибкостью клиентов сейчас и свободой владельца данных потом: свободой менять
+      схему, предсказуемостью нагрузки и контролем доступа. На горизонте лет вторая сторона стоит дороже: если
+      поле можно запросить, кто-нибудь начнёт на него опираться, и удалить его будет уже нельзя.
+
+      Фреймворки OData сами предлагают ограничения: в ASP.NET Core OData у атрибута `EnableQuery` есть
+      `PageSize`, `MaxTop`, `MaxExpansionDepth` и `AllowedQueryOptions`, а руководство по безопасности OData
+      советует ограничивать допустимые запросы. Само наличие этих настроек показывает, что открытый вариант
+      по умолчанию слишком широк.
+
+      Сильный ответ отличает вызов внутри процесса от вызова через границу сервиса, называет модель стоимости и
+      владения схемой, не запрещает подход догматически, а задаёт условия, при которых он допустим, и путь для
+      произвольной аналитики (модель чтения, отдельное хранилище).
+    linkTitles:
+      - "Интерфейс IQueryable"
+      - "Деревья выражений в C#"
+      - "Руководство по безопасности OData в ASP.NET Web API"
+  en:
+    title: "Should internal services expose client-composable queries in the IQueryable or OData style?"
+    prompt: |
+      Several teams propose that internal services expose client-composable queries instead of fixed read
+      operations: an endpoint that accepts OData-style parameters (`$filter`, `$orderby`, `$expand`, `$top`),
+      or a library that hands other modules an `IQueryable<T>` over the service's data. Supporters say it removes
+      the need to add an endpoint for every new screen.
+
+      What trade-offs does this decision bring over several years and dozens of clients, and what do you decide
+      as the architect?
+    hint: Once such an endpoint is published, who decides which query reaches the database, who pays for running it, and who now owns the storage schema?
+    answer: |
+      - **Decision.** Fixed, purpose-built query contracts stay the default. Composable queries are allowed as an
+        exception: for specific read scenarios (lists, search, back-office filtering), only over a dedicated
+        published read model, and only with hard limits. Ad-hoc analytics go to a separate store (a replica,
+        a data warehouse), not to the operational service.
+      - **Coupling to the schema.** A composable query refers to fields and navigations. Once published, every
+        field and relation that clients filter, sort or expand on becomes part of the contract. Renaming a
+        column, splitting a table, denormalizing or moving to another store turns into a breaking change for
+        clients you may not even know about: the API no longer shows which combinations are actually in use.
+      - **Unbounded cost.** The client chooses the shape of the query, the service and its database pay for it.
+        A filter on a non-indexed column, a sort on a computed field, a deep `$expand` or a large `$top` produce
+        full scans, heavy joins and memory pressure. Indexes cannot be designed for an open set of queries, the
+        plan cache fills up with many query shapes, and one client's report slows down everyone else.
+      - **Security.** The query surface covers everything visible in the model. Expanding navigations can bypass
+        the authorization intended for fixed operations, so row and field access rules have to be enforced inside
+        the query pipeline itself, not in individual endpoints.
+      - **Operations and evolution.** An infinite set of queries is hard to test and cache, load is hard to
+        attribute to a client and cover with an SLO, and the store is hard to replace. Passing `IQueryable<T>`
+        across a module boundary also leaks the ORM: the caller executes the query later, possibly after the
+        `DbContext` is disposed, and whether an operator translates to SQL is known only at run time.
+      - **When it pays off.** Many clients with genuinely varied read needs over the same data, a stable read
+        model, read-only access. Conditions: an allowlist of fields and operators, a maximum page size and
+        server-side paging, limits on expansion depth and expression complexity, query timeouts, per-client
+        limits, monitoring of query shapes, and versioning of the read model separately from the storage schema.
+      - **The price of fixed contracts.** A new screen may need a new endpoint, but that is the price of an
+        explicit contract: you can back it with an index, a test and a metric, and change the storage under it.
+        A middle ground is a typed search contract with an explicit list of filters and sort keys that the
+        service translates into expressions itself.
+    explanation: |
+      `IQueryable<T>` is attractive because the query is stored as an expression tree that a provider translates
+      into the language of the data source. At a service boundary that same property becomes the problem: the
+      client writes the tree, and it is translated against the server's storage, so the client effectively
+      programs someone else's database. Inside one process and one team this is a convenient abstraction; across
+      a service boundary it is a remote query language that you will have to support for years.
+
+      So the choice is between client flexibility now and the data owner's freedom later: the freedom to change
+      the schema, predictable load and control over access. Over years the second side costs more: if a field can
+      be queried, someone will come to depend on it, and removing it will no longer be possible.
+
+      OData frameworks offer limits themselves: in ASP.NET Core OData the `EnableQuery` attribute has `PageSize`,
+      `MaxTop`, `MaxExpansionDepth` and `AllowedQueryOptions`, and the OData security guidance recommends
+      restricting the queries you accept. The very existence of these settings shows that the open default is
+      too wide.
+
+      A strong answer separates in-process calls from calls across a service boundary, names the cost model and
+      schema ownership, does not forbid the approach dogmatically, and instead sets the conditions under which it
+      is acceptable plus a path for ad-hoc analytics (a read model, a separate store).
+    linkTitles:
+      - "IQueryable interface"
+      - "Expression trees in C#"
+      - "Security guidance for ASP.NET Web API OData"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

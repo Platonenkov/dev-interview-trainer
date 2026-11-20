@@ -1,0 +1,178 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RMRB1H06F9TDG2FKB4
+slug: collectible-assemblyloadcontext-unload-blocked
+stack: dotnet
+topic: clr-gc
+level: senior
+type: open
+grading: self
+tags: [assemblies, assemblyloadcontext, unloading, plugins, memory-leaks]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/assembly/unloadability
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/dependency-loading/understanding-assemblyloadcontext
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как работает выгрузка collectible AssemblyLoadContext и почему сборки плагина остаются в памяти после Unload?
+    prompt: |
+      Приложение на .NET 10 загружает плагины в отдельный `AssemblyLoadContext`, созданный с `isCollectible: true`.
+      После вызова `Unload()` для контекста плагина сборки плагина по-прежнему видны в памяти процесса, а после
+      нескольких циклов загрузки и выгрузки потребление памяти только растёт.
+
+      1. Как устроена выгрузка collectible `AssemblyLoadContext` и что на самом деле делает `Unload()`?
+      2. Какие ссылки могут не дать контексту выгрузиться?
+      3. Как найти причину и как спроектировать хост, чтобы выгрузка работала надёжно?
+    hint: Кто на самом деле освобождает память сборок после вызова `Unload()`, и что ему может помешать?
+    answer: |
+      **Как работает выгрузка.**
+
+      - Контекст должен быть создан как collectible: `new AssemblyLoadContext(name, isCollectible: true)` или
+        наследник, передающий `isCollectible: true` в базовый конструктор. Сборки плагина загружаются в него,
+        например, через `LoadFromAssemblyPath`.
+      - `Unload()` только **начинает** выгрузку: вызывает событие `Unloading` и сразу возвращает управление.
+        В этот момент ничего не освобождается.
+      - Выгрузка кооперативная, её завершает сборщик мусора. Она завершится, только когда:
+        - ни в одном потоке на стеке вызовов нет методов из сборок этого контекста;
+        - на сами сборки, их типы и экземпляры этих типов нет ссылок извне контекста, кроме слабых
+          (`WeakReference`, `WeakReference<T>`), и нет сильных GC-хендлов (`GCHandleType.Normal`, `Pinned`),
+          причём хендлы мешают, даже если созданы внутри контекста.
+      - В отличие от `AppDomain.Unload` в .NET Framework, среда выполнения не прерывает потоки и не обнуляет
+        ссылки: если что-то ещё держит плагин, он просто остаётся в памяти, и ошибки при этом не будет.
+      - Проверить выгрузку можно так: держать на контекст только `WeakReference`, а работу с плагином вынести
+        в отдельный метод с `[MethodImpl(MethodImplOptions.NoInlining)]`. После `Unload()` в цикле вызывать
+        `GC.Collect()` и `GC.WaitForPendingFinalizers()`, пока `IsAlive` не станет `false` (может понадобиться
+        несколько сборок).
+
+      **Что удерживает контекст.**
+
+      - Ссылки хоста: поле, список плагинов, DI-контейнер или статический кэш хранит объект плагина, его `Type`,
+        `Assembly`, `MethodInfo` или делегат на его метод.
+      - Подписки на события: плагин подписался на событие хоста или на статическое событие фреймворка
+        (например, у `AppDomain.CurrentDomain`), и издатель держит делегат, цель которого - объект плагина.
+      - Работающий код: плагин запустил поток, фоновый цикл, `Timer` или зарегистрировал ожидание через
+        `RegisteredWaitHandle`, а очередь таймеров или пула потоков - это корень.
+      - Кэши, ключом в которых служит `Type`: кэши метаданных сериализаторов, рефлексии и т. п. в хосте или
+        общих библиотеках, куда попали типы плагина.
+      - Локальные переменные вызывающего метода, в том числе созданные JIT-компилятором слоты стека: они могут
+        держать объект плагина до конца метода, особенно в отладочной сборке.
+      - Сильные или закреплённые `GCHandle`, например созданные через `GCHandle.Alloc` и так и не освобождённые
+        через `Free`, причём неважно, внутри контекста или снаружи.
+
+      **Диагностика и проектирование.**
+
+      - Снять дамп процесса (`dotnet-dump collect`) и разобрать его командами SOS в `dotnet-dump analyze`
+        (или в WinDbg с SOS): например, `dumpheap` находит объекты, оставшиеся от невыгруженного контекста,
+        а `gcroot` показывает цепочку ссылок от корня до них.
+      - Контракт плагина (интерфейсы) держать в общей сборке, загруженной в контекст по умолчанию; хост хранит
+        ссылки на плагин в одном месте, обнуляет их при выгрузке и не держит локальных переменных с объектами
+        плагина в вызывающем методе.
+      - Требовать от плагина явной остановки (`IDisposable` или метод `Stop`): отписаться от событий,
+        остановить потоки и таймеры, дождаться завершения задач.
+      - Закрепить интеграционным тестом: загрузить, выгрузить и убедиться, что `WeakReference` на контекст умирает.
+    explanation: |
+      Код, типы и метаданные сборок collectible-контекста в CoreCLR привязаны к внутреннему объекту контекста
+      (`LoaderAllocator`), который живёт в управляемой куче. Любой экземпляр типа из такой сборки, сам `Type` или
+      делегат на метод плагина транзитивно удерживает этот объект. Поэтому выгрузка подчиняется тем же правилам,
+      что и обычная сборка мусора: пока от какого-либо корня (статического поля, стека потока, GC-хендла) есть путь
+      до чего-то из контекста, сборщик мусора не может его освободить. `Unload()` лишь инициирует выгрузку: среда
+      выполнения перестаёт удерживать контекст сама, и дальше его судьба зависит от того, остались ли на него ссылки.
+
+      Почему среда выполнения не выгружает принудительно: если бы код и типы освободились, пока на них есть ссылки
+      или пока поток выполняет метод плагина, следующий вызов обратился бы к освобождённой памяти. В .NET Framework
+      `AppDomain.Unload` решал это прерыванием потоков, а в .NET Core и далее выбран кооперативный подход:
+      безопасно, но ответственность за отсутствие ссылок лежит на хосте и плагине.
+
+      Отсюда типичная картина утечки: каждая итерация "загрузить - выгрузить" оставляет в памяти ещё один
+      контекст со всеми его сборками, потому что одна забытая подписка на событие или таймер держит весь граф.
+      Самая неочевидная ловушка - проверка выгрузки в том же методе, где шла работа с плагином: локальная
+      переменная или введённый JIT-компилятором слот стека может удерживать объект плагина до конца метода,
+      поэтому работу с плагином выносят в отдельный метод, который JIT не встроит. Описание соответствует .NET 10.
+    linkTitles:
+      - "Использование и отладка выгружаемости сборок в .NET"
+      - "Класс AssemblyLoadContext"
+  en:
+    title: How does unloading a collectible AssemblyLoadContext work, and why do plugin assemblies stay in memory after Unload?
+    prompt: |
+      A .NET 10 application loads plugins into a separate `AssemblyLoadContext` created with `isCollectible: true`.
+      After `Unload()` is called on a plugin's context, the plugin assemblies are still visible in the process
+      memory, and after several load and unload cycles memory usage only grows.
+
+      1. How does unloading a collectible `AssemblyLoadContext` work, and what does `Unload()` actually do?
+      2. Which references can keep the context from unloading?
+      3. How do you find the cause, and how do you design the host so that unloading works reliably?
+    hint: Who actually frees the memory of the assemblies after `Unload()` is called, and what can stop it?
+    answer: |
+      **How unloading works.**
+
+      - The context must be created as collectible: `new AssemblyLoadContext(name, isCollectible: true)` or a
+        derived class that passes `isCollectible: true` to the base constructor. Plugin assemblies are loaded into
+        it, for example with `LoadFromAssemblyPath`.
+      - `Unload()` only **starts** unloading: it raises the `Unloading` event and returns immediately. Nothing is
+        freed at that moment.
+      - Unloading is cooperative, and the garbage collector completes it. It completes only when:
+        - no thread has methods from the context's assemblies on its call stack;
+        - the assemblies, their types and instances of those types are not referenced from outside the context,
+          except by weak references (`WeakReference`, `WeakReference<T>`), and no strong GC handles
+          (`GCHandleType.Normal`, `Pinned`) point to them, even handles created inside the context.
+      - Unlike `AppDomain.Unload` in .NET Framework, the runtime does not abort threads or clear references: if
+        something still holds the plugin, it simply stays in memory, and no error is reported.
+      - To check unloading, hold only a `WeakReference` to the context and move the work with the plugin into a
+        separate method marked `[MethodImpl(MethodImplOptions.NoInlining)]`. After `Unload()`, call `GC.Collect()`
+        and `GC.WaitForPendingFinalizers()` in a loop until `IsAlive` becomes `false` (several collections may be
+        needed).
+
+      **What keeps the context alive.**
+
+      - Host references: a field, a plugin list, the DI container or a static cache holds a plugin object, its
+        `Type`, `Assembly`, `MethodInfo` or a delegate to one of its methods.
+      - Event subscriptions: the plugin subscribed to a host event or a static framework event (for example on
+        `AppDomain.CurrentDomain`), and the publisher holds a delegate whose target is a plugin object.
+      - Running code: the plugin started a thread, a background loop, a `Timer`, or registered a wait through a
+        `RegisteredWaitHandle`, and the timer queue or the thread pool is a root.
+      - Caches keyed by `Type`: serializer metadata caches, reflection caches and the like in the host or shared
+        libraries that plugin types ended up in.
+      - Local variables of the calling method, including stack slots introduced by the JIT: they can keep a plugin
+        object alive until the end of the method, especially in a Debug build.
+      - Strong or pinned `GCHandle`s, for example one created with `GCHandle.Alloc` and never released with `Free`,
+        whether it was created inside the context or outside it.
+
+      **Diagnosis and design.**
+
+      - Take a process dump (`dotnet-dump collect`) and inspect it with SOS commands in `dotnet-dump analyze`
+        (or WinDbg with SOS): for example, `dumpheap` finds the objects left over from the context that did not
+        unload, and `gcroot` shows the chain of references from a root to them.
+      - Keep the plugin contract (interfaces) in a shared assembly loaded into the default context; the host keeps
+        plugin references in one place, clears them when unloading, and keeps no local variables with plugin
+        objects in the calling method.
+      - Require an explicit stop from the plugin (`IDisposable` or a `Stop` method): unsubscribe from events,
+        stop threads and timers, wait for tasks to finish.
+      - Lock it in with an integration test: load, unload and assert that the `WeakReference` to the context dies.
+    explanation: |
+      In CoreCLR the code, types and metadata of a collectible context's assemblies are tied to an internal object of
+      the context (`LoaderAllocator`) that lives on the managed heap. Any instance of a type from such an assembly,
+      the `Type` itself, or a delegate to a plugin method transitively keeps that object alive. So unloading follows
+      the same rules as an ordinary garbage collection: as long as there is a path from some root (a static field, a
+      thread stack, a GC handle) to anything from the context, the garbage collector cannot free it. `Unload()` only
+      initiates unloading: the runtime stops keeping the context alive on its own, and from then on its fate depends
+      on whether any references to it remain.
+
+      Why the runtime does not unload by force: if the code and types were freed while references to them existed
+      or while a thread was running a plugin method, the next call would touch freed memory. In .NET Framework
+      `AppDomain.Unload` solved this by aborting threads; .NET Core and later chose a cooperative approach: it is
+      safe, but the host and the plugin are responsible for leaving no references.
+
+      Hence the typical leak: every "load, unload" iteration leaves one more context with all its assemblies in
+      memory, because one forgotten event subscription or timer holds the whole graph. The least obvious trap is
+      checking unloading in the same method that worked with the plugin: a local variable or a stack slot introduced
+      by the JIT can keep a plugin object alive until the end of the method, which is why the work with the plugin
+      goes into a separate method that the JIT will not inline. The description matches .NET 10.
+    linkTitles:
+      - "How to use and debug assembly unloadability in .NET"
+      - "About System.Runtime.Loader.AssemblyLoadContext"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

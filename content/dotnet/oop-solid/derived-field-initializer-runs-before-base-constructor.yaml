@@ -1,0 +1,146 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPJC8RH9V9KXH7A0T3
+slug: derived-field-initializer-runs-before-base-constructor
+stack: dotnet
+topic: oop-solid
+level: senior
+type: output
+grading: auto
+tags: [inheritance, constructors, field-initializers]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    new Derived();
+
+    static class Log
+    {
+        public static int Write(string message)
+        {
+            Console.Write(message);
+            return 0;
+        }
+    }
+
+    class Base
+    {
+        public readonly int BaseMarker = Log.Write("base-field ");
+
+        public Base() => Console.Write("base-ctor ");
+    }
+
+    class Derived : Base
+    {
+        public readonly int DerivedMarker = Log.Write("derived-field ");
+
+        public Derived() => Console.Write("derived-ctor");
+    }
+expect:
+  kind: output
+  value: "derived-field base-field base-ctor derived-ctor"
+acceptedOutputs: ["derived-field base-field base-ctor derived-ctor"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "derived-field base-field base-ctor derived-ctor" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "base-field base-ctor derived-field derived-ctor" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "base-field derived-field base-ctor derived-ctor" }
+  - id: d
+    correct: false
+    expect: { kind: output, value: "base-ctor base-field derived-ctor derived-field" }
+  - id: e
+    correct: false
+    expect: { kind: compile-error }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/language-specification/classes
+    lang: en
+    kind: spec
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/classes-and-structs/constructors
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: В каком порядке выполняются инициализаторы полей и конструкторы базового и производного классов?
+    prompt: |
+      Оба класса пишут сообщение в консоль из инициализатора поля и из тела конструктора.
+      Что выведет эта программа (C# 14, .NET 10)?
+    hint: Во что компилятор превращает инициализаторы полей и где они оказываются относительно неявного вызова `base()`?
+    options:
+      a: "derived-field base-field base-ctor derived-ctor"
+      b: "base-field base-ctor derived-field derived-ctor"
+      c: "base-field derived-field base-ctor derived-ctor"
+      d: "base-ctor base-field derived-ctor derived-field"
+      e: Ошибка компиляции
+    optionExplanations:
+      b: "Это порядок Java, где инициализаторы полей производного класса выполняются после вызова `super(...)`. В C# инициализаторы производного класса выполняются до вызова конструктора базового класса."
+      c: "Инициализаторы выполняются внутри конструктора своего класса. Конструктор `Derived` сначала выполняет свои инициализаторы и только потом вызывает конструктор `Base`, который уже выполняет инициализаторы `Base`."
+      d: "Инициализаторы полей выполняются до тела конструктора своего класса, а не после него: компилятор вставляет их в начало конструктора."
+      e: "В инициализаторе поля нельзя обращаться к экземпляру и его членам (ошибка CS0236), но вызов статического метода разрешён. `new Derived();` - допустимая инструкция, а объявления типов после инструкций верхнего уровня разрешены."
+    answer: "derived-field base-field base-ctor derived-ctor"
+    explanation: |
+      Спецификация C# описывает инициализаторы переменных экземпляра так: компилятор превращает их в
+      присваивания и выполняет их в конструкторе экземпляра до вызова конструктора базового класса.
+      Поэтому создание `Derived` проходит так:
+
+      1. инициализаторы полей `Derived` - `derived-field`;
+      2. неявный вызов `base()`: конструктор `Base` выполняет свои инициализаторы - `base-field`, затем своё
+         тело - `base-ctor`;
+      3. тело конструктора `Derived` - `derived-ctor`.
+
+      Такой порядок гарантирует, что к моменту, когда какой-либо код получает доступ к объекту, все поля уже
+      получили значения из своих инициализаторов. Практическое следствие: если конструктор базового класса
+      вызывает виртуальный метод, переопределение в производном классе увидит поля, заданные
+      инициализаторами, но не значения, которые присваивает тело конструктора производного класса: оно ещё
+      не выполнялось.
+
+      В Java и C++ поля производного класса инициализируются после конструктора базового, поэтому этот
+      порядок часто путают. Поведение описано для C# 14 и .NET 10.
+    linkTitles:
+      - "Спецификация C#: классы"
+      - "Конструкторы (руководство по программированию на C#)"
+  en:
+    title: In what order do field initializers and the base and derived constructors run?
+    prompt: |
+      Both classes write a message to the console from a field initializer and from the constructor body.
+      What does this program print (C# 14, .NET 10)?
+    hint: What does the compiler turn field initializers into, and where do they end up relative to the implicit `base()` call?
+    options:
+      a: "derived-field base-field base-ctor derived-ctor"
+      b: "base-field base-ctor derived-field derived-ctor"
+      c: "base-field derived-field base-ctor derived-ctor"
+      d: "base-ctor base-field derived-ctor derived-field"
+      e: Compile error
+    optionExplanations:
+      b: "That is the Java order, where field initializers of the derived class run after the `super(...)` call. In C# the derived class initializers run before the base class constructor is called."
+      c: "Initializers run inside the constructor of their own class. The `Derived` constructor first runs its own initializers and only then calls the `Base` constructor, which runs the `Base` initializers."
+      d: "Field initializers run before the body of their class constructor, not after it: the compiler places them at the start of the constructor."
+      e: "A field initializer cannot reference the instance or its members (error CS0236), but calling a static method is allowed. `new Derived();` is a valid statement, and type declarations after top-level statements are allowed."
+    answer: "derived-field base-field base-ctor derived-ctor"
+    explanation: |
+      The C# specification describes instance variable initializers like this: the compiler turns them into
+      assignments and runs them in the instance constructor before the base class constructor is invoked.
+      So creating a `Derived` goes like this:
+
+      1. the field initializers of `Derived` - `derived-field`;
+      2. the implicit `base()` call: the `Base` constructor runs its own initializers - `base-field`, then its
+         body - `base-ctor`;
+      3. the body of the `Derived` constructor - `derived-ctor`.
+
+      This order guarantees that by the time any code can access the object, every field already holds the
+      value from its initializer. A practical consequence: if the base constructor calls a virtual method, the
+      override in the derived class sees the fields set by initializers, but not the values assigned in the
+      derived constructor body, because that body has not run yet.
+
+      In Java and C++ the derived fields are initialized after the base constructor, which is why this order
+      is often confused. The behaviour is described for C# 14 and .NET 10.
+    linkTitles:
+      - "C# specification: Classes"
+      - "Constructors (C# programming guide)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

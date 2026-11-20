@@ -1,0 +1,171 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RP3R0GNMMA295NXGJQ
+slug: crash-vs-catch-all-policy-background-workers
+stack: dotnet
+topic: exceptions
+level: architect
+type: open
+grading: self
+tags: [background-service, hosting, unhandled-exceptions, resilience, idempotency, fail-fast]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/core/compatibility/core-libraries/6.0/hosting-exception-handling
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/microsoft.extensions.hosting.hostoptions.backgroundserviceexceptionbehavior
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/extensions/workers
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Должен ли фоновый воркер .NET падать при неожиданном исключении или перехватывать его и продолжать цикл?
+    prompt: |
+      В компании десятки worker-сервисов на .NET 10: они читают очереди, обрабатывают задания и синхронизируют
+      данные в цикле внутри `BackgroundService`. Одни команды оборачивают весь цикл в `catch (Exception)`,
+      логируют ошибку и продолжают, другие дают исключению выйти из `ExecuteAsync`.
+
+      Какую политику вы установите для всех сервисов: перехватывать неожиданное исключение и продолжать цикл
+      или позволить процессу упасть? Что должна обеспечить платформа, чтобы выбранный вариант был безопасным?
+    hint: |
+      Что вы знаете о состоянии процесса после исключения, которого никто не ожидал? И что должно произойти
+      с незавершённой работой, если процесс завершится посреди неё?
+    answer: |
+      **Коротко.** Не перехватывать всё вокруг всего цикла. Изолировать понятные сбои на границе единицы работы,
+      а всё остальное пусть завершает процесс, но только на платформе, где падение превращается в быстрый,
+      безопасный и заметный перезапуск.
+
+      1. **Различать два вида `catch`.**
+         - **Граница единицы работы.** Каждое сообщение или задание выполняется в своей области DI и своей
+           транзакции. Сбой логируется один раз с идентификатором элемента, элемент повторяется с задержкой, а
+           после N попыток уходит в очередь недоставленных сообщений (DLQ). Всё состояние, которое трогал элемент,
+           выбрасывается вместе с областью, поэтому переходить к следующему элементу безопасно. Это обработка,
+           а не проглатывание.
+         - **Перехват всего вокруг цикла** (`catch (Exception) { log; continue; }`) ловит и сбои общего
+           состояния: синглтонов, кэшей, пулов соединений, буферов в памяти, наполовину применённого пакета.
+           После неожиданного исключения это состояние может быть несогласованным, и никто не знает, какой
+           инвариант нарушен. Процесс жив, проверка здоровья зелёная, а он ничего не обрабатывает, сыплет одной
+           и той же ошибкой каждую секунду или портит данные.
+      2. **Опереться на поведение по умолчанию.** Начиная с .NET 6 исключение, вышедшее из
+         `BackgroundService.ExecuteAsync`, логируется и останавливает хост
+         (`HostOptions.BackgroundServiceExceptionBehavior` по умолчанию равно `StopHost`). До .NET 6 задача
+         завершалась с ошибкой молча: сервис переставал работать, а процесс продолжал жить. Значение `Ignore`
+         возвращает старое поведение, и стандарт компании его запрещает. В .NET 10 умолчание то же.
+      3. **Что обязана дать платформа, чтобы падение было безопасным.**
+         - **Супервизор с перезапуском:** Kubernetes с `restartPolicy: Always`, systemd с `Restart=`, управляемый
+           хостинг. Перезапуск идёт с нарастающей задержкой, чтобы цикл падений не добивал зависимости.
+         - **Долговечная и возобновляемая работа:** источник правды вне процесса. Сообщение подтверждается только
+           после обработки, смещение Kafka фиксируется после обработки, у длинных заданий есть контрольные точки.
+           Доставка получается «как минимум один раз», поэтому обработчики идемпотентны: ключ идемпотентности,
+           таблица inbox, upsert.
+         - **Обработка «ядовитых» сообщений:** лимит попыток доставки и DLQ. Иначе одно плохое сообщение роняет
+           по очереди все реплики.
+         - **Корректная остановка:** код учитывает `stoppingToken` и успевает завершить или отпустить текущий
+           элемент за `HostOptions.ShutdownTimeout`.
+         - **Наблюдаемость:** логи доставляются до выхода процесса, есть метрика числа перезапусков и алерт на
+           CrashLoopBackOff, включены дампы при падении, проверено, с каким кодом выхода завершается воркер.
+         - **Liveness-проба по прогрессу:** цикл обновляет «пульс», и проба проверяет его свежесть, потому что
+           зависший цикл - это не падение, и супервизор его сам не заметит.
+      4. **Закрепить на уровне всего парка сервисов.** Общий шаблон воркера с конвейером для элемента (область,
+         повторы, DLQ, метрики), `StopHost` без переопределения, правило code review: `catch (Exception)` только
+         на границе единицы работы. Один упавший `BackgroundService` останавливает весь хост, поэтому несвязанные
+         воркеры, которые не должны ронять друг друга, живут в разных процессах. Работа с внешними побочными
+         эффектами без ключей идемпотентности требует отдельного проектирования (outbox, дедупликация у
+         получателя), прежде чем на неё распространяется политика «падать».
+    explanation: |
+      Ключевой вопрос - что известно о состоянии процесса после исключения, которого никто не ожидал. На
+      границе единицы работы ответ есть: всё состояние элемента принадлежит одной области и одной транзакции и
+      выбрасывается целиком. Вокруг всего цикла ответа нет: исключение могло прервать изменение общего
+      состояния на полпути. Продолжать работу в таком процессе - значит ставить доступность выше корректности,
+      причём доступность мнимую: метрики и проверки здоровья показывают живой сервис, который на деле сломан.
+
+      Падение превращает неизвестное состояние в известное - чистый новый процесс. Но у этого есть цена:
+      прерывается вся работа в процессе, есть холодный старт, а детерминированная ошибка даёт цикл падений.
+      Поэтому «пусть падает» - решение не отдельной команды, а свойство платформы: перезапуск, работа во
+      внешнем долговечном хранилище, идемпотентность, DLQ и алерты. Без них падение теряет данные или
+      незаметно останавливает обработку, и команды из страха снова оборачивают всё в `catch`.
+
+      Изменение в .NET 6 показывает, что сама платформа .NET выбрала этот путь: раньше упавший
+      `BackgroundService` молча оставлял процесс-зомби, теперь по умолчанию останавливается хост. Задача
+      архитектора - не отключать это поведение через `Ignore`, а построить вокруг него инфраструктуру, в которой
+      остановка хоста безопасна.
+    linkTitles:
+      - "Необработанные исключения BackgroundService останавливают хост (.NET 6)"
+      - "Свойство HostOptions.BackgroundServiceExceptionBehavior"
+      - "Worker-сервисы в .NET"
+  en:
+    title: Should a .NET background worker crash on an unexpected exception or catch it and keep looping?
+    prompt: |
+      Your company runs dozens of .NET 10 worker services: they read queues, process jobs and synchronize data in
+      a loop inside a `BackgroundService`. Some teams wrap the whole loop in `catch (Exception)`, log the error
+      and continue; others let the exception escape `ExecuteAsync`.
+
+      What policy do you set for all services: catch an unexpected exception and continue the loop, or let the
+      process crash? What must the platform provide to make the chosen option safe?
+    hint: |
+      What do you know about the state of the process after an exception that nobody expected? And what must
+      happen to unfinished work if the process ends in the middle of it?
+    answer: |
+      **In short.** Do not catch everything around the whole loop. Isolate understood failures at the
+      unit-of-work boundary, and let anything else end the process, but only on a platform that turns a crash
+      into a fast, safe and visible restart.
+
+      1. **Tell two kinds of `catch` apart.**
+         - **The unit-of-work boundary.** Each message or job runs in its own DI scope and its own transaction. A
+           failure is logged once with the item id, the item is retried with a delay, and after N attempts it goes
+           to a dead-letter queue (DLQ). All state the item touched is thrown away with the scope, so moving on to
+           the next item is safe. This is handling, not swallowing.
+         - **A catch-all around the loop** (`catch (Exception) { log; continue; }`) also catches failures of shared
+           state: singletons, caches, connection pools, in-memory buffers, a half-applied batch. After an
+           unexpected exception that state may be inconsistent, and nobody knows which invariant is broken. The
+           process is alive and its health check is green, yet it processes nothing, logs the same error every
+           second, or corrupts data.
+      2. **Rely on the default behavior.** Since .NET 6 an exception that escapes `BackgroundService.ExecuteAsync`
+         is logged and stops the host (`HostOptions.BackgroundServiceExceptionBehavior` defaults to `StopHost`).
+         Before .NET 6 the task faulted silently: the service stopped working while the process stayed alive. The
+         `Ignore` value brings the old behavior back, and the company standard forbids it. In .NET 10 the default
+         is the same.
+      3. **What the platform must provide for a crash to be safe.**
+         - **A supervisor that restarts:** Kubernetes with `restartPolicy: Always`, systemd with `Restart=`, a
+           managed host. Restarts back off, so a crash loop does not hammer dependencies.
+         - **Durable, resumable work:** the source of truth is outside the process. A message is acknowledged only
+           after processing, a Kafka offset is committed after processing, long jobs have checkpoints. Delivery
+           becomes at-least-once, so handlers are idempotent: an idempotency key, an inbox table, an upsert.
+         - **Poison message handling:** a maximum delivery count and a DLQ. Otherwise one bad message takes down
+           every replica in turn.
+         - **Graceful shutdown:** the code honors `stoppingToken` and finishes or releases the current item within
+           `HostOptions.ShutdownTimeout`.
+         - **Observability:** logs are shipped before the process exits, there is a restart count metric and an
+           alert on CrashLoopBackOff, crash dumps are enabled, and the exit code of the worker is checked.
+         - **A liveness probe based on progress:** the loop updates a heartbeat and the probe checks that it is
+           fresh, because a hung loop is not a crash and the supervisor will not notice it on its own.
+      4. **Make it a fleet standard.** A shared worker template with a per-item pipeline (scope, retries, DLQ,
+         metrics), `StopHost` left as is, and a code review rule: `catch (Exception)` only at the unit-of-work
+         boundary. One failed `BackgroundService` stops the whole host, so unrelated workers that must not take
+         each other down run in separate processes. Work with external side effects and no idempotency keys needs
+         its own design (outbox, deduplication at the receiver) before the "crash" policy applies to it.
+    explanation: |
+      The key question is what you know about the state of the process after an exception nobody expected. At
+      the unit-of-work boundary there is an answer: all state of the item belongs to one scope and one
+      transaction and is discarded as a whole. Around the whole loop there is no answer: the exception may have
+      interrupted a change to shared state halfway. Continuing in such a process puts availability above
+      correctness, and the availability is an illusion: metrics and health checks show a live service that is
+      actually broken.
+
+      A crash turns an unknown state into a known one, a clean new process. But it has a cost: all work in the
+      process is interrupted, there is a cold start, and a deterministic bug produces a crash loop. That is why
+      "let it crash" is not a single team's decision but a property of the platform: restarts, work kept in
+      durable external storage, idempotency, DLQs and alerts. Without them a crash loses data or silently stops
+      processing, and teams go back to wrapping everything in `catch` out of fear.
+
+      The .NET 6 change shows that .NET itself chose this path: a failed `BackgroundService` used to leave a
+      zombie process silently, and now the host stops by default. The architect's job is not to switch this
+      off with `Ignore`, but to build the infrastructure in which stopping the host is safe.
+    linkTitles:
+      - "Unhandled exceptions from a BackgroundService stop the host (.NET 6)"
+      - "HostOptions.BackgroundServiceExceptionBehavior property"
+      - "Worker services in .NET"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

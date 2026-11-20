@@ -1,0 +1,154 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNDTNWJYQ7VKG07ZCX
+slug: iqueryable-expression-provider-pipeline
+stack: dotnet
+topic: collections-linq
+level: senior
+type: open
+grading: self
+tags: [linq, iqueryable, iqueryprovider, expression-trees, deferred-execution]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.linq.iqueryable
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.linq.iqueryprovider
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.linq.queryable.where
+    lang: en
+    kind: docs
+  - url: https://github.com/dotnet/runtime/blob/main/src/libraries/System.Linq.Queryable/src/System/Linq/Queryable.cs
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что хранят свойства Expression и Provider у IQueryable<T> и как цепочка Where и Select доходит до источника данных?
+    prompt: |
+      Что хранят свойства `Expression` и `Provider` у `IQueryable<T>`? Опишите по шагам, что происходит, когда над
+      `IQueryable<Order>` вызывают `Where(o => o.Total > 100)`, затем `Select(o => o.Id)`, а потом перебирают
+      результат в `foreach`. В какой момент и кем выполняется запрос? Чем от этого отличаются `Count()` и `First()`?
+    hint: "Посмотрите на тип параметра `Queryable.Where` и на то, что этот метод возвращает. Где вообще мог бы выполниться предикат в момент вызова `Where`?"
+    answer: |
+      - **Что хранит объект.** `IQueryable<T>` - это `IEnumerable<T>` плюс три свойства `IQueryable`: `ElementType`
+        (тип элементов результата), `Expression` (дерево выражений, описывающее весь запрос, построенный к этому
+        моменту) и `Provider` (`IQueryProvider`, который умеет строить новые запросы через `CreateQuery` и выполнять
+        их через `Execute`). Ни данных, ни результатов в объекте нет: это описание запроса и ссылка на того, кто
+        его выполнит.
+      - **Корень.** У исходного запроса (`DbSet<Order>` в EF Core или `list.AsQueryable()`) дерево состоит из
+        одного узла, который обозначает сам источник. Для `AsQueryable()` это `ConstantExpression`, у EF Core -
+        собственный узел корня запроса.
+      - **Компиляция.** `Where` над `IQueryable<Order>` связывается с `Queryable.Where`, параметр которого имеет тип
+        `Expression<Func<Order, bool>>`. Поэтому компилятор превращает лямбду не в делегат, а в код, который
+        строит дерево выражений для неё.
+      - **Where.** `Queryable.Where` предикат не вызывает. Он строит `MethodCallExpression` - вызов самого
+        `Queryable.Where<Order>` с аргументами `source.Expression` и деревом лямбды (обёрнутым в узел `Quote`) - и
+        возвращает `source.Provider.CreateQuery<Order>(...)`. Провайдер создаёт новый `IQueryable<Order>` с тем же
+        провайдером и новым деревом. К источнику данных никто не обращается.
+      - **Select.** То же самое: новый `MethodCallExpression` для `Queryable.Select<Order, int>` оборачивает
+        предыдущее дерево, вызывается `CreateQuery<int>`. Теперь дерево выглядит как
+        `Select(Where(root, lambda1), lambda2)`, а `ElementType` равен `int`.
+      - **Перебор.** `foreach` вызывает `GetEnumerator` у последнего объекта. Только сейчас провайдер получает всё
+        дерево целиком, переводит его (EF Core - в один SQL-запрос с `WHERE` и списком столбцов), выполняет и
+        материализует результат. `EnumerableQuery<T>` от `AsQueryable()` вместо этого переписывает вызовы
+        `Queryable` на `Enumerable`, компилирует дерево в делегаты и выполняет их в памяти.
+      - **Операторы с одним значением.** `Count`, `First`, `Any`, `Sum` тоже строят `MethodCallExpression`, но
+        передают его в `Provider.Execute<TResult>` и поэтому выполняют запрос сразу, в момент вызова.
+      - **Повторный перебор.** Каждый новый `GetEnumerator` снова передаёт дерево провайдеру, то есть запрос
+        выполняется заново.
+    explanation: |
+      Ключевая идея - дерево выражений является данными, а делегат нет. Делегат можно только вызвать, а дерево
+      провайдер может обойти и увидеть всю цепочку операторов сразу. Поэтому `Where` и `Select` не выполняются по
+      отдельности: провайдер склеивает их в один запрос к источнику. Документация `Queryable.Where` прямо описывает
+      этот механизм: метод создаёт `MethodCallExpression`, представляющий вызов самого себя, и передаёт его в
+      `CreateQuery` провайдера из свойства `Provider`. Документация `IQueryable` добавляет, что запросы с
+      последовательностью в результате выполняются при перечислении, а запросы с одним значением - через `Execute`.
+
+      Из этого следуют практические выводы, которые стоит назвать на собеседовании:
+
+      - **Ошибки перевода видны поздно.** Не любое выражение C# провайдер умеет перевести. `Where` с вызовом
+        собственного метода компилируется и вызывается без ошибок, а исключение возникает только при `foreach`,
+        `ToList` или `Count`, и стек указывает туда, а не на построение запроса.
+      - **Оператор выбирается по статическому типу.** Если переменная объявлена как `IEnumerable<Order>`, компилятор
+        свяжет `Where` с `Enumerable.Where`, даже если объект во время выполнения реализует `IQueryable<Order>`, и
+        фильтр уйдёт в память.
+      - **Захваченные переменные попадают в дерево.** Локальная переменная из лямбды становится узлом обращения к
+        полю объекта-замыкания. EF Core превращает такие узлы в параметры SQL, поэтому её значение читается в
+        момент выполнения, а не в момент вызова `Where`.
+      - **Построение дешёвое, выполнение не бесплатное.** Создание узлов почти ничего не стоит. Каждое выполнение
+        всё равно обходит дерево и обращается к источнику: EF Core извлекает значения параметров и ищет форму
+        запроса в своём кэше скомпилированных запросов, поэтому полный перевод в SQL оплачивается только при первом
+        выполнении новой формы, а обращение к базе - каждый раз. Константа, вписанная прямо в лямбду вместо
+        захваченной переменной, даёт новую форму запроса для каждого значения. Если результат нужен несколько раз,
+        его материализуют один раз.
+    linkTitles:
+      - "Интерфейс IQueryable"
+      - "Интерфейс IQueryProvider"
+      - "Метод Queryable.Where"
+      - "Исходный код Queryable в dotnet/runtime"
+  en:
+    title: What do IQueryable<T>.Expression and Provider hold, and how does a chain of Where and Select reach the data source?
+    prompt: |
+      What do the `Expression` and `Provider` properties of `IQueryable<T>` hold? Describe step by step what happens
+      when you call `Where(o => o.Total > 100)` on an `IQueryable<Order>`, then `Select(o => o.Id)`, and then iterate
+      the result with `foreach`. When is the query executed, and by whom? How do `Count()` and `First()` differ?
+    hint: "Look at the parameter type of `Queryable.Where` and at what this method returns. Where could the predicate even run at the moment `Where` is called?"
+    answer: |
+      - **What the object holds.** `IQueryable<T>` is `IEnumerable<T>` plus the three properties of `IQueryable`:
+        `ElementType` (the element type of the result), `Expression` (the expression tree describing the whole query
+        built so far) and `Provider` (the `IQueryProvider` that can build new queries with `CreateQuery` and run them
+        with `Execute`). The object holds no data and no results: it is a description of the query and a reference
+        to whoever will run it.
+      - **The root.** For the initial query (`DbSet<Order>` in EF Core or `list.AsQueryable()`) the tree is a single
+        node that stands for the source itself. For `AsQueryable()` it is a `ConstantExpression`; EF Core uses its
+        own query root node.
+      - **Compile time.** `Where` over an `IQueryable<Order>` binds to `Queryable.Where`, whose parameter has the type
+        `Expression<Func<Order, bool>>`. So the compiler turns the lambda not into a delegate but into code that
+        builds an expression tree for it.
+      - **Where.** `Queryable.Where` does not call the predicate. It builds a `MethodCallExpression` - a call of
+        `Queryable.Where<Order>` itself with the arguments `source.Expression` and the lambda tree (wrapped in a
+        `Quote` node) - and returns `source.Provider.CreateQuery<Order>(...)`. The provider creates a new
+        `IQueryable<Order>` with the same provider and the new tree. Nothing touches the data source.
+      - **Select.** The same again: a new `MethodCallExpression` for `Queryable.Select<Order, int>` wraps the previous
+        tree, and `CreateQuery<int>` is called. The tree now looks like `Select(Where(root, lambda1), lambda2)`, and
+        `ElementType` is `int`.
+      - **Enumeration.** `foreach` calls `GetEnumerator` on the last object. Only now does the provider receive the
+        whole tree, translate it (EF Core: into one SQL query with a `WHERE` clause and a column list), run it and
+        materialize the result. The `EnumerableQuery<T>` from `AsQueryable()` instead rewrites the `Queryable` calls
+        into `Enumerable` calls, compiles the tree into delegates and runs them in memory.
+      - **Single-value operators.** `Count`, `First`, `Any` and `Sum` also build a `MethodCallExpression`, but pass it
+        to `Provider.Execute<TResult>`, so they run the query immediately, at the moment of the call.
+      - **Enumerating again.** Every new `GetEnumerator` hands the tree to the provider again, so the query runs again.
+    explanation: |
+      The key idea is that an expression tree is data and a delegate is not. A delegate can only be invoked, while a
+      provider can walk a tree and see the whole chain of operators at once. That is why `Where` and `Select` do not
+      run separately: the provider merges them into one query for the source. The `Queryable.Where` documentation
+      describes this mechanism directly: the method creates a `MethodCallExpression` that represents calling itself
+      and passes it to `CreateQuery` of the provider from the `Provider` property. The `IQueryable` documentation adds
+      that queries returning a sequence run when they are enumerated, and queries returning a single value run
+      through `Execute`.
+
+      This leads to practical consequences worth naming in an interview:
+
+      - **Translation errors show up late.** Not every C# expression can be translated by a provider. A `Where` with
+        a call to your own method compiles and is called without errors, and the exception appears only at
+        `foreach`, `ToList` or `Count`, with a stack trace pointing there rather than to where the query was built.
+      - **The operator is chosen by the static type.** If a variable is declared as `IEnumerable<Order>`, the compiler
+        binds `Where` to `Enumerable.Where` even if the object implements `IQueryable<Order>` at run time, and the
+        filter runs in memory.
+      - **Captured variables end up in the tree.** A local variable used in the lambda becomes a node that accesses a
+        field of the closure object. EF Core turns such nodes into SQL parameters, so the variable's value is read
+        when the query runs, not when `Where` is called.
+      - **Building is cheap, executing is not free.** Creating nodes costs almost nothing. Every execution still
+        walks the tree and goes to the source: EF Core extracts the parameter values and looks the query shape up in
+        its compiled-query cache, so the full translation into SQL is paid only on the first run of a new shape,
+        while the round trip to the database is paid every time. A constant written directly into the lambda instead
+        of a captured variable produces a new query shape for each value. If the result is needed several times,
+        materialize it once.
+    linkTitles:
+      - "IQueryable interface"
+      - "IQueryProvider interface"
+      - "Queryable.Where method"
+      - "Queryable source in dotnet/runtime"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

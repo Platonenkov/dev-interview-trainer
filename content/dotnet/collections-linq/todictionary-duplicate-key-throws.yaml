@@ -1,0 +1,121 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RMA2457GXDT2KG8569
+slug: todictionary-duplicate-key-throws
+stack: dotnet
+topic: collections-linq
+level: middle
+type: find-bug
+grading: auto
+tags: [linq, todictionary, tolookup, groupby, dictionary]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    List<Order> orders = new()
+    {
+        new Order(1, "alice"),
+        new Order(2, "bob"),
+        new Order(3, "alice"),
+    };
+
+    Dictionary<string, List<Order>> byCustomer = orders.ToDictionary(o => o.Customer, o => new List<Order> { o });
+
+    Console.WriteLine(string.Join(",", byCustomer["alice"].Select(o => o.Id)));
+
+    record Order(int Id, string Customer);
+bugLineSets: [[8]]
+fixedSource: |
+  List<Order> orders = new()
+  {
+      new Order(1, "alice"),
+      new Order(2, "bob"),
+      new Order(3, "alice"),
+  };
+
+  ILookup<string, Order> byCustomer = orders.ToLookup(o => o.Customer);
+
+  Console.WriteLine(string.Join(",", byCustomer["alice"].Select(o => o.Id)));
+
+  record Order(int Id, string Customer);
+fixedExpect: { kind: output, value: "1,3" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.linq.enumerable.todictionary
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.linq.enumerable.tolookup
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.linq.enumerable.groupby
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему ToDictionary падает при построении словаря «клиент - заказы», если у клиента два заказа?
+    prompt: |
+      Программа строит по списку заказов отображение «клиент - его заказы» и должна вывести номера заказов
+      клиента `alice`: `1,3`. На тестовых данных, где у каждого клиента был один заказ, всё работало. На этих
+      данных программа завершается с необработанным исключением `ArgumentException`.
+      Щёлкните по строке с дефектом.
+    hint: Сколько записей с ключом `"alice"` пытается создать эта строка и сколько записей с одним ключом может храниться в словаре?
+    answer: |
+      Строка 8: `ToDictionary` создаёт по одной записи на каждый элемент источника, и на втором заказе `alice`
+      выбрасывает `ArgumentException` из-за повторяющегося ключа. Данные с повторяющимися ключами нужно
+      группировать: `ILookup<string, Order> byCustomer = orders.ToLookup(o => o.Customer);`.
+    explanation: |
+      `ToDictionary` не группирует элементы. Он проходит по источнику и для каждого элемента добавляет в новый
+      `Dictionary<TKey, TValue>` одну запись: ключ из `keySelector`, значение из `elementSelector`. Документация
+      прямо говорит, что метод выбрасывает `ArgumentException`, если в источнике есть повторяющиеся ключи.
+      Здесь у заказов 1 и 3 один и тот же ключ `"alice"`, поэтому исключение возникает на третьем элементе, и до
+      `Console.WriteLine` выполнение не доходит. Лямбда `o => new List<Order> { o }` ничего не меняет: она
+      создаёт отдельный список на каждый заказ, а не дописывает заказ в список существующего ключа.
+
+      Если ключ по смыслу может повторяться, нужна структура «ключ - несколько значений»:
+
+      - `ToLookup` строит `ILookup<TKey, TElement>`, где каждому ключу соответствует последовательность
+        элементов. Остальной код программы менять не нужно: `byCustomer["alice"]` отдаёт оба заказа клиента.
+      - `GroupBy` даёт те же группы, но выполняется отложенно. Если нужен изменяемый словарь списков, его
+        строят так: `orders.GroupBy(o => o.Customer).ToDictionary(g => g.Key, g => g.ToList())`.
+
+      `ToDictionary` подходит, когда ключ уникален по определению, например идентификатор заказа. Тогда
+      `ArgumentException` полезен: он сообщает о нарушении этого предположения. Поведение проверено на .NET 10.
+    linkTitles:
+      - "Метод Enumerable.ToDictionary"
+      - "Метод Enumerable.ToLookup"
+      - "Метод Enumerable.GroupBy"
+  en:
+    title: Why does ToDictionary throw when building a customer-to-orders map and a customer has two orders?
+    prompt: |
+      The program builds a customer-to-orders map from a list of orders and should print the order ids of the
+      customer `alice`: `1,3`. It worked on test data where every customer had one order. On this data the
+      program ends with an unhandled `ArgumentException`.
+      Click the line that contains the defect.
+    hint: How many entries with the key `"alice"` does this line try to create, and how many entries with the same key can a dictionary hold?
+    answer: |
+      Line 8: `ToDictionary` creates one entry per source element and throws `ArgumentException` for the duplicate
+      key on the second order of `alice`. Data with repeating keys must be grouped:
+      `ILookup<string, Order> byCustomer = orders.ToLookup(o => o.Customer);`.
+    explanation: |
+      `ToDictionary` does not group elements. It walks the source and, for every element, adds one entry to a new
+      `Dictionary<TKey, TValue>`: the key from `keySelector` and the value from `elementSelector`. The
+      documentation states that the method throws `ArgumentException` when the source contains duplicate keys.
+      Orders 1 and 3 share the key `"alice"`, so the exception is thrown on the third element and execution never
+      reaches `Console.WriteLine`. The lambda `o => new List<Order> { o }` changes nothing: it creates a separate
+      list for each order instead of appending the order to the list of an existing key.
+
+      When a key can legitimately repeat, you need a key-to-many-values structure:
+
+      - `ToLookup` builds an `ILookup<TKey, TElement>` in which every key maps to a sequence of elements. The
+        rest of the program does not change: `byCustomer["alice"]` yields both orders of the customer.
+      - `GroupBy` produces the same groups but uses deferred execution. If you need a mutable dictionary of lists,
+        build it as `orders.GroupBy(o => o.Customer).ToDictionary(g => g.Key, g => g.ToList())`.
+
+      `ToDictionary` fits when the key is unique by definition, such as an order id. Then the `ArgumentException`
+      is useful: it reports that the assumption was broken. The behaviour is verified on .NET 10.
+    linkTitles:
+      - "Enumerable.ToDictionary method"
+      - "Enumerable.ToLookup method"
+      - "Enumerable.GroupBy method"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

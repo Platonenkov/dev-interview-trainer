@@ -1,0 +1,120 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RRRPBBHNXCFC2TAT63
+slug: unboxing-requires-exact-type
+stack: dotnet
+topic: types-memory
+level: middle
+type: output
+grading: auto
+tags: [boxing, unboxing, value-types, casting]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    int number = 42;
+    object boxed = number;
+
+    long value = (long)boxed;
+
+    Console.Write(value);
+expect:
+  kind: exception
+  value: System.InvalidCastException
+options:
+  - id: a
+    correct: false
+    expect: { kind: output, value: "42" }
+  - id: b
+    correct: true
+    expect: { kind: exception, value: System.InvalidCastException }
+  - id: c
+    correct: false
+    expect: { kind: compile-error }
+  - id: d
+    correct: false
+    expect: { kind: exception, value: System.OverflowException }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/types/boxing-and-unboxing
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/numeric-conversions
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что произойдёт, если упакованный int распаковать приведением к long?
+    prompt: |
+      Что выведет эта программа? Значение типа `int` упаковывается в `object`, а затем извлекается явным
+      приведением к `long`.
+    hint: Выполняет ли приведение `object` к типу значения числовое преобразование или только проверяет, что лежит в объекте?
+    options:
+      a: "42"
+      b: Исключение `InvalidCastException`
+      c: Ошибка компиляции
+      d: Исключение `OverflowException`
+    optionExplanations:
+      a: "Так было бы, если бы распаковка умела выполнять числовое преобразование `int` в `long`. Но распаковка только проверяет, что в объекте лежит значение именно целевого типа, и копирует его. Упакованный `Int32` не является `Int64`, поэтому значение не извлекается."
+      c: "Код корректен. Явное преобразование `object` в любой тип значения разрешено компилятором: это распаковка. Тип содержимого объекта компилятору неизвестен, проверка выполняется только во время выполнения."
+      d: "Число 42 помещается в `long`, переполнения здесь быть не может. К тому же распаковка вообще не пытается преобразовать значение: она завершается ошибкой ещё на проверке типа."
+    answer: Исключение `InvalidCastException`
+    explanation: |
+      Приведение `(long)boxed`, где `boxed` имеет тип `object`, - это не числовое преобразование, а распаковка.
+      Во время выполнения она проверяет, что объект является упакованным значением именно типа `long`
+      (или что ссылка равна `null` при распаковке в `long?`), и только затем копирует значение. В объекте лежит
+      упакованный `int`, тип не совпадает, и среда выполнения выбрасывает `InvalidCastException`.
+
+      Неявное преобразование `int` в `long` существует только между самими числовыми типами. Через `object`
+      компилятор не знает, что внутри, поэтому генерирует инструкцию распаковки в `long`, а не преобразование.
+
+      Правильные варианты:
+
+      - сначала распаковать в точный тип, затем преобразовать: `long value = (int)boxed;` или `(long)(int)boxed`;
+      - распаковать в `int?`: это тоже допустимая цель для упакованного `int`;
+      - если тип содержимого заранее неизвестен, использовать `Convert.ToInt64(boxed)`, который выполняет
+        настоящее преобразование.
+
+      Поведение проверено на .NET 10, но правило точного типа при распаковке действует во всех версиях .NET.
+    linkTitles:
+      - Упаковка и распаковка
+      - Встроенные числовые преобразования
+  en:
+    title: What happens when a boxed int is unboxed with a cast to long?
+    prompt: |
+      What does this program print? An `int` value is boxed into `object` and then extracted with an explicit
+      cast to `long`.
+    hint: Does a cast from `object` to a value type perform a numeric conversion, or does it only check what is inside the object?
+    options:
+      a: "42"
+      b: "`InvalidCastException`"
+      c: Compile error
+      d: "`OverflowException`"
+    optionExplanations:
+      a: "That would happen if unboxing could perform the numeric conversion from `int` to `long`. But unboxing only checks that the object holds a value of exactly the target type and copies it. A boxed `Int32` is not an `Int64`, so no value is extracted."
+      c: "The code is valid. The compiler allows an explicit conversion from `object` to any value type: it is unboxing. The compiler does not know what the object contains, so the check happens only at run time."
+      d: "The number 42 fits in a `long`, so there is no overflow. Besides, unboxing never tries to convert the value at all: it fails earlier, at the type check."
+    answer: "`InvalidCastException`"
+    explanation: |
+      The cast `(long)boxed`, where `boxed` is of type `object`, is not a numeric conversion but unboxing.
+      At run time it checks that the object is a boxed value of exactly the type `long` (or that the reference
+      is `null` when unboxing to `long?`), and only then copies the value. The object holds a boxed `int`, the
+      types do not match, and the runtime throws `InvalidCastException`.
+
+      The implicit conversion from `int` to `long` exists only between the numeric types themselves. Through
+      `object` the compiler does not know what is inside, so it emits an unboxing instruction to `long`, not a
+      conversion.
+
+      Correct alternatives:
+
+      - unbox to the exact type first, then convert: `long value = (int)boxed;` or `(long)(int)boxed`;
+      - unbox to `int?`: it is also a valid target for a boxed `int`;
+      - if the type of the content is not known in advance, use `Convert.ToInt64(boxed)`, which performs a
+        real conversion.
+
+      The behaviour is verified on .NET 10, but the exact-type rule for unboxing holds in every .NET version.
+    linkTitles:
+      - Boxing and unboxing
+      - Built-in numeric conversions
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

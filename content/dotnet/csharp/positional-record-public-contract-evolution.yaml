@@ -1,0 +1,207 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNMMY52T3GJZMGVMCQ
+slug: positional-record-public-contract-evolution
+stack: dotnet
+topic: csharp
+level: architect
+type: open
+grading: self
+tags: [records, api-design, breaking-changes, versioning, nuget]
+code:
+  language: csharp
+  harness: none
+  source: |
+    // Shop.Contracts 1.0.0, a NuGet package shared by many services
+    public record OrderPlaced(Guid OrderId, decimal Amount);
+
+    // Shop.Billing, compiled against Shop.Contracts 1.0.0
+    public static class BillingHandler
+    {
+        public static OrderPlaced Handle(OrderPlaced message)
+        {
+            var (orderId, amount) = message;
+            if (message is OrderPlaced(_, > 1000m))
+            {
+                Console.WriteLine($"Large order {orderId}: {amount}");
+            }
+
+            return new OrderPlaced(orderId, -amount);
+        }
+    }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/record
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/library-guidance/breaking-changes
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/fundamentals/apicompat/package-validation/overview
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/serialization/system-text-json/immutability
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Чем рискуют позиционные записи в роли общих контрактов в NuGet-пакетах и как спроектировать их для эволюции?
+    prompt: |
+      Позиционные записи вроде `OrderPlaced` лежат в общем NuGet-пакете `Shop.Contracts` и служат сообщениями и DTO
+      для десятков сервисов, которые будут жить с этим пакетом годами. Сервисы и другие пакеты собираются и
+      развёртываются независимо.
+
+      В версии 1.1.0 команда хочет добавить валюту:
+      `public record OrderPlaced(Guid OrderId, decimal Amount, string Currency = "EUR");`
+
+      - Что сломается у потребителей вроде `BillingHandler` и в какой форме: при компиляции или во время выполнения?
+      - Какие ещё изменения позиционных параметров опасны?
+      - Как спроектировать такие контракты, чтобы они могли развиваться, и что закрепить в процессе?
+    hint: "Какие публичные члены компилятор создаёт из одного позиционного параметра, и по чему CLR находит конструктор, который вызывает уже собранная сборка?"
+    answer: |
+      1. **Что попадает в публичный API.** Каждый позиционный параметр компилятор превращает сразу в несколько
+         публичных членов: параметр основного конструктора, свойство `init` с тем же именем, параметр `out`
+         синтезированного метода `Deconstruct` (на нём же работают позиционные шаблоны вроде `OrderPlaced(_, > 1000m)`)
+         и часть `Equals`, `GetHashCode` и `ToString`. Порядок и типы параметров становятся частью сигнатур.
+      2. **Добавление параметра, даже со значением по умолчанию.**
+         - Конструктор `OrderPlaced(Guid, decimal)` исчезает, вместо него появляется `OrderPlaced(Guid, decimal, string)`.
+           Значение по умолчанию компилятор подставляет в точку вызова, поэтому `new OrderPlaced(id, amount)`
+           пересобирается без правок, но уже собранные сборки ссылаются на старую сигнатуру. Это критическое
+           изменение на двоичном уровне: сервис или пакет, собранный с 1.0.0, получает `MissingMethodException` во
+           время выполнения, когда в процесс попадает 1.1.0, например транзитивно через другой пакет.
+         - `Deconstruct` получает третий параметр `out`: `var (orderId, amount) = message;` и позиционный шаблон из
+           двух элементов перестают компилироваться (критическое изменение исходного кода), а уже собранный код снова
+           получает `MissingMethodException`.
+         - Новое свойство участвует в равенстве по значению: сообщения, которые раньше считались равными
+           (дедупликация, ключи кэша), могут стать разными. Это изменение поведения.
+      3. **Переименование, перестановка, удаление.** Переименование параметра удаляет свойство со старым именем,
+         ломает именованные аргументы и, если тип сериализуется по именам свойств, формат на проводе. Перестановка
+         параметров одного типа (`string From, string To`) опаснее всего: сигнатура не меняется, всё компилируется и
+         запускается, а значения молча меняются местами. Удаление параметра ломает всё сразу.
+      4. **Если позиционный контракт уже опубликован.** Совместимость можно сохранить вручную: явный конструктор со
+         старой сигнатурой, который вызывает основной через `: this(orderId, amount, "EUR")`, и перегрузка
+         `Deconstruct` со старым числом параметров. Цена: у типа становится два публичных конструктора с параметрами,
+         поэтому десериализацию через `System.Text.Json` надо перепроверить: сериализатору нужен однозначный
+         конструктор, и нужный стоит явно отметить атрибутом `[JsonConstructor]`. Без этих заплаток изменение -
+         мажорная версия пакета по SemVer.
+      5. **Дизайн для долгой жизни.** Для общих контрактов выбирать номинальные записи:
+         `public sealed record OrderPlaced { public required Guid OrderId { get; init; } public decimal Amount { get; init; } }`.
+         Равенство по значению и `with` остаются, а новое необязательное свойство
+         `public string? Currency { get; init; }` - это просто новый член: старые сборки работают, инициализаторы
+         объектов компилируются. `required` ставить только на члены, которые есть с первой версии: новый обязательный
+         член ломает компиляцию у всех, кто создаёт объект. `sealed` объявлять сразу: запечатать тип позже - критическое
+         изменение, а иерархии позиционных записей распространяют любое изменение базовой записи на наследников у
+         потребителей.
+      6. **Процесс.** Проверка совместимости в CI: валидация пакетов в .NET SDK (`EnablePackageValidation` с базовой
+         версией пакета) или анализатор публичного API. SemVer, где мажорная версия - единственное место для
+         критических изменений. Удаление через `[Obsolete]` и период устаревания. Несовместимое по смыслу изменение -
+         новый тип сообщения (`OrderPlacedV2`), который публикуется параллельно со старым.
+      7. **Архитектурный уровень.** Общая сборка с типами связывает сроки развёртывания всех сервисов. Для
+         межсервисных сообщений надёжнее считать контрактом формат на проводе (JSON Schema, `.proto`) с правилами
+         терпимого чтения (игнорировать неизвестные поля, иметь значения по умолчанию для отсутствующих), а пакет с
+         типами держать тонким: без логики и с минимумом зависимостей.
+    explanation: |
+      Собранный IL ссылается на конструктор или метод по имени и полной сигнатуре с типами параметров, и CLR ищет
+      ровно такой член. Значения параметров по умолчанию в C# - удобство компилятора в точке вызова, а не часть
+      поиска метода, поэтому «необязательный» параметр совместим только на уровне исходного кода и только для вызовов
+      конструктора. Руководство .NET по критическим изменениям в библиотеках приводит именно этот случай как
+      двоичное критическое изменение: если в сигнатуру метода добавлен параметр, сборки, скомпилированные со старой
+      версией библиотеки, получают `MissingMethodException`. Для общего пакета в парке сервисов это самое опасное:
+      поломка проявляется не при вашей сборке, а во время выполнения чужого процесса, после того как NuGet выбрал одну
+      версию пакета на весь граф зависимостей, и сборка, скомпилированная с 1.0.0, работает рядом с 1.1.0. Пример с
+      `Deconstruct` добавляет к этому ещё и поломку исходного кода: потребитель, который пересобирается с новой
+      версией, перестаёт компилироваться.
+
+      Позиционный синтаксис оптимизирован под краткость. Он хорош внутри одного сервиса или решения, где все вызовы
+      пересобираются вместе, но в долгоживущем публичном API превращает порядок и состав параметров в контракт сразу
+      нескольких членов. Номинальная запись многословнее, зато каждое свойство - отдельный член, и добавление члена
+      остаётся совместимым изменением.
+
+      Описанное поведение относится к C# 14 и .NET 10; записи появились в C# 9, модификатор `required` - в C# 11.
+    linkTitles:
+      - "Записи (справочник по C#)"
+      - "Критические изменения и библиотеки .NET"
+      - "Обзор валидации пакетов"
+      - "Неизменяемые типы и System.Text.Json"
+  en:
+    title: What are the risks of positional records as shared contracts in NuGet packages, and how do you design them to evolve?
+    prompt: |
+      Positional records such as `OrderPlaced` live in a shared NuGet package `Shop.Contracts` and serve as messages
+      and DTOs for dozens of services that will live with this package for years. The services and other packages
+      are built and deployed independently.
+
+      In version 1.1.0 the team wants to add a currency:
+      `public record OrderPlaced(Guid OrderId, decimal Amount, string Currency = "EUR");`
+
+      - What breaks for consumers such as `BillingHandler`, and in what form: at compile time or at run time?
+      - Which other changes to positional parameters are dangerous?
+      - How do you design such contracts so that they can evolve, and what do you put into the process?
+    hint: "Which public members does the compiler generate from one positional parameter, and how does the CLR find a constructor that an already compiled assembly calls?"
+    answer: |
+      1. **What becomes public API.** The compiler turns every positional parameter into several public members at
+         once: a parameter of the primary constructor, an `init` property with the same name, an `out` parameter of
+         the synthesized `Deconstruct` method (which positional patterns such as `OrderPlaced(_, > 1000m)` also use)
+         and a part of `Equals`, `GetHashCode` and `ToString`. The order and types of the parameters become part of
+         the signatures.
+      2. **Adding a parameter, even with a default value.**
+         - The constructor `OrderPlaced(Guid, decimal)` disappears and `OrderPlaced(Guid, decimal, string)` replaces it.
+           The compiler inserts the default value at the call site, so `new OrderPlaced(id, amount)` rebuilds without
+           edits, but assemblies that are already built reference the old signature. This is a binary breaking change:
+           a service or package built against 1.0.0 gets `MissingMethodException` at run time when 1.1.0 ends up in
+           the process, for example transitively through another package.
+         - `Deconstruct` gets a third `out` parameter: `var (orderId, amount) = message;` and a positional pattern with
+           two elements stop compiling (a source breaking change), and already built code again gets
+           `MissingMethodException`.
+         - The new property takes part in value equality: messages that used to be equal (deduplication, cache keys)
+           can become different. This is a behavioral change.
+      3. **Renaming, reordering, removing.** Renaming a parameter removes the property with the old name, breaks
+         named arguments and, if the type is serialized by property names, the wire format. Reordering parameters of
+         the same type (`string From, string To`) is the most dangerous: the signature does not change, everything
+         compiles and runs, and the values are silently swapped. Removing a parameter breaks everything at once.
+      4. **If a positional contract is already published.** You can keep compatibility by hand: an explicit
+         constructor with the old signature that calls the primary one through `: this(orderId, amount, "EUR")`, and a
+         `Deconstruct` overload with the old number of parameters. The cost: the type now has two public
+         parameterized constructors, so deserialization with `System.Text.Json` must be rechecked: the serializer
+         needs an unambiguous constructor, so mark the intended one with `[JsonConstructor]`. Without these patches
+         the change is a major package version under SemVer.
+      5. **Design for a long life.** For shared contracts choose nominal records:
+         `public sealed record OrderPlaced { public required Guid OrderId { get; init; } public decimal Amount { get; init; } }`.
+         Value equality and `with` stay, and a new optional property `public string? Currency { get; init; }` is just
+         a new member: old assemblies keep working and object initializers compile. Put `required` only on members
+         that exist from the first version: a new required member breaks compilation for everyone who creates the
+         object. Declare `sealed` from the start: sealing a type later is a breaking change, and hierarchies of
+         positional records spread any change of the base record to the derived records of consumers.
+      6. **Process.** A compatibility check in CI: package validation in the .NET SDK (`EnablePackageValidation` with a
+         baseline package version) or a public API analyzer. SemVer, where the major version is the only place for
+         breaking changes. Removal through `[Obsolete]` and a deprecation period. A change that is incompatible in
+         meaning becomes a new message type (`OrderPlacedV2`) published side by side with the old one.
+      7. **Architecture level.** A shared assembly of types couples the deployment schedules of all services. For
+         messages between services it is more robust to treat the wire format (JSON Schema, `.proto`) as the contract,
+         with tolerant reader rules (ignore unknown fields, have defaults for missing ones), and to keep the types
+         package thin: no logic and a minimum of dependencies.
+    explanation: |
+      Compiled IL references a constructor or method by name and full signature including parameter types, and the
+      CLR looks for exactly that member. Default parameter values in C# are a compiler convenience at the call site,
+      not part of member lookup, so an "optional" parameter is compatible only at the source level and only for
+      constructor calls. The .NET guidance on breaking changes in libraries gives exactly this case as a binary
+      breaking change: when a parameter is added to a method signature, assemblies compiled against the older
+      version of the library throw `MissingMethodException`. For a shared package in a fleet of services this is the
+      most dangerous kind: it shows up not in your build but at run time in someone else's process, after NuGet has
+      picked one package version for the whole dependency graph and an assembly compiled against 1.0.0 runs next to
+      1.1.0. The `Deconstruct` example adds a source break on top of that: a consumer that rebuilds against the new
+      version no longer compiles.
+
+      The positional syntax is optimized for brevity. It works well inside one service or solution, where all call
+      sites are rebuilt together, but in a long-lived public API it turns the order and set of parameters into the
+      contract of several members at once. A nominal record is more verbose, but every property is a separate member,
+      and adding a member stays a compatible change.
+
+      The behaviour described applies to C# 14 and .NET 10; records arrived in C# 9 and the `required` modifier in C# 11.
+    linkTitles:
+      - "Records (C# reference)"
+      - "Breaking changes and .NET libraries"
+      - "Package validation overview"
+      - "Use immutable types and properties with System.Text.Json"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"
+  noRunReason: Illustrative code for an open question about compatibility between two versions of a NuGet package; demonstrating the failure needs two package versions and separately compiled assemblies.

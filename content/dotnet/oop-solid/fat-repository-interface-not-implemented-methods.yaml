@@ -1,0 +1,151 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPE3EDCPEA2N7GGB6A
+slug: fat-repository-interface-not-implemented-methods
+stack: dotnet
+topic: oop-solid
+level: senior
+type: situation
+grading: self
+tags: [interface-segregation, liskov-substitution, refactoring, interfaces]
+links:
+  - url: https://en.wikipedia.org/wiki/Interface_segregation_principle
+    lang: en
+    kind: article
+  - url: https://en.wikipedia.org/wiki/Liskov_substitution_principle
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/dotnet/architecture/modern-web-apps-azure/architectural-principles
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.notimplementedexception
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.icollection-1.isreadonly
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "IRepository из 25 методов: половина реализаций бросает NotImplementedException, а каждая правка задевает чужие модули"
+    prompt: |
+      В проекте есть общий интерфейс `IRepository` с 25 методами: чтение по ключу, поиск, сохранение, удаление,
+      пакетный импорт, выгрузка в отчёты и другие. Его реализуют шесть классов, и в трёх из них часть методов
+      выглядит как `throw new NotImplementedException();`. Любое изменение интерфейса заставляет править все
+      шесть реализаций и пересобирать модули, которые к изменённым методам отношения не имеют. Недавно отчётный
+      модуль упал в production, вызвав метод, который в подставленной реализации оказался заглушкой.
+
+      Что вы будете делать и в каком порядке?
+    hint: "Посмотрите на интерфейс со стороны вызывающего кода: какие методы использует каждый клиент и что ему обещает реализация, бросающая исключение вместо работы?"
+    answer: |
+      1. **Собрать факты.** Для каждого клиента `IRepository` выяснить, какие методы он реально вызывает (поиск
+         использований в IDE или небольшой анализатор Roslyn), а для каждой реализации - какие методы работают,
+         а какие бросают `NotImplementedException`. Получаются две матрицы: «клиент - методы» и «реализация -
+         методы». Группы методов, которые клиенты используют вместе, и есть будущие интерфейсы.
+      2. **Спроектировать ролевые интерфейсы.** По этим группам, например `IOrderReader` (чтение по ключу и
+         поиск), `IOrderWriter` (сохранение и удаление), `IOrderBulkImport` для пакетной загрузки, нужной одному
+         модулю. Интерфейсы описываются в терминах клиента и лежат рядом с ним, а не в общей инфраструктурной
+         сборке. Не дробить до одного метода: то, что клиенты всегда вызывают вместе, остаётся вместе.
+      3. **Мигрировать постепенно.** Сначала `IRepository` наследует новые интерфейсы
+         (`interface IRepository : IOrderReader, IOrderWriter, ...`), и всё продолжает компилироваться. Затем
+         клиенты по одному переходят на узкие интерфейсы в конструкторах. В DI один и тот же экземпляр
+         регистрируется под несколькими интерфейсами через фабрику: сам класс регистрируется как scoped
+         (`services.AddScoped<SqlOrderRepository>()`), а интерфейсы ссылаются на эту регистрацию, например
+         `services.AddScoped<IOrderReader>(sp => sp.GetRequiredService<SqlOrderRepository>())`. Каждый шаг -
+         отдельный небольшой PR с зелёными тестами.
+      4. **Убрать заглушки.** Когда у `IRepository` не осталось клиентов, каждая реализация объявляет только те
+         ролевые интерфейсы, которые действительно поддерживает, методы с `NotImplementedException` удаляются, а
+         затем удаляется и сам `IRepository` (на переходный период его можно пометить `[Obsolete]`).
+      5. **Закрепить.** Контрактные тесты для каждой реализации каждого интерфейса; правило анализатора или
+         code review против `NotImplementedException` в production-коде; архитектурный тест, который не даёт
+         новым модулям зависеть от широкого интерфейса.
+    explanation: |
+      Здесь нарушены сразу два принципа. Принцип разделения интерфейсов: клиенты зависят от методов, которыми
+      не пользуются, поэтому изменение любого из 25 методов задевает всех, кто ссылается на `IRepository`, а
+      добавление метода требует правки всех шести реализаций. Принцип подстановки Лисков: реализация, которая
+      бросает исключение вместо работы, не выполняет контракт интерфейса, и клиент не может знать, какие методы
+      безопасно вызывать. Ошибка обнаруживается только во время выполнения, как с отчётным модулем.
+
+      Документация описывает `NotImplementedException` как признак члена, который ещё в разработке, и советует
+      не перехватывать это исключение, а убрать вызов, поэтому в рабочей реализации контракта ему не место.
+      Замена на `NotSupportedException` проект тоже не исправляет: вызывающий код по-прежнему узнаёт об
+      отсутствующей возможности только во время выполнения, если контракт не позволяет проверить её заранее,
+      как `ICollection<T>.IsReadOnly` для коллекций, в которые нельзя добавлять элементы и из которых нельзя
+      их удалять. Узкие интерфейсы решают это на уровне типов: реализация, которая не умеет писать, просто не
+      реализует `IOrderWriter`, и подставить её туда, где нужна запись, не даст компилятор.
+
+      Ролевые интерфейсы объявляются на стороне клиента, как требует принцип инверсии зависимостей: реализация
+      зависит от абстракции, которую контролирует вызывающий модуль, а не наоборот. Наследование широкого
+      интерфейса от ролевых позволяет мигрировать без «большого переключения»: старые и новые клиенты работают
+      одновременно. Цена решения - больше типов и регистраций в DI, поэтому интерфейсы выделяют по реальным
+      группам вызовов, а не по методу на интерфейс. Заодно упрощаются тестовые фейки: для отчёта достаточно
+      реализовать `IOrderReader`.
+    linkTitles:
+      - "Interface segregation principle (Википедия)"
+      - "Liskov substitution principle (Википедия)"
+      - "Архитектурные принципы"
+      - "Класс NotImplementedException"
+      - "Свойство ICollection<T>.IsReadOnly"
+  en:
+    title: "An IRepository with 25 methods: half the implementations throw NotImplementedException and every edit hits unrelated modules"
+    prompt: |
+      The project has a shared `IRepository` interface with 25 methods: lookup by key, search, save, delete,
+      bulk import, export for reports and more. Six classes implement it, and in three of them some methods
+      look like `throw new NotImplementedException();`. Any change to the interface forces edits in all six
+      implementations and rebuilds of modules that have nothing to do with the changed methods. Recently the
+      reporting module failed in production by calling a method that turned out to be a stub in the injected
+      implementation.
+
+      What do you do, and in what order?
+    hint: "Look at the interface from the caller's side: which methods does each client use, and what does an implementation that throws instead of working promise it?"
+    answer: |
+      1. **Gather facts.** For each client of `IRepository`, find out which methods it actually calls (find
+         usages in the IDE or a small Roslyn analyzer), and for each implementation, which methods work and which
+         throw `NotImplementedException`. You get two matrices: "client to methods" and "implementation to
+         methods". The groups of methods that clients use together are the future interfaces.
+      2. **Design role interfaces.** Along those groups, for example `IOrderReader` (lookup by key and search),
+         `IOrderWriter` (save and delete), `IOrderBulkImport` for the bulk load that one module needs. The
+         interfaces are expressed in the client's terms and live next to the client, not in a shared
+         infrastructure assembly. Do not split down to one method each: what clients always call together
+         stays together.
+      3. **Migrate incrementally.** First make `IRepository` inherit the new interfaces
+         (`interface IRepository : IOrderReader, IOrderWriter, ...`), so everything still compiles. Then move
+         clients one at a time to narrow interfaces in their constructors. In DI the same instance is registered
+         under several interfaces through a factory: the class itself is registered as scoped
+         (`services.AddScoped<SqlOrderRepository>()`), and the interfaces resolve that registration, for example
+         `services.AddScoped<IOrderReader>(sp => sp.GetRequiredService<SqlOrderRepository>())`. Each step is a
+         separate small PR with green tests.
+      4. **Remove the stubs.** When `IRepository` has no clients left, each implementation declares only the role
+         interfaces it really supports, the methods with `NotImplementedException` are deleted, and then
+         `IRepository` itself is deleted (it can be marked `[Obsolete]` during the transition).
+      5. **Lock it in.** Contract tests for every implementation of every interface; an analyzer rule or a code
+         review rule against `NotImplementedException` in production code; an architecture test that keeps new
+         modules from depending on the wide interface.
+    explanation: |
+      Two principles are broken here at once. Interface segregation: clients depend on methods they do not use,
+      so a change to any of the 25 methods affects everyone who references `IRepository`, and adding a method
+      requires editing all six implementations. Liskov substitution: an implementation that throws instead of
+      working does not fulfil the interface contract, and a client cannot know which methods are safe to call.
+      The failure shows up only at run time, as it did with the reporting module.
+
+      The documentation describes `NotImplementedException` as a marker for a member that is still in
+      development and advises removing the call rather than catching the exception, so it does not belong in a
+      shipped implementation of a contract. Switching to `NotSupportedException` does not fix the design either:
+      the caller still learns about the missing capability only at run time, unless the contract lets it check
+      up front, as `ICollection<T>.IsReadOnly` does for collections that do not allow adding or removing
+      elements. Narrow interfaces solve this at the type level: an implementation that cannot write simply does
+      not implement `IOrderWriter`, and the compiler will not let you pass it where writing is needed.
+
+      The role interfaces are declared on the client side, as the dependency inversion principle asks: the
+      implementation depends on an abstraction controlled by the calling module, not the other way around.
+      Having the wide interface inherit the role interfaces allows a migration without a "big switch": old and
+      new clients work side by side. The cost is more types and more DI registrations, so interfaces are cut
+      along real groups of calls, not one method per interface. Test fakes also get simpler: a fake for the
+      report only has to implement `IOrderReader`.
+    linkTitles:
+      - "Interface segregation principle (Wikipedia)"
+      - "Liskov substitution principle (Wikipedia)"
+      - "Architectural principles"
+      - "NotImplementedException class"
+      - "ICollection<T>.IsReadOnly property"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

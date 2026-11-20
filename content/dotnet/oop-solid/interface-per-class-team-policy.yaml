@@ -1,0 +1,159 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RP1372EMXG49D07Z4F
+slug: interface-per-class-team-policy
+stack: dotnet
+topic: oop-solid
+level: lead
+type: situation
+grading: self
+tags: [interfaces, header-interface, role-interface, team-policy, testing]
+links:
+  - url: https://martinfowler.com/bliki/RoleInterface.html
+    lang: en
+    kind: article
+  - url: https://martinfowler.com/bliki/HeaderInterface.html
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/dotnet/architecture/modern-web-apps-azure/architectural-principles
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/extensions/dependency-injection
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Стандарт команды требует интерфейс для каждого класса - как пересмотреть это правило?
+    prompt: |
+      Несколько лет назад в команде приняли стандарт: у каждого класса должен быть интерфейс. Теперь в решении
+      сотни пар вида `IOrderService` и `OrderService`, у каждого интерфейса ровно одна реализация, и он
+      повторяет все публичные методы класса. Любое изменение сигнатуры приходится делать в двух файлах,
+      «Перейти к определению» приводит в интерфейс, а не в код, и новые разработчики жалуются, что в проекте
+      трудно ориентироваться. Часть команды считает, что без интерфейсов не будут работать DI и модульные тесты.
+
+      Вы техлид. Как вы пересмотрите правило и как проведёте изменение в команде?
+    hint: Какую конкретную задачу решает интерфейс у отдельно взятого класса, и что сломается, если его убрать?
+    answer: |
+      1. **Понять, зачем правило появилось.** Обсудить с командой исходные причины: обычно это моки в
+         модульных тестах, убеждение «DI требует интерфейсов» и «вдруг понадобится вторая реализация».
+         Собрать данные: сколько интерфейсов имеют ровно одну реализацию и используются только в регистрации
+         DI и в моках. Так спор о вкусах превращается в разговор о фактах.
+      2. **Отделить мифы от реальных причин.**
+         - Встроенный контейнер DI в .NET разрешает и конкретные классы, интерфейс для внедрения не нужен.
+         - Выделить интерфейс позже внутри одного решения - дешёвый рефакторинг средствами IDE, поэтому
+           «на всякий случай» - это нарушение YAGNI.
+         - Мок чистой логики внутри процесса проверяет детали реализации; такие классы лучше тестировать с
+           настоящими объектами.
+      3. **Записать новое правило как список швов, где абстракция (интерфейс или абстрактный класс) обязательна:**
+         - зависимости вне процесса и источники недетерминизма: база данных, HTTP-клиенты, брокер сообщений,
+           файловая система, время (`TimeProvider`, начиная с .NET 8), случайные числа;
+         - несколько реальных реализаций уже сейчас: стратегии, провайдеры, плагины;
+         - границы модулей: модуль-потребитель объявляет узкий ролевой интерфейс (порт) в своих терминах, а
+           инфраструктура его реализует;
+         - места, где действительно нужны декораторы или сквозная функциональность.
+
+         И явно перечислить, где интерфейс не нужен: сущности, объекты-значения, DTO и записи, классы
+         настроек, чистые вычисления и маппинг, внутренние вспомогательные классы, контроллеры.
+      4. **Задать форму хорошего интерфейса.** Он назван по роли (`IOrderReader`, `IPaymentGateway`),
+         принадлежит клиенту и содержит только то, что клиент вызывает, а не копирует все публичные члены
+         класса. На code review вопрос звучит так: «какой шов представляет этот интерфейс?».
+      5. **Внедрять без большого взрыва.** Зафиксировать решение в ADR, обсудить его, опробовать на одном
+         модуле, обновить чек-лист code review. Убирать заголовочные интерфейсы, когда код и так меняется:
+         встроить интерфейс в класс, заменить моки чистой логики настоящими объектами, оставшиеся швы
+         перевести на ролевые интерфейсы. До удаления моков убедиться, что швы ввода-вывода покрыты
+         интеграционными тестами. Один огромный PR на сотни файлов не делать.
+      6. **Не уйти в противоположную крайность.** Цель - не «никаких интерфейсов», а интерфейсы там, где они
+         окупаются. Для публикуемых NuGet-пакетов дизайн интерфейсов - отдельное решение: добавление
+         абстрактного члена в публичный интерфейс ломает все внешние реализации.
+    explanation: |
+      Мартин Фаулер различает заголовочный интерфейс (header interface), который повторяет неявный публичный
+      интерфейс класса один к одному, и ролевой интерфейс (role interface), который выводится из того, что
+      нужно конкретному клиенту. Правило «интерфейс на каждый класс» механически порождает заголовочные
+      интерфейсы.
+
+      Такие интерфейсы почти ничего не развязывают. Интерфейс лежит рядом с реализацией, им владеет
+      реализующая сторона, и он меняется синхронно с классом: каждое изменение делается дважды. Клиент
+      зависит от всех членов, даже если вызывает один, что противоречит принципу разделения интерфейсов.
+      Принцип инверсии зависимостей требует, чтобы абстракцией владел модуль верхнего уровня и выражал её в
+      своих терминах, а копия публичных методов класса этого не даёт. Единственная реальная польза -
+      возможность замокать класс, и она часто приводит к тестам, которые ломаются при любом рефакторинге.
+
+      Интерфейс окупается там, где есть настоящий шов: внешний ресурс, который нужно подменить в тестах,
+      несколько реализаций, граница модуля или пакета. Задача лида - заменить механическое правило правилом
+      с понятными критериями, иначе команда либо продолжит создавать интерфейсы по привычке, либо начнёт
+      решать каждый случай по-своему. Поэтому новое правило называет конкретные швы, а изменение проводится
+      постепенно и с согласия команды, а не одним приказом и одним гигантским PR.
+    linkTitles:
+      - "Martin Fowler: RoleInterface"
+      - "Martin Fowler: HeaderInterface"
+      - "Архитектурные принципы"
+      - "Внедрение зависимостей в .NET"
+  en:
+    title: A team standard requires an interface for every class - how do you revise the policy?
+    prompt: |
+      A few years ago the team adopted a standard: every class must have an interface. Now the solution has
+      hundreds of pairs like `IOrderService` and `OrderService`, every interface has exactly one
+      implementation, and it repeats all public methods of the class. Every signature change has to be made in
+      two files, "Go to Definition" lands in the interface instead of the code, and new developers complain
+      that the project is hard to navigate. Part of the team believes that without interfaces DI and unit tests
+      will not work.
+
+      You are the tech lead. How do you revise the rule, and how do you roll the change out in the team?
+    hint: What concrete problem does the interface solve for a given class, and what breaks if you remove it?
+    answer: |
+      1. **Understand why the rule exists.** Discuss the original reasons with the team: usually mocking in
+         unit tests, the belief that "DI needs interfaces" and "we might need a second implementation".
+         Collect data: how many interfaces have exactly one implementation and are used only in the DI
+         registration and in mocks. This turns a debate about taste into a discussion of facts.
+      2. **Separate myths from real reasons.**
+         - The built-in .NET DI container also resolves concrete classes; injection does not need an interface.
+         - Extracting an interface later inside one solution is a cheap IDE refactoring, so "just in case" is a
+           YAGNI violation.
+         - Mocking pure in-process logic tests implementation details; such classes are better tested with
+           real objects.
+      3. **Write the new rule as a list of seams where an abstraction (interface or abstract class) is required:**
+         - out-of-process dependencies and sources of nondeterminism: the database, HTTP clients, the message
+           broker, the file system, time (`TimeProvider`, since .NET 8), random numbers;
+         - several real implementations right now: strategies, providers, plug-ins;
+         - module boundaries: the consuming module declares a narrow role interface (a port) in its own terms,
+           and the infrastructure implements it;
+         - places where decorators or cross-cutting behaviour are actually needed.
+
+         And list explicitly where an interface is not needed: entities, value objects, DTOs and records,
+         options classes, pure calculation and mapping, internal helpers, controllers.
+      4. **Define the shape of a good interface.** It is named after the role (`IOrderReader`,
+         `IPaymentGateway`), owned by the client and contains only what the client calls, instead of copying
+         every public member of a class. In code review the question becomes: "which seam does this interface
+         represent?".
+      5. **Roll out without a big bang.** Record the decision in an ADR, discuss it, pilot it on one module,
+         update the code review checklist. Remove header interfaces when the code is changed anyway: inline the
+         interface into the class, replace mocks of pure logic with real objects, move the remaining seams to
+         role interfaces. Before deleting mocks, make sure integration tests cover the I/O seams. Do not do one
+         huge PR across hundreds of files.
+      6. **Do not swing to the opposite extreme.** The goal is not "no interfaces" but interfaces where they
+         pay off. For published NuGet packages interface design is a separate decision: adding an abstract
+         member to a public interface breaks every external implementation.
+    explanation: |
+      Martin Fowler distinguishes a header interface, which mirrors the implicit public interface of a class
+      one to one, from a role interface, which is derived from what a specific client needs. The rule "an
+      interface for every class" mechanically produces header interfaces.
+
+      Such interfaces decouple almost nothing. The interface sits next to the implementation, the implementing
+      side owns it, and it changes in lockstep with the class: every change is made twice. The client depends
+      on all members even if it calls one, which goes against the interface segregation principle. The
+      dependency inversion principle asks that the high-level module owns the abstraction and expresses it in
+      its own terms, and a copy of a class's public methods does not achieve that. The only real benefit is the
+      ability to mock the class, and that often leads to tests that break on any refactoring.
+
+      An interface pays off at a real seam: an external resource that must be replaced in tests, several
+      implementations, a module or package boundary. The lead's job is to replace a mechanical rule with a rule
+      that has clear criteria; otherwise the team either keeps creating interfaces out of habit or starts
+      deciding every case differently. That is why the new rule names concrete seams, and the change is rolled
+      out gradually and with the team's agreement, not by decree and one giant PR.
+    linkTitles:
+      - "Martin Fowler: RoleInterface"
+      - "Martin Fowler: HeaderInterface"
+      - "Architectural principles"
+      - "Dependency injection in .NET"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

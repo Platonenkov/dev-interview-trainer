@@ -1,0 +1,138 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPV9WX2YE2YFDFYMKJ
+slug: seal-classes-not-designed-for-inheritance
+stack: dotnet
+topic: oop-solid
+level: senior
+type: open
+grading: self
+tags: [sealed, inheritance, fragile-base-class, breaking-changes]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/design-guidelines/sealing
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/design-guidelines/virtual-members
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/compatibility/library-change-rules
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/fundamentals/code-analysis/quality-rules/ca1852
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Зачем запечатывать классы, не предназначенные для наследования, и что значит запечатать или распечатать класс позже?
+    prompt: |
+      Многие команды помечают `sealed` все классы, которые не проектировались для наследования. Почему это
+      разумно, как это сочетается с рекомендацией Framework Design Guidelines «не запечатывать классы без
+      веской причины» и что означает для потребителей библиотеки, если уже опубликованный публичный класс
+      позже запечатать или, наоборот, снять с него `sealed`?
+    hint: На какие детали базового класса может начать опираться наследник, если в нём есть виртуальные методы? И какое из двух изменений способно сломать уже написанный чужой код?
+    answer: |
+      - **Почему запечатывать.** Незапечатанный класс с виртуальными или `protected` членами делает свою
+        внутреннюю кухню частью публичного контракта: какие виртуальные методы вызываются, из каких других
+        методов, в каком порядке и в каком состоянии объекта. Наследники опираются на эту последовательность,
+        поэтому безобидный рефакторинг базового класса молча ломает их: это проблема хрупкого базового класса.
+        Проектирование для наследования - отдельная работа: точки расширения нужно документировать и
+        тестировать, и рекомендации по виртуальным членам прямо называют их дорогими в проектировании,
+        тестировании и поддержке. Класс, для которого эту работу не делали, не должен приглашать к наследованию.
+      - **Нюанс рекомендаций.** Страница о запечатывании в Framework Design Guidelines для публичных типов
+        платформы говорит: не запечатывать без веской причины, а «не смог придумать сценарий расширения»
+        причиной не считается, потому что пользователи наследуются, например, ради удобных дополнительных
+        членов. Такое наследование почти безопасно, если в классе нет виртуальных и `protected` членов: наследник
+        видит только публичный API. Разумная позиция: в публичной библиотеке либо осознанно проектировать
+        немногие точки расширения (документированные виртуальные члены, `sealed override` для остальных
+        переопределений), либо запечатывать; в коде приложения и для `internal` типов запечатывание по
+        умолчанию почти ничего не стоит, его можно поддержать правилом CA1852.
+      - **Побочные эффекты.** Для запечатанных классов JIT может девиртуализировать вызовы и упрощать проверки
+        типа. Цена: такой класс нельзя подменить наследником-прокси в тестах, поэтому шов для тестов
+        делается через интерфейс.
+      - **Что это значит для потребителей.** Снять `sealed` позже - совместимое изменение: существующий код
+        продолжает работать, но с этого момента вы обязаны поддерживать контракт наследования. Запечатать уже
+        опубликованный публичный класс - ломающее изменение: производные классы перестают компилироваться
+        (CS0509), а уже собранные сборки с наследниками падают при загрузке типа (`TypeLoadException`).
+        Правила совместимости библиотек .NET относят добавление `sealed` к недопустимым изменениям. Из этой
+        асимметрии и следует стратегия: начинать с запечатанного класса и открывать его, когда появляется
+        реальный сценарий.
+    explanation: |
+      Суть аргумента - проблема хрупкого базового класса. Возьмём коллекцию с виртуальными `Add` и
+      `AddRange`, где `AddRange` добавляет элементы напрямую, и наследника, который считает элементы,
+      переопределив оба метода. Если в новой версии базового класса `AddRange` реализуют через цикл по `Add`,
+      каждый элемент будет посчитан дважды, хотя публичный API не изменился. Наследник зависел от детали
+      реализации, которая стала наблюдаемой через виртуальные члены. Поэтому незапечатанный класс с
+      виртуальными членами - это обязательство: последовательность вызовов нужно описать и сохранять.
+
+      Рекомендации по проектированию платформы смотрят на вопрос со стороны публичных типов, где ценится
+      расширяемость, поэтому требуют веской причины для `sealed`. Обе позиции сходятся в главном: опасно не
+      наследование само по себе, а переопределение поведения, которое никто не специфицировал. Класс без
+      виртуальных и `protected` членов почти ничего не раскрывает наследнику, а класс с виртуальными членами,
+      которые не проектировались для расширения, - как раз тот случай, когда `sealed` (или `sealed override` на
+      отдельных членах) защищает обе стороны.
+
+      Выбор по умолчанию определяет асимметрия правил совместимости. Снятие `sealed` не ломает код,
+      который уже использует тип, поэтому запечатанный класс оставляет выбор открытым. Добавление `sealed` к
+      опубликованному типу ломает всех, кто от него унаследовался, и при компиляции, и при загрузке, поэтому
+      такое изменение возможно разве что в мажорной версии с планом миграции.
+    linkTitles:
+      - "Запечатывание (рекомендации по проектированию платформы)"
+      - "Виртуальные члены (рекомендации по проектированию платформы)"
+      - "Правила изменений для совместимости"
+      - "CA1852: запечатывайте внутренние типы"
+  en:
+    title: Why seal classes that were not designed for inheritance, and what does sealing or unsealing later mean?
+    prompt: |
+      Many teams mark every class that was not designed for inheritance as `sealed`. Why is that reasonable,
+      how does it fit with the Framework Design Guidelines advice "do not seal classes without a good
+      reason", and what does it mean for library consumers if an already published public class is later
+      sealed or, the other way round, has its `sealed` removed?
+    hint: Which details of the base class can a derived class start to rely on when the base class has virtual methods? And which of the two changes can break code that others have already written?
+    answer: |
+      - **Why seal.** An unsealed class with virtual or `protected` members makes its internals part of the
+        public contract: which virtual methods are called, from which other methods, in which order and in
+        which object state. Derived classes rely on that sequence, so a harmless refactoring of the base class
+        silently breaks them: the fragile base class problem. Designing for inheritance is separate work:
+        extension points must be documented and tested, and the virtual members guidelines call them costly to
+        design, test and maintain. A class for which that work was not done should not invite inheritance.
+      - **The guideline nuance.** The sealing page of the Framework Design Guidelines says, for public framework
+        types: do not seal without a good reason, and "I cannot think of an extensibility scenario" is not one,
+        because users derive for reasons such as adding convenience members. That kind of inheritance is
+        nearly safe when the class has no virtual and no `protected` members: the derived class sees only the
+        public API. A sensible position: in a public library either design a few deliberate extension points
+        (documented virtual members, `sealed override` for the other overrides) or seal; in application code and
+        for `internal` types sealing by default costs almost nothing and can be backed by rule CA1852.
+      - **Side effects.** For sealed classes the JIT can devirtualize calls and simplify type checks. The cost:
+        such a class cannot be replaced by a derived proxy in tests, so the test seam goes through an interface.
+      - **What it means for consumers.** Removing `sealed` later is a compatible change: existing code keeps
+        working, but from then on you must maintain the inheritance contract. Sealing an already published
+        public class is a breaking change: derived classes stop compiling (CS0509), and already built
+        assemblies with derived types fail when the type is loaded (`TypeLoadException`). The .NET library
+        change rules list adding `sealed` as a disallowed change. That asymmetry gives the strategy: start
+        sealed and open the class when a real scenario appears.
+    explanation: |
+      The core of the argument is the fragile base class problem. Take a collection with virtual `Add` and
+      `AddRange`, where `AddRange` adds items directly, and a derived class that counts items by overriding
+      both methods. If a later version of the base class implements `AddRange` as a loop over `Add`, every
+      item is counted twice, although the public API did not change. The derived class depended on an
+      implementation detail that became observable through the virtual members. That is why an unsealed class
+      with virtual members is a commitment: its call sequence has to be specified and kept stable.
+
+      The framework design guidelines look at the question from the side of public types, where extensibility
+      is valued, so they ask for a good reason to use `sealed`. Both views agree on the main point: the danger
+      is not inheritance as such but overriding behaviour that nobody specified. A class without virtual and
+      `protected` members exposes almost nothing to a derived class, while a class with virtual members that
+      were never designed for extension is exactly the case where `sealed` (or `sealed override` on individual
+      members) protects both sides.
+
+      The asymmetry of the compatibility rules decides the default. Removing `sealed` does not break code that
+      already uses the type, so a sealed class keeps the choice open. Adding `sealed` to a published type
+      breaks everyone who derived from it, both at compile time and at load time, so such a change is possible
+      at most in a major version with a migration plan.
+    linkTitles:
+      - "Sealing (Framework design guidelines)"
+      - "Virtual members (Framework design guidelines)"
+      - "Change rules for compatibility"
+      - "CA1852: Seal internal types"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

@@ -1,0 +1,135 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPGB74A73GM6M2AN3T
+slug: exception-in-catch-not-caught-by-sibling-catch
+stack: dotnet
+topic: exceptions
+level: middle
+type: output
+grading: auto
+tags: [catch, rethrowing, exception-propagation]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    try
+    {
+        try
+        {
+            throw new InvalidOperationException("first");
+        }
+        catch (InvalidOperationException)
+        {
+            Console.Write("catch1 ");
+            throw new ArgumentException("second");
+        }
+        catch (ArgumentException)
+        {
+            Console.Write("catch2 ");
+        }
+    }
+    catch (ArgumentException)
+    {
+        Console.Write("outer");
+    }
+expect:
+  kind: output
+  value: "catch1 outer"
+acceptedOutputs: ["catch1 outer"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "catch1 outer" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "catch1 catch2" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "catch1 catch2 outer" }
+  - id: d
+    correct: false
+    expect: { kind: exception, value: System.ArgumentException }
+  - id: e
+    correct: false
+    expect: { kind: compile-error }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/statements/exception-handling-statements
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/language-specification/statements
+    lang: en
+    kind: spec
+locales:
+  ru:
+    title: "Перехватит ли соседний catch исключение, выброшенное в другом блоке catch того же try?"
+    prompt: |
+      Первый блок `catch` внутреннего оператора `try` выбрасывает новое `ArgumentException`, а следующий за ним
+      блок того же оператора объявлен как `catch (ArgumentException)`. Что выведет эта программа в консоль?
+    hint: "Какой код на самом деле охраняют блоки `catch` одного оператора `try` - только блок `try` или ещё и друг друга?"
+    options:
+      a: "catch1 outer"
+      b: "catch1 catch2"
+      c: "catch1 catch2 outer"
+      d: "Необработанное исключение `ArgumentException`"
+      e: "Ошибка компиляции"
+    optionExplanations:
+      b: "Блок `catch (ArgumentException)` внутреннего оператора охраняет только его блок `try`. Исключение выброшено из соседнего блока `catch`, поэтому этот обработчик не рассматривается и `catch2` не печатается."
+      c: "Для нового исключения внутренние блоки `catch` уже не проверяются: оно сразу уходит за пределы внутреннего оператора `try`. Поэтому `catch2` не печатается."
+      d: "Внутренний оператор `try` вложен во внешний, а блок `catch` внутреннего оператора находится внутри внешнего блока `try`. Внешний `catch (ArgumentException)` ловит новое исключение."
+      e: "Типы `InvalidOperationException` и `ArgumentException` не связаны наследованием, поэтому ни один блок не делает другой недостижимым (ошибки CS0160 нет), а `throw` внутри `catch` разрешён."
+    answer: "catch1 outer"
+    explanation: |
+      Блоки `catch` оператора `try` обрабатывают только исключения, выброшенные во время выполнения его блока
+      `try`. Здесь `InvalidOperationException` выброшено в блоке `try`, поиск обработчика находит первый
+      подходящий блок, `catch (InvalidOperationException)`, и он печатает `catch1 `.
+
+      Затем этот блок выбрасывает новое `ArgumentException`. Оно возникло уже не в блоке `try`, а в блоке
+      `catch`, поэтому соседние блоки `catch` того же оператора не проверяются, даже если тип совпадает.
+      Исключение покидает внутренний оператор `try` целиком (если бы у него был `finally`, тот выполнился бы)
+      и ищет обработчик в объемлющем коде. Весь внутренний оператор находится в блоке `try` внешнего оператора,
+      поэтому срабатывает внешний `catch (ArgumentException)` и печатает `outer`.
+
+      Практический вывод: если обработчик переводит одно исключение в другое, ловить результат нужно уровнем
+      выше, а не соседним `catch`. И при такой замене стоит передавать исходное исключение как
+      `innerException`, иначе причина сбоя потеряется.
+    linkTitles:
+      - "Операторы обработки исключений: throw и try"
+      - "Спецификация C#: операторы"
+  en:
+    title: "Does a sibling catch clause catch an exception thrown in another catch of the same try?"
+    prompt: |
+      The first `catch` clause of the inner `try` statement throws a new `ArgumentException`, and the clause that
+      follows it in the same statement is declared as `catch (ArgumentException)`. What does this program print
+      to the console?
+    hint: "What code do the `catch` clauses of one `try` statement actually guard - only the `try` block, or each other too?"
+    options:
+      a: "catch1 outer"
+      b: "catch1 catch2"
+      c: "catch1 catch2 outer"
+      d: "Unhandled `ArgumentException`"
+      e: "Compile error"
+    optionExplanations:
+      b: "The `catch (ArgumentException)` clause of the inner statement guards only its `try` block. The exception is thrown from a sibling `catch` clause, so this handler is not considered and `catch2` is not printed."
+      c: "The inner `catch` clauses are not checked for the new exception at all: it leaves the inner `try` statement right away. So `catch2` is not printed."
+      d: "The inner `try` statement is nested in the outer one, and the inner `catch` clause sits inside the outer `try` block. The outer `catch (ArgumentException)` catches the new exception."
+      e: "`InvalidOperationException` and `ArgumentException` are not related by inheritance, so neither clause makes the other unreachable (no CS0160), and `throw` inside `catch` is allowed."
+    answer: "catch1 outer"
+    explanation: |
+      The `catch` clauses of a `try` statement handle only exceptions thrown while its `try` block runs. Here
+      `InvalidOperationException` is thrown in the `try` block, the handler search finds the first matching
+      clause, `catch (InvalidOperationException)`, and it prints `catch1 `.
+
+      That clause then throws a new `ArgumentException`. It was raised in a `catch` block, not in the `try`
+      block, so the sibling `catch` clauses of the same statement are not checked, even though the type matches.
+      The exception leaves the inner `try` statement as a whole (a `finally` there would run) and looks for a
+      handler in the enclosing code. The whole inner statement is inside the `try` block of the outer statement,
+      so the outer `catch (ArgumentException)` runs and prints `outer`.
+
+      The practical takeaway: if a handler translates one exception into another, the result must be caught one
+      level up, not by a sibling `catch`. And when you translate, pass the original exception as
+      `innerException`, otherwise the root cause is lost.
+    linkTitles:
+      - "Exception-handling statements: throw and try"
+      - "C# specification: statements"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

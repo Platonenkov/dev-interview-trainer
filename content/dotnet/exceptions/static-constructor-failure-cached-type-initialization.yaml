@@ -1,0 +1,155 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPVQHGJW8MP2DTP3S4
+slug: static-constructor-failure-cached-type-initialization
+stack: dotnet
+topic: exceptions
+level: senior
+type: output
+grading: auto
+tags: [static-constructor, type-initialization-exception, exception-design]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    Access();
+    Access();
+    Console.Write($"runs={Counter.Runs}");
+
+    static void Access()
+    {
+        try
+        {
+            Console.Write($"{Config.Value} ");
+        }
+        catch (Exception ex)
+        {
+            Console.Write($"{ex.GetType().Name}/{ex.InnerException?.GetType().Name} ");
+        }
+    }
+
+    static class Counter
+    {
+        public static int Runs;
+    }
+
+    static class Config
+    {
+        public static int Value => 42;
+
+        static Config()
+        {
+            Counter.Runs++;
+            throw new InvalidOperationException("config is missing");
+        }
+    }
+expect:
+  kind: output
+  value: "TypeInitializationException/InvalidOperationException TypeInitializationException/InvalidOperationException runs=1"
+acceptedOutputs: ["TypeInitializationException/InvalidOperationException TypeInitializationException/InvalidOperationException runs=1"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "TypeInitializationException/InvalidOperationException TypeInitializationException/InvalidOperationException runs=1" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "InvalidOperationException/ InvalidOperationException/ runs=2" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "TypeInitializationException/InvalidOperationException TypeInitializationException/InvalidOperationException runs=2" }
+  - id: d
+    correct: false
+    expect: { kind: output, value: "TypeInitializationException/InvalidOperationException 42 runs=1" }
+  - id: e
+    correct: false
+    expect: { kind: exception, value: System.InvalidOperationException }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.typeinitializationexception
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/classes-and-structs/static-constructors
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что происходит, когда статический конструктор выбрасывает исключение, и сколько раз он выполнится?
+    prompt: |
+      Статический конструктор класса `Config` увеличивает счётчик и выбрасывает `InvalidOperationException`.
+      Метод `Access` дважды обращается к `Config.Value`, каждый раз в своём блоке `try`, и печатает тип
+      перехваченного исключения и тип его `InnerException`. В конце печатается, сколько раз выполнился
+      статический конструктор. Что выведет эта программа в .NET 10?
+    hint: Какое исключение видит код, который обращается к типу, а не вызывает конструктор напрямую? И пытается ли среда выполнения инициализировать тип повторно после неудачи?
+    options:
+      a: "`TypeInitializationException/InvalidOperationException TypeInitializationException/InvalidOperationException runs=1`"
+      b: "`InvalidOperationException/ InvalidOperationException/ runs=2`"
+      c: "`TypeInitializationException/InvalidOperationException TypeInitializationException/InvalidOperationException runs=2`"
+      d: "`TypeInitializationException/InvalidOperationException 42 runs=1`"
+      e: Необработанное исключение `InvalidOperationException`
+    optionExplanations:
+      b: "Исключение из статического конструктора не доходит до вызывающего кода в исходном виде: среда выполнения оборачивает его в `TypeInitializationException`, а исходное исключение лежит в `InnerException`. Кроме того, конструктор не запускается второй раз."
+      c: Тип исключения указан верно, но статический конструктор выполняется не больше одного раза. После неудачи среда выполнения запоминает ошибку и не вызывает конструктор повторно, поэтому счётчик равен `1`.
+      d: Неудачная инициализация не помечает тип как готовый к работе. Тип остаётся неинициализированным до конца жизни процесса, и каждое следующее обращение снова выбрасывает `TypeInitializationException`.
+      e: "`TypeInitializationException` наследуется от `Exception`, поэтому `catch (Exception ex)` перехватывает оба обращения, и программа завершается нормально."
+    answer: "Вывод: `TypeInitializationException/InvalidOperationException TypeInitializationException/InvalidOperationException runs=1`"
+    explanation: |
+      Статический конструктор вызывает среда выполнения, а не пользовательский код: он запускается перед первым
+      обращением к статическому члену типа. Если он выбрасывает исключение, среда выполнения оборачивает его в
+      `TypeInitializationException`, а исходное `InvalidOperationException` сохраняется в свойстве
+      `InnerException`. Поэтому первое обращение печатает `TypeInitializationException/InvalidOperationException`.
+
+      Повторно статический конструктор не запускается. Документация C# говорит прямо: если статический
+      конструктор выбросил исключение, среда выполнения не вызывает его второй раз, и тип остаётся
+      неинициализированным на всё время жизни домена приложения, то есть процесса в .NET 10. Каждое следующее
+      обращение к `Config` снова выбрасывает `TypeInitializationException` с той же причиной внутри, а
+      `Counter.Runs` остаётся равным `1`.
+
+      Практический вывод для проектирования: ошибка в статическом конструкторе необратима без перезапуска
+      процесса, и её не исправить повторной попыткой. Работу, которая может упасть (чтение конфигурации, файлов,
+      сетевые вызовы), не стоит помещать в статический конструктор или инициализатор статического поля: лучше
+      явная инициализация при старте приложения, где ошибку можно сообщить понятно. А при разборе логов
+      настоящую причину нужно искать в `InnerException`, а не в сообщении самого `TypeInitializationException`.
+    linkTitles:
+      - "Класс TypeInitializationException"
+      - "Статические конструкторы"
+  en:
+    title: What happens when a static constructor throws, and how many times does it run?
+    prompt: |
+      The static constructor of the `Config` class increments a counter and throws `InvalidOperationException`.
+      The `Access` method reads `Config.Value` twice, each time in its own `try` block, and prints the type of
+      the caught exception and the type of its `InnerException`. At the end the program prints how many times the
+      static constructor ran. What does this program print in .NET 10?
+    hint: Which exception does code see when it touches a type, rather than calling a constructor directly? And does the runtime try to initialize the type again after a failure?
+    options:
+      a: "`TypeInitializationException/InvalidOperationException TypeInitializationException/InvalidOperationException runs=1`"
+      b: "`InvalidOperationException/ InvalidOperationException/ runs=2`"
+      c: "`TypeInitializationException/InvalidOperationException TypeInitializationException/InvalidOperationException runs=2`"
+      d: "`TypeInitializationException/InvalidOperationException 42 runs=1`"
+      e: Unhandled `InvalidOperationException`
+    optionExplanations:
+      b: "An exception from a static constructor does not reach the caller as is: the runtime wraps it in `TypeInitializationException` and keeps the original in `InnerException`. Besides, the constructor does not run a second time."
+      c: The exception type is right, but a static constructor runs at most once. After a failure the runtime remembers the error and does not call the constructor again, so the counter is `1`.
+      d: A failed initialization does not mark the type as ready. The type stays uninitialized for the rest of the process lifetime, and every later access throws `TypeInitializationException` again.
+      e: "`TypeInitializationException` derives from `Exception`, so `catch (Exception ex)` catches both accesses and the program ends normally."
+    answer: "Output: `TypeInitializationException/InvalidOperationException TypeInitializationException/InvalidOperationException runs=1`"
+    explanation: |
+      A static constructor is called by the runtime, not by user code: it runs before the first access to a static
+      member of the type. When it throws, the runtime wraps the exception in `TypeInitializationException` and keeps
+      the original `InvalidOperationException` in the `InnerException` property. That is why the first access
+      prints `TypeInitializationException/InvalidOperationException`.
+
+      The static constructor does not run again. The C# documentation says it directly: if a static constructor
+      throws an exception, the runtime does not invoke it a second time, and the type remains uninitialized for the
+      lifetime of the application domain, which in .NET 10 means the process. Every later access to `Config` throws
+      `TypeInitializationException` again with the same cause inside, and `Counter.Runs` stays `1`.
+
+      The design lesson: a failure in a static constructor cannot be undone without restarting the process, and a
+      retry does not help. Work that can fail (reading configuration or files, network calls) does not belong in a
+      static constructor or a static field initializer: explicit initialization at application startup is better,
+      because there the error can be reported clearly. And when you read logs, look for the real cause in
+      `InnerException`, not in the message of `TypeInitializationException` itself.
+    linkTitles:
+      - "TypeInitializationException class"
+      - "Static constructors"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

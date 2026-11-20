@@ -1,0 +1,142 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNPFE270G0TE9VWK4M
+slug: langversion-upgrade-breaking-changes-plan
+stack: dotnet
+topic: csharp
+level: lead
+type: situation
+grading: self
+tags: [language-version, langversion, global-json, csharp-14, breaking-changes]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/whats-new/csharp-14
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/tools/global-json
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/configure-language-version
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "После установки .NET 10 SDK сборки перешли на C# 14 и ведут себя по-разному на разных машинах: как управлять обновлением языка?"
+    prompt: |
+      Команда сопровождает решение с целевой платформой `net8.0`. Один разработчик установил .NET 10 SDK, и с тех
+      пор его локальные сборки компилируются как C# 14: появились новые предупреждения, а один тест, который
+      проходит в CI, на его машине падает. Файлы проектов никто не менял, `global.json` в репозитории нет, на агентах
+      CI по-прежнему стоит .NET 8 SDK.
+
+      Как вы выясните, что произошло, и как спланируете и проконтролируете переход на новую версию языка для всей
+      команды?
+    hint: Что определяет, какой SDK и какой компилятор выполняют сборку, и от чего зависит версия языка, которую этот компилятор использует?
+    answer: |
+      1. **Найти причину.** Сравнить `dotnet --info` на машине разработчика и на агенте CI. Без `global.json`
+         команда `dotnet` берёт самый новый установленный SDK, поэтому у разработчика собирает компилятор из
+         .NET 10 SDK. Версия языка по умолчанию зависит от целевой платформы (для `net8.0` это C# 12), значит,
+         C# 14 появился из-за `<LangVersion>latest</LangVersion>` (или `preview`), скорее всего в
+         `Directory.Build.props`: такое значение следует за компилятором, а не за платформой. Фактическую версию
+         языка можно увидеть, временно добавив в код `#error version`: компилятор сообщит ошибку CS8304 с версией
+         компилятора и выбранной версией языка. Падающий тест - кандидат на семантическое изменение C# 14,
+         например контекстное ключевое слово `field`: в методе доступа свойства типа, где есть член с именем
+         `field`, оно теперь означает скрытое поле, которое генерирует компилятор.
+      2. **Сразу стабилизировать сборку.** Добавить `global.json`, который фиксирует SDK команды и CI, с
+         `"rollForward": "latestPatch"`: исправления SDK подхватываются, а переход на новую ветку или мажорную
+         версию - нет. Убрать `latest` и `preview` из `LangVersion`: либо удалить свойство, чтобы действовало
+         значение по умолчанию для платформы, либо задать явную версию в одном месте (`Directory.Build.props`).
+         Тот же SDK - в образах CI и в контейнерах для разработки.
+      3. **Обновление - отдельным изменением.** Один PR без функциональных задач: `global.json` на .NET 10 SDK,
+         целевая платформа `net10.0`, явный `LangVersion` убран, и действует умолчание C# 14. Перед этим разобрать
+         статью «Что нового в C# 14», список критических изменений компилятора и изменения .NET 10. Отдельно
+         проверить `field` в методах доступа (переименовать член или писать `this.field` / `@field`) и новые
+         неявные преобразования к `Span<T>` и `ReadOnlySpan<T>`: разрешение перегрузок для массивов (например,
+         `Reverse`, `Contains`) может выбрать методы `MemoryExtensions`.
+      4. **Предупреждения - как сигнал.** Сравнить список предупреждений до и после, исправлять, а не подавлять;
+         в CI - `TreatWarningsAsErrors`. При необходимости явно задать `AnalysisLevel`, чтобы набор правил
+         анализаторов менялся осознанно, отдельным шагом, а не вместе с SDK.
+      5. **Проверить и раскатать.** Полный прогон модульных и интеграционных тестов, стенд, затем обновление
+         агентов CI, базовых Docker-образов, инструкции для разработчиков и минимальной версии IDE. Откат - это
+         отмена слияния одного PR (`git revert`).
+      6. **Закрепить процесс.** Обновление SDK и языка - плановая задача с ответственным, `global.json` меняется
+         только через PR, плавающих значений `LangVersion` в репозитории нет.
+    explanation: |
+      Версия компилятора и версия языка - часть инструментария сборки, а сборка должна быть воспроизводимой:
+      один и тот же коммит обязан давать одинаковый результат на любой машине. Без `global.json` выбор SDK зависит
+      от того, что установлено локально (используется самый новый SDK), а `LangVersion latest` превращает установку
+      нового SDK в неявное обновление языка: документация прямо предупреждает, что значение `latest` меняется от
+      машины к машине и делает сборки ненадёжными.
+
+      Кроме того, версия языка новее умолчания для целевой платформы не поддерживается: такая сборка может давать
+      ошибки компиляции и выполнения, потому что возможностям языка могут требоваться возможности среды выполнения
+      или библиотек, которых нет в целевой платформе. Поэтому язык поднимают вместе с платформой (`net10.0` -
+      C# 14), а не отдельно от неё.
+
+      Отдельный PR нужен, чтобы любое изменение поведения однозначно указывало на обновление, а не на смешанную с
+      ним функциональность. Пример `field` показывает, почему мало добиться компиляции: код может собраться без
+      ошибок и вести себя иначе, поэтому список критических изменений и полный прогон тестов обязательны.
+    linkTitles:
+      - "Что нового в C# 14"
+      - "Обзор global.json"
+      - "Настройка версии языка C#"
+  en:
+    title: "Installing the .NET 10 SDK switched builds to C# 14 and they now differ between machines: how do you control the language upgrade?"
+    prompt: |
+      Your team maintains a solution that targets `net8.0`. A developer installed the .NET 10 SDK, and since then
+      their local builds compile as C# 14: new warnings appear, and one test that passes in CI fails on their
+      machine. Nobody changed the project files, the repository has no `global.json`, and the CI agents still
+      have the .NET 8 SDK.
+
+      How do you find out what happened, and how do you plan and control the move to the new language version
+      for the whole team?
+    hint: What decides which SDK and which compiler run a build, and what decides the language version that compiler uses?
+    answer: |
+      1. **Find the cause.** Compare `dotnet --info` on the developer machine and on a CI agent. Without
+         `global.json` the `dotnet` command picks the newest installed SDK, so the developer builds with the
+         compiler from the .NET 10 SDK. The default language version depends on the target framework (C# 12 for
+         `net8.0`), so C# 14 comes from `<LangVersion>latest</LangVersion>` (or `preview`), most likely in
+         `Directory.Build.props`: that value follows the compiler, not the framework. To see the effective
+         language version, temporarily add `#error version` to the code: the compiler reports error CS8304 with
+         the compiler version and the selected language version. The failing test is a candidate for a C# 14
+         semantic change, for example the `field` contextual keyword: in a property accessor of a type that has
+         a member named `field`, it now means the backing field generated by the compiler.
+      2. **Stabilise the build right away.** Add a `global.json` that pins the SDK used by the team and CI, with
+         `"rollForward": "latestPatch"`: SDK patches are picked up, a new feature band or major version is not.
+         Remove `latest` and `preview` from `LangVersion`: either delete the property so the framework default
+         applies, or set an explicit version in one place (`Directory.Build.props`). Use the same SDK in CI
+         images and development containers.
+      3. **Upgrade in one dedicated change.** One PR with no feature work: `global.json` moves to the .NET 10 SDK,
+         the target framework to `net10.0`, the explicit `LangVersion` is removed so the C# 14 default applies.
+         Before that, go through "What's new in C# 14", the compiler breaking changes list and the .NET 10
+         breaking changes. Check `field` in accessors (rename the member or write `this.field` / `@field`) and the
+         new implicit conversions to `Span<T>` and `ReadOnlySpan<T>`: overload resolution for arrays (for example
+         `Reverse` or `Contains`) may pick `MemoryExtensions` methods.
+      4. **Treat warnings as a signal.** Diff the warnings before and after, fix them rather than suppress them;
+         use `TreatWarningsAsErrors` in CI. If needed, set `AnalysisLevel` explicitly so that the set of analyzer
+         rules changes deliberately, as a separate step, rather than together with the SDK.
+      5. **Verify and roll out.** Run the full unit and integration test suite, deploy to a staging environment,
+         then update CI agents, base Docker images, the developer setup guide and the minimum IDE version.
+         Rollback is reverting the merge of a single PR (`git revert`).
+      6. **Make it a process.** SDK and language upgrades are planned work with an owner, `global.json` changes
+         only through a PR, and the repository has no floating `LangVersion` values.
+    explanation: |
+      The compiler version and the language version are part of the build toolchain, and the build must be
+      reproducible: the same commit has to give the same result on any machine. Without `global.json` the SDK
+      choice depends on what is installed locally (the newest SDK is used), and `LangVersion latest` turns
+      installing a new SDK into an implicit language upgrade: the documentation warns explicitly that the value of
+      `latest` changes from machine to machine and makes builds unreliable.
+
+      Besides, a language version newer than the default for the target framework is not supported: such a build
+      can produce compile-time and run-time errors, because language features may require runtime or library
+      features that the target framework does not have. That is why the language is raised together with the
+      framework (`net10.0` means C# 14), not on its own.
+
+      A dedicated PR makes any change in behaviour point clearly at the upgrade rather than at feature work mixed
+      into it. The `field` example shows why compiling is not enough: code can build without errors and behave
+      differently, so the breaking changes list and a full test run are mandatory.
+    linkTitles:
+      - "What's new in C# 14"
+      - "global.json overview"
+      - "Configure the C# language version"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

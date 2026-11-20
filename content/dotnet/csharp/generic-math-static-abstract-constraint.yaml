@@ -1,0 +1,126 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNMZTVH3EYZ5K3CNBX
+slug: generic-math-static-abstract-constraint
+stack: dotnet
+topic: csharp
+level: senior
+type: single
+grading: auto
+tags: [generics, generic-math, static-abstract-members, interfaces]
+code:
+  language: csharp
+  harness: none
+  source: |
+    using System.Numerics;
+
+    static T Sum<T>(T[] values) /* constraint */
+    {
+        T result = T.Zero;
+        foreach (T value in values)
+        {
+            result += value;
+        }
+        return result;
+    }
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/generics/math
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/advanced-topics/interface-implementation/static-virtual-interface-members
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какое ограничение позволяет обобщённому методу Sum<T> использовать T.Zero и оператор + без упаковки и dynamic?
+    prompt: |
+      Нужен один метод `Sum<T>`, который работает для `int`, `double`, `decimal` и других числовых типов, без
+      упаковки, рефлексии и `dynamic`. Вместо комментария `/* constraint */` нужно подставить ограничение на `T`.
+      С каким из вариантов метод скомпилируется и будет работать для `Sum(new[] { 1, 2, 3 })`?
+    hint: "`T.Zero` вызывается у типа, а не у экземпляра. Какие члены интерфейса вообще можно вызвать через параметр типа, и даёт ли ограничение сразу оба нужных члена?"
+    options:
+      a: "`where T : struct`"
+      b: "`where T : INumber<T>`"
+      c: "`where T : IAdditionOperators<T, T, T>`"
+      d: "`where T : IAddable<T>`, где `interface IAddable<T> { T Zero { get; } T Add(T other); }`"
+    optionExplanations:
+      a: "Ограничение `struct` говорит только о том, что `T` - тип значения. Оно не даёт ни статического члена `Zero`, ни оператора `+`, поэтому и `T.Zero`, и `result += value` - ошибки компиляции."
+      c: "Этот интерфейс объявляет статический абстрактный оператор `+`, поэтому `result += value` скомпилируется. Но члена `Zero` в нём нет: `Zero` объявлен в `INumberBase<TSelf>`, а родственный `IAdditiveIdentity<TSelf, TResult>` называет нейтральный элемент `AdditiveIdentity`. Строка `T result = T.Zero;` не компилируется."
+      d: "Члены `IAddable<T>` - экземплярные: `Zero` можно прочитать только у уже существующего значения, поэтому `T.Zero` через тип не компилируется, а оператора `+` интерфейс не объявляет. К тому же `int` и `double` не реализуют пользовательский интерфейс, так что `Sum<int>` всё равно был бы невозможен."
+    answer: "`where T : INumber<T>`"
+    explanation: |
+      Начиная с C# 11 и .NET 7 интерфейсы могут объявлять статические абстрактные члены, в том числе операторы.
+      Если параметр типа ограничен таким интерфейсом, компилятор разрешает обращаться к этим членам через сам
+      параметр типа: `T.Zero`, `a + b`. Конкретная реализация выбирается по аргументу типа: для `Sum<int>` это
+      реализация `INumberBase<int>.Zero` (значение 0) и сложение `int`. Сам `int.Zero` при этом не компилируется:
+      `Int32` реализует этот член явно, и он доступен только через интерфейс, например через ограниченный
+      параметр типа.
+
+      `INumber<TSelf>` из пространства имён `System.Numerics` (его нет среди неявных `using`, поэтому в коде есть
+      `using System.Numerics;`) объединяет нужные интерфейсы обобщённой математики: через унаследованный
+      `INumberBase<TSelf>` он даёт статическое свойство `Zero`, а через `IAdditionOperators<TSelf, TSelf, TSelf>` -
+      оператор `+`. Встроенные числовые типы (`int`, `double`, `decimal` и другие) реализуют `INumber<T>` начиная
+      с .NET 7. Параметр `TSelf` - это приём «тип ссылается сам на себя»: ограничение `INumber<T>` гарантирует, что
+      операторы принимают и возвращают именно `T`.
+
+      Упаковки здесь нет: для аргументов-типов значений JIT компилирует отдельную специализацию метода и вызывает
+      статическую реализацию напрямую, поэтому сложение может быть встроено так же, как в необобщённом коде.
+      В отличие от `dynamic` ошибки ловятся при компиляции, а не во время выполнения.
+
+      Так это работает начиная с C# 11 и .NET 7, в том числе в .NET 10.
+    linkTitles:
+      - "Обобщённая математика (generic math)"
+      - "Руководство: статические виртуальные члены интерфейсов"
+  en:
+    title: Which constraint lets a generic Sum<T> use T.Zero and the + operator without boxing or dynamic?
+    prompt: |
+      You need a single `Sum<T>` method that works for `int`, `double`, `decimal` and other numeric types, without
+      boxing, reflection or `dynamic`. A constraint on `T` has to replace the `/* constraint */` comment.
+      With which option does the method compile and work for `Sum(new[] { 1, 2, 3 })`?
+    hint: "`T.Zero` is called on a type, not on an instance. Which interface members can be called through a type parameter at all, and does the constraint provide both members you need?"
+    options:
+      a: "`where T : struct`"
+      b: "`where T : INumber<T>`"
+      c: "`where T : IAdditionOperators<T, T, T>`"
+      d: "`where T : IAddable<T>`, where `interface IAddable<T> { T Zero { get; } T Add(T other); }`"
+    optionExplanations:
+      a: "The `struct` constraint only says that `T` is a value type. It provides neither a static `Zero` member nor a `+` operator, so both `T.Zero` and `result += value` are compile errors."
+      c: "This interface declares a static abstract `+` operator, so `result += value` compiles. But it has no `Zero` member: `Zero` is declared in `INumberBase<TSelf>`, and the related `IAdditiveIdentity<TSelf, TResult>` names the identity value `AdditiveIdentity`. The line `T result = T.Zero;` does not compile."
+      d: "The members of `IAddable<T>` are instance members: `Zero` can be read only from an existing value, so `T.Zero` through the type does not compile, and the interface declares no `+` operator. Besides, `int` and `double` do not implement a user-defined interface, so `Sum<int>` would be impossible anyway."
+    answer: "`where T : INumber<T>`"
+    explanation: |
+      Since C# 11 and .NET 7 interfaces can declare static abstract members, including operators. When a type
+      parameter is constrained to such an interface, the compiler lets you access these members through the type
+      parameter itself: `T.Zero`, `a + b`. The concrete implementation is chosen by the type argument: for
+      `Sum<int>` it is the `INumberBase<int>.Zero` implementation (value 0) and `int` addition. `int.Zero` itself
+      does not compile: `Int32` implements this member explicitly, so it is reachable only through the interface,
+      for example through a constrained type parameter.
+
+      `INumber<TSelf>` from the `System.Numerics` namespace (not among the implicit `using` directives, hence the
+      `using System.Numerics;` line in the code) combines the generic math interfaces you need: through the
+      inherited `INumberBase<TSelf>` it provides the static `Zero` property, and through
+      `IAdditionOperators<TSelf, TSelf, TSelf>` the `+` operator. The built-in numeric types (`int`, `double`,
+      `decimal` and others) implement `INumber<T>` since .NET 7. The `TSelf` parameter is the self-referencing type
+      pattern: the `INumber<T>` constraint guarantees that the operators take and return exactly `T`.
+
+      There is no boxing: for value type arguments the JIT compiles a separate specialization of the method and
+      calls the static implementation directly, so the addition can be inlined just as in non-generic code.
+      Unlike `dynamic`, mistakes are caught at compile time, not at run time.
+
+      This works since C# 11 and .NET 7, including on .NET 10.
+    linkTitles:
+      - "Generic math"
+      - "Tutorial: static virtual members in interfaces"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"
+  noRunReason: The constraint is deliberately replaced by a placeholder because choosing it is the answer; each option supplies a different constraint, so the code cannot be compiled as shown.

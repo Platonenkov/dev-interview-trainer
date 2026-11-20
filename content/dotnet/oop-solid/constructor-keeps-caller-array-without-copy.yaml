@@ -1,0 +1,155 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPB366M7BSZ8M6TWQ4
+slug: constructor-keeps-caller-array-without-copy
+stack: dotnet
+topic: oop-solid
+level: middle
+type: find-bug
+grading: auto
+tags: [encapsulation, invariants, arrays, defensive-copy, readonly]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    int[] limits = { 100, 500, 1000 };
+    PriceTiers tiers = new PriceTiers(limits);
+    limits[0] = 2000;
+    Console.WriteLine(tiers.IsSorted());
+
+    class PriceTiers
+    {
+        private readonly int[] _limits;
+
+        public PriceTiers(int[] limits)
+        {
+            for (int i = 1; i < limits.Length; i++)
+            {
+                if (limits[i - 1] >= limits[i])
+                {
+                    throw new ArgumentException("Limits must be sorted.");
+                }
+            }
+
+            _limits = limits;
+        }
+
+        public bool IsSorted()
+        {
+            for (int i = 1; i < _limits.Length; i++)
+            {
+                if (_limits[i - 1] >= _limits[i])
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+    }
+bugLineSets: [[20]]
+fixedSource: |
+  int[] limits = { 100, 500, 1000 };
+  PriceTiers tiers = new PriceTiers(limits);
+  limits[0] = 2000;
+  Console.WriteLine(tiers.IsSorted());
+
+  class PriceTiers
+  {
+      private readonly int[] _limits;
+
+      public PriceTiers(int[] limits)
+      {
+          int[] copy = limits.ToArray();
+          for (int i = 1; i < copy.Length; i++)
+          {
+              if (copy[i - 1] >= copy[i])
+              {
+                  throw new ArgumentException("Limits must be sorted.");
+              }
+          }
+
+          _limits = copy;
+      }
+
+      public bool IsSorted()
+      {
+          for (int i = 1; i < _limits.Length; i++)
+          {
+              if (_limits[i - 1] >= _limits[i])
+              {
+                  return false;
+              }
+          }
+
+          return true;
+      }
+  }
+fixedExpect: { kind: output, value: "True" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/readonly
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/design-guidelines/arrays
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строку, из-за которой проверенный в конструкторе массив перестаёт быть отсортированным
+    prompt: |
+      Класс `PriceTiers` в конструкторе проверяет, что границы ценовых уровней строго возрастают, и сохраняет
+      их в поле `readonly`. После создания объекта вызывающий код меняет свой массив `limits`. Объект должен
+      по-прежнему считать свои границы отсортированными и вывести `True`, но программа выводит `False`.
+      Щёлкните по строке класса `PriceTiers` с дефектом.
+    hint: Сколько массивов существует в программе после вызова конструктора?
+    answer: Строка 20, `_limits = limits;`, которая сохраняет ссылку на массив вызывающего кода без копирования.
+    explanation: |
+      Массив - ссылочный тип. Строка 20 копирует в поле не элементы, а ссылку, поэтому после конструктора и
+      вызывающий код, и объект работают с одним и тем же массивом. Проверка в конструкторе прошла успешно, но
+      затем вызывающий код записал `2000` в `limits[0]`, и объект видит границы `2000, 500, 1000`: инвариант
+      нарушен в обход класса, и `IsSorted` возвращает `False`.
+
+      Модификатор `readonly` здесь не помогает: он запрещает только присвоить полю другую ссылку после
+      конструктора, но не мешает менять элементы массива, на который поле указывает. Строка 3 не дефект:
+      вызывающий код вправе распоряжаться своим массивом, и класс не должен зависеть от того, что тот с ним
+      сделает.
+
+      Исправление - защитная копия: `limits.ToArray()` (или `(int[])limits.Clone()`) создаёт отдельный массив.
+      Проверять лучше именно копию, а не исходный массив: тогда объект хранит ровно то, что было проверено.
+      Для `int` поверхностного копирования достаточно. Если массив нужно отдавать наружу, то по той же причине
+      возвращают копию или представление только для чтения. Рекомендации по проектированию .NET отдельно
+      предупреждают, что поле `readonly` с массивом не защищает его элементы от изменения.
+    linkTitles:
+      - "Ключевое слово readonly (справочник по C#)"
+      - "Массивы: рекомендации по проектированию"
+  en:
+    title: Find the line that lets an array validated in the constructor become unsorted
+    prompt: |
+      The `PriceTiers` class checks in its constructor that the price tier limits are strictly increasing and
+      stores them in a `readonly` field. After the object is created, the caller changes its own `limits`
+      array. The object should still consider its limits sorted and print `True`, but the program prints
+      `False`. Click the line of the `PriceTiers` class that contains the defect.
+    hint: How many arrays exist in the program after the constructor call?
+    answer: Line 20, `_limits = limits;`, which stores a reference to the caller's array without copying it.
+    explanation: |
+      An array is a reference type. Line 20 copies a reference into the field, not the elements, so after the
+      constructor both the caller and the object work with the same array. The check in the constructor
+      passed, but then the caller wrote `2000` into `limits[0]`, and the object sees the limits
+      `2000, 500, 1000`: the invariant is broken without going through the class, and `IsSorted` returns
+      `False`.
+
+      The `readonly` modifier does not help here: it only forbids assigning another reference to the field
+      after the constructor, and it does not stop anyone from changing the elements of the array the field
+      points to. Line 3 is not the defect: the caller is free to do what it wants with its own array, and the
+      class must not depend on what the caller does with it.
+
+      The fix is a defensive copy: `limits.ToArray()` (or `(int[])limits.Clone()`) creates a separate array.
+      Validate the copy rather than the original: then the object stores exactly what was checked. For `int`
+      a shallow copy is enough. If the array has to be handed out, return a copy or a read-only view for the
+      same reason. The .NET design guidelines explicitly warn that a `readonly` array field does not protect
+      its elements from being changed.
+    linkTitles:
+      - "readonly keyword (C# reference)"
+      - "Arrays (Framework Design Guidelines)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

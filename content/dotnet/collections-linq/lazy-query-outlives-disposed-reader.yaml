@@ -1,0 +1,149 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RMQEEJDCBPMPCX3REG
+slug: lazy-query-outlives-disposed-reader
+stack: dotnet
+topic: collections-linq
+level: senior
+type: find-bug
+grading: auto
+tags: [linq, deferred-execution, idisposable, using-declaration, iterators]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    IEnumerable<string> names = LoadNames("ann\nbob\ncid");
+    Console.WriteLine(string.Join(",", names));
+
+    static IEnumerable<string> LoadNames(string text)
+    {
+        using StringReader reader = new StringReader(text);
+        return ReadLines(reader).Select(line => line.ToUpperInvariant());
+    }
+
+    static IEnumerable<string> ReadLines(TextReader reader)
+    {
+        string line;
+        while ((line = reader.ReadLine()) != null)
+        {
+            yield return line;
+        }
+    }
+bugLineSets: [[7], [6]]
+fixedSource: |
+  IEnumerable<string> names = LoadNames("ann\nbob\ncid");
+  Console.WriteLine(string.Join(",", names));
+
+  static IEnumerable<string> LoadNames(string text)
+  {
+      using StringReader reader = new StringReader(text);
+      return ReadLines(reader).Select(line => line.ToUpperInvariant()).ToList();
+  }
+
+  static IEnumerable<string> ReadLines(TextReader reader)
+  {
+      string line;
+      while ((line = reader.ReadLine()) != null)
+      {
+          yield return line;
+      }
+  }
+fixedExpect: { kind: output, value: "ANN,BOB,CID" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/linq/deferred-execution-lazy-evaluation
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.io.stringreader.readline
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/statements/using
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему ленивый запрос над StringReader падает с ObjectDisposedException при перечислении?
+    prompt: |
+      Метод `LoadNames` читает строки из `StringReader` и возвращает их в верхнем регистре. Программа должна
+      вывести `ANN,BOB,CID`, но завершается с необработанным исключением `ObjectDisposedException`, причём
+      выбрасывается оно не внутри `LoadNames`, а во время `string.Join` в вызывающем коде.
+      Щёлкните по строке с дефектом.
+    hint: В какой момент на самом деле впервые вызывается `reader.ReadLine()` и что к этому моменту уже успело произойти с `reader`?
+    answer: |
+      Строка 7: метод возвращает ленивый запрос `ReadLines(reader).Select(...)`, который переживает `reader`.
+      Принимается и строка 6: объявление `using` освобождает `reader` при выходе из метода, раньше, чем запрос
+      начнут перечислять. Исправление - материализовать результат внутри области `using`
+      (`.ToList()` в строке 7) или превратить `LoadNames` в итератор, который сам владеет `reader`.
+    explanation: |
+      Ни `ReadLines`, ни `Select` в момент вызова ничего не читают. `ReadLines` - итератор: его тело не
+      выполняется, пока у перечислителя не вызовут `MoveNext`. `Select` выполняется отложенно и возвращает
+      объект-запрос, который хранит только источник и лямбду. Поэтому строка 7 лишь собирает цепочку объектов,
+      ссылающихся на `reader`, и возвращает её.
+
+      Объявление `using` в строке 6 вызывает `Dispose` в конце области видимости, то есть сразу после того,
+      как вычислено выражение `return` и метод завершается. Вызывающий код получает запрос над уже закрытым
+      читателем. Когда `string.Join` начинает перечисление, `Select` вызывает `MoveNext` у `ReadLines`, тот
+      впервые вызывает `reader.ReadLine()`, и закрытый `StringReader` выбрасывает `ObjectDisposedException`.
+      Исключение возникает далеко от места ошибки, поэтому такой дефект трудно найти по стеку вызовов.
+
+      Корень проблемы - время жизни ресурса не совпадает с временем жизни ленивого запроса. Два корректных
+      исправления:
+
+      1. **Материализовать внутри `using`.** `.ToList()` перечисляет запрос, пока `reader` ещё открыт, и
+         возвращает готовый список. Цена - все данные сразу в памяти, потоковая обработка теряется.
+      2. **Сделать `LoadNames` итератором.** Тело с `using StringReader reader = ...` и
+         `foreach` + `yield return` становится частью конечного автомата: читатель создаётся при первом
+         `MoveNext` и освобождается, когда перечисление закончится или вызывающий код освободит перечислитель
+         (`foreach` делает это и при `break`). Данные по-прежнему читаются потоково.
+
+      Удалить `using` - плохое исправление: для `StringReader` это безвредно, но для файла, сетевого потока
+      или подключения к базе данных ресурс останется неосвобождённым. Та же ошибка возникает с блоком
+      `using (...) { return query; }` и с любым ленивым запросом над освобождаемым объектом.
+    linkTitles:
+      - "Отложенное выполнение и ленивые вычисления в LINQ"
+      - "Метод StringReader.ReadLine"
+      - "Оператор using"
+  en:
+    title: Why does a lazy query over a StringReader fail with ObjectDisposedException when it is enumerated?
+    prompt: |
+      The `LoadNames` method reads lines from a `StringReader` and returns them in upper case. The program
+      should print `ANN,BOB,CID`, but it ends with an unhandled `ObjectDisposedException`, and the exception is
+      thrown not inside `LoadNames` but during `string.Join` in the calling code.
+      Click the line that contains the defect.
+    hint: At what moment is `reader.ReadLine()` actually called for the first time, and what has already happened to `reader` by then?
+    answer: |
+      Line 7: the method returns the lazy query `ReadLines(reader).Select(...)`, which outlives `reader`.
+      Line 6 is accepted too: the `using` declaration disposes `reader` when the method exits, before anyone
+      enumerates the query. The fix is to materialise the result inside the `using` scope (`.ToList()` on
+      line 7) or to turn `LoadNames` into an iterator that owns `reader` itself.
+    explanation: |
+      Neither `ReadLines` nor `Select` reads anything when it is called. `ReadLines` is an iterator: its body
+      does not run until `MoveNext` is called on its enumerator. `Select` uses deferred execution and returns a
+      query object that stores only the source and the lambda. So line 7 merely builds a chain of objects that
+      reference `reader` and returns it.
+
+      The `using` declaration on line 6 calls `Dispose` at the end of the enclosing scope, that is, right after
+      the `return` expression is evaluated and the method exits. The caller receives a query over a reader
+      that is already closed. When `string.Join` starts the enumeration, `Select` calls `MoveNext` on
+      `ReadLines`, which calls `reader.ReadLine()` for the first time, and the closed `StringReader` throws
+      `ObjectDisposedException`. The exception surfaces far from the actual mistake, which is why this defect
+      is hard to find from the stack trace.
+
+      The root cause is that the lifetime of the resource does not match the lifetime of the lazy query. Two
+      correct fixes:
+
+      1. **Materialise inside `using`.** `.ToList()` enumerates the query while `reader` is still open and
+         returns a finished list. The cost is that all data is in memory at once and streaming is lost.
+      2. **Make `LoadNames` an iterator.** A body with `using StringReader reader = ...` and
+         `foreach` + `yield return` becomes part of the state machine: the reader is created on the first
+         `MoveNext` and disposed when the enumeration finishes or the caller disposes the enumerator
+         (`foreach` does this even on `break`). The data is still read as a stream.
+
+      Removing `using` is a poor fix: for a `StringReader` it is harmless, but for a file, a network stream or a
+      database connection the resource would be left undisposed. The same mistake happens with a
+      `using (...) { return query; }` block and with any lazy query over a disposable object.
+    linkTitles:
+      - "Deferred execution and lazy evaluation in LINQ"
+      - "StringReader.ReadLine method"
+      - "using statement"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

@@ -1,0 +1,171 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RMDJQG95TSYQC36XZP
+slug: plugin-isolation-alc-vs-separate-process
+stack: dotnet
+topic: clr-gc
+level: architect
+type: open
+grading: self
+tags: [assemblyloadcontext, plugins, isolation, ipc, assemblies]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/core/dependency-loading/understanding-assemblyloadcontext
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/tutorials/creating-app-with-plugin-support
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/assembly/unloadability
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/porting/net-framework-tech-unavailable
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Как выбрать между AssemblyLoadContext и отдельными процессами для сторонних плагинов?"
+    prompt: |
+      Вы проектируете продукт на .NET 10, который годами будет размещать расширения сторонних разработчиков.
+      Можно загружать плагины в процесс хоста, каждый в свой `AssemblyLoadContext`, а можно запускать их
+      в отдельных процессах и общаться с ними через IPC.
+
+      По каким критериям вы выберете модель изоляции, что даёт и чего не даёт каждая из них и какое решение
+      вы предложите для этого продукта?
+    hint: Что может пойти не так со сторонним кодом, кроме конфликта версий, и что останется общим, если он работает в вашем процессе?
+    answer: |
+      1. **Что даёт `AssemblyLoadContext`.** Каждый плагин получает свой контекст и разрешает зависимости
+         через `AssemblyDependencyResolver` по собственному `.deps.json`, поэтому плагин A может использовать
+         одну версию библиотеки, а плагин B - другую. Collectible-контекст можно выгрузить и обновить плагин
+         без перезапуска хоста. Вызовы - обычные вызовы методов с общими объектами: без сериализации
+         и с минимальной задержкой.
+      2. **Чего он не даёт.** Контекст загрузки - не граница безопасности и не граница отказа. Всё живёт
+         в одном процессе:
+         - **общие права**: код плагина работает от имени хоста, видит его файлы, секреты, сеть и может вызвать
+           `Environment.Exit`;
+         - **общий домен отказа**: необработанное исключение в любом потоке, `StackOverflowException` или сбой
+           нативной библиотеки, вызванной через P/Invoke, завершают весь хост;
+         - **общие куча сборщика мусора, пул потоков и CPU**: утечка памяти или блокирующий `.Result` в одном
+           плагине бьют по всем; лимит памяти на отдельный плагин не задать, а зависший плагин нельзя
+           принудительно остановить (`Thread.Abort` в .NET не поддерживается);
+         - **общая версия среды выполнения**: плагин работает на той версии .NET, что и хост, и при обновлении
+           хоста все плагины переезжают вместе с ним;
+         - **общие типы контракта**: как правило (по схеме из руководства по плагинам), сборка с интерфейсами
+           плагинов загружается один раз в контекст по умолчанию и общая для хоста и всех плагинов, поэтому
+           несовместимое её изменение ломает все плагины сразу; выгрузка кооперативная, и одна оставшаяся
+           ссылка извне удерживает контекст в памяти.
+      3. **Что даёт и чего стоит отдельный процесс.** Даёт: изоляцию сбоев и перезапуск упавшего плагина,
+         ограничения ресурсов средствами ОС (cgroups, контейнеры, job objects в Windows), запуск под учётной
+         записью с минимальными правами или в песочнице, тайм-ауты с принудительным завершением, независимые
+         версии среды выполнения и даже языка, независимый выпуск плагинов. Стоит: IPC (gRPC, именованные
+         каналы, stdin/stdout), сериализация и задержка на каждый вызов, поэтому «болтливый» мелкозернистый API
+         невозможен; управление жизненным циклом (запуск, проверки работоспособности, перезапуск с задержкой),
+         больше памяти на процесс, усложнение развёртывания, отладки и трассировки через границу процессов,
+         версионирование протокола.
+      4. **Критерии выбора.** Кто пишет плагин и насколько ему можно доверять; цена отказа плагина для SLA хоста;
+         частота и гранулярность вызовов и объём передаваемых данных; нужны ли лимиты ресурсов и права
+         на плагин; горизонт поддержки контракта и обновлений .NET; готовность команды эксплуатировать
+         дополнительные процессы.
+      5. **Решение для этого продукта.** Сторонний код по умолчанию считается недоверенным и нестабильным,
+         поэтому он работает вне процесса хоста. `AssemblyLoadContext` остаётся для собственных или
+         сертифицированных модулей, где важна задержка. Контракт с первого дня проектируется как
+         версионируемый крупнозернистый асинхронный протокол сообщений (например, Protobuf поверх gRPC),
+         а доступ к данным и возможностям хоста плагин получает только через этот API. Тогда модуль можно
+         перенести между моделями без переписывания.
+    explanation: |
+      `AssemblyLoadContext` решает одну задачу: изоляцию версий зависимостей и загрузку и выгрузку кода.
+      Границей безопасности или отказа он не является. Документация о технологиях .NET Framework, недоступных
+      в .NET, говорит, что создавать дополнительные домены приложений нельзя, и для изоляции кода рекомендует
+      отдельные процессы или контейнеры, а для динамической загрузки сборок - `AssemblyLoadContext`. Там же
+      сказано, что песочница средствами среды выполнения (Code Access Security) не поддерживается, и для запуска
+      процессов с минимальными правами рекомендуются границы, которые обеспечивает ОС: виртуализация, контейнеры,
+      учётные записи. Поэтому всё, что касается отказов, ресурсов и прав, внутри одного процесса не решается.
+
+      Горизонт в годы усиливает аргумент. Хост будет обновлять .NET, контракт будет развиваться, плагины
+      разных авторов будут выпускаться в своём ритме. При загрузке в процесс всё это сцеплено: общая версия
+      среды выполнения и, как правило, общая сборка контракта. Граница процесса и версионируемый протокол
+      разрывают эту связь, а сбой одного расширения становится перезапуском его процесса, а не падением продукта.
+
+      Цена границы процесса реальна, поэтому ответ «всегда процессы» тоже слабый: для доверенного кода
+      с частыми мелкими вызовами загрузка в `AssemblyLoadContext` оправдана. Сильный ответ называет критерии,
+      разделяет плагины по уровню доверия и закладывает в контракт возможность сменить модель изоляции.
+      Описание соответствует .NET 10.
+    linkTitles:
+      - "Общие сведения об AssemblyLoadContext"
+      - "Создание приложения .NET с поддержкой плагинов"
+      - "Использование и отладка выгружаемых сборок в .NET"
+      - "Технологии .NET Framework, недоступные в .NET"
+  en:
+    title: "How do you choose between AssemblyLoadContext and separate processes for third-party plugins?"
+    prompt: |
+      You are designing a product on .NET 10 that will host extensions from third-party developers for years.
+      You can load plugins into the host process, each in its own `AssemblyLoadContext`, or run them in
+      separate processes and talk to them over IPC.
+
+      What criteria do you use to choose the isolation model, what does each model give and not give, and
+      what would you propose for this product?
+    hint: What can go wrong with third-party code besides a version conflict, and what would still be shared if it ran inside your process?
+    answer: |
+      1. **What `AssemblyLoadContext` gives.** Each plugin gets its own context and resolves its dependencies
+         through `AssemblyDependencyResolver` from its own `.deps.json`, so plugin A can use one version of a
+         library and plugin B another. A collectible context can be unloaded to update a plugin without
+         restarting the host. Calls are ordinary method calls on shared objects: no serialization and minimal
+         latency.
+      2. **What it does not give.** A load context is neither a security boundary nor a fault boundary.
+         Everything lives in one process:
+         - **shared permissions**: plugin code runs as the host, sees its files, secrets and network, and can
+           call `Environment.Exit`;
+         - **shared crash domain**: an unhandled exception on any thread, a `StackOverflowException` or a crash
+           in a native library called through P/Invoke terminates the whole host;
+         - **shared garbage collector heap, thread pool and CPU**: a memory leak or a blocking `.Result` in one
+           plugin hurts all of them; you cannot set a memory limit per plugin, and you cannot forcibly stop a
+           hung plugin (`Thread.Abort` is not supported in .NET);
+         - **shared runtime version**: the plugin runs on the host's .NET version, and when the host upgrades,
+           every plugin moves with it;
+         - **shared contract types**: typically, following the plugin tutorial pattern, the assembly with the
+           plugin interfaces is loaded once in the default context and shared by the host and every plugin, so a
+           breaking change to it breaks all plugins at once; unloading is cooperative, and one leftover reference
+           from outside keeps the context in memory.
+      3. **What a separate process gives and costs.** It gives: crash isolation and restart of a failed plugin,
+         OS-level resource limits (cgroups, containers, job objects on Windows), running under a least-privilege
+         account or in a sandbox, timeouts with a forced kill, independent runtime versions and even languages,
+         independent plugin releases. It costs: IPC (gRPC, named pipes, stdin/stdout), serialization and latency
+         on every call, so a chatty fine-grained API is impossible; lifecycle management (start, health checks,
+         restart with backoff), more memory per process, harder deployment, debugging and tracing across
+         process boundaries, protocol versioning.
+      4. **Decision criteria.** Who writes the plugin and how far it can be trusted; what a plugin failure costs
+         the host's SLA; the frequency and granularity of calls and the data volume; whether you need resource
+         limits and permissions per plugin; how long the contract and .NET upgrades must be supported; whether
+         the team can operate the extra processes.
+      5. **Decision for this product.** Third-party code is untrusted and unstable by default, so it runs outside
+         the host process. `AssemblyLoadContext` stays for your own or certified modules where latency matters.
+         From day one the contract is designed as a versioned, coarse-grained, asynchronous message protocol
+         (for example Protobuf over gRPC), and a plugin reaches the host's data and capabilities only through
+         that API. Then a module can move between the models without a rewrite.
+    explanation: |
+      `AssemblyLoadContext` solves one problem: isolating dependency versions and loading and unloading code.
+      It is neither a security boundary nor a fault boundary. The documentation on .NET Framework technologies
+      unavailable on .NET says that creating more application domains is not supported, and it recommends
+      separate processes or containers for code isolation, with `AssemblyLoadContext` for loading assemblies
+      dynamically. The same page says that sandboxing through the runtime (Code Access Security) is not supported
+      and recommends security boundaries provided by the operating system, such as virtualization, containers or
+      user accounts, for running processes with the minimum set of privileges. So nothing about failures,
+      resources or permissions can be solved inside one process.
+
+      A horizon of years strengthens the argument. The host will upgrade .NET, the contract will evolve, and
+      plugins from different authors will ship on their own schedules. In-process loading couples all of this:
+      a shared runtime version and, typically, a shared contract assembly. A process boundary with a versioned
+      protocol breaks that coupling, and a failure of one extension becomes a restart of its process instead of
+      a crash of the product.
+
+      The cost of a process boundary is real, so "always processes" is also a weak answer: for trusted code with
+      frequent small calls, loading into an `AssemblyLoadContext` is justified. A strong answer names the criteria,
+      splits plugins by trust level and builds the option to change the isolation model into the contract.
+      The description matches .NET 10.
+    linkTitles:
+      - "About AssemblyLoadContext"
+      - "Create a .NET application with plugins"
+      - "How to use and debug assembly unloadability in .NET"
+      - ".NET Framework technologies unavailable on .NET"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

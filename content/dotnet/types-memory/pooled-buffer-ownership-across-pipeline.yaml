@@ -1,0 +1,179 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RRJEHTEBX47F66DEVP
+slug: pooled-buffer-ownership-across-pipeline
+stack: dotnet
+topic: types-memory
+level: architect
+type: open
+grading: self
+tags: [span, memory, imemoryowner, arraypool, buffer-ownership, zero-copy]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/memory-and-spans/memory-t-usage-guidelines
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.buffers.imemoryowner-1
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.buffers.arraypool-1.rent
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.buffers.arraypool-1.return
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как спроектировать владение пулированными буферами в конвейере сообщений без копирования, который годами развивают разные команды?
+    prompt: |
+      Сетевой слой арендует буферы из пула и передаёт сообщение по конвейеру: декодирование (команда A),
+      валидация (команда B) и сохранение в хранилище (команда C, асинхронно и пачками). Цель - не копировать
+      данные между этапами. Компоненты принадлежат разным командам, а конвейер будет жить и меняться годами,
+      люди в командах будут сменяться.
+
+      Как вы спроектируете владение буферами: кто и когда возвращает буфер в пул, какие типы принимают
+      этапы, где допустимо копирование и как обнаруживать нарушения правил?
+    hint: |
+      Чем `Memory<T>` отличается от того, кто реально отвечает за возврат памяти в пул?
+    answer: |
+      1. **Один владелец в каждый момент времени, и это видно по типам.** Арендованный буфер оборачивается
+         во владельца: `IMemoryOwner<byte>` (например, из `MemoryPool<byte>.Shared.Rent`) или тип сообщения,
+         который его содержит. В любой момент буфером владеет ровно один компонент. Владелец либо освобождает
+         буфер (`Dispose`), либо передаёт владение дальше, но не то и другое сразу, и освобождение происходит
+         ровно один раз. Параметр типа `IMemoryOwner<T>` (или типа сообщения-владельца) в сигнатуре означает
+         «метод забирает владение»: после вызова вызывающий код буфер больше не трогает.
+      2. **Потребители получают аренду (lease), а не владение.**
+         - синхронные этапы (декодирование, валидация) принимают `ReadOnlySpan<byte>`: это `ref struct`,
+           и компилятор сам не даёт сохранить её в куче или пронести через `await`, поэтому аренда гарантированно
+           заканчивается на выходе из метода;
+         - асинхронные этапы принимают `ReadOnlyMemory<byte>` и пользуются им только до завершения
+           возвращённой `Task`;
+         - метод, который принимает `Memory<T>` и возвращает `void`, не использует его после возврата;
+           тип, получающий `Memory<T>` в конструкторе, делает потребителями все свои методы и растягивает аренду
+           на время жизни объекта - на границах между командами такие контракты лучше не допускать;
+         - этапы, которые только читают, получают read-only типы.
+      3. **Копировать там, где контракт нельзя обеспечить.** Всё, что переживает вызов: очереди, кэши,
+         фоновые задачи, логирование содержимого, накопление пачек при сохранении, повторные попытки. Здесь
+         либо явно передаётся владение (этап сохранения принимает владельца и освобождает его после завершения
+         записи), либо данные копируются в память, которой компонент владеет сам (`ToArray` или собственный
+         арендованный буфер). Правило: внутри компонента данные не копируются, а на его границе владение либо
+         явно передаётся, либо данные копируются. Решение подтверждается замером: одна копия в несколько
+         килобайт рядом с записью в базу обычно незаметна.
+      4. **Раздача нескольким потребителям.** Если один буфер нужен нескольким параллельным потребителям,
+         модель одного владельца не подходит: либо копия на каждого потребителя, либо владелец со счётчиком ссылок
+         (`Interlocked`, последний освободивший возвращает буфер). Счётчик ссылок - крайняя мера: лишнее или
+         пропущенное освобождение даёт те же ошибки, только реже.
+      5. **Сделать нарушения видимыми.**
+         - в тестовом и отладочном режиме - собственный пул, который выдаёт новые массивы и заполняет
+           возвращённые буферы «ядовитым» шаблоном, и обёртка-владелец, которая бросает `ObjectDisposedException`
+           при обращении после освобождения и обнаруживает повторное освобождение;
+         - нагрузочные и параллельные тесты, контрактные тесты на каждой границе между командами;
+         - контракт владения записан в ADR и в чек-листе code review, а не держится в памяти авторов.
+      6. **Утечка лучше порчи данных.** Документация `ArrayPool<T>.Rent` называет невозвращённый буфер
+         нефатальной ошибкой: она может лишь снизить производительность, потому что пулу придётся создать новый
+         буфер, а потерянный массив соберёт сборщик мусора. Возврат слишком рано или дважды портит чужие данные.
+         Поэтому при неясном владении буфер лучше не вернуть, чем вернуть «на всякий случай».
+    explanation: |
+      `Memory<T>` - это только ссылка на массив (или `MemoryManager<T>`), смещение и длина. Он не владеет памятью
+      и не знает, что буфер вернули в пул. После возврата пул выдаёт тот же массив следующему арендатору, а
+      старый `Memory<T>` остаётся для среды выполнения совершенно корректным: исключения нет. Чтение видит
+      данные чужого сообщения, запись портит чужое сообщение. Ошибка проявляется под нагрузкой, плохо
+      воспроизводится и может навсегда попасть в хранилище. Повторный возврат ещё хуже: один массив может
+      оказаться у двух арендаторов одновременно.
+
+      Рекомендации Microsoft по `Memory<T>` и `Span<T>` вводят именно эти понятия: у буфера один владелец,
+      который управляет временем жизни, потребители и аренда - время, в течение которого потребитель может
+      пользоваться буфером. Владельца `IMemoryOwner<T>` нужно либо освободить, либо передать, но не то и другое,
+      а параметр `IMemoryOwner<T>` в API означает принятие владения. Архитектурная задача в том, чтобы эти правила
+      пережили смену команд. Поэтому владение выражается в сигнатурах, а не в комментариях: ограничения
+      `ref struct` для `Span<T>` - единственная аренда, которую проверяет компилятор, а тип `IMemoryOwner<T>` в
+      параметре явно показывает передачу владения. Там, где ни типы, ни компилятор аренду не ограничивают,
+      безопаснее заплатить за копию, чем рисковать тихой порчей данных.
+
+      Ещё две детали: `Rent` возвращает буфер не меньше запрошенной длины, а он может оказаться больше, поэтому
+      дальше передаётся срез нужной длины, а не весь буфер; и `Return` по умолчанию не очищает массив (параметр
+      `clearArray` по умолчанию равен `false`), поэтому для чувствительных данных используют
+      `Return(array, clearArray: true)`.
+    linkTitles:
+      - "Рекомендации по использованию Memory<T> и Span<T>"
+      - "Интерфейс IMemoryOwner<T>"
+      - "Метод ArrayPool<T>.Rent"
+      - "Метод ArrayPool<T>.Return"
+  en:
+    title: How do you design ownership of pooled buffers in a zero-copy message pipeline that different teams evolve over years?
+    prompt: |
+      The network layer rents buffers from a pool and passes each message through a pipeline: decoding (team A),
+      validation (team B) and persistence to storage (team C, asynchronous and batched). The goal is not to copy
+      data between the stages. The components belong to different teams, and the pipeline will live and change
+      for years while people on the teams come and go.
+
+      How do you design buffer ownership: who returns a buffer to the pool and when, which types do the stages
+      accept, where is copying acceptable, and how do you detect rule violations?
+    hint: |
+      How does a `Memory<T>` differ from whoever is actually responsible for returning the memory to the pool?
+    answer: |
+      1. **One owner at a time, visible in the types.** The rented buffer is wrapped in an owner:
+         `IMemoryOwner<byte>` (for example from `MemoryPool<byte>.Shared.Rent`) or a message type that holds it.
+         At any moment exactly one component owns the buffer. The owner either releases it (`Dispose`) or
+         transfers ownership, never both, and release happens exactly once. A parameter of type `IMemoryOwner<T>`
+         (or of the owning message type) in a signature means "this method takes ownership": after the call the
+         caller does not touch the buffer.
+      2. **Consumers get leases, not ownership.**
+         - synchronous stages (decoding, validation) take `ReadOnlySpan<byte>`: it is a `ref struct`, and the
+           compiler itself prevents storing it on the heap or carrying it across `await`, so the lease is
+           guaranteed to end when the method returns;
+         - asynchronous stages take `ReadOnlyMemory<byte>` and use it only until the returned `Task` completes;
+         - a method that accepts `Memory<T>` and returns `void` does not use it after it returns; a type that
+           receives `Memory<T>` in its constructor makes all its methods consumers and stretches the lease to the
+           lifetime of the object - avoid such contracts at boundaries between teams;
+         - stages that only read get read-only types.
+      3. **Copy where the contract cannot be enforced.** Anything that outlives the call: queues, caches,
+         background tasks, payload logging, batching in persistence, retries. There, either ownership is
+         transferred explicitly (the persistence stage takes the owner and releases it after the write completes),
+         or the data is copied into memory the component owns itself (`ToArray` or its own rented buffer). The rule:
+         inside a component the data is not copied, and at its edge ownership is either transferred explicitly or
+         the data is copied. Confirm the decision by measuring: one copy of a few kilobytes next to a database
+         write is usually noise.
+      4. **Fan-out to several consumers.** If one buffer is needed by several parallel consumers, the single-owner
+         model does not fit: either a copy per consumer, or a reference-counted owner (`Interlocked`, the last
+         release returns the buffer). Reference counting is a last resort: an extra or missed release produces the
+         same bugs, just less often.
+      5. **Make violations visible.**
+         - in test and debug mode, a custom pool that hands out fresh arrays and fills returned buffers with a
+           poison pattern, and an owner wrapper that throws `ObjectDisposedException` on access after release and
+           detects a double release;
+         - load and concurrency tests, and contract tests at every boundary between teams;
+         - the ownership contract is recorded in an ADR and in the code review checklist, not kept in the memory
+           of its authors.
+      6. **A leak is better than corruption.** The `ArrayPool<T>.Rent` documentation calls failing to return a
+         rented buffer a non-fatal error: it may only reduce performance, because the pool has to create a new
+         buffer, and the lost array is collected by the garbage collector. Returning too early or twice corrupts
+         someone else's data. So when ownership is unclear, it is better not to return the buffer than to return it
+         "just in case".
+    explanation: |
+      A `Memory<T>` is only a reference to an array (or a `MemoryManager<T>`), an offset and a length. It does not
+      own the memory and does not know that the buffer was returned to the pool. After the return, the pool hands
+      the same array to the next renter, while the old `Memory<T>` is still perfectly valid as far as the runtime
+      is concerned: there is no exception. Reads see another message's data, writes corrupt another message. The
+      bug shows up under load, is hard to reproduce and can end up in storage permanently. A double return is even
+      worse: one array can end up with two renters at the same time.
+
+      The Microsoft guidelines for `Memory<T>` and `Span<T>` introduce exactly these concepts: a buffer has one
+      owner who manages its lifetime, consumers, and a lease - the period during which a consumer may use the
+      buffer. An `IMemoryOwner<T>` must be either disposed or transferred, but not both, and an `IMemoryOwner<T>`
+      parameter in an API means accepting ownership. The architectural task is to make these rules survive team
+      changes. That is why ownership is expressed in signatures, not in comments: the `ref struct` restrictions of
+      `Span<T>` are the only lease the compiler checks, and an `IMemoryOwner<T>` parameter type makes the transfer
+      of ownership explicit. Where neither the types nor the compiler limit the lease, paying for a copy is safer
+      than risking silent data corruption.
+
+      Two more details: `Rent` returns a buffer of at least the requested length, and it may be larger, so the
+      stages receive a slice of the needed length rather than the whole buffer; and `Return` does not clear the
+      array by default (the `clearArray` parameter defaults to `false`), so for sensitive data use
+      `Return(array, clearArray: true)`.
+    linkTitles:
+      - "Memory<T> and Span<T> usage guidelines"
+      - "IMemoryOwner<T> interface"
+      - "ArrayPool<T>.Rent method"
+      - "ArrayPool<T>.Return method"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

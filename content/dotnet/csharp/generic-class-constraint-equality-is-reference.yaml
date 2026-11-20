@@ -1,0 +1,123 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNSXAP8M1PCS72TWAJ
+slug: generic-class-constraint-equality-is-reference
+stack: dotnet
+topic: csharp
+level: senior
+type: output
+grading: auto
+tags: [generics, constraints, equality, operator-overloading, string]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    string a = new string('x', 3);
+    string b = new string('x', 3);
+
+    bool generic = Same(a, b);
+    bool direct = a == b;
+
+    Console.Write($"{generic} {direct}");
+
+    static bool Same<T>(T x, T y) where T : class => x == y;
+expect:
+  kind: output
+  value: "False True"
+acceptedOutputs: ["False True"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "False True" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "True True" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "False False" }
+  - id: d
+    correct: false
+    expect: { kind: compile-error }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/generics/constraints-on-type-parameters
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/equality-operators
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Что выведет сравнение двух равных строк через == в обобщённом методе с ограничением where T : class?"
+    prompt: |
+      Что выведет эта программа в консоль? Строки `a` и `b` содержат одинаковый текст `"xxx"`, но созданы
+      отдельно через `new string('x', 3)`. Метод `Same<T>` сравнивает аргументы оператором `==`.
+    hint: "В какой момент компилятор выбирает, какой именно оператор `==` вызвать внутри `Same<T>`, и что он знает о `T` в этот момент?"
+    options:
+      a: "False True"
+      b: "True True"
+      c: "False False"
+      d: Ошибка компиляции
+    optionExplanations:
+      b: "Внутри `Same<T>` перегрузка `==` для `string` не вызывается. Оператор выбирается один раз при компиляции обобщённого метода, и для `T : class` это сравнение ссылок. Разные объекты с одинаковым текстом дают `False`."
+      c: "Прямое сравнение `a == b` компилятор связывает с перегруженным оператором `string.operator ==`, который сравнивает содержимое строк. Текст одинаковый, поэтому результат `True`."
+      d: "Ограничение `where T : class` разрешает применять `==` к значениям типа `T`: компилятор использует предопределённое сравнение ссылок. Ошибка CS0019 была бы без ограничения, когда `T` может оказаться типом значения."
+    answer: "False True"
+    explanation: |
+      Операторы в C# - это статические методы, и выбор перегрузки происходит при компиляции. Обобщённый метод
+      `Same<T>` компилируется один раз для всех аргументов типа, и в этот момент компилятор знает о `T` только то,
+      что сказано в ограничении: это ссылочный тип. Пользовательских операторов у такого `T` не видно, поэтому
+      `x == y` связывается с предопределённым оператором равенства ссылок. При вызове `Same<string>` перегрузка
+      `string.operator ==` не подставляется: метод сравнивает две разные ссылки и возвращает `False`.
+
+      В строке `a == b` статический тип операндов - `string`, и компилятор выбирает перегруженный
+      `string.operator ==`, который сравнивает символы. Поэтому `direct` равен `True`, и программа выводит
+      `False True`.
+
+      Обратите внимание, почему строки созданы через `new string('x', 3)`: строковые литералы интернируются,
+      и два литерала `"xxx"` указывали бы на один объект. Тогда и сравнение ссылок дало бы `True`, и ошибка
+      в обобщённом коде осталась бы незамеченной в тестах.
+
+      Чтобы обобщённый код сравнивал значения, используют `EqualityComparer<T>.Default.Equals(x, y)` или
+      принимают `IEqualityComparer<T>`: тогда вызывается `Equals` конкретного типа, а не сравнение ссылок.
+    linkTitles:
+      - Ограничения параметров типа
+      - Операторы равенства
+  en:
+    title: "What does comparing two equal strings with == print in a generic method constrained with where T : class?"
+    prompt: |
+      What does this program print to the console? The strings `a` and `b` hold the same text `"xxx"`, but
+      they are created separately with `new string('x', 3)`. The method `Same<T>` compares its arguments with `==`.
+    hint: "At what point does the compiler choose which `==` operator to call inside `Same<T>`, and what does it know about `T` at that point?"
+    options:
+      a: "False True"
+      b: "True True"
+      c: "False False"
+      d: Compile error
+    optionExplanations:
+      b: "Inside `Same<T>` the `string` overload of `==` is not called. The operator is chosen once, when the generic method is compiled, and for `T : class` that is reference comparison. Two different objects with the same text give `False`."
+      c: "For the direct comparison `a == b` the compiler binds to the overloaded `string.operator ==`, which compares the contents of the strings. The text is the same, so the result is `True`."
+      d: "The `where T : class` constraint allows `==` on values of type `T`: the compiler uses the predefined reference equality. Error CS0019 would appear without the constraint, when `T` could be a value type."
+    answer: "False True"
+    explanation: |
+      Operators in C# are static methods, and the overload is chosen at compile time. The generic method
+      `Same<T>` is compiled once for all type arguments, and at that moment the compiler knows only what the
+      constraint says about `T`: it is a reference type. No user-defined operators of such a `T` are visible, so
+      `x == y` binds to the predefined reference equality operator. When `Same<string>` is called, the
+      `string.operator ==` overload is not substituted: the method compares two different references and
+      returns `False`.
+
+      In the line `a == b` the static type of the operands is `string`, and the compiler picks the overloaded
+      `string.operator ==`, which compares characters. So `direct` is `True`, and the program prints
+      `False True`.
+
+      Note why the strings are created with `new string('x', 3)`: string literals are interned, and two
+      `"xxx"` literals would point to the same object. Then reference comparison would also give `True`, and
+      the bug in the generic code would go unnoticed in tests.
+
+      To make generic code compare values, use `EqualityComparer<T>.Default.Equals(x, y)` or accept an
+      `IEqualityComparer<T>`: then the `Equals` of the actual type is called instead of reference comparison.
+    linkTitles:
+      - Constraints on type parameters
+      - Equality operators
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

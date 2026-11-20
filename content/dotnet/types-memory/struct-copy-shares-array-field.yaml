@@ -1,0 +1,118 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RRQMBF1JFPXH740TA7
+slug: struct-copy-shares-array-field
+stack: dotnet
+topic: types-memory
+level: junior
+type: output
+grading: auto
+tags: [struct, value-types, reference-types, shallow-copy, arrays]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    Holder original = new Holder { Count = 1, Items = new int[] { 1, 2, 3 } };
+    Holder copy = original;
+
+    copy.Count = 5;
+    copy.Items[0] = 9;
+
+    Console.Write($"{original.Count} {original.Items[0]}");
+
+    struct Holder
+    {
+        public int Count;
+        public int[] Items;
+    }
+expect:
+  kind: output
+  value: "1 9"
+acceptedOutputs: ["1 9"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "1 9" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "5 9" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "1 1" }
+  - id: d
+    correct: false
+    expect: { kind: compile-error }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/value-types
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/struct
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что выведет программа, если скопировать структуру с полем-массивом и изменить копию?
+    prompt: |
+      Что выведет эта программа в консоль? Структура `Holder` содержит поле `int` и поле `int[]`. Через копию
+      меняются оба поля, а печатаются значения из исходной переменной `original`.
+    hint: Что именно хранится в поле `Items` внутри структуры - сами элементы массива или что-то другое?
+    options:
+      a: "1 9"
+      b: "5 9"
+      c: "1 1"
+      d: Ошибка компиляции
+    optionExplanations:
+      b: Так было бы, если бы `original` и `copy` были одним объектом, как при `class`. Но `Holder` - структура, присваивание копирует её поля, и `copy.Count = 5` меняет только поле копии, поэтому `original.Count` остаётся равным 1.
+      c: Так было бы, если бы копирование структуры копировало и сам массив. Но поле `Items` хранит ссылку, и копируется только ссылка. Обе структуры указывают на один массив, поэтому запись `copy.Items[0] = 9` видна и через `original`.
+      d: Код корректен. Инициализатор объекта можно использовать со структурой, поля открыты для записи, а объявление типа разрешено после операторов верхнего уровня.
+    answer: "1 9"
+    explanation: |
+      Присваивание `Holder copy = original;` копирует все поля структуры. Но копируется значение каждого поля,
+      а значение поля ссылочного типа - это ссылка. Поэтому:
+
+      - поле `Count` типа `int` копируется целиком, и у `copy` оно своё: `copy.Count = 5` не затрагивает
+        `original.Count`, который остаётся равным 1;
+      - поле `Items` типа `int[]` после копирования в обеих структурах указывает на один и тот же массив в куче.
+        Запись `copy.Items[0] = 9` меняет этот общий массив, и `original.Items[0]` тоже равно 9.
+
+      Отсюда вывод `1 9`. Копирование структуры - поверхностное: тип значения не делает «глубокую» копию
+      объектов, на которые ссылаются его поля. Если копии нужен собственный массив, его копируют явно,
+      например `copy.Items = (int[])original.Items.Clone();`. Обратите внимание: присваивание
+      `copy.Items = new int[] { ... }` заменило бы ссылку только у копии и на `original` бы не повлияло.
+    linkTitles:
+      - "Типы значений"
+      - "Типы структур"
+  en:
+    title: What does the program print when a struct with an array field is copied and the copy is changed?
+    prompt: |
+      What does this program print to the console? The struct `Holder` has an `int` field and an `int[]` field.
+      Both fields are changed through the copy, and the values are printed from the original variable `original`.
+    hint: What exactly is stored in the field `Items` inside the struct - the array elements themselves, or something else?
+    options:
+      a: "1 9"
+      b: "5 9"
+      c: "1 1"
+      d: Compile error
+    optionExplanations:
+      b: That would be the result if `original` and `copy` were one object, as with a `class`. But `Holder` is a struct, the assignment copies its fields, and `copy.Count = 5` changes only the field of the copy, so `original.Count` stays 1.
+      c: That would be the result if copying the struct also copied the array itself. But the field `Items` holds a reference, and only the reference is copied. Both structs point to one array, so the write `copy.Items[0] = 9` is visible through `original` as well.
+      d: The code is valid. An object initializer can be used with a struct, the fields are public and writable, and a type declaration may follow top-level statements.
+    answer: "1 9"
+    explanation: |
+      The assignment `Holder copy = original;` copies every field of the struct. But it copies the value of each
+      field, and the value of a reference-type field is a reference. So:
+
+      - the `int` field `Count` is copied in full, and `copy` has its own: `copy.Count = 5` does not touch
+        `original.Count`, which stays 1;
+      - after the copy, the `int[]` field `Items` in both structs points to the same array on the heap.
+        The write `copy.Items[0] = 9` changes that shared array, so `original.Items[0]` is 9 too.
+
+      Hence the output `1 9`. Copying a struct is shallow: a value type does not make a deep copy of the objects
+      its fields refer to. If the copy needs its own array, copy it explicitly, for example
+      `copy.Items = (int[])original.Items.Clone();`. Note that the assignment `copy.Items = new int[] { ... }`
+      would replace the reference only in the copy and would not affect `original`.
+    linkTitles:
+      - "Value types"
+      - "Structure types"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

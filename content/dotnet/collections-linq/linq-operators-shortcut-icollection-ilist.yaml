@@ -1,0 +1,120 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RM1948SEYMVH9RGCAZ
+slug: linq-operators-shortcut-icollection-ilist
+stack: dotnet
+topic: collections-linq
+level: senior
+type: multi
+grading: auto
+tags: [linq, complexity, icollection, ilist, performance]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+  - id: e
+    correct: true
+  - id: f
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.linq.enumerable.count
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.linq.enumerable.contains
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.linq.enumerable.elementat
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какие операторы LINQ to Objects используют ICollection<T> или IList<T> источника вместо перебора?
+    prompt: |
+      Источник - `List<int>` с `n` элементами, переданный в метод как `IEnumerable<int>`. Выберите все операторы
+      `System.Linq.Enumerable`, для которых документация явно указывает: если источник реализует `ICollection<T>`
+      или `IList<T>`, оператор использует эту реализацию, а не перебирает последовательность.
+    hint: У каких интерфейсов уже есть член, который отвечает ровно на тот вопрос, что задаёт оператор, без обхода элементов?
+    options:
+      a: "`Count()` без предиката"
+      b: "`Count(predicate)`"
+      c: "`Contains(value)` без компаратора"
+      d: "`Where(predicate)`"
+      e: "`ElementAt(index)`"
+      f: "`Any(predicate)`"
+    optionExplanations:
+      b: "`ICollection<T>.Count` возвращает общее число элементов, а не число подходящих под условие. Чтобы посчитать подходящие, оператор вызывает предикат для каждого элемента, поэтому даже для `List<T>` это O(n)."
+      d: "`Where` возвращает ленивую последовательность, и при её перечислении предикат вызывается для каждого элемента источника: ни `ICollection<T>`, ни `IList<T>` не умеют фильтровать. Результат `Where` не реализует `ICollection<T>`, поэтому и `Count()` после него перебирает элементы."
+      f: "В `ICollection<T>` и `IList<T>` нет члена, который проверяет произвольное условие. `Any(predicate)` перебирает элементы до первого совпадения, в худшем случае все n."
+    answer: "`Count()`, `Contains(value)` и `ElementAt(index)`."
+    explanation: |
+      Методы `Enumerable` принимают `IEnumerable<T>`, но проверяют тип источника во время выполнения. Документация
+      описывает три таких сокращения:
+
+      - `Count()`: если источник реализует `ICollection<T>`, количество берётся из `ICollection<T>.Count`. Для
+        `List<T>`, массива или `HashSet<T>` это O(1), а не перебор.
+      - `Contains(value)`: если источник реализует `ICollection<T>`, вызывается его собственный `Contains`. Для
+        `List<T>` это всё равно линейный поиск, но для `HashSet<T>` - поиск по хешу в среднем за O(1). Следствие:
+        сравнение выполняет коллекция по своим правилам, например с компаратором, переданным в конструктор
+        `HashSet<T>`.
+      - `ElementAt(index)`: если источник реализует `IList<T>`, элемент берётся через индексатор, то есть за O(1)
+        для `List<T>` и массива. Иначе оператор перебирает элементы до нужной позиции.
+
+      Операторы с предикатом (`Count(predicate)`, `Any(predicate)`, `Where`) такого сокращения не имеют: ответ
+      зависит от значения каждого элемента, а интерфейсы коллекций условий не проверяют.
+
+      Сокращение срабатывает, только пока в руках сам источник. После `Where` или другого оператора получается
+      новая последовательность, и `Count()` над ней уже перебирает элементы. Реализация в `dotnet/runtime`
+      содержит и другие внутренние оптимизации, но рассчитывать стоит на то, что гарантирует документация.
+    linkTitles:
+      - "Метод Enumerable.Count"
+      - "Метод Enumerable.Contains"
+      - "Метод Enumerable.ElementAt"
+  en:
+    title: Which LINQ to Objects operators use the ICollection<T> or IList<T> of the source instead of enumerating it?
+    prompt: |
+      The source is a `List<int>` with `n` elements, passed to a method as `IEnumerable<int>`. Select every
+      `System.Linq.Enumerable` operator whose documentation explicitly states that when the source implements
+      `ICollection<T>` or `IList<T>`, the operator uses that implementation instead of enumerating the sequence.
+    hint: Which interfaces already have a member that answers exactly the question the operator asks, without visiting the elements?
+    options:
+      a: "`Count()` without a predicate"
+      b: "`Count(predicate)`"
+      c: "`Contains(value)` without a comparer"
+      d: "`Where(predicate)`"
+      e: "`ElementAt(index)`"
+      f: "`Any(predicate)`"
+    optionExplanations:
+      b: "`ICollection<T>.Count` returns the total number of elements, not the number that match a condition. To count the matching ones the operator calls the predicate for every element, so even for `List<T>` it is O(n)."
+      d: "`Where` returns a lazy sequence, and enumerating it calls the predicate for every source element: neither `ICollection<T>` nor `IList<T>` can filter. The result of `Where` does not implement `ICollection<T>`, so a `Count()` after it enumerates as well."
+      f: "`ICollection<T>` and `IList<T>` have no member that checks an arbitrary condition. `Any(predicate)` enumerates until the first match, all n elements in the worst case."
+    answer: "`Count()`, `Contains(value)` and `ElementAt(index)`."
+    explanation: |
+      `Enumerable` methods take an `IEnumerable<T>`, but they check the type of the source at run time. The
+      documentation describes three such shortcuts:
+
+      - `Count()`: if the source implements `ICollection<T>`, the count comes from `ICollection<T>.Count`. For a
+        `List<T>`, an array or a `HashSet<T>` this is O(1), not a scan.
+      - `Contains(value)`: if the source implements `ICollection<T>`, its own `Contains` is called. For `List<T>`
+        that is still a linear search, but for `HashSet<T>` it is a hash lookup in O(1) on average. A consequence:
+        the collection does the comparison by its own rules, for example with the comparer passed to the
+        `HashSet<T>` constructor.
+      - `ElementAt(index)`: if the source implements `IList<T>`, the element is read through the indexer, which is
+        O(1) for `List<T>` and arrays. Otherwise the operator enumerates up to the requested position.
+
+      Operators with a predicate (`Count(predicate)`, `Any(predicate)`, `Where`) have no such shortcut: the answer
+      depends on the value of every element, and collection interfaces do not check conditions.
+
+      The shortcut works only while you hold the source itself. `Where` or another operator produces a new
+      sequence, and `Count()` over it enumerates the elements. The implementation in `dotnet/runtime` has other
+      internal optimizations too, but what you can rely on is what the documentation guarantees.
+    linkTitles:
+      - "Enumerable.Count method"
+      - "Enumerable.Contains method"
+      - "Enumerable.ElementAt method"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

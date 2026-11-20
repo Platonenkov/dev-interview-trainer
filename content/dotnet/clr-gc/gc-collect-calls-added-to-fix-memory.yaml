@@ -1,0 +1,157 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RMD4N7HXX088E45H00
+slug: gc-collect-calls-added-to-fix-memory
+stack: dotnet
+topic: clr-gc
+level: lead
+type: situation
+grading: self
+tags: [gc, induced-collection, memory, code-review, batch-processing]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/induced
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.gc.collect
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/fundamentals
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/runtime-config/garbage-collector
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Разработчик добавил вызовы GC.Collect после пакетных задач, чтобы снизить пики памяти. Что делать тимлиду?
+    prompt: |
+      Сервис на ASP.NET Core под .NET 10 работает в контейнере с лимитом памяти. Внутри того же процесса раз в час
+      запускается пакетная задача импорта, и на графике памяти после каждого запуска виден большой пик. Пару раз
+      за месяц контейнер завершался по OOM.
+
+      Разработчик открывает PR, который после каждой пакетной задачи вызывает
+      `GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();`. В описании PR сказано, что на тестовом стенде
+      график памяти стал ровнее.
+
+      Вы технический лидер команды. Что вы сделаете с этим PR и с исходной проблемой?
+    hint: |
+      В какой момент процесс достигает пика памяти - во время пакетной задачи или после неё? И что ещё, кроме
+      пакетной задачи, выполняется в процессе, когда вызывается `GC.Collect()`?
+    answer: |
+      1. **Не принимать PR как исправление, но и не закрывать молча.** В review объяснить причины: принудительная
+         полная сборка лечит график, а не причину. Если OOM в production происходит прямо сейчас, можно
+         принять вызов как временную меру за флагом конфигурации, с задачей на настоящее исправление и сроком
+         удаления, но только если измерения показывают, что он вообще помогает.
+      2. **Уточнить, в чём проблема.** Высокое потребление памяти само по себе не ошибка: сборщик мусора
+         расходует доступный бюджет и собирает, когда считает нужным. Проблема - это OOM, троттлинг или рост
+         задержек. Затем отделить пик от утечки: возвращается ли размер поколения 2 к базовому уровню после
+         полных сборок, которые сборщик делает сам?
+      3. **Измерить, что именно занимает память во время задачи.** `dotnet-counters` во время пакетной задачи
+         (размер кучи по поколениям, доля LOH, число сборок поколения 2, время в GC, рабочий набор),
+         снимок кучи `dotnet-gcdump` на пике или трассировка выделений через `dotnet-trace`. Нужен ответ: какие
+         типы и какой код дают пик и что удерживает эти объекты.
+      4. **Исправить источник.** Обычно это загрузка всего набора данных в память (`ToList()` по всей выборке),
+         большие массивы и строки в куче больших объектов, разрастающийся `MemoryStream`, слишком высокая
+         параллельность. Лечится обработкой порциями и потоковым чтением, переиспользованием буферов
+         (`ArrayPool<T>.Shared`), ограничением параллельности. Если данные задачи удерживает статическое поле или
+         кэш, это утечка, и чинить нужно владельца ссылки.
+      5. **Проверить окружение.** Сравнить лимит контейнера с ограничением кучи сборщика мусора, режим GC
+         (Server или Workstation, DATAS) и при необходимости настройку `GCConserveMemory`. Если профиль памяти
+         пакетной задачи сильно отличается от профиля API, вынести её в отдельный процесс или задание.
+      6. **Закрепить в команде.** Записать в правила review, что `GC.Collect` в коде сервиса допускается только с
+         измерениями до и после; при желании запретить API через `BannedApiAnalyzers` с явными исключениями.
+         Добавить оповещение по памяти и нагрузочный прогон пакетной задачи на данных близкого к боевому объёма.
+    explanation: |
+      `GC.Collect()` без аргументов выполняет блокирующую сборку всех поколений. В веб-сервисе это бьёт по
+      соседям: на время сборки останавливаются все управляемые потоки, включая обработку запросов, и задержки
+      растут. Объекты, которые в этот момент живы (данные запросов в обработке), переживают сборку и продвигаются
+      в старшие поколения, где их освободит только более дорогая полная сборка. Сборщик мусора сам подбирает
+      бюджеты поколений по поведению приложения, и лишние принудительные сборки мешают этой настройке.
+
+      Главное же - вызов не решает проблему. Пик памяти достигается во время пакетной задачи, когда её данные
+      ещё нужны и достижимы, а `GC.Collect` после задачи этот пик не уменьшает. Если OOM происходит в середине
+      задачи, PR ничего не изменит, хотя график после задачи станет ровнее. Если же память держит забытая ссылка,
+      принудительная сборка не освободит достижимые объекты вовсе. Пара `GC.WaitForPendingFinalizers()` и
+      повторный `GC.Collect()` только удлиняют паузу.
+
+      Документация по принудительным сборкам признаёт редкие законные случаи: например, когда в известной точке
+      кода освобождается большой объём памяти. Поэтому позиция лидера не «никогда», а «только с доказательством»:
+      сначала измерения, затем исправление выделений или удержания в источнике, и лишь после этого, если
+      измерения это подтверждают, точечный вызов, например с `GCCollectionMode.Optimized`, при котором сборщик сам
+      решает, стоит ли собирать. Описанное поведение и настройки GC соответствуют .NET 10.
+
+      Командная часть важна не меньше технической: разработчик решал реальную проблему, и разбор в review с
+      измерениями учит команду диагностике лучше, чем отказ без объяснений.
+    linkTitles:
+      - Принудительные сборки мусора
+      - Метод GC.Collect
+      - Основы сборки мусора
+      - Параметры конфигурации сборщика мусора
+  en:
+    title: A developer added GC.Collect calls after batch jobs to reduce memory spikes. What does the tech lead do?
+    prompt: |
+      An ASP.NET Core service on .NET 10 runs in a container with a memory limit. An import batch job runs every
+      hour inside the same process, and the memory graph shows a large spike after every run. A couple of times a
+      month the container was OOM-killed.
+
+      A developer opens a PR that calls
+      `GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();` after every batch job. The PR description says
+      that the memory graph on the test environment became flatter.
+
+      You are the team's tech lead. What do you do with this PR and with the underlying problem?
+    hint: |
+      At what moment does the process reach its memory peak - during the batch job or after it? And what else,
+      besides the batch job, is running in the process when `GC.Collect()` is called?
+    answer: |
+      1. **Do not accept the PR as a fix, but do not just close it either.** Explain the reasons in the review:
+         a forced full collection treats the graph, not the cause. If production is being OOM-killed right now,
+         the call can be accepted as a temporary mitigation behind a configuration flag, with a task for the real
+         fix and a removal date, but only if measurements show that it helps at all.
+      2. **Clarify what the problem is.** High memory use is not a bug by itself: the garbage collector uses the
+         available budget and collects when it decides to. The problem is the OOM kill, throttling or growing
+         latency. Then separate a peak from a leak: does the generation 2 size return to its baseline after the
+         full collections the collector runs on its own?
+      3. **Measure what holds the memory during the job.** `dotnet-counters` during the batch job (heap size per
+         generation, the LOH share, generation 2 collection count, time in GC, working set), a `dotnet-gcdump`
+         heap snapshot at the peak, or an allocation trace with `dotnet-trace`. The goal is to know which types and
+         which code produce the peak and what keeps those objects alive.
+      4. **Fix the source.** Typical causes are loading the whole data set into memory (`ToList()` over the full
+         result), large arrays and strings on the large object heap, a `MemoryStream` that keeps growing, and too
+         much parallelism. The cures are processing in chunks and streaming reads, reusing buffers
+         (`ArrayPool<T>.Shared`), and limiting parallelism. If a static field or a cache retains the job's data,
+         it is a leak, and the owner of the reference must be fixed.
+      5. **Check the environment.** Compare the container limit with the garbage collector heap limit, the GC mode
+         (Server or Workstation, DATAS) and, if needed, the `GCConserveMemory` setting. If the memory profile of
+         the batch job differs a lot from the API's, move it to a separate process or job.
+      6. **Lock it in for the team.** Add a review rule that `GC.Collect` in service code needs before-and-after
+         measurements; optionally ban the API with `BannedApiAnalyzers` and explicit exceptions. Add a memory alert
+         and a load run of the batch job on data close to production size.
+    explanation: |
+      `GC.Collect()` without arguments performs a blocking collection of all generations. In a web service this
+      hurts everything else: during the collection all managed threads stop, including request processing, and
+      latency grows. Objects that are alive at that moment (data of in-flight requests) survive and are promoted to
+      older generations, where only a more expensive full collection can free them. The garbage collector tunes the
+      generation budgets from the application's behaviour, and extra forced collections interfere with that tuning.
+
+      Most importantly, the call does not solve the problem. The memory peak is reached during the batch job, while
+      its data is still needed and reachable, and `GC.Collect` after the job does not lower that peak. If the OOM
+      kill happens in the middle of the job, the PR changes nothing, even though the graph after the job looks
+      flatter. If a forgotten reference holds the memory, a forced collection cannot free reachable objects at all.
+      `GC.WaitForPendingFinalizers()` and the second `GC.Collect()` only make the pause longer.
+
+      The documentation on induced collections admits rare legitimate cases, for example when a large amount of
+      memory becomes free at a known point in the code. So the lead's position is not "never" but "only with
+      evidence": measurements first, then a fix of allocation or retention at the source, and only after that, if
+      measurements support it, a targeted call, for example with `GCCollectionMode.Optimized`, which lets the
+      collector decide whether a collection is worthwhile. The behaviour and GC settings described match .NET 10.
+
+      The team side matters as much as the technical one: the developer was solving a real problem, and a review
+      backed by measurements teaches the team diagnostics better than a rejection without explanation.
+    linkTitles:
+      - Induced collections
+      - GC.Collect method
+      - Fundamentals of garbage collection
+      - Runtime configuration options for garbage collection
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

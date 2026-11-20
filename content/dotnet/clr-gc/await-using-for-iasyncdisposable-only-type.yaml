@@ -1,0 +1,133 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RMMZ7GCVJ6DE6VWVYM
+slug: await-using-for-iasyncdisposable-only-type
+stack: dotnet
+topic: clr-gc
+level: middle
+type: single
+grading: auto
+tags: [idisposable, iasyncdisposable, await-using, dispose]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    using (var writer = new LogWriter())
+    {
+        await writer.WriteAsync("started");
+    }
+
+    class LogWriter : IAsyncDisposable
+    {
+        public Task WriteAsync(string line) => Task.CompletedTask;
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: false
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/implementing-disposeasync
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/statements/using
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как освобождать тип, который реализует только IAsyncDisposable, и что будет с обычным using?
+    prompt: |
+      Класс `LogWriter` реализует только `IAsyncDisposable`: у него есть `DisposeAsync`, но нет `IDisposable`
+      и метода `Dispose`. Разработчик обернул экземпляр в обычный оператор `using`, как показано в коде.
+
+      Что произойдёт и как правильно освобождать такой объект (C# 14, .NET 10)?
+    hint: Какой интерфейс компилятор ожидает от выражения в обычном `using` и во что он разворачивает этот оператор?
+    options:
+      a: "Код компилируется: компилятор сам вызывает `DisposeAsync` в конце блока и синхронно дожидается его через `GetAwaiter().GetResult()`."
+      b: "Код компилируется, но `DisposeAsync` не вызывается вовсе: ресурс позже освободит сборщик мусора."
+      c: "Код не компилируется: обычный `using` требует `IDisposable`. Такой объект нужно освобождать через `await using`."
+      d: "Код компилируется, `DisposeAsync` вызывается в конце блока без ожидания, и выполнение идёт дальше до освобождения ресурса."
+    optionExplanations:
+      a: "Компилятор не вставляет синхронное ожидание асинхронной операции. Обычный `using` разворачивается в `try`/`finally` с вызовом `IDisposable.Dispose()`, а этого интерфейса у типа нет."
+      b: "Обычный `using` с типом без `IDisposable` не компилируется вовсе. К тому же сборщик мусора ничего не знает ни о `Dispose`, ни о `DisposeAsync` и никогда их не вызывает."
+      d: "Обычный `using` не умеет вызывать `DisposeAsync` ни с ожиданием, ни без него: он работает только с `IDisposable`, поэтому этот код - ошибка компиляции."
+    answer: "Обычный `using` не компилируется для типа, у которого есть только `IAsyncDisposable`. Такой объект освобождают через `await using`: он ожидает `DisposeAsync` в конце области видимости, даже если внутри было исключение."
+    explanation: |
+      Оператор `using` - это синтаксический сахар: компилятор разворачивает его в `try`/`finally` и в `finally`
+      вызывает `Dispose()` через интерфейс `IDisposable`. Поэтому выражение в обычном `using` должно приводиться
+      к `IDisposable` (для классов исключений нет; шаблонный `Dispose` без интерфейса допускается только у
+      `ref struct`). У `LogWriter` такого интерфейса нет, поэтому компилятор сообщает об ошибке: тип, используемый
+      в `using`, должен неявно приводиться к `IDisposable`.
+
+      `await using` (появился в C# 8, работает так же в C# 14 на .NET 10) разворачивается в такой же `try`/`finally`,
+      только в `finally` стоит `await writer.DisposeAsync()`. Поэтому освобождение гарантированно выполняется и
+      завершается до выхода из области видимости, в том числе когда блок завершился исключением. Так как внутри
+      есть `await`, `await using` допустим только в асинхронном контексте: в `async`-методе или в операторах
+      верхнего уровня. Есть и форма объявления: `await using var writer = new LogWriter();`.
+
+      Исправление кода из вопроса - заменить `using (...)` на `await using (...)`. Если нужно настроить
+      продолжение после освобождения, `ConfigureAwait(false)` применяют к самому освобождению, а переменную
+      оставляют исходного типа:
+      `var writer = new LogWriter(); await using (writer.ConfigureAwait(false)) { await writer.WriteAsync("started"); }`.
+      Писать `await using (var writer = new LogWriter().ConfigureAwait(false))` здесь нельзя: тогда `writer` получит
+      тип обёртки `ConfiguredAsyncDisposable`, у которой нет метода `WriteAsync`.
+
+      Когда тип реализует оба интерфейса, обычный `using` вызовет `Dispose`, а `await using` - `DisposeAsync`.
+      Поэтому документация советует по возможности реализовывать оба: если у типа есть только `IAsyncDisposable`,
+      а потребитель рассчитывает на синхронное освобождение, `DisposeAsync` так и не будет вызван.
+    linkTitles:
+      - "Реализация метода DisposeAsync"
+      - "Оператор using"
+  en:
+    title: How do you release a type that implements only IAsyncDisposable, and what happens with a plain using?
+    prompt: |
+      The class `LogWriter` implements only `IAsyncDisposable`: it has `DisposeAsync`, but no `IDisposable`
+      and no `Dispose` method. A developer wrapped an instance in a plain `using` statement, as shown in the code.
+
+      What happens, and how should such an object be released (C# 14, .NET 10)?
+    hint: Which interface does the compiler expect from the expression in a plain `using`, and what does it turn that statement into?
+    options:
+      a: "The code compiles: the compiler calls `DisposeAsync` at the end of the block and waits for it synchronously with `GetAwaiter().GetResult()`."
+      b: "The code compiles, but `DisposeAsync` is never called: the garbage collector releases the resource later."
+      c: "The code does not compile: a plain `using` requires `IDisposable`. Such an object must be released with `await using`."
+      d: "The code compiles, `DisposeAsync` is called at the end of the block without being awaited, and execution continues before the resource is released."
+    optionExplanations:
+      a: "The compiler does not insert a synchronous wait on an asynchronous operation. A plain `using` becomes a `try`/`finally` that calls `IDisposable.Dispose()`, and the type does not have that interface."
+      b: "A plain `using` over a type without `IDisposable` does not compile at all. Besides, the garbage collector knows nothing about `Dispose` or `DisposeAsync` and never calls them."
+      d: "A plain `using` cannot call `DisposeAsync`, awaited or not: it works only with `IDisposable`, so this code is a compile error."
+    answer: "A plain `using` does not compile for a type that has only `IAsyncDisposable`. Such an object is released with `await using`, which awaits `DisposeAsync` at the end of the scope, even if an exception was thrown inside."
+    explanation: |
+      The `using` statement is syntactic sugar: the compiler turns it into a `try`/`finally` and calls `Dispose()`
+      through the `IDisposable` interface in the `finally` block. That is why the expression in a plain `using`
+      must be convertible to `IDisposable` (there is no exception for classes; a pattern-based `Dispose` without
+      the interface is allowed only for a `ref struct`). `LogWriter` does not have that interface, so the compiler
+      reports an error: the type used in a `using` statement must be implicitly convertible to `IDisposable`.
+
+      `await using` (introduced in C# 8, and working the same in C# 14 on .NET 10) becomes the same kind of
+      `try`/`finally`, but the `finally` block contains `await writer.DisposeAsync()`. So the release is guaranteed
+      to run and to complete before the scope is left, including when the block ends with an exception. Because
+      it contains an `await`, `await using` is allowed only in an async context: an `async` method or top-level
+      statements. There is also a declaration form: `await using var writer = new LogWriter();`.
+
+      The fix for the code in the question is to replace `using (...)` with `await using (...)`. If you need to
+      configure the continuation after the release, apply `ConfigureAwait(false)` to the disposal itself and keep
+      the variable of the original type:
+      `var writer = new LogWriter(); await using (writer.ConfigureAwait(false)) { await writer.WriteAsync("started"); }`.
+      Writing `await using (var writer = new LogWriter().ConfigureAwait(false))` does not work here: `writer` would
+      then be the wrapper type `ConfiguredAsyncDisposable`, which has no `WriteAsync` method.
+
+      When a type implements both interfaces, a plain `using` calls `Dispose` and `await using` calls
+      `DisposeAsync`. That is why the documentation recommends implementing both where possible: if a type has
+      only `IAsyncDisposable` and a consumer relies on synchronous disposal, `DisposeAsync` is never called.
+    linkTitles:
+      - "Implement a DisposeAsync method"
+      - "The using statement"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

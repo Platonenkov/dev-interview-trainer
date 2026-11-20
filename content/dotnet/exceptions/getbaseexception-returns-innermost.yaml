@@ -1,0 +1,138 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RP2Y5G5GPBHBVQ54AM
+slug: getbaseexception-returns-innermost
+stack: dotnet
+topic: exceptions
+level: middle
+type: output
+grading: auto
+tags: [inner-exception, exception-chaining, getbaseexception]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    try
+    {
+        try
+        {
+            try
+            {
+                throw new FormatException("root");
+            }
+            catch (FormatException fe)
+            {
+                throw new InvalidOperationException("middle", fe);
+            }
+        }
+        catch (InvalidOperationException ioe)
+        {
+            throw new NotSupportedException("outer", ioe);
+        }
+    }
+    catch (Exception ex)
+    {
+        Console.Write($"{ex.GetBaseException().Message} {ex.InnerException.Message}");
+    }
+expect:
+  kind: output
+  value: "root middle"
+acceptedOutputs: ["root middle"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "root middle" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "root root" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "middle middle" }
+  - id: d
+    correct: false
+    expect: { kind: output, value: "outer middle" }
+  - id: e
+    correct: false
+    expect: { kind: exception, value: System.NullReferenceException }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.exception.getbaseexception
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.exception.innerexception
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что вернут GetBaseException() и InnerException для цепочки из трёх исключений?
+    prompt: |
+      Три исключения связаны в цепочку через аргумент `innerException`: `FormatException` оборачивается в
+      `InvalidOperationException`, а оно - в `NotSupportedException`. Внешний `catch` печатает сообщения
+      `ex.GetBaseException()` и `ex.InnerException`. Что выведет эта программа в консоль?
+    hint: "На сколько уровней вниз по цепочке `InnerException` спускается каждый из двух членов?"
+    options:
+      a: "root middle"
+      b: "root root"
+      c: "middle middle"
+      d: "outer middle"
+      e: Необработанное исключение `NullReferenceException`
+    optionExplanations:
+      b: "`InnerException` возвращает только следующий уровень цепочки, то есть исключение, переданное в конструктор `NotSupportedException`. Это `InvalidOperationException` с сообщением `middle`, а не самое глубокое исключение."
+      c: "`GetBaseException()` не останавливается на одном уровне: метод идёт по `InnerException`, пока не найдёт исключение без вложенного, и возвращает `FormatException` с сообщением `root`."
+      d: "Слово base в имени метода означает исходное исключение - первопричину, а не внешнее исключение и не базовый класс `Exception`. Сам объект `ex` метод вернул бы, только если бы его `InnerException` был равен `null`."
+      e: "Оба внешних исключения созданы с аргументом `innerException`, поэтому `ex.InnerException` не равен `null`, и обращение к его `Message` безопасно."
+    answer: "root middle"
+    explanation: |
+      Каждый `catch` создаёт новое исключение и передаёт пойманное как `innerException`, поэтому внешний
+      обработчик получает цепочку `NotSupportedException` (`outer`) -> `InvalidOperationException` (`middle`)
+      -> `FormatException` (`root`).
+
+      - `ex.InnerException` - это просто свойство: оно возвращает исключение на один уровень ниже, то есть
+        `InvalidOperationException` с сообщением `middle`.
+      - `ex.GetBaseException()` проходит по `InnerException` до конца цепочки и возвращает самое внутреннее
+        исключение, у которого `InnerException` равен `null`. Это `FormatException` с сообщением `root`.
+
+      На практике `GetBaseException()` помогает добраться до первопричины, когда исключение многократно
+      обёрнуто, например в `TargetInvocationException` при вызове через рефлексию. Метод виртуальный, и
+      `AggregateException` переопределяет его со своей логикой. Для логов обычно лучше `ex.ToString()`: он
+      выводит всю цепочку вложенных исключений вместе с трассировками стека, а не только одно звено.
+    linkTitles:
+      - "Метод Exception.GetBaseException"
+      - "Свойство Exception.InnerException"
+  en:
+    title: What do GetBaseException() and InnerException return for a chain of three exceptions?
+    prompt: |
+      Three exceptions are chained through the `innerException` argument: a `FormatException` is wrapped in an
+      `InvalidOperationException`, which is wrapped in a `NotSupportedException`. The outer `catch` prints the
+      messages of `ex.GetBaseException()` and `ex.InnerException`. What does this program print to the console?
+    hint: "How many levels down the `InnerException` chain does each of the two members go?"
+    options:
+      a: "root middle"
+      b: "root root"
+      c: "middle middle"
+      d: "outer middle"
+      e: Unhandled `NullReferenceException`
+    optionExplanations:
+      b: "`InnerException` returns only the next level of the chain, the exception passed to the `NotSupportedException` constructor. That is the `InvalidOperationException` with the message `middle`, not the deepest exception."
+      c: "`GetBaseException()` does not stop after one level: it follows `InnerException` until it finds an exception with no inner exception and returns the `FormatException` with the message `root`."
+      d: "The word base in the method name means the original exception, the root cause, not the outer exception and not the `Exception` base class. The method would return `ex` itself only if its `InnerException` were `null`."
+      e: "Both outer exceptions are created with an `innerException` argument, so `ex.InnerException` is not `null` and reading its `Message` is safe."
+    answer: "root middle"
+    explanation: |
+      Each `catch` creates a new exception and passes the caught one as `innerException`, so the outer handler
+      receives the chain `NotSupportedException` (`outer`) -> `InvalidOperationException` (`middle`) ->
+      `FormatException` (`root`).
+
+      - `ex.InnerException` is just a property: it returns the exception one level down, the
+        `InvalidOperationException` with the message `middle`.
+      - `ex.GetBaseException()` follows `InnerException` to the end of the chain and returns the innermost
+        exception, the one whose `InnerException` is `null`. That is the `FormatException` with the message `root`.
+
+      In practice `GetBaseException()` gets you to the root cause when an exception has been wrapped several
+      times, for example in a `TargetInvocationException` from a reflection call. The method is virtual, and
+      `AggregateException` overrides it with its own logic. For logging, `ex.ToString()` is usually better: it
+      prints the whole chain of inner exceptions with their stack traces, not just one link.
+    linkTitles:
+      - "Exception.GetBaseException method"
+      - "Exception.InnerException property"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

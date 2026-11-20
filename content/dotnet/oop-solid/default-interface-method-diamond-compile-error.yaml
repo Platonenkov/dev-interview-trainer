@@ -1,0 +1,160 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPB5E6FGQGC99T5AEB
+slug: default-interface-method-diamond-compile-error
+stack: dotnet
+topic: oop-solid
+level: senior
+type: output
+grading: auto
+tags: [interfaces, default-interface-methods, diamond-inheritance, compile-error]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    IA item = new D();
+    item.M();
+
+    interface IA
+    {
+        void M();
+    }
+
+    interface IB : IA
+    {
+        void IA.M() => Console.Write("IB");
+    }
+
+    interface IC : IA
+    {
+        void IA.M() => Console.Write("IC");
+    }
+
+    class D : IB, IC
+    {
+    }
+expect:
+  kind: compile-error
+  value: CS8705
+options:
+  - id: a
+    correct: false
+    expect: { kind: output, value: "IB" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "IC" }
+  - id: c
+    correct: false
+    expect: { kind: exception, value: System.Runtime.AmbiguousImplementationException }
+  - id: d
+    correct: true
+    expect: { kind: compile-error, value: CS8705 }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/compiler-messages/interface-implementation-errors
+    lang: en
+    kind: spec
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.runtime.ambiguousimplementationexception
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/interface
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что произойдёт, если два интерфейса дают свои реализации по умолчанию для одного метода базового интерфейса?
+    prompt: |
+      Интерфейсы `IB` и `IC` наследуют `IA`, и каждый из них явно реализует `IA.M` с телом по умолчанию.
+      Класс `D` реализует оба интерфейса, но сам метод `M` не объявляет. Что произойдёт при сборке и
+      запуске программы (C# 14, .NET 10)?
+    hint: Наследуется ли один из интерфейсов `IB` и `IC` от другого? От этого зависит, какую реализацию `IA.M` компилятор может сопоставить классу `D`.
+    options:
+      a: "Программа выведет `IB`."
+      b: "Программа выведет `IC`."
+      c: "Программа соберётся, а при вызове `item.M()` будет выброшено `System.Runtime.AmbiguousImplementationException`."
+      d: "Ошибка компиляции CS8705."
+    optionExplanations:
+      a: "Порядок интерфейсов в списке базовых типов не влияет на выбор реализации по умолчанию. Первый указанный интерфейс не получает приоритета."
+      b: "Последний указанный интерфейс тоже не получает приоритета: правило выбора опирается на иерархию интерфейсов, а не на порядок в списке базовых типов."
+      c: "Здесь все типы находятся в одной компиляции, поэтому конфликт виден компилятору, и программа не собирается. Ошибка во время выполнения возможна только тогда, когда компилятор конфликта не видел, например интерфейсы лежат в другой сборке, которую обновили без перекомпиляции `D`."
+    answer: "Ошибка компиляции CS8705: у члена интерфейса `IA.M` нет наиболее специфичной реализации."
+    explanation: |
+      Чтобы сопоставить член интерфейса `IA.M` классу `D`, компилятор ищет реализацию в самом классе, а если
+      её там нет, то наиболее специфичную реализацию по умолчанию среди интерфейсов класса. Реализация
+      считается наиболее специфичной, если её интерфейс наследует интерфейсы всех остальных кандидатов.
+
+      `IB` и `IC` оба наследуют `IA`, но не связаны друг с другом, поэтому ни одна из двух реализаций не
+      специфичнее другой. Это классический ромб: выбрать реализацию компилятор не может и сообщает ошибку
+      CS8705 для класса `D`. Порядок интерфейсов в списке `class D : IB, IC` роли не играет.
+
+      Исправить можно двумя способами:
+
+      - объявить `M` в самом `D` (неявно, `public void M()`, или явно, `void IA.M()`): реализация класса
+        всегда важнее реализаций по умолчанию;
+      - объявить интерфейс, который наследует `IB` и `IC` и сам реализует `IA.M`, например
+        `interface IBC : IB, IC { void IA.M() => Console.Write("IBC"); }`, и сделать так, чтобы `D`
+        реализовал этот интерфейс (`class D : IBC`). Тогда реализация `IBC` становится наиболее специфичной.
+        Само по себе объявление `IBC` ничего не меняет, пока `D` его не реализует.
+
+      Внутри собственной реализации `D` нельзя просто вызвать `((IB)this).M()`: для объекта `D` этот вызов
+      снова придёт в реализацию `D` и приведёт к бесконечной рекурсии. Общую логику обычно выносят во
+      вспомогательный метод.
+
+      Если интерфейсы лежат в отдельной сборке и вторая реализация появляется в её новой версии без
+      перекомпиляции `D`, компилятор конфликта не видит, и неоднозначность может обнаружить уже среда
+      выполнения. Для этого случая в .NET есть исключение `System.Runtime.AmbiguousImplementationException`.
+      Поведение описано для C# 14 и .NET 10.
+    linkTitles:
+      - "Ошибки и предупреждения реализации интерфейсов (справочник по C#)"
+      - "Класс AmbiguousImplementationException"
+      - "Ключевое слово interface (справочник по C#)"
+  en:
+    title: What happens when two interfaces give their own default implementations of one base interface method?
+    prompt: |
+      The interfaces `IB` and `IC` both extend `IA`, and each of them explicitly implements `IA.M` with a
+      default body. The class `D` implements both interfaces but does not declare `M` itself. What happens
+      when the program is built and run (C# 14, .NET 10)?
+    hint: Does either of `IB` and `IC` derive from the other? That decides which implementation of `IA.M` the compiler can map for `D`.
+    options:
+      a: "The program prints `IB`."
+      b: "The program prints `IC`."
+      c: "The program builds, and the call `item.M()` throws `System.Runtime.AmbiguousImplementationException`."
+      d: "Compile error CS8705."
+    optionExplanations:
+      a: "The order of interfaces in the base type list does not affect the choice of a default implementation. The first listed interface gets no priority."
+      b: "The last listed interface gets no priority either: the selection rule relies on the interface hierarchy, not on the order in the base type list."
+      c: "Here all the types are in one compilation, so the compiler sees the conflict and the program does not build. A run-time error is possible only when the compiler did not see the conflict, for example when the interfaces live in another assembly that was updated without recompiling `D`."
+    answer: "Compile error CS8705: the interface member `IA.M` does not have a most specific implementation."
+    explanation: |
+      To map the interface member `IA.M` for the class `D`, the compiler looks for an implementation in the
+      class itself, and if there is none, for the most specific default implementation among the class's
+      interfaces. An implementation is the most specific one when its interface derives from the interfaces
+      of all the other candidates.
+
+      `IB` and `IC` both extend `IA`, but they are not related to each other, so neither implementation is
+      more specific than the other. This is the classic diamond: the compiler cannot pick an implementation
+      and reports error CS8705 for the class `D`. The order of interfaces in `class D : IB, IC` does not matter.
+
+      There are two ways to fix it:
+
+      - declare `M` in `D` itself (implicitly, `public void M()`, or explicitly, `void IA.M()`): a class
+        implementation always wins over default implementations;
+      - declare an interface that extends both `IB` and `IC` and implements `IA.M` itself, for example
+        `interface IBC : IB, IC { void IA.M() => Console.Write("IBC"); }`, and make `D` implement it
+        (`class D : IBC`). Then the implementation in `IBC` becomes the most specific one. Declaring `IBC`
+        alone changes nothing while `D` does not implement it.
+
+      Inside its own implementation `D` cannot simply call `((IB)this).M()`: for a `D` object that call comes
+      back to the implementation in `D` and causes infinite recursion. Shared logic is usually moved into a
+      helper method.
+
+      If the interfaces live in a separate assembly and the second implementation appears in a new version of
+      it without recompiling `D`, the compiler does not see the conflict, and the ambiguity can be detected by
+      the runtime instead. .NET has the exception `System.Runtime.AmbiguousImplementationException` for this
+      case. The behaviour is described for C# 14 and .NET 10.
+    linkTitles:
+      - "Interface implementation errors and warnings (C# reference)"
+      - "AmbiguousImplementationException class"
+      - "interface keyword (C# reference)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

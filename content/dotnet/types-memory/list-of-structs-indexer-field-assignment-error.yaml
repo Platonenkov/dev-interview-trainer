@@ -1,0 +1,138 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RRMTJH6SXHHYZ84XE1
+slug: list-of-structs-indexer-field-assignment-error
+stack: dotnet
+topic: types-memory
+level: middle
+type: output
+grading: auto
+tags: [struct, value-types, list, indexers, mutable-structs]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    Point[] array = { new Point { X = 1 } };
+    List<Point> list = new() { new Point { X = 1 } };
+
+    array[0].X = 5;
+    list[0].X = 5;
+
+    Console.Write($"{array[0].X} {list[0].X}");
+
+    struct Point
+    {
+        public int X;
+    }
+expect:
+  kind: compile-error
+  value: CS1612
+options:
+  - id: a
+    correct: true
+    expect: { kind: compile-error, value: CS1612 }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "5 5" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "5 1" }
+  - id: d
+    correct: false
+    expect: { kind: output, value: "1 1" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/compiler-messages/cs1612
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/struct
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.list-1.item
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.runtime.interopservices.collectionsmarshal.asspan
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что произойдёт при записи в поле структуры через элемент массива и через индексатор List<T>?
+    prompt: |
+      Что выведет эта программа в консоль? Одна и та же запись `[0].X = 5` выполняется сначала для элемента
+      массива структур, а затем для элемента `List<Point>`.
+    hint: Является ли выражение `list[0]` местом хранения, как `array[0]`, или чем-то другим?
+    options:
+      a: Ошибка компиляции
+      b: "5 5"
+      c: "5 1"
+      d: "1 1"
+    optionExplanations:
+      b: "Так было бы, если бы `Point` был классом: тогда индексатор вернул бы ссылку на объект, и запись поля изменила бы его. Но для структуры индексатор `List<T>` возвращает копию значения, и компилятор запрещает менять поле такой копии."
+      c: "Так могло бы показаться: запись в массив работает, а запись через индексатор списка меняет временную копию и теряется. Но компилятор не пропускает такой код молча: присваивание полю значения, которое не является переменной, - это ошибка CS1612, программа не собирается."
+      d: "Ни одна из двух записей не может молча потеряться. Элемент массива - это переменная, поэтому `array[0].X = 5` меняет саму структуру внутри массива, а запись через список компилятор отвергает ещё до запуска. Программа не собирается и ничего не выводит."
+    answer: Ошибка компиляции CS1612 в строке `list[0].X = 5;`.
+    explanation: |
+      Обращение к элементу массива `array[0]` в C# - это переменная: оно обозначает саму ячейку внутри массива.
+      Поэтому `array[0].X = 5` меняет поле структуры прямо в массиве, и эта строка компилируется.
+
+      `list[0]` выглядит так же, но это вызов индексатора, то есть метода доступа `get` свойства `Item`. Для типа
+      значения такой метод возвращает копию элемента - значение, а не переменную. Запись в поле этой временной
+      копии ни на что бы не повлияла, поэтому компилятор запрещает её ошибкой CS1612: нельзя изменить
+      возвращаемое значение, потому что оно не является переменной. Если бы `X` было свойством с `set`,
+      ошибка была бы той же.
+
+      Как изменить элемент списка:
+
+      - прочитать копию, изменить её и записать обратно: `var p = list[0]; p.X = 5; list[0] = p;`;
+      - получить `Span<Point>` над внутренним массивом списка через `CollectionsMarshal.AsSpan(list)`:
+        индексатор `Span<T>` возвращает `ref T`, поэтому `CollectionsMarshal.AsSpan(list)[0].X = 5` меняет
+        элемент на месте. Пока такой span используется, в список нельзя добавлять элементы и удалять их.
+
+      Именно из-за таких ловушек структуры рекомендуют делать неизменяемыми (`readonly struct`): тогда попытка
+      изменить копию невозможна в принципе, а новое значение создаётся явно и явно записывается обратно.
+    linkTitles:
+      - Ошибка компилятора CS1612
+      - Типы структур
+      - Свойство List<T>.Item
+      - Метод CollectionsMarshal.AsSpan
+  en:
+    title: What happens when you write to a struct field through an array element and through a List<T> indexer?
+    prompt: |
+      What does this program print to the console? The same write `[0].X = 5` is done first for an element of
+      an array of structs and then for an element of a `List<Point>`.
+    hint: Is the expression `list[0]` a storage location like `array[0]`, or something else?
+    options:
+      a: Compile error
+      b: "5 5"
+      c: "5 1"
+      d: "1 1"
+    optionExplanations:
+      b: "That would be the result if `Point` were a class: the indexer would return a reference to the object, and the field write would change it. But for a struct the `List<T>` indexer returns a copy of the value, and the compiler forbids changing a field of such a copy."
+      c: "It may look that way: the array write works, and the write through the list indexer changes a temporary copy and is lost. But the compiler does not accept such code silently: assigning to a field of a value that is not a variable is error CS1612, and the program does not build."
+      d: "Neither write can be silently lost. An array element is a variable, so `array[0].X = 5` changes the struct itself inside the array, and the write through the list is rejected by the compiler before anything runs. The program does not build and prints nothing."
+    answer: Compile error CS1612 on the line `list[0].X = 5;`.
+    explanation: |
+      An array element access `array[0]` in C# is a variable: it denotes the slot inside the array itself.
+      That is why `array[0].X = 5` changes the struct field directly in the array, and this line compiles.
+
+      `list[0]` looks the same, but it is an indexer call, that is, the `get` accessor of the `Item` property.
+      For a value type that accessor returns a copy of the element - a value, not a variable. Writing to a field
+      of that temporary copy would have no effect, so the compiler forbids it with error CS1612: you cannot
+      modify the return value because it is not a variable. If `X` were a property with a `set` accessor, the
+      error would be the same.
+
+      How to change a list element:
+
+      - read the copy, change it and write it back: `var p = list[0]; p.X = 5; list[0] = p;`;
+      - get a `Span<Point>` over the list's internal array with `CollectionsMarshal.AsSpan(list)`: the
+        `Span<T>` indexer returns `ref T`, so `CollectionsMarshal.AsSpan(list)[0].X = 5` changes the element
+        in place. Items must not be added to or removed from the list while such a span is in use.
+
+      Traps like this are why structs are recommended to be immutable (`readonly struct`): changing a copy is
+      then impossible by design, and a new value is created explicitly and written back explicitly.
+    linkTitles:
+      - Compiler Error CS1612
+      - Structure types
+      - List<T>.Item property
+      - CollectionsMarshal.AsSpan method
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

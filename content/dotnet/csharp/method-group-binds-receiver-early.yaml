@@ -1,0 +1,124 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNCV5Z88PJZKRHC4V2
+slug: method-group-binds-receiver-early
+stack: dotnet
+topic: csharp
+level: senior
+type: output
+grading: auto
+tags: [delegates, method-group, closures, lambda]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    string s = "a";
+
+    Func<string> fromGroup = s.ToUpper;
+    Func<string> fromLambda = () => s.ToUpper();
+
+    s = "b";
+
+    Console.Write(fromGroup() + fromLambda());
+expect:
+  kind: output
+  value: "AB"
+acceptedOutputs: ["AB"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "AB" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "BB" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "AA" }
+  - id: d
+    correct: false
+    expect: { kind: compile-error }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/language-specification/expressions
+    lang: en
+    kind: spec
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/language-specification/conversions
+    lang: en
+    kind: spec
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/lambda-expressions#capture-of-outer-variables-and-variable-scope-in-lambda-expressions
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что выведут делегаты из группы методов s.ToUpper и из лямбды () => s.ToUpper() после смены s?
+    prompt: |
+      Что выведет эта программа в консоль? Оба делегата `Func<string>` создаются, пока `s` равна `"a"`,
+      а вызываются уже после присваивания `s = "b"`.
+    hint: Что именно каждый делегат запоминает о `s` и когда он обращается к этой переменной?
+    options:
+      a: "AB"
+      b: "BB"
+      c: "AA"
+      d: Ошибка компиляции
+    optionExplanations:
+      b: "Так было бы, если бы группа методов `s.ToUpper` захватывала переменную `s`, как лямбда. Но при преобразовании группы методов выражение `s` вычисляется сразу, и делегат запоминает сам объект-строку `\"a\"` как цель вызова, а не переменную."
+      c: "Так было бы, если бы лямбда копировала значение `s` в момент создания. Лямбда захватывает саму переменную и читает её при каждом вызове, поэтому видит `\"b\"`."
+      d: "Код корректен. У `string.ToUpper` есть перегрузки, но для `Func<string>` без параметров выбирается `ToUpper()` без аргументов, и группа методов неявно преобразуется в делегат."
+    answer: "AB"
+    explanation: |
+      Преобразование группы методов `s.ToUpper` в делегат выполняется в момент присваивания и по смыслу
+      равносильно выражению создания делегата. Если выбранный метод экземплярный, выражение экземпляра
+      (здесь `s`) вычисляется сразу, и полученный объект становится целью делегата (`Delegate.Target`).
+      Делегат `fromGroup` хранит ссылку на строку `"a"`, а не на переменную `s`, поэтому последующее
+      `s = "b"` на него не влияет: вызов даёт `"A"`.
+
+      Лямбда `() => s.ToUpper()` захватывает переменную `s`. Компилятор переносит `s` в поле класса замыкания,
+      и тело лямбды читает это поле при каждом вызове. К моменту вызова там уже `"b"`, поэтому результат `"B"`.
+      Итог: `AB`.
+
+      Практическое следствие: группа методов фиксирует получателя «рано», лямбда - «поздно». Если получатель
+      должен меняться (например, текущий объект в поле, которое потом заменяют), нужна лямбда. Если, наоборот,
+      нужно зафиксировать объект на момент подписки, группа методов делает это без дополнительной локальной копии.
+      Для получателя-структуры разница ещё заметнее: при создании делегата значение упаковывается, и делегат
+      работает с упакованной копией.
+    linkTitles:
+      - "Спецификация C#: выражения (выражения создания делегатов)"
+      - "Спецификация C#: преобразования (преобразования групп методов)"
+      - Лямбда-выражения, захват внешних переменных
+  en:
+    title: What do delegates made from the method group s.ToUpper and the lambda () => s.ToUpper() print after s changes?
+    prompt: |
+      What does this program print to the console? Both `Func<string>` delegates are created while `s` is `"a"`,
+      and they are invoked after the assignment `s = "b"`.
+    hint: What exactly does each delegate remember about `s`, and when does it look at that variable?
+    options:
+      a: "AB"
+      b: "BB"
+      c: "AA"
+      d: Compile error
+    optionExplanations:
+      b: "That would be true if the method group `s.ToUpper` captured the variable `s` the way a lambda does. But a method group conversion evaluates the expression `s` immediately, and the delegate stores the string object `\"a\"` itself as the call target, not the variable."
+      c: "That would be true if the lambda copied the value of `s` when it was created. A lambda captures the variable itself and reads it on every invocation, so it sees `\"b\"`."
+      d: "The code is valid. `string.ToUpper` has overloads, but for a parameterless `Func<string>` the parameterless `ToUpper()` is chosen, and the method group converts implicitly to the delegate."
+    answer: "AB"
+    explanation: |
+      The conversion of the method group `s.ToUpper` to a delegate happens at the assignment and is processed like
+      a delegate creation expression. When the selected method is an instance method, the instance expression
+      (here `s`) is evaluated right away, and the resulting object becomes the delegate target (`Delegate.Target`).
+      The delegate `fromGroup` holds a reference to the string `"a"`, not to the variable `s`, so the later
+      `s = "b"` does not affect it: the call returns `"A"`.
+
+      The lambda `() => s.ToUpper()` captures the variable `s`. The compiler moves `s` into a field of a closure
+      class, and the lambda body reads that field on every invocation. By the time of the call the field holds
+      `"b"`, so the result is `"B"`. The output is `AB`.
+
+      The practical consequence: a method group binds the receiver early, a lambda binds it late. If the receiver
+      must follow changes (for example, a current object in a field that is later replaced), use a lambda. If you
+      want to pin the object as it was at subscription time, a method group does that without an extra local copy.
+      With a struct receiver the difference is even sharper: the value is boxed when the delegate is created, and
+      the delegate works on that boxed copy.
+    linkTitles:
+      - "C# specification: expressions (delegate creation expressions)"
+      - "C# specification: conversions (method group conversions)"
+      - Lambda expressions, capture of outer variables
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

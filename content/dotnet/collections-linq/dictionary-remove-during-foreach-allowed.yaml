@@ -1,0 +1,132 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RMZGRC8GDWSEA43XVP
+slug: dictionary-remove-during-foreach-allowed
+stack: dotnet
+topic: collections-linq
+level: senior
+type: output
+grading: auto
+tags: [dictionary, enumerator, foreach, collection-modification]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    Dictionary<string, int> scores = new()
+    {
+        ["a"] = 1,
+        ["b"] = 2,
+        ["c"] = 3,
+        ["d"] = 4
+    };
+
+    foreach (KeyValuePair<string, int> pair in scores)
+    {
+        if (pair.Value % 2 == 0)
+        {
+            scores.Remove(pair.Key);
+        }
+    }
+
+    Console.Write($"{scores.Count} {scores.Values.Sum()}");
+expect:
+  kind: output
+  value: "2 4"
+acceptedOutputs: ["2 4"]
+options:
+  - id: a
+    correct: false
+    expect: { kind: exception, value: System.InvalidOperationException }
+  - id: b
+    correct: true
+    expect: { kind: output, value: "2 4" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "4 10" }
+  - id: d
+    correct: false
+    expect: { kind: output, value: "3 8" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.dictionary-2.remove
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.dictionary-2
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что выведет программа на .NET 10, если вызвать Dictionary.Remove внутри foreach по тому же словарю?
+    prompt: |
+      Что выведет эта программа в консоль при запуске на .NET 10? Внутри `foreach` по словарю `scores`
+      из того же словаря удаляются элементы с чётными значениями.
+    hint: Одинаково ли правило «не изменяйте коллекцию во время `foreach`» для всех коллекций, всех операций и всех версий .NET?
+    options:
+      a: Исключение `InvalidOperationException`
+      b: "2 4"
+      c: "4 10"
+      d: "3 8"
+    optionExplanations:
+      a: "Так было в .NET Framework: там `Remove` менял версию словаря, и следующий `MoveNext` выбрасывал `InvalidOperationException`. Начиная с .NET Core 3.0 `Dictionary<TKey, TValue>.Remove` документированно не делает активные перечислители недействительными, поэтому на .NET 10 цикл завершается без исключения."
+      c: "`Remove` удаляет элемент сразу, а не после окончания цикла: ничего не откладывается и не буферизуется. Ключи `\"b\"` и `\"d\"` действительно удалены, поэтому `Count` не может остаться равным 4."
+      d: "Так выглядел бы пропуск элемента, как при удалении из `List<T>` по индексу в цикле `for`, когда остальные элементы сдвигаются. Словарь при удалении не сдвигает остальные записи, поэтому перечислитель не пропускает `\"d\"`, и он тоже удаляется."
+    answer: "2 4"
+    explanation: |
+      Перечислитель `Dictionary<TKey, TValue>` запоминает версию словаря при создании и сверяет её в каждом
+      вызове `MoveNext`. Если версия изменилась, он выбрасывает `InvalidOperationException`. В .NET Framework
+      `Remove` увеличивал версию, и удаление внутри `foreach` падало. Начиная с .NET Core 3.0 документация
+      `Remove` прямо говорит, что этот метод можно вызывать, не делая активные перечислители недействительными.
+      Поведение проверено на .NET 10.
+
+      Удалённая запись помечается свободной на своём месте во внутреннем массиве, остальные записи не
+      сдвигаются, а перечислитель, идущий по массиву, просто пропускает свободные ячейки. Поэтому каждый
+      оставшийся элемент посещается ровно один раз: удаляются `"b"` и `"d"`, остаются значения 1 и 3,
+      `Count` равен `2`, сумма равна `4`. Порядок перебора на результат не влияет.
+
+      Это гарантия только для удаления из `Dictionary<TKey, TValue>` в .NET Core 3.0 и новее. Добавление нового
+      ключа (`Add`) внутри `foreach` по-прежнему меняет версию и приводит к `InvalidOperationException`, а
+      `List<T>.Remove` в `foreach` по списку тоже выбрасывает исключение. Гарантия не означает потокобезопасности:
+      удаление из другого потока во время перебора остаётся ошибкой. Если код должен работать и на .NET Framework
+      или через `netstandard2.0`, надёжнее сначала собрать ключи для удаления, а затем удалить их отдельным циклом.
+    linkTitles:
+      - Метод Dictionary<TKey,TValue>.Remove
+      - Класс Dictionary<TKey,TValue>
+  en:
+    title: What does a .NET 10 program print when Dictionary.Remove is called inside a foreach over the same dictionary?
+    prompt: |
+      What does this program print to the console when it runs on .NET 10? Inside a `foreach` over the
+      dictionary `scores`, the entries with even values are removed from that same dictionary.
+    hint: Does the rule "do not modify a collection during `foreach`" hold the same way for every collection, every operation and every .NET version?
+    options:
+      a: "`InvalidOperationException`"
+      b: "2 4"
+      c: "4 10"
+      d: "3 8"
+    optionExplanations:
+      a: "That is how .NET Framework behaved: there `Remove` changed the dictionary version and the next `MoveNext` threw `InvalidOperationException`. Since .NET Core 3.0, `Dictionary<TKey, TValue>.Remove` is documented not to invalidate active enumerators, so on .NET 10 the loop completes without an exception."
+      c: "`Remove` removes the entry immediately, not after the loop ends: nothing is deferred or buffered. The keys `\"b\"` and `\"d\"` really are removed, so `Count` cannot stay 4."
+      d: "That would be a skipped element, as when removing from a `List<T>` by index in a `for` loop and the other elements shift. A dictionary does not shift the other entries on removal, so the enumerator does not skip `\"d\"`, and it is removed too."
+    answer: "2 4"
+    explanation: |
+      The `Dictionary<TKey, TValue>` enumerator remembers the dictionary version when it is created and checks it
+      on every `MoveNext` call. If the version has changed, it throws `InvalidOperationException`. In .NET Framework
+      `Remove` incremented the version, so removing inside `foreach` failed. Since .NET Core 3.0 the documentation
+      of `Remove` states explicitly that this method can be called without invalidating active enumerators.
+      The behaviour is verified on .NET 10.
+
+      A removed entry is marked free in place in the internal array, the other entries do not move, and the
+      enumerator, walking the array, simply skips free slots. So every remaining element is visited exactly
+      once: `"b"` and `"d"` are removed, the values 1 and 3 remain, `Count` is `2` and the sum is `4`. The
+      enumeration order does not affect the result.
+
+      This guarantee covers only removal from `Dictionary<TKey, TValue>` on .NET Core 3.0 and later. Adding a new
+      key (`Add`) inside `foreach` still changes the version and leads to `InvalidOperationException`, and
+      `List<T>.Remove` inside a `foreach` over the list throws as well. The guarantee does not imply thread safety:
+      removing from another thread during enumeration is still a bug. If the code must also run on .NET Framework
+      or through `netstandard2.0`, it is safer to collect the keys to remove first and then remove them in a
+      separate loop.
+    linkTitles:
+      - Dictionary<TKey,TValue>.Remove method
+      - Dictionary<TKey,TValue> class
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

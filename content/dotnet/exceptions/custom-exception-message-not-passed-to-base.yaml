@@ -1,0 +1,145 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RP9H02XVFHT2459BER
+slug: custom-exception-message-not-passed-to-base
+stack: dotnet
+topic: exceptions
+level: middle
+type: find-bug
+grading: auto
+tags: [custom-exceptions, exception-message, constructors]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    try
+    {
+        PlaceOrder(42, 0);
+    }
+    catch (OrderException ex)
+    {
+        Console.WriteLine($"Order {ex.OrderId}: {ex.Message}");
+    }
+
+    static void PlaceOrder(int orderId, int quantity)
+    {
+        if (quantity <= 0)
+        {
+            throw new OrderException(orderId, "Quantity must be positive");
+        }
+    }
+
+    class OrderException : Exception
+    {
+        public OrderException(int orderId, string message)
+        {
+            OrderId = orderId;
+        }
+
+        public int OrderId { get; }
+    }
+bugLineSets: [[20]]
+fixedSource: |
+  try
+  {
+      PlaceOrder(42, 0);
+  }
+  catch (OrderException ex)
+  {
+      Console.WriteLine($"Order {ex.OrderId}: {ex.Message}");
+  }
+
+  static void PlaceOrder(int orderId, int quantity)
+  {
+      if (quantity <= 0)
+      {
+          throw new OrderException(orderId, "Quantity must be positive");
+      }
+  }
+
+  class OrderException : Exception
+  {
+      public OrderException(int orderId, string message) : base(message)
+      {
+          OrderId = orderId;
+      }
+
+      public int OrderId { get; }
+  }
+fixedExpect: { kind: output, value: "Order 42: Quantity must be positive" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/exceptions/how-to-create-user-defined-exceptions
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.exception.message
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строку, из-за которой собственное исключение теряет сообщение
+    prompt: |
+      Метод `PlaceOrder` выбрасывает собственное исключение `OrderException` с номером заказа и сообщением
+      `Quantity must be positive`. Вызывающий код перехватывает его и выводит номер заказа и `Message`.
+      Ожидается `Order 42: Quantity must be positive`, но программа выводит:
+
+      ```text
+      Order 42: Exception of type 'OrderException' was thrown.
+      ```
+
+      Щёлкните по строке с дефектом.
+    hint: Какой конструктор базового класса вызывается, если конструктор производного класса не указывает его явно?
+    answer: |
+      Строка 20, конструктор `OrderException(int orderId, string message)` не передаёт сообщение в базовый
+      класс через `: base(message)`.
+    explanation: |
+      Если конструктор производного класса не содержит инициализатора `: base(...)`, компилятор неявно вызывает
+      конструктор базового класса без параметров, здесь `Exception()`. Параметр `message` принимается, но нигде
+      не используется, поэтому сообщение внутри `Exception` так и остаётся незаданным.
+
+      Свойство `Exception.Message` в таком случае не возвращает `null`, а подставляет текст по умолчанию вида
+      `Exception of type '<type name>' was thrown.` Тип объявлен в глобальном пространстве имён, поэтому в тексте
+      стоит просто `OrderException`. Сообщение вызывающего кода потеряно, и в логе остаётся бесполезная строка.
+
+      Строки 14 и 22 не дефектны: исключение создаётся с правильным сообщением, а `OrderId` сохраняется верно.
+      Исправление - добавить в объявление конструктора `: base(message)`. Так и устроены примеры собственных
+      исключений в документации: конструкторы передают сообщение (и при необходимости `innerException`) в
+      конструктор `Exception`. Тогда `Message`, `ToString()` и логирование работают так же, как у встроенных
+      исключений, и не нужно хранить сообщение в отдельном поле.
+    linkTitles:
+      - "Как создавать пользовательские исключения"
+      - "Свойство Exception.Message"
+  en:
+    title: Find the line that makes a custom exception lose its message
+    prompt: |
+      The `PlaceOrder` method throws a custom `OrderException` with an order number and the message
+      `Quantity must be positive`. The caller catches it and prints the order number and `Message`.
+      The expected result is `Order 42: Quantity must be positive`, but the program prints:
+
+      ```text
+      Order 42: Exception of type 'OrderException' was thrown.
+      ```
+
+      Click the line that contains the defect.
+    hint: Which base class constructor is called when a derived class constructor does not name one explicitly?
+    answer: |
+      Line 20, the constructor `OrderException(int orderId, string message)` does not pass the message to the
+      base class with `: base(message)`.
+    explanation: |
+      When a derived class constructor has no `: base(...)` initializer, the compiler implicitly calls the
+      parameterless base class constructor, here `Exception()`. The `message` parameter is accepted but never
+      used, so the message inside `Exception` is never set.
+
+      In that case the `Exception.Message` property does not return `null`; it supplies a default text of the form
+      `Exception of type '<type name>' was thrown.` The type is declared in the global namespace, so the text
+      shows just `OrderException`. The caller's message is lost, and the log keeps a useless line.
+
+      Lines 14 and 22 are not defects: the exception is created with the right message, and `OrderId` is stored
+      correctly. The fix is to add `: base(message)` to the constructor declaration. That is how the custom
+      exception examples in the documentation are built: the constructors pass the message (and `innerException`
+      when needed) to the `Exception` constructor. Then `Message`, `ToString()` and logging work as they do for
+      built-in exceptions, and there is no need to keep the message in a separate field.
+    linkTitles:
+      - "How to create user-defined exceptions"
+      - "Exception.Message property"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

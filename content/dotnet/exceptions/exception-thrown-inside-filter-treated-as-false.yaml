@@ -1,0 +1,145 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPZYWVGQYSZS4C5N3P
+slug: exception-thrown-inside-filter-treated-as-false
+stack: dotnet
+topic: exceptions
+level: senior
+type: output
+grading: auto
+tags: [exception-filters, catch, when, null-reference]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    string tenant = null;
+    try
+    {
+        throw new InvalidOperationException("boom");
+    }
+    catch (InvalidOperationException) when (tenant.Length > 0)
+    {
+        Console.Write("first");
+    }
+    catch (Exception e)
+    {
+        Console.Write($"second {e.GetType().Name}");
+    }
+expect:
+  kind: output
+  value: "second InvalidOperationException"
+acceptedOutputs: ["second InvalidOperationException"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "second InvalidOperationException" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "second NullReferenceException" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "first" }
+  - id: d
+    correct: false
+    expect: { kind: exception, value: System.NullReferenceException }
+  - id: e
+    correct: false
+    expect: { kind: exception, value: System.InvalidOperationException }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/when
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/statements/exception-handling-statements
+    lang: en
+    kind: docs
+  - url: https://www.ecma-international.org/publications-and-standards/standards/ecma-335/
+    lang: en
+    kind: spec
+locales:
+  ru:
+    title: Что произойдёт, если фильтр исключения when сам выбросит исключение?
+    prompt: |
+      Блок `try` выбрасывает `InvalidOperationException`. Первый блок `catch` подходит по типу, но его фильтр
+      `when` обращается к свойству переменной, равной `null`. Что выведет эта программа в .NET 10?
+    hint: "Что среда выполнения делает с исключением, которое вылетело из выражения фильтра, пока она ищет обработчик?"
+    options:
+      a: "second InvalidOperationException"
+      b: "second NullReferenceException"
+      c: "first"
+      d: Необработанное исключение `NullReferenceException`
+      e: Необработанное исключение `InvalidOperationException`
+    optionExplanations:
+      b: "`NullReferenceException` из фильтра не распространяется и не заменяет исходное исключение: среда выполнения поглощает его. Поиск обработчика продолжается для `InvalidOperationException`, поэтому `catch (Exception e)` получает именно его."
+      c: "Тело блока выполняется, только если фильтр вернул `true`. Здесь фильтр не вернул значение вовсе: при его вычислении возникло исключение, и такой фильтр считается ложным."
+      d: "Исключение, выброшенное внутри фильтра, не выходит за его пределы. Среда выполнения отбрасывает его и считает, что фильтр вернул `false`."
+      e: "Ложный фильтр не завершает поиск обработчика. Следующий блок `catch (Exception e)` подходит по типу и перехватывает исходное исключение."
+    answer: "second InvalidOperationException"
+    explanation: |
+      Фильтр `when` вычисляется, пока среда выполнения ищет подходящий обработчик: блок `catch` выполняется,
+      только если фильтр вернул `true`. Здесь `tenant` равен `null`, поэтому `tenant.Length` выбрасывает
+      `NullReferenceException` прямо во время вычисления фильтра.
+
+      Среда выполнения .NET не даёт такому исключению распространиться: оно отбрасывается, а фильтр считается
+      вернувшим `false`. Поиск продолжается так, будто первый блок просто не подошёл, и для того же исходного
+      исключения. Следующий блок `catch (Exception e)` подходит по типу, и программа выводит
+      `second InvalidOperationException`. `NullReferenceException` нигде не появляется: оно не становится ни
+      текущим исключением, ни `InnerException`. Если бы исключение из фильтра распространялось, программа
+      вывела бы другое имя типа или завершилась бы необработанным `NullReferenceException`.
+
+      Практический вывод: ошибка в фильтре тихо отключает обработчик. Специальная обработка не срабатывает,
+      исключение уходит в более общий блок или становится необработанным, а в логах нет следа сбоя в самом
+      фильтре (его видно разве что как first-chance исключение в отладчике или через
+      `AppDomain.FirstChanceException`). Поэтому фильтр должен быть простым выражением, которое не может
+      выбросить исключение: проверяйте `null`, например `tenant?.Length > 0`.
+
+      Результат проверен запуском в .NET 10; это поведение среды выполнения при обработке фильтров, а не
+      особенность версии языка C#.
+    linkTitles:
+      - "Контекстное ключевое слово when"
+      - "Операторы обработки исключений: throw и try"
+      - "ECMA-335: Common Language Infrastructure"
+  en:
+    title: What happens when a when exception filter throws an exception itself?
+    prompt: |
+      The `try` block throws an `InvalidOperationException`. The first `catch` clause matches by type, but its
+      `when` filter reads a property of a variable that is `null`. What does this program print in .NET 10?
+    hint: "What does the runtime do with an exception that escapes from a filter expression while it is looking for a handler?"
+    options:
+      a: "second InvalidOperationException"
+      b: "second NullReferenceException"
+      c: "first"
+      d: Unhandled `NullReferenceException`
+      e: Unhandled `InvalidOperationException`
+    optionExplanations:
+      b: "The `NullReferenceException` from the filter does not propagate and does not replace the original exception: the runtime swallows it. The handler search continues for the `InvalidOperationException`, so that is what `catch (Exception e)` receives."
+      c: "The clause body runs only if the filter returns `true`. Here the filter returns no value at all: evaluating it threw, and such a filter counts as false."
+      d: "An exception thrown inside a filter does not escape it. The runtime discards it and treats the filter as having returned `false`."
+      e: "A false filter does not end the handler search. The next clause, `catch (Exception e)`, matches by type and catches the original exception."
+    answer: "second InvalidOperationException"
+    explanation: |
+      A `when` filter is evaluated while the runtime is searching for a matching handler: the `catch` body runs
+      only if the filter returns `true`. Here `tenant` is `null`, so `tenant.Length` throws a
+      `NullReferenceException` right in the middle of evaluating the filter.
+
+      The .NET runtime does not let that exception propagate: it is discarded and the filter is treated as
+      having returned `false`. The search goes on as if the first clause simply did not match, and for the same
+      original exception. The next clause, `catch (Exception e)`, matches by type, and the program prints
+      `second InvalidOperationException`. The `NullReferenceException` shows up nowhere: it becomes neither the
+      current exception nor an `InnerException`. If the exception from the filter propagated, the program would
+      print a different type name or end with an unhandled `NullReferenceException`.
+
+      The practical lesson: a bug in a filter silently disables its handler. The special handling does not run,
+      the exception goes to a more general clause or becomes unhandled, and the logs show no trace of the
+      failure in the filter itself (at most it is visible as a first-chance exception in a debugger or through
+      `AppDomain.FirstChanceException`). So a filter should be a simple expression that cannot throw: check for
+      `null`, for example `tenant?.Length > 0`.
+
+      The result was checked by running the program on .NET 10; this is how the runtime handles filters, not a
+      feature of a particular C# language version.
+    linkTitles:
+      - "The when contextual keyword"
+      - "Exception-handling statements: throw and try"
+      - "ECMA-335: Common Language Infrastructure"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

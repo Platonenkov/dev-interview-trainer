@@ -1,0 +1,145 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPEFKB8ZH8X3VRXK3P
+slug: analyzer-rules-enforcing-encapsulation
+stack: dotnet
+topic: oop-solid
+level: lead
+type: multi
+grading: auto
+tags: [encapsulation, code-analysis, analyzers, editorconfig]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: true
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/fundamentals/code-analysis/quality-rules/ca1051
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/fundamentals/code-analysis/quality-rules/ca2227
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/fundamentals/code-analysis/quality-rules/ca1002
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какие правила анализа кода .NET включить в стандарт команды, чтобы публичные типы не раскрывали своё внутреннее устройство?
+    prompt: |
+      Вы лид команды. На code review раз за разом отклоняются одни и те же ошибки: публичные поля, свойства-коллекции
+      с публичным `set`, `List<T>` в публичных членах. Вы хотите перенести эти проверки в общий `.editorconfig`
+      решения с уровнем `warning` и для каждого правила зафиксировать область действия или политику подавления.
+
+      Выберите все записи, которые должны войти в этот стандарт: правило, которое не даёт публичному типу раскрывать
+      своё внутреннее представление (поля, заменяемые коллекции, конкретный тип `List<T>`), вместе с политикой,
+      которая согласуется с документацией правила.
+    hint: Для каждого правила спросите себя, что оно защищает - форму публичного API или что-то другое (скорость, асинхронный контекст).
+    options:
+      a: "CA1051 (Do not declare visible instance fields) с областью действия по умолчанию - видимые снаружи типы"
+      b: "CA2227 (Collection properties should be read only) с разрешением подавлять предупреждение в DTO-классах для сериализации"
+      c: "CA1002 (Do not expose generic lists) обязательно в проектах, которые поставляются как переиспользуемые библиотеки; подавление допустимо в сборке приложения, оптимизированной под производительность"
+      d: "CA1822 (Mark members as static) с уровнем `warning` во всех проектах без исключений"
+      e: "CA2007 (Consider calling ConfigureAwait on the awaited task) с уровнем `warning` во всех проектах без исключений"
+    optionExplanations:
+      d: "CA1822 предлагает сделать статическим член, который не обращается к данным экземпляра. Это правило о производительности: оно не меняет того, что тип показывает наружу, и к сокрытию внутреннего устройства отношения не имеет."
+      e: "CA2007 касается того, в каком контексте продолжится метод после `await`. Это правило о надёжности асинхронного кода, а не о форме публичного API типа."
+    answer: "Записи a, b и c: CA1051, CA2227 и CA1002 с политиками, которые соответствуют их документации."
+    explanation: |
+      Все три выбранных правила не дают публичному типу раскрыть своё внутреннее представление, но делают это
+      по-разному:
+
+      - **CA1051** срабатывает на видимые снаружи (public, protected, protected internal) поля экземпляра.
+        Документация называет поле деталью реализации: его делают private или internal и открывают через
+        свойство. В аксессоры свойства потом можно добавить проверку или поменять хранение данных без
+        ломающего изменения API. По умолчанию правило проверяет только видимые снаружи типы, и это как раз то,
+        что нужно стандарту.
+      - **CA2227** срабатывает на свойство-коллекцию с публичным `set`: через такой сеттер вызывающий может
+        подменить коллекцию целиком, минуя логику типа. Сеттер убирают (или делают `init`), а содержимое меняют
+        методами коллекции или типа-владельца. Документация прямо разрешает подавлять правило для DTO, поэтому
+        такое исключение в стандарте обосновано.
+      - **CA1002** срабатывает на `List<T>` в публичной сигнатуре. Правило не запрещает изменять коллекцию, оно
+        не пускает конкретную реализацию в публичный контракт. `List<T>` рассчитан на производительность, а не на
+        наследование: у него нет виртуальных членов. Вместо него открывают типы, рассчитанные на наследование и
+        расширение (`Collection<T>`, `ReadOnlyCollection<T>`, `KeyedCollection<TKey,TItem>`) или интерфейсы
+        (`IList<T>`, `ICollection<T>`). Тогда владелец может позже поменять реализацию или перехватить изменения,
+        не ломая потребителей, а `ReadOnlyCollection<T>` вообще не даёт менять список снаружи. Документация
+        допускает подавление только в сборке, которая не задумана как переиспользуемая библиотека, например в
+        приложении, где `List<T>` дал выигрыш в производительности.
+
+      CA1822 и CA2007 полезны, но решают другие задачи: первое - производительность, второе - контекст
+      продолжения после `await`. Если смешать их с правилами инкапсуляции, команде труднее понять, зачем
+      введено ограничение и когда его можно подавлять.
+
+      Для лида важен и порядок внедрения. Например, CA1051 в .NET 10 не включено по умолчанию, поэтому правила
+      включают явно через `.editorconfig` (`dotnet_diagnostic.CA1051.severity = warning`). Начинать стоит с нового
+      кода или одного проекта, чтобы не утонуть в сотнях предупреждений на старом коде, а каждое подавление
+      сопровождать обоснованием из перечисленных выше.
+    linkTitles:
+      - "CA1051: не объявляйте видимые поля экземпляра"
+      - "CA2227: свойства-коллекции должны быть доступны только для чтения"
+      - "CA1002: не предоставляйте наружу универсальные списки"
+  en:
+    title: Which .NET code analysis rules belong in a team standard that stops public types from exposing their internals?
+    prompt: |
+      You are the team lead. In code review the same mistakes keep getting rejected: public fields, collection
+      properties with a public `set`, `List<T>` in public members. You want to move these checks into the
+      solution-wide `.editorconfig` at `warning` severity and fix a scope or suppression policy for each rule.
+
+      Select all entries that belong in this standard: a rule that stops a public type from leaking its internal
+      representation (fields, replaceable collections, the concrete `List<T>` type), together with a policy that
+      matches the rule's documentation.
+    hint: For each rule, ask what it protects - the shape of a public API or something else (speed, async context).
+    options:
+      a: "CA1051 (Do not declare visible instance fields) on its default scope - externally visible types"
+      b: "CA2227 (Collection properties should be read only) with suppressions allowed on DTO classes used for serialization"
+      c: "CA1002 (Do not expose generic lists) required in projects that ship as reusable libraries; a suppression is acceptable in an application assembly tuned for performance"
+      d: "CA1822 (Mark members as static) at `warning` in every project, without exceptions"
+      e: "CA2007 (Consider calling ConfigureAwait on the awaited task) at `warning` in every project, without exceptions"
+    optionExplanations:
+      d: "CA1822 suggests making a member static when it does not access instance data. It is a performance rule: it does not change what a type exposes and has nothing to do with hiding its internals."
+      e: "CA2007 is about the context in which a method continues after `await`. It is a reliability rule for async code, not a rule about the shape of a type's public API."
+    answer: "Entries a, b and c: CA1051, CA2227 and CA1002 with policies that match their documentation."
+    explanation: |
+      All three selected rules stop a public type from leaking its internal representation, but each in its own
+      way:
+
+      - **CA1051** fires on externally visible (public, protected, protected internal) instance fields. The
+        documentation calls a field an implementation detail: make it private or internal and expose it through a
+        property. The property accessors can later gain validation or a different storage without a breaking API
+        change. By default the rule looks only at externally visible types, which is exactly what the standard
+        needs.
+      - **CA2227** fires on a collection property with a public `set`: through that setter a caller can replace
+        the whole collection and bypass the type's logic. The setter is removed (or changed to `init`), and the
+        contents are changed through methods of the collection or the owning type. The documentation explicitly
+        allows suppressing the rule for DTOs, so that exception in the standard is justified.
+      - **CA1002** fires on `List<T>` in a public signature. The rule does not forbid mutation; it keeps the
+        concrete implementation out of the public contract. `List<T>` is designed for performance, not
+        inheritance: it has no virtual members. Instead you expose types designed for inheritance and extension
+        (`Collection<T>`, `ReadOnlyCollection<T>`, `KeyedCollection<TKey,TItem>`) or interfaces (`IList<T>`,
+        `ICollection<T>`). The owner can then change the implementation or intercept changes later without
+        breaking consumers, and `ReadOnlyCollection<T>` does not let outside code change the list at all. The
+        documentation allows a suppression only in an assembly that is not meant to be a reusable library, for
+        example an application where `List<T>` gave a performance benefit.
+
+      CA1822 and CA2007 are useful, but they solve other problems: the first is about performance, the second
+      about the continuation context after `await`. Mixing them with encapsulation rules makes it harder for the
+      team to understand why a restriction exists and when it may be suppressed.
+
+      For a lead the rollout order matters too. For example, CA1051 is not enabled by default in .NET 10, so the
+      rules are enabled explicitly in `.editorconfig` (`dotnet_diagnostic.CA1051.severity = warning`). Start
+      with new code or one project so the team does not drown in hundreds of warnings on legacy code, and back
+      every suppression with one of the justifications above.
+    linkTitles:
+      - "CA1051: Do not declare visible instance fields"
+      - "CA2227: Collection properties should be read only"
+      - "CA1002: Do not expose generic lists"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

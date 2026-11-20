@@ -1,0 +1,151 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RRVDRFNKQWBGXQMSQ2
+slug: struct-field-order-padding-size
+stack: dotnet
+topic: types-memory
+level: senior
+type: output
+grading: auto
+tags: [struct, memory-layout, padding, structlayout]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    using System.Runtime.CompilerServices;
+    using System.Runtime.InteropServices;
+
+    Console.Write($"{Unsafe.SizeOf<DefaultLayout>()} {Unsafe.SizeOf<AutoLayout>()}");
+
+    struct DefaultLayout
+    {
+        public byte A;
+        public long B;
+        public byte C;
+    }
+
+    [StructLayout(LayoutKind.Auto)]
+    struct AutoLayout
+    {
+        public byte A;
+        public long B;
+        public byte C;
+    }
+expect:
+  kind: output
+  value: "24 16"
+acceptedOutputs: ["24 16"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "24 16" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "10 10" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "24 24" }
+  - id: d
+    correct: false
+    expect: { kind: output, value: "16 16" }
+  - id: e
+    correct: false
+    expect: { kind: compile-error }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.runtime.interopservices.structlayoutattribute
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.runtime.compilerservices.unsafe.sizeof
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Каков размер структуры с полями byte, long, byte при раскладке по умолчанию и при LayoutKind.Auto?
+    prompt: |
+      Две структуры объявляют одни и те же поля в одном порядке: `byte`, `long`, `byte`. Вторая помечена
+      атрибутом `[StructLayout(LayoutKind.Auto)]`. Что выведет программа в консоль на 64-битной платформе
+      в .NET 10?
+    hint: Какое выравнивание нужно полю `long` и кто решает, в каком порядке поля лежат в памяти?
+    options:
+      a: "24 16"
+      b: "10 10"
+      c: "24 24"
+      d: "16 16"
+      e: Ошибка компиляции
+    optionExplanations:
+      b: "`10` - это просто сумма размеров полей (1 + 8 + 1). Но среда выполнения выравнивает `long` по границе 8 байт и дополняет размер всей структуры до кратного её выравниванию, поэтому без заполнителей структура не обходится ни в одной из раскладок."
+      c: "Так было бы, если бы `LayoutKind.Auto` ничего не менял. Но при автоматической раскладке среда выполнения вправе переставить поля: она ставит `long` первым, а два `byte` сразу за ним, и заполнитель остаётся только в конце."
+      d: "Так было бы, если бы компилятор C# или среда выполнения сами переставляли поля обычной структуры. Но компилятор C# по умолчанию помечает структуры как `LayoutKind.Sequential`, и для структуры только из примитивных полей порядок объявления сохраняется: `byte`, 7 байт заполнителя, `long`, `byte`, ещё 7 байт."
+      e: "Код корректен. `Unsafe.SizeOf<T>()` - обычный обобщённый метод, контекст `unsafe` для него не нужен. Директивы `using` стоят перед операторами верхнего уровня, а объявления структур - после них, как и положено."
+    answer: "24 16"
+    explanation: |
+      Компилятор C# по умолчанию применяет к структурам `LayoutKind.Sequential`: поля размещаются в порядке
+      объявления. Поле `long` должно быть выровнено по границе 8 байт, поэтому раскладка `DefaultLayout`
+      такая: `A` по смещению 0, 7 байт заполнителя, `B` по смещению 8, `C` по смещению 16, и ещё 7 байт
+      в конце, чтобы размер был кратен выравниванию структуры (8). Итого 24 байта, из них 14 - заполнитель.
+
+      С `LayoutKind.Auto` среда выполнения сама выбирает порядок полей. CoreCLR размещает сначала крупные
+      поля: `B` по смещению 0, `A` и `C` по смещениям 8 и 9, затем заполнитель до 16. `Unsafe.SizeOf<T>()`
+      возвращает именно управляемый размер структуры, то есть 16.
+
+      Практические выводы:
+
+      - Тот же выигрыш можно получить без `Auto`, просто объявив поля от крупных к мелким: `long`, `byte`,
+        `byte` дают 16 байт и при последовательной раскладке. Для массивов из миллионов структур это треть памяти.
+      - Структуру с `LayoutKind.Auto` нельзя передать в неуправляемый код: маршалинг её не поддерживает,
+        и `Marshal.SizeOf` для неё выбрасывает исключение. Конкретный порядок полей при `Auto` - деталь
+        реализации, полагаться на смещения нельзя.
+      - Если в структуре есть поля ссылочного типа, CoreCLR использует автоматическую раскладку для
+        управляемой памяти даже без атрибута.
+
+      Числа верны для 64-битного процесса в .NET 10 и зависят от выравнивания `long` на платформе.
+    linkTitles:
+      - Класс StructLayoutAttribute
+      - Метод Unsafe.SizeOf<T>
+  en:
+    title: What is the size of a struct with byte, long, byte fields in default layout and with LayoutKind.Auto?
+    prompt: |
+      Two structs declare the same fields in the same order: `byte`, `long`, `byte`. The second one is marked
+      with `[StructLayout(LayoutKind.Auto)]`. What does the program print to the console on a 64-bit platform
+      in .NET 10?
+    hint: What alignment does a `long` field need, and who decides the order of the fields in memory?
+    options:
+      a: "24 16"
+      b: "10 10"
+      c: "24 24"
+      d: "16 16"
+      e: Compile error
+    optionExplanations:
+      b: "`10` is just the sum of the field sizes (1 + 8 + 1). But the runtime aligns `long` on an 8-byte boundary and pads the whole struct to a multiple of its alignment, so neither layout gets away without padding."
+      c: "That would happen if `LayoutKind.Auto` changed nothing. But with auto layout the runtime may reorder the fields: it puts the `long` first and the two `byte` fields right after it, so padding remains only at the end."
+      d: "That would happen if the C# compiler or the runtime reordered the fields of an ordinary struct. But the C# compiler marks structs as `LayoutKind.Sequential` by default, and for a struct of primitive fields the declaration order is kept: `byte`, 7 bytes of padding, `long`, `byte`, 7 more bytes."
+      e: "The code is valid. `Unsafe.SizeOf<T>()` is an ordinary generic method and needs no `unsafe` context. The `using` directives come before the top-level statements and the struct declarations come after them, as required."
+    answer: "24 16"
+    explanation: |
+      By default the C# compiler applies `LayoutKind.Sequential` to structs: fields are placed in declaration
+      order. A `long` field must be aligned on an 8-byte boundary, so `DefaultLayout` looks like this: `A` at
+      offset 0, 7 bytes of padding, `B` at offset 8, `C` at offset 16, and 7 more bytes at the end so that the
+      size is a multiple of the struct alignment (8). That is 24 bytes, 14 of them padding.
+
+      With `LayoutKind.Auto` the runtime chooses the field order itself. CoreCLR places larger fields first:
+      `B` at offset 0, `A` and `C` at offsets 8 and 9, then padding up to 16. `Unsafe.SizeOf<T>()` returns
+      the managed size of the struct, which is 16.
+
+      Practical takeaways:
+
+      - You get the same saving without `Auto` by declaring fields from largest to smallest: `long`, `byte`,
+        `byte` gives 16 bytes even with sequential layout. For arrays of millions of structs that is a third of
+        the memory.
+      - A struct with `LayoutKind.Auto` cannot be passed to native code: marshaling does not support it, and
+        `Marshal.SizeOf` throws for it. The exact field order under `Auto` is an implementation detail, so do
+        not rely on offsets.
+      - If a struct contains reference-type fields, CoreCLR uses auto layout for managed memory even without
+        the attribute.
+
+      The numbers hold for a 64-bit process on .NET 10 and depend on the alignment of `long` on the platform.
+    linkTitles:
+      - StructLayoutAttribute class
+      - Unsafe.SizeOf<T> method
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

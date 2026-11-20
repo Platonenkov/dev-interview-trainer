@@ -1,0 +1,157 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RR4GDCFGEPF0570N7H
+slug: hidden-boxing-sources-in-hot-path
+stack: dotnet
+topic: types-memory
+level: senior
+type: multi
+grading: auto
+tags: [boxing, value-types, generics, string-interpolation, performance]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    Rect rect = new(3, 4);
+
+    int area1 = Measure(rect);                    // A
+    Type type = rect.GetType();                   // B
+    int area2 = MeasureGeneric(rect);             // C
+    string label = $"{rect.Width}x{rect.Height}"; // D
+    string text = rect.ToString();                // E
+
+    static int Measure(IShape shape) => shape.Area();
+    static int MeasureGeneric<T>(T shape) where T : IShape => shape.Area();
+
+    interface IShape
+    {
+        int Area();
+    }
+
+    readonly struct Rect : IShape
+    {
+        public Rect(int width, int height)
+        {
+            Width = width;
+            Height = height;
+        }
+
+        public int Width { get; }
+        public int Height { get; }
+
+        public int Area() => Width * Height;
+
+        public override string ToString() => $"({Width}, {Height})";
+    }
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/types/boxing-and-unboxing
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/tokens/interpolated
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.reflection.emit.opcodes.constrained
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какие операции с небольшой структурой в горячем пути приводят к упаковке?
+    prompt: |
+      В горячем пути код работает с небольшой структурой `Rect`, которая реализует интерфейс `IShape` и
+      переопределяет `ToString`. Код компилируется C# 14 на .NET 10.
+
+      Выберите все строки, помеченные комментариями от `// A` до `// E`, в которых компилятор упаковывает
+      значение `rect`: в IL появляется инструкция `box`, то есть по умолчанию в куче выделяется новый объект.
+    hint: Для каждой строки подумайте, нужна ли вызываемому коду ссылка на объект (`object` или интерфейс), или он работает с точно известным типом значения.
+    options:
+      a: "Строка A: передача `rect` в метод с параметром типа `IShape`"
+      b: "Строка B: вызов `rect.GetType()`"
+      c: "Строка C: передача `rect` в обобщённый метод с ограничением `where T : IShape`"
+      d: "Строка D: интерполяция `$\"{rect.Width}x{rect.Height}\"` в переменную типа `string`"
+      e: "Строка E: вызов переопределённого `rect.ToString()`"
+    optionExplanations:
+      c: "Для типа значения JIT компилирует отдельную версию обобщённого метода под `Rect`, а вызов `shape.Area()` компилятор генерирует с префиксом `constrained.`. Так как `Rect` сам реализует `Area`, метод вызывается напрямую по управляемой ссылке на значение, без упаковки."
+      d: "Начиная с C# 10 интерполяция в `string` компилируется через `DefaultInterpolatedStringHandler`, у которого метод `AppendFormatted<T>(T value)` обобщённый. Значения `int` передаются как `int` и форматируются в буфер без упаковки. До C# 10 такая строка компилировалась в вызов `string.Format` с параметрами `object`, и каждый `int` упаковывался."
+      e: "`Rect` переопределяет `ToString`, поэтому вызов попадает прямо в метод структуры без упаковки. Упаковка при вызове `ToString`, `Equals` или `GetHashCode` возникает, когда структура их не переопределяет и выполняется реализация, унаследованная от `System.ValueType` или `System.Object`."
+    answer: Строки A и B.
+    explanation: |
+      **Строка A.** Преобразование типа значения в интерфейс, который он реализует, - это упаковка, так же как
+      преобразование в `object`. Среда выполнения выделяет в куче объект, копирует в него значение `rect` и
+      передаёт в `Measure` ссылку. В горячем пути это аллокация на каждый вызов.
+
+      **Строка B.** `GetType` - невиртуальный метод, объявленный в `System.Object`. Тип значения не может его
+      переопределить, а для вызова нужна ссылка на объект, поэтому компилятор сначала упаковывает `rect`.
+
+      **Строки C, D и E упаковки не содержат.** Обобщённый метод с ограничением для типа значения
+      специализируется JIT под конкретный тип, и вызов через префикс `constrained.` идёт напрямую в метод
+      структуры. Обработчик интерполированных строк из C# 10 принимает аргументы через обобщённый
+      `AppendFormatted<T>`. Переопределённый `ToString` вызывается у самой структуры.
+
+      Отсюда практический приём: если метод горячего пути принимает интерфейс, а вызывают его со структурами,
+      замените параметр `IShape` на обобщённый `T` с ограничением `where T : IShape`, как в строке C.
+
+      Оговорка для .NET 10: начиная с .NET 9 JIT умеет в отдельных случаях размещать упакованный объект на
+      стеке или убирать упаковку, если объект не выходит за пределы метода (например, после встраивания вызова).
+      На это нельзя рассчитывать при проектировании: наличие аллокаций проверяют профилировщиком или
+      `MemoryDiagnoser` в BenchmarkDotNet.
+    linkTitles:
+      - Упаковка и распаковка
+      - Интерполяция строк
+      - Префикс constrained в IL
+  en:
+    title: Which operations on a small struct in a hot path cause boxing?
+    prompt: |
+      In a hot path, code works with a small struct `Rect` that implements the `IShape` interface and overrides
+      `ToString`. The code is compiled with C# 14 on .NET 10.
+
+      Select every line, marked with the comments `// A` to `// E`, in which the compiler boxes the value of
+      `rect`: a `box` instruction appears in the IL, which by default means a new object is allocated on the heap.
+    hint: For each line, think about whether the called code needs a reference to an object (`object` or an interface), or works with the exact value type it knows.
+    options:
+      a: "Line A: passing `rect` to a method with a parameter of type `IShape`"
+      b: "Line B: calling `rect.GetType()`"
+      c: "Line C: passing `rect` to a generic method constrained with `where T : IShape`"
+      d: "Line D: the interpolation `$\"{rect.Width}x{rect.Height}\"` into a variable of type `string`"
+      e: "Line E: calling the overridden `rect.ToString()`"
+    optionExplanations:
+      c: "For a value type the JIT compiles a separate version of the generic method for `Rect`, and the compiler emits the `shape.Area()` call with the `constrained.` prefix. Because `Rect` implements `Area` itself, the method is called directly through a managed reference to the value, without boxing."
+      d: "Since C# 10, interpolation into a `string` is compiled through `DefaultInterpolatedStringHandler`, whose `AppendFormatted<T>(T value)` method is generic. The `int` values are passed as `int` and formatted into a buffer without boxing. Before C# 10 such a string was compiled into a `string.Format` call with `object` parameters, and every `int` was boxed."
+      e: "`Rect` overrides `ToString`, so the call goes straight to the struct's method without boxing. Boxing on a `ToString`, `Equals` or `GetHashCode` call happens when the struct does not override them and the implementation inherited from `System.ValueType` or `System.Object` runs."
+    answer: Lines A and B.
+    explanation: |
+      **Line A.** Converting a value type to an interface it implements is boxing, just like converting it to
+      `object`. The runtime allocates an object on the heap, copies the value of `rect` into it and passes a
+      reference to `Measure`. In a hot path that is one allocation per call.
+
+      **Line B.** `GetType` is a non-virtual method declared on `System.Object`. A value type cannot override it,
+      and the call needs an object reference, so the compiler boxes `rect` first.
+
+      **Lines C, D and E contain no boxing.** A constrained generic method is specialized by the JIT for each
+      value type, and the call through the `constrained.` prefix goes directly to the struct's method. The C# 10
+      interpolated string handler takes its arguments through the generic `AppendFormatted<T>`. The overridden
+      `ToString` is called on the struct itself.
+
+      That gives a practical technique: if a hot-path method takes an interface and is called with structs,
+      replace the `IShape` parameter with a generic `T` constrained by `where T : IShape`, as on line C.
+
+      A caveat for .NET 10: since .NET 9 the JIT can in some cases place a boxed object on the stack or remove the
+      box when the object does not escape the method (for example, after the call is inlined). Do not rely on it
+      when designing code: check for allocations with a profiler or with `MemoryDiagnoser` in BenchmarkDotNet.
+    linkTitles:
+      - Boxing and unboxing
+      - String interpolation
+      - The constrained IL prefix
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

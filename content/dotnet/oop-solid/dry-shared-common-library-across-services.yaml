@@ -1,0 +1,155 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQ6DK98BKS5V9STK8K
+slug: dry-shared-common-library-across-services
+stack: dotnet
+topic: oop-solid
+level: architect
+type: open
+grading: self
+tags: [dry, shared-library, microservices, nuget, versioning, bounded-context]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/architecture/microservices/architect-microservice-container-applications/data-sovereignty-per-microservice
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/library-guidance/dependencies
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/library-guidance/versioning
+    lang: en
+    kind: docs
+  - url: https://sandimetz.com/blog/2016/1/20/the-wrong-abstraction
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Как применять DRY между сервисами, если общий пакет Company.Common заставляет обновлять тридцать сервисов разом?
+    prompt: |
+      Пакет NuGet `Company.Common` содержит утилиты, настройку логирования и HTTP-клиентов, а также доменные
+      модели `Customer`, `Order` и `Invoice`. Его используют тридцать независимо развёртываемых сервисов.
+      Почти каждый релиз пакета меняет какую-нибудь модель, поэтому командам приходится согласованно обновлять
+      зависимость и выкатываться вместе. Сервис, который отстал на пару версий, перестаёт собираться или
+      начинает ошибаться при обмене данными с соседями.
+
+      Как вы примените принцип DRY через границы сервисов и что сделаете с этим пакетом?
+    hint: Какие части пакета меняются из-за бизнес-правил конкретного сервиса, а какие годами остаются прежними? И что дороже - продублировать класс в одном сервисе или согласовать релиз тридцати команд?
+    answer: |
+      - **Диагноз.** Общая библиотека между независимо развёртываемыми сервисами - это связь на этапе сборки:
+        её версия становится частью цикла релизов каждого потребителя. Когда в ней лежат доменные модели,
+        изменение бизнес-правил одного сервиса превращается в изменение для всех тридцати. Получился
+        распределённый монолит: сервисы развёртываются отдельно, но меняться могут только вместе.
+      - **Что значит DRY между сервисами.** DRY требует одного авторитетного представления для каждого знания,
+        но `Customer` в биллинге и `Customer` в доставке - разные знания: у них разные поля, инварианты и
+        причины изменения. Каждый сервис - свой ограниченный контекст (bounded context) и владеет своей
+        моделью и данными. Похожие классы в разных контекстах - не нарушение DRY, а нормальная цена автономии.
+      - **Разобрать пакет по категориям.**
+        1. Доменные модели - вернуть в сервисы-владельцы. Каждый сервис держит свою модель только с нужными
+           ему полями.
+        2. Контракты интеграции (сообщения, DTO API) - публикует сервис-владелец в виде схемы (OpenAPI,
+           Protobuf, JSON Schema) и развивает совместимыми изменениями, например добавлением необязательных
+           полей. Потребители генерируют или пишут свои классы и игнорируют незнакомые поля.
+        3. Доменно-нейтральная инфраструктура (настройка логирования и трассировки, политики повторов,
+           проверки работоспособности, формат ошибок) - остаётся общей, но разбивается на небольшие пакеты
+           с одним владельцем, собственной версией по SemVer и минимумом транзитивных зависимостей.
+        4. Мелкие утилиты на несколько строк - скопировать или заменить средствами BCL: зависимость обходится
+           дороже копии.
+      - **Правила для оставшихся пакетов.** Ломающие изменения - только в мажорной версии, предыдущая мажорная
+        версия поддерживается заранее объявленный срок, сервисы обновляются в своём темпе, а не синхронно.
+        Публичная поверхность минимальна, типы `internal` по умолчанию.
+      - **Если знание действительно общее** (например, расчёт налога обязан совпадать везде), его выносят не
+        в библиотеку, а в сервис или API с одним владельцем: правило меняется в одном месте без пересборки
+        потребителей.
+      - **Миграция.** Запретить добавлять доменные типы в `Company.Common`, пометить существующие `[Obsolete]`
+        и переносить модели в сервисы по одной, начиная с самых часто меняющихся. Критерий успеха: релиз
+        общего пакета больше не требует обновлять остальные сервисы.
+    explanation: |
+      Внутри одного процесса DRY почти бесплатен: изменение общего кода сразу видно всем вызывающим,
+      компилятор находит несовместимости, и всё выкатывается одним релизом. Между независимо развёртываемыми
+      сервисами общий код ведёт себя иначе. Каждый сервис фиксирует свою версию пакета, поэтому изменение не
+      доходит до потребителей само, а требует тридцати обновлений, сборок и выкаток. Если изменение ломает
+      совместимость, сервисы на разных версиях начинают по-разному понимать одни и те же данные. Вдобавок в
+      одном приложении NuGet выбирает одну версию каждого пакета: если две зависимости сервиса требуют
+      несовместимых версий `Company.Common`, удовлетворить обе нельзя (ромбовидная зависимость).
+
+      Руководство Microsoft по архитектуре микросервисов связывает автономию сервиса с суверенитетом данных:
+      каждый сервис владеет своей моделью предметной области и своими данными, а одно и то же понятие в разных
+      ограниченных контекстах может выглядеть по-разному. Общая библиотека моделей стирает эту границу и
+      заставляет все контексты разделять одну модель.
+
+      Вывод Сэнди Метц о том, что дублирование дешевле неверной абстракции, здесь только усиливается. Общая
+      модель для тридцати сервисов почти неизбежно обрастает полями и флагами для каждого потребителя, а платить
+      за неё приходится уже не ветками в методе, а координацией релизов между командами. Поэтому разумная
+      граница такая: делиться стабильной доменно-нейтральной инфраструктурой с понятным владельцем и
+      семантическим версионированием, а доменное знание держать в сервисе-владельце и открывать другим через
+      контракты, даже ценой дублирования похожих классов.
+    linkTitles:
+      - "Суверенитет данных для каждого микросервиса"
+      - "Зависимости (рекомендации по библиотекам .NET)"
+      - "Версионирование (рекомендации по библиотекам .NET)"
+      - "Sandi Metz: The Wrong Abstraction"
+  en:
+    title: How do you apply DRY across services when a shared Company.Common package forces thirty services to upgrade together?
+    prompt: |
+      The NuGet package `Company.Common` contains utilities, logging and HTTP client setup, and also the domain
+      models `Customer`, `Order` and `Invoice`. Thirty independently deployed services use it. Almost every
+      release of the package changes some model, so teams have to upgrade the dependency in a coordinated way
+      and ship together. A service that falls a couple of versions behind stops building or starts making
+      mistakes when it exchanges data with its neighbours.
+
+      How do you apply the DRY principle across service boundaries, and what do you do with this package?
+    hint: Which parts of the package change because of the business rules of a particular service, and which stay the same for years? And what costs more - duplicating a class in one service or coordinating a release of thirty teams?
+    answer: |
+      - **Diagnosis.** A library shared between independently deployed services is a build-time coupling: its
+        version becomes part of the release cycle of every consumer. When it holds domain models, a change in
+        the business rules of one service becomes a change for all thirty. The result is a distributed
+        monolith: services deploy separately but can only change together.
+      - **What DRY means across services.** DRY asks for one authoritative representation of each piece of
+        knowledge, but `Customer` in billing and `Customer` in shipping are different knowledge: different
+        fields, invariants and reasons to change. Each service is its own bounded context and owns its model and
+        data. Similar classes in different contexts are not a DRY violation but the normal price of autonomy.
+      - **Sort the package into categories.**
+        1. Domain models go back to the owning services. Each service keeps its own model with only the fields
+           it needs.
+        2. Integration contracts (messages, API DTOs) are published by the owning service as a schema (OpenAPI,
+           Protobuf, JSON Schema) and evolved with compatible changes, such as adding optional fields.
+           Consumers generate or write their own classes and ignore unknown fields.
+        3. Domain-agnostic infrastructure (logging and tracing setup, retry policies, health checks, error
+           format) stays shared, but is split into small packages, each with one owner, its own SemVer version
+           and a minimum of transitive dependencies.
+        4. Tiny utilities of a few lines are copied or replaced with BCL features: the dependency costs more than
+           the copy.
+      - **Rules for the remaining packages.** Breaking changes only in a major version, the previous major
+        version is supported for an announced period, and services upgrade at their own pace rather than in
+        lockstep. The public surface is minimal and types are `internal` by default.
+      - **If the knowledge is truly shared** (for example, tax calculation must be identical everywhere), it
+        goes into a service or API with one owner, not into a library: the rule changes in one place without
+        rebuilding the consumers.
+      - **Migration.** Stop adding domain types to `Company.Common`, mark the existing ones `[Obsolete]` and move
+        the models into the services one by one, starting with the ones that change most often. The success
+        criterion: a release of a shared package no longer requires the other services to upgrade.
+    explanation: |
+      Inside one process DRY is almost free: a change to shared code is immediately visible to every caller, the
+      compiler finds incompatibilities, and everything ships in one release. Between independently deployed
+      services shared code behaves differently. Each service pins its own version of the package, so a change
+      does not reach the consumers by itself but needs thirty upgrades, builds and deployments. If the change
+      breaks compatibility, services on different versions start to interpret the same data differently. On top
+      of that, NuGet picks one version of each package for an application: if two dependencies of a service
+      require incompatible versions of `Company.Common`, both cannot be satisfied (a diamond dependency).
+
+      The Microsoft microservices architecture guide ties service autonomy to data sovereignty: each service
+      owns its domain model and its data, and the same concept can look different in different bounded
+      contexts. A shared model library erases that boundary and forces every context to share one model.
+
+      Sandi Metz's conclusion that duplication is cheaper than the wrong abstraction is even stronger here. A
+      shared model for thirty services almost inevitably grows fields and flags for each consumer, and the price
+      is no longer branches in a method but release coordination across teams. So a sensible boundary is: share
+      stable, domain-agnostic infrastructure with a clear owner and semantic versioning, and keep domain
+      knowledge in the owning service, exposed to others through contracts, even at the cost of duplicating
+      similar classes.
+    linkTitles:
+      - "Data sovereignty per microservice"
+      - "Dependencies (.NET library guidance)"
+      - "Versioning (.NET library guidance)"
+      - "Sandi Metz: The Wrong Abstraction"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

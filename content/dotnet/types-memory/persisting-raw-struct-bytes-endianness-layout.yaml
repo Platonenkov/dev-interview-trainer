@@ -1,0 +1,129 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RRESRPTV32D5F33P2Q
+slug: persisting-raw-struct-bytes-endianness-layout
+stack: dotnet
+topic: types-memory
+level: architect
+type: single
+grading: auto
+tags: [struct, memory-marshal, binary-primitives, endianness, serialization, file-format]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: false
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.buffers.binary.binaryprimitives
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.runtime.interopservices.memorymarshal.asbytes
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.runtime.interopservices.structlayoutattribute
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Можно ли годами хранить записи в файлах, сбрасывая память структур через MemoryMarshal.AsBytes?
+    prompt: |
+      Команда проектирует хранилище записей, которые должны читаться много лет, в том числе другими версиями
+      приложения и на других серверах. Предложение: описать запись как `struct` из числовых полей, получать её
+      байты через `MemoryMarshal.AsBytes` и записывать их в файл как есть, а при чтении делать обратное
+      преобразование. Какое утверждение об этом решении верно? Ответ дан для .NET 10.
+    hint: Подумайте, что из устройства конкретной машины и конкретной версии типа попадает в байты, которые возвращает `AsBytes`.
+    options:
+      a: "`MemoryMarshal.AsBytes` сериализует структуру в платформенно-независимый формат: числа записываются в сетевом порядке байтов (big-endian), поэтому файлы можно читать на любой машине"
+      b: "Подход годится и для структур с полями `string`: в файл попадут байты строк, и при чтении строки восстановятся"
+      c: "Байты структуры повторяют её раскладку в памяти: смещения полей, байты выравнивания и порядок байтов машины, которая их записала. Для формата, который живёт годами, каждое поле нужно записывать явно с фиксированным порядком байтов, например через `BinaryPrimitives.WriteInt64LittleEndian`, а в заголовок файла добавить номер версии формата"
+      d: "Достаточно пометить структуру `[StructLayout(LayoutKind.Explicit)]` и задать `[FieldOffset]` каждому полю: смещения станут фиксированными, формат будет стабилен на любой платформе, и номер версии формата не нужен"
+      e: "Для структур C# по умолчанию действует `LayoutKind.Sequential`, поэтому байтовый образ стабилен: достаточно никогда не менять порядок полей"
+    optionExplanations:
+      a: "`AsBytes` ничего не сериализует и не преобразует: он лишь позволяет смотреть на ту же память как на `Span<byte>`, без копирования. Числа остаются в том порядке байтов, в котором их хранит процессор, записавший файл."
+      b: "`AsBytes` требует, чтобы тип не содержал ссылок, и для такой структуры выбрасывает `ArgumentException`. Да и поле `string` хранит не символы, а ссылку на объект в куче - адрес, который бессмыслен в другом процессе."
+      d: "`LayoutKind.Explicit` фиксирует смещения полей, но не порядок байтов внутри каждого числа: он по-прежнему определяется машиной. И раскладка не решает эволюцию формата: новое поле или смена типа поля всё равно ломают чтение старых файлов, если в файле нет версии."
+      e: "Последовательная раскладка задаёт только порядок полей. Байты выравнивания между полями, порядок байтов в числах и влияние любого изменения типа на смещения никуда не деваются. Добавить поле или поменять `int` на `long` за годы жизни формата придётся почти наверняка, и без версии старые файлы станут нечитаемыми."
+    answer: "Байты структуры повторяют её раскладку в памяти и порядок байтов машины, поэтому долговечный формат пишут поле за полем с явным порядком байтов (например, через `BinaryPrimitives`) и снабжают номером версии."
+    explanation: |
+      `MemoryMarshal.AsBytes` - это переинтерпретация, а не сериализация: возвращаемый `Span<byte>` указывает на ту же
+      память, что и исходные структуры. Значит, в файл попадает ровно образ памяти, а он зависит от трёх вещей,
+      которые не являются частью данных.
+
+      - **Раскладка.** Смещения полей и байты выравнивания определяются размером и выравниванием полей. Байты
+        выравнивания не принадлежат ни одному полю, и формат не определяет их содержимое. Любое изменение типа -
+        новое поле, другой тип поля - сдвигает смещения, и старый файл читается как мусор без всякой ошибки.
+      - **Порядок байтов.** Многобайтовые числа хранятся в порядке байтов процессора (`BitConverter.IsLittleEndian`).
+        Распространённые платформы .NET 10, x64 и Arm64, используют little-endian, но формат тогда неявно
+        привязан к этому свойству машины, а не описан явно.
+      - **Ссылки.** Для типов, содержащих ссылки, `AsBytes` выбрасывает `ArgumentException`, потому что ссылка - это
+        адрес в куче конкретного процесса.
+
+      Долговечный формат описывают явно: заголовок с номером версии, затем каждое поле записывается методами
+      `BinaryPrimitives` с фиксированным порядком байтов (`WriteInt32LittleEndian`, `WriteInt64LittleEndian`,
+      `WriteDoubleLittleEndian`) и читается парными методами `Read...LittleEndian`. На little-endian машине это почти
+      обычное копирование, на big-endian - перестановка байтов, так что цена невелика, а формат перестаёт зависеть от
+      машины и от раскладки типа в памяти. Версия позволяет новому коду читать старые файлы. Закрепить формат помогают
+      тесты на эталонных файлах, записанных прошлыми версиями.
+
+      Сброс памяти через `MemoryMarshal` уместен для данных, которые живут недолго и читаются тем же билдом на той же
+      машине, например для временного кэша. Для хранения на годы это неявный формат, который ломается тихо.
+    linkTitles:
+      - "Класс BinaryPrimitives"
+      - "Метод MemoryMarshal.AsBytes"
+      - "Атрибут StructLayoutAttribute"
+  en:
+    title: Can you store records in files for years by dumping struct memory with MemoryMarshal.AsBytes?
+    prompt: |
+      A team is designing storage for records that must stay readable for many years, including by other versions
+      of the application and on other servers. The proposal: describe a record as a `struct` of numeric fields, get
+      its bytes with `MemoryMarshal.AsBytes` and write them to a file as is, then do the reverse when reading.
+      Which statement about this design is correct? The answer is given for .NET 10.
+    hint: Think about what from the specific machine and the specific version of the type ends up in the bytes that `AsBytes` returns.
+    options:
+      a: "`MemoryMarshal.AsBytes` serializes the struct into a platform-independent format: numbers are written in network byte order (big-endian), so the files can be read on any machine"
+      b: "The approach also works for structs with `string` fields: the string bytes go into the file, and the strings are restored on reading"
+      c: "The struct bytes mirror its layout in memory: field offsets, padding bytes and the byte order of the machine that wrote them. For a format that lives for years, each field must be written explicitly with a fixed byte order, for example with `BinaryPrimitives.WriteInt64LittleEndian`, and the file header must carry a format version number"
+      d: "It is enough to mark the struct `[StructLayout(LayoutKind.Explicit)]` and give every field a `[FieldOffset]`: the offsets become fixed, the format is stable on any platform, and no format version number is needed"
+      e: "C# structs use `LayoutKind.Sequential` by default, so the byte image is stable: you only need to never reorder the fields"
+    optionExplanations:
+      a: "`AsBytes` neither serializes nor converts anything: it only lets you view the same memory as a `Span<byte>`, without copying. Numbers stay in the byte order in which the processor that wrote the file stores them."
+      b: "`AsBytes` requires a type without references and throws `ArgumentException` for such a struct. Besides, a `string` field holds not characters but a reference to a heap object - an address that is meaningless in another process."
+      d: "`LayoutKind.Explicit` fixes the field offsets, but not the byte order inside each number: that is still decided by the machine. And layout does not solve format evolution: a new field or a changed field type still breaks reading of old files if the file has no version."
+      e: "Sequential layout only fixes the order of the fields. Padding between fields, the byte order of numbers and the effect of any type change on offsets remain. Over years of a format's life you will almost certainly add a field or change an `int` to a `long`, and without a version the old files become unreadable."
+    answer: "The struct bytes mirror its memory layout and the machine's byte order, so a durable format is written field by field with an explicit byte order (for example, with `BinaryPrimitives`) and carries a version number."
+    explanation: |
+      `MemoryMarshal.AsBytes` is a reinterpretation, not serialization: the returned `Span<byte>` points to the same
+      memory as the original structs. So the file receives exactly the memory image, and that image depends on three
+      things that are not part of the data.
+
+      - **Layout.** Field offsets and padding bytes follow from the size and alignment of the fields. Padding bytes
+        belong to no field, and the format does not define their content. Any change to the type - a new field, a
+        different field type - shifts the offsets, and an old file is read as garbage without any error.
+      - **Byte order.** Multi-byte numbers are stored in the processor's byte order (`BitConverter.IsLittleEndian`).
+        The common .NET 10 platforms, x64 and Arm64, are little-endian, but the format is then implicitly tied to
+        this property of the machine instead of being described explicitly.
+      - **References.** For types that contain references, `AsBytes` throws `ArgumentException`, because a reference
+        is an address in the heap of a specific process.
+
+      A durable format is described explicitly: a header with a version number, then every field written with
+      `BinaryPrimitives` methods in a fixed byte order (`WriteInt32LittleEndian`, `WriteInt64LittleEndian`,
+      `WriteDoubleLittleEndian`) and read back with the matching `Read...LittleEndian` methods. On a little-endian
+      machine this is close to a plain copy, on a big-endian one it is a byte swap, so the cost is small, while the
+      format no longer depends on the machine or on the type's memory layout. The version lets new code read old
+      files. Tests against golden files written by previous versions help lock the format in.
+
+      Dumping memory through `MemoryMarshal` is fine for short-lived data read by the same build on the same
+      machine, such as a temporary cache. For storage that lasts years it is an implicit format that breaks silently.
+    linkTitles:
+      - "BinaryPrimitives class"
+      - "MemoryMarshal.AsBytes method"
+      - "StructLayoutAttribute class"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

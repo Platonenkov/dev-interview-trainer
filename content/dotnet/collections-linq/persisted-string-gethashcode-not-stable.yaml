@@ -1,0 +1,131 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNPJD3MM469PH95VES
+slug: persisted-string-gethashcode-not-stable
+stack: dotnet
+topic: collections-linq
+level: architect
+type: single
+grading: auto
+tags: [hashing, gethashcode, string, partitioning, persistence]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.string.gethashcode
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.object.gethashcode
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.hashcode
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Можно ли хранить string.GetHashCode() как ключ партиции, общий для нескольких сервисов?
+    prompt: |
+      В проекте системы предлагается вычислять ключ партиции как `customerId.GetHashCode() % partitionCount`, где
+      `customerId` - строка. Значения ключей сохраняются в базе на годы, а одну и ту же формулу независимо
+      вычисляют несколько сервисов на .NET 10, чтобы находить нужную партицию. Какое утверждение об этом
+      дизайне верно?
+    hint: На какой срок и в каких процессах можно полагаться на значение `GetHashCode`?
+    options:
+      a: "Дизайн допустим, если все сервисы работают на одной версии .NET и одной платформе: тогда `GetHashCode` для одинаковых строк вернёт одинаковые значения"
+      b: "Дизайн ошибочен: в .NET Core и .NET 5+ хеш-код строки рандомизирован для каждого процесса и может меняться между версиями, поэтому для ключей партиций нужен документированный стабильный алгоритм хеширования"
+      c: "Дизайн надёжен, потому что контракт `GetHashCode` гарантирует одинаковый хеш-код для равных строк, а значит, у одной строки ключ партиции всегда один и тот же"
+      d: "Достаточно заменить `customerId.GetHashCode()` на `HashCode.Combine(customerId)`: структура `HashCode` даёт стабильное значение, которое можно хранить"
+    optionExplanations:
+      a: "Одинаковая версия и платформа не помогают. В .NET Core и .NET 5+ хеширование строк использует случайное значение, выбираемое при старте процесса, поэтому два экземпляра одного и того же сервиса и даже два последовательных запуска одной программы получают разные хеш-коды для одной строки. Документация говорит, что хеш-коды зависят от версии .NET и платформы и в некоторых случаях вычисляются отдельно для каждого процесса, поэтому их нельзя сохранять."
+      c: "Равенство хеш-кодов для равных строк гарантировано только при вычислении в одном и том же процессе. Между процессами, запусками и версиями .NET такой гарантии нет, и документация `Object.GetHashCode` запрещает хранить хеш-коды в базах данных и передавать их в другие процессы."
+      d: "`HashCode` тоже использует случайное начальное значение, выбираемое для каждого процесса, поэтому его результаты различаются между процессами и не годятся для хранения. Кроме того, для строки он вызывает её `GetHashCode`, который сам рандомизирован."
+    answer: "Дизайн ошибочен: в .NET Core и .NET 5+ хеш-код строки рандомизирован для каждого процесса и может меняться между версиями, поэтому для ключей партиций нужен документированный стабильный алгоритм хеширования."
+    explanation: |
+      `string.GetHashCode` предназначен для одной задачи - распределения ключей по корзинам хеш-таблицы внутри
+      процесса. В .NET Core, .NET 5+ и, в частности, в .NET 10 хеш строки вычисляется с секретным случайным
+      значением, которое выбирается при старте процесса. Это защита от hash flooding: атакующий не может заранее
+      подобрать строки с одинаковым хеш-кодом. Следствие - хеш-код одной и той же строки различается между
+      процессами и между запусками. Кроме того, документация `String.GetHashCode` предупреждает, что хеш-коды
+      могут различаться между версиями .NET и между платформами.
+
+      Документация `String.GetHashCode` запрещает сериализовать и сохранять хеш-коды. Документация
+      `Object.GetHashCode` добавляет: не хранить их в базах данных и не передавать между доменами приложений и
+      процессами, потому что в некоторых случаях хеш-коды вычисляются отдельно для каждого процесса. Предложенный
+      дизайн нарушает оба запрета: сервисы вычислят разные партиции для одного клиента, а сохранённые ключи после
+      перезапуска перестанут совпадать с вычисленными.
+
+      Правильное решение - считать ключ партиции стабильным алгоритмом, описанным в спецификации системы:
+
+      - зафиксировать кодировку строки (например, UTF-8) и сам алгоритм: криптографический хеш вроде
+        `SHA256.HashData` с усечением результата или некриптографический с открытой спецификацией
+        (xxHash, FNV-1a);
+      - считать алгоритм частью формата данных и версионировать его, ведь смена алгоритма означает
+        перераспределение уже сохранённых данных;
+      - если число партиций будет расти, сразу продумать схему, при которой при изменении `partitionCount`
+        переезжает не почти всё (например, consistent hashing), потому что простой остаток от деления
+        перемещает большинство ключей.
+
+      Для уже записанных данных нужна миграция: пересчитать ключи стабильным алгоритмом и на время переезда
+      поддерживать чтение по старой и новой схеме.
+    linkTitles:
+      - "Метод String.GetHashCode"
+      - "Метод Object.GetHashCode"
+      - "Структура HashCode"
+  en:
+    title: Can string.GetHashCode() be stored as a partition key shared by several services?
+    prompt: |
+      A system design proposes computing the partition key as `customerId.GetHashCode() % partitionCount`, where
+      `customerId` is a string. The key values are stored in a database for years, and several services on
+      .NET 10 compute the same formula independently to find the right partition. Which statement about this
+      design is correct?
+    hint: For how long and in which processes can you rely on a `GetHashCode` value?
+    options:
+      a: "The design is acceptable if all services run on the same .NET version and the same platform: then `GetHashCode` returns the same values for identical strings"
+      b: "The design is wrong: in .NET Core and .NET 5+ a string's hash code is randomized per process and may change between versions, so partition keys need a documented stable hash algorithm"
+      c: "The design is reliable because the `GetHashCode` contract guarantees the same hash code for equal strings, so a given string always gets the same partition key"
+      d: "It is enough to replace `customerId.GetHashCode()` with `HashCode.Combine(customerId)`: the `HashCode` struct produces a stable value that can be stored"
+    optionExplanations:
+      a: "The same version and platform do not help. In .NET Core and .NET 5+ string hashing uses a random value chosen when the process starts, so two instances of the same service, and even two consecutive runs of one program, get different hash codes for the same string. The documentation says that hash codes depend on the .NET version and the platform and in some cases are computed per process, so they must not be persisted."
+      c: "Equal hash codes for equal strings are guaranteed only when they are computed in the same process. There is no such guarantee across processes, runs or .NET versions, and the `Object.GetHashCode` documentation forbids storing hash codes in databases and sending them to other processes."
+      d: "`HashCode` also uses a random seed chosen per process, so its results differ between processes and are not fit for storage. On top of that, for a string it calls the string's `GetHashCode`, which is randomized itself."
+    answer: "The design is wrong: in .NET Core and .NET 5+ a string's hash code is randomized per process and may change between versions, so partition keys need a documented stable hash algorithm."
+    explanation: |
+      `string.GetHashCode` exists for one job: spreading keys across the buckets of a hash table inside a
+      process. In .NET Core, .NET 5+ and, in particular, .NET 10 a string hash is computed with a secret random
+      value chosen when the process starts. This protects against hash flooding: an attacker cannot precompute
+      strings with the same hash code. The consequence is that the hash code of the same string differs between
+      processes and between runs. On top of that, the `String.GetHashCode` documentation warns that hash codes
+      can vary between .NET versions and between platforms.
+
+      The `String.GetHashCode` documentation says not to serialize or persist hash codes. The
+      `Object.GetHashCode` documentation adds: do not store them in databases and do not send them across
+      application domains or processes, because in some cases hash codes are computed per process. The proposed
+      design breaks both rules: services will compute different partitions for the same customer, and stored keys
+      stop matching the computed ones after a restart.
+
+      The correct approach is to compute the partition key with a stable algorithm described in the system's
+      specification:
+
+      - fix the string encoding (for example UTF-8) and the algorithm itself: a cryptographic hash such as
+        `SHA256.HashData` with a truncated result, or a non-cryptographic one with a public specification
+        (xxHash, FNV-1a);
+      - treat the algorithm as part of the data format and version it, because changing the algorithm means
+        redistributing data that is already stored;
+      - if the number of partitions will grow, plan a scheme where changing `partitionCount` does not move
+        almost everything (for example consistent hashing), because a plain remainder moves most keys.
+
+      Data already written needs a migration: recompute the keys with the stable algorithm and, during the
+      move, support reads under both the old and the new scheme.
+    linkTitles:
+      - "String.GetHashCode method"
+      - "Object.GetHashCode method"
+      - "HashCode struct"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

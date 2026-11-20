@@ -1,0 +1,113 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNAQDYWG6V2BD052C8
+slug: record-with-skips-field-initializers
+stack: dotnet
+topic: csharp
+level: middle
+type: output
+grading: auto
+tags: [records, with-expression, copy-constructor, property-initializers]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    var anna = new Person("anna");
+    var bob = anna with { Name = "bob" };
+
+    Console.Write($"{bob.Name} {bob.Upper}");
+
+    record Person(string Name)
+    {
+        public string Upper { get; } = Name.ToUpperInvariant();
+    }
+expect:
+  kind: output
+  value: "bob ANNA"
+acceptedOutputs: ["bob ANNA"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "bob ANNA" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "bob BOB" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "anna ANNA" }
+  - id: d
+    correct: false
+    expect: { kind: compile-error }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/with-expression
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/record
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что выведет выражение with для записи, у которой свойство вычисляется из позиционного параметра?
+    prompt: |
+      Что выведет эта программа в консоль? Свойство `Upper` записи `Person` инициализируется из параметра
+      основного конструктора `Name`, а копия создаётся выражением `with` с новым значением `Name`.
+    hint: Какой конструктор создаёт копию в выражении `with` и выполняются ли в нём инициализаторы свойств?
+    options:
+      a: "bob ANNA"
+      b: "bob BOB"
+      c: "anna ANNA"
+      d: Ошибка компиляции
+    optionExplanations:
+      b: "Так было бы, если бы `with` создавал объект через основной конструктор и заново вычислял инициализаторы. На самом деле копию создаёт конструктор копирования, который просто копирует поля, в том числе поле свойства `Upper`, уже вычисленное для `anna`."
+      c: "`with` не возвращает исходный объект без изменений: после копирования он присваивает копии `Name = bob` через аксессор `init`, поэтому `bob.Name` равно `bob`. Не меняется только исходный объект `anna`."
+      d: "Параметры основного конструктора записи доступны в инициализаторах свойств, а свойство `Upper` в выражении `with` не задаётся, поэтому отсутствие у него аксессора `init` ничему не мешает. Код компилируется."
+    answer: "bob ANNA"
+    explanation: |
+      Инициализатор `Upper = Name.ToUpperInvariant()` выполняется только в основном конструкторе, то есть один раз,
+      при создании `new Person("anna")`. В этот момент в скрытое поле свойства `Upper` записывается `ANNA`.
+
+      Выражение `with` не вызывает основной конструктор. Для записи компилятор синтезирует метод клонирования и
+      конструктор копирования, который копирует все экземплярные поля исходного объекта как есть, без повторного
+      выполнения инициализаторов полей и свойств. Только после этого к копии применяются присваивания из фигурных
+      скобок: `Name` становится `bob`, а `Upper` остаётся скопированным значением `ANNA`. Программа выводит `bob ANNA`.
+
+      Так появляются рассогласованные объекты: производное значение перестаёт соответствовать исходному. Если
+      свойство должно всегда следовать за `Name`, его делают вычисляемым: `public string Upper => Name.ToUpperInvariant();`.
+      Записи и `with` появились в C# 9, поведение проверено на .NET 10.
+    linkTitles:
+      - Выражение with
+      - Записи (справочник по C#)
+  en:
+    title: What does a with expression print for a record whose property is computed from a positional parameter?
+    prompt: |
+      What does this program print to the console? The `Upper` property of the record `Person` is initialized from
+      the primary constructor parameter `Name`, and a copy is created by a `with` expression with a new `Name`.
+    hint: Which constructor creates the copy in a `with` expression, and do property initializers run in it?
+    options:
+      a: "bob ANNA"
+      b: "bob BOB"
+      c: "anna ANNA"
+      d: Compile error
+    optionExplanations:
+      b: "That would be true if `with` created the object through the primary constructor and evaluated the initializers again. In fact the copy is created by the copy constructor, which just copies the fields, including the backing field of `Upper` that was already computed for `anna`."
+      c: "`with` does not return the original object unchanged: after copying, it assigns `Name = bob` to the copy through the `init` accessor, so `bob.Name` is `bob`. Only the original object `anna` stays unchanged."
+      d: "Primary constructor parameters of a record are available in property initializers, and `Upper` is not set in the `with` expression, so the lack of an `init` accessor does not matter. The code compiles."
+    answer: "bob ANNA"
+    explanation: |
+      The initializer `Upper = Name.ToUpperInvariant()` runs only in the primary constructor, that is once, when
+      `new Person("anna")` is created. At that moment `ANNA` is stored in the hidden backing field of `Upper`.
+
+      A `with` expression does not call the primary constructor. For a record the compiler synthesizes a clone method
+      and a copy constructor that copies every instance field of the original as is, without running field or
+      property initializers again. Only then are the assignments in the braces applied to the copy: `Name` becomes
+      `bob`, while `Upper` keeps the copied value `ANNA`. The program prints `bob ANNA`.
+
+      This is how inconsistent objects appear: the derived value no longer matches its source. If the property must
+      always follow `Name`, make it computed: `public string Upper => Name.ToUpperInvariant();`. Records and `with`
+      were introduced in C# 9, and the behaviour is verified on .NET 10.
+    linkTitles:
+      - The with expression
+      - Records (C# reference)
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

@@ -1,0 +1,131 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNG8PQHVNH38RVAA6S
+slug: records-vs-classes-team-guideline
+stack: dotnet
+topic: csharp
+level: lead
+type: open
+grading: self
+tags: [records, value-equality, immutability, ef-core, coding-guidelines]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/types/records
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/record
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какое правило вы бы задали команде, когда объявлять тип как record, а когда как class?
+    prompt: |
+      В команде одни разработчики объявляют записями (`record`) почти всё, включая сущности EF Core и сервисы,
+      другие не используют записи вовсе. Вы отвечаете за соглашения по коду. Какое правило выбора между `record`
+      и `class` вы бы записали, на какие подводные камни записей в нём нужно указать и как вы закрепите это
+      правило в работе команды?
+    hint: Записи - это не только короткий синтаксис. Какие члены компилятор генерирует для записи и какое поведение типа они фиксируют?
+    answer: |
+      1. **Основное правило: выбирать по семантике, а не по количеству строк.** `record` - для типов, которые
+         целиком определяются своими значениями: DTO и модели API, команды, события и сообщения, результаты
+         запросов, объекты-значения (`Money`, `DateRange`), снимки настроек. `class` - для объектов с идентичностью
+         и жизненным циклом: сущности и агрегаты, сервисы, объекты с изменяемым состоянием или ресурсами.
+      2. **Не делать записями сущности EF Core.** Две сущности с одинаковыми значениями полей окажутся равными,
+         хотя это разные строки или разные экземпляры, а EF Core опирается на ссылочную идентичность: один
+         экземпляр на одну сущность. Документация прямо называет записи неподходящими для типов сущностей EF Core.
+         Кроме того, `with` создаёт новый экземпляр, о котором трекер изменений ничего не знает, а хеш-код,
+         вычисленный по изменяемым полям, меняется после правки и ломает `HashSet<T>` и ключи словаря.
+      3. **Коллекции в записи ломают равенство по значению.** У `record Order(int Id, List<string> Lines)`
+         список сравнивается по ссылке, поэтому два заказа с одинаковыми позициями не равны. Варианты: не
+         полагаться на равенство таких записей, либо явно объявить собственный `Equals(Order? other)` и
+         переопределить `GetHashCode` со сравнением последовательностей и записать это в правило.
+      4. **Неизменяемость поверхностная.** `init` запрещает переприсвоить свойство, но не менять объект, на
+         который оно ссылается. `with` копирует поля поверхностно: копия и оригинал делят один и тот же список.
+         Инварианты лучше проверять в методах доступа `init`, а не только в конструкторе, потому что `with`
+         не вызывает основной конструктор.
+      5. **Сгенерированный `ToString` печатает все публичные поля и свойства, доступные для чтения.** Запись с
+         паролем, токеном или персональными данными попадёт в лог целиком. Для таких типов - переопределить
+         `PrintMembers` или не использовать запись.
+      6. **`record struct` - только для маленьких значений и лучше `readonly record struct`.** Позиционные
+         свойства обычного `record struct` (C# 10) изменяемы, у `readonly record struct` они `init`.
+      7. **Наследование - по минимуму.** Запись может наследовать только запись, а равенство учитывает
+         фактический тип экземпляра. Предпочтительны `sealed record` без глубоких иерархий.
+      8. **Смена `class` на `record` и обратно - изменение поведения.** Меняются `==`, `Equals` и
+         `GetHashCode`, поэтому кэши, словари, дедупликация и проверки равенства в существующем коде начинают
+         работать иначе. Такую смену делать отдельным изменением с проверкой мест использования.
+      9. **Как закрепить.** Записать правило с примерами и исключениями в соглашения по коду или ADR, проверять
+         на code review, добавить архитектурный тест, который запрещает записи в пространстве имён сущностей,
+         и пересматривать правило, когда появляются спорные случаи.
+    explanation: |
+      Запись - это указание компилятору сгенерировать набор членов: `Equals` и `GetHashCode` по всем полям
+      экземпляра, операторы `==` и `!=`, `ToString` с `PrintMembers`, копирующий конструктор для `with`, а для
+      позиционной записи ещё свойства и `Deconstruct`. Все они фиксируют одну семантику: тип равен своим
+      значениям. Поэтому правило команды должно отвечать на вопрос «чем определяется этот объект - значениями
+      или идентичностью», а не «где меньше кода». Там, где семантика совпадает, записи убирают шаблонный код и
+      ошибки в ручных `Equals`. Там, где нет, они создают тихие ошибки, которые не видит компилятор: неверное
+      равенство сущностей, утечки данных в логи, потерю отслеживания в EF Core.
+
+      Для руководителя важно, что выбор делается не один раз в коде, а в правиле, которое применяют все. Правило
+      «записи везде» и правило «записи никогда» одинаково плохи: первое ломает доменную модель, второе возвращает
+      ручные и часто неполные реализации равенства в DTO и объектах-значениях.
+      Записи появились в C# 9, `record struct` - в C# 10; описанное поведение относится к C# 14 и .NET 10.
+    linkTitles:
+      - "Записи (основы C#)"
+      - "Записи (справочник по C#)"
+  en:
+    title: What guideline would you set for a team on when to declare a type as a record and when as a class?
+    prompt: |
+      In your team some developers declare almost everything as a `record`, including EF Core entities and
+      services, while others never use records at all. You own the coding conventions. What rule for choosing
+      between `record` and `class` would you write down, which record pitfalls must it point out, and how would
+      you make the rule stick in the team's work?
+    hint: A record is more than short syntax. Which members does the compiler generate for a record, and what behaviour of the type do they fix?
+    answer: |
+      1. **Core rule: choose by semantics, not by line count.** `record` is for types that are fully defined by
+         their values: API DTOs and models, commands, events and messages, query results, value objects
+         (`Money`, `DateRange`), configuration snapshots. `class` is for objects with identity and a lifecycle:
+         entities and aggregates, services, objects with mutable state or resources.
+      2. **Do not make EF Core entities records.** Two entities with the same field values become equal even
+         though they are different rows or different instances, while EF Core relies on reference identity: one
+         instance per entity. The documentation explicitly calls records inappropriate as EF Core entity types.
+         Also, `with` creates a new instance that the change tracker knows nothing about, and a hash code
+         computed from mutable fields changes after an edit and breaks `HashSet<T>` and dictionary keys.
+      3. **Collections in a record break value equality.** In `record Order(int Id, List<string> Lines)` the
+         list is compared by reference, so two orders with the same lines are not equal. Options: do not rely
+         on equality of such records, or explicitly declare your own `Equals(Order? other)` and override
+         `GetHashCode` with a sequence comparison, and state this in the rule.
+      4. **Immutability is shallow.** `init` prevents reassigning a property, not changing the object it
+         references. `with` copies fields shallowly: the copy and the original share the same list. Check
+         invariants in `init` accessors, not only in the constructor, because `with` does not call the primary
+         constructor.
+      5. **The generated `ToString` prints every public field and readable property.** A record holding a
+         password, a token or personal data ends up in the log in full. For such types, override
+         `PrintMembers` or do not use a record.
+      6. **`record struct` only for small values, preferably `readonly record struct`.** The positional
+         properties of a plain `record struct` (C# 10) are mutable; in a `readonly record struct` they are `init`.
+      7. **Keep inheritance minimal.** A record can inherit only from a record, and equality takes the actual
+         runtime type into account. Prefer `sealed record` without deep hierarchies.
+      8. **Switching between `class` and `record` changes behaviour.** `==`, `Equals` and `GetHashCode`
+         change, so caches, dictionaries, deduplication and equality checks in existing code start to behave
+         differently. Make such a switch a separate change and review its usages.
+      9. **Making it stick.** Write the rule with examples and exceptions into the coding conventions or an ADR,
+         check it in code review, add an architecture test that forbids records in the entities namespace, and
+         revisit the rule when disputed cases come up.
+    explanation: |
+      A record tells the compiler to generate a set of members: `Equals` and `GetHashCode` over all instance
+      fields, the `==` and `!=` operators, `ToString` with `PrintMembers`, a copy constructor for `with`, and for
+      a positional record also the properties and `Deconstruct`. All of them fix one semantics: the type equals
+      its values. So the team rule must answer "is this object defined by its values or by its identity", not
+      "which is less code". Where the semantics match, records remove boilerplate and bugs in hand-written
+      `Equals`. Where they do not, records create silent bugs the compiler cannot see: wrong equality of
+      entities, data leaking into logs, lost tracking in EF Core.
+
+      For a lead the point is that the choice is made not once in code but in a rule everyone applies. "Records
+      everywhere" and "records never" are equally bad: the first breaks the domain model, the second brings back
+      hand-written and often incomplete equality in DTOs and value objects.
+      Records arrived in C# 9 and `record struct` in C# 10; the behaviour described here applies to C# 14 and .NET 10.
+    linkTitles:
+      - "Records (C# fundamentals)"
+      - "Records (C# reference)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

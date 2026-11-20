@@ -1,0 +1,178 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RMM2B5NT39Y052PHSZ
+slug: disposable-ownership-rules-for-team
+stack: dotnet
+topic: clr-gc
+level: lead
+type: open
+grading: self
+tags: [idisposable, ownership, code-analysis, dependency-injection, code-review]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/fundamentals/code-analysis/quality-rules/ca2000
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/fundamentals/code-analysis/quality-rules/ca2213
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/extensions/dependency-injection-guidelines
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/implementing-dispose
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какие правила владения IDisposable-объектами ввести в команде и как добиться их соблюдения?
+    prompt: |
+      В кодовой базе команды регулярно находят незакрытые соединения, потоки и `CancellationTokenSource`, а иногда
+      наоборот - `ObjectDisposedException`, потому что один объект освободили два разных класса. Вы техлид проекта
+      на .NET 10. Какие правила владения объектами, реализующими `IDisposable` и `IAsyncDisposable`, вы зафиксируете
+      для команды и как добьётесь, чтобы их соблюдали?
+    hint: Кто должен вызывать `Dispose`, если объект создал один класс, а пользуется им другой? И какую часть этого правила может проверить сборка, а не рецензент?
+    answer: |
+      **Главное правило: у каждого освобождаемого объекта ровно один владелец, и только владелец вызывает `Dispose`.**
+
+      1. **Кто создал, тот и освобождает.**
+         - Локальный объект освобождается через `using` или `await using` (для `IAsyncDisposable`), а не ручным
+           вызовом `Dispose` в конце метода, который пропускается при исключении.
+         - Если объект хранится в поле, класс-владелец сам реализует `IDisposable` и освобождает поле в своём
+           `Dispose`. По умолчанию такой класс `sealed` и без финализатора; финализатор нужен только при прямом
+           владении неуправляемым ресурсом, и его заменяет `SafeHandle`.
+      2. **Полученное извне не освобождается.** Объект, пришедший через параметр конструктора или метода, в том
+         числе из DI, принадлежит вызывающему коду. Вызывать на нём `Dispose` нельзя.
+      3. **Передача владения только явная.** Метод-фабрика, возвращающий новый объект, передаёт владение
+         вызывающему, и это видно из имени и документации (`Create...`, `Open...`). Если тип умеет забирать владение
+         параметром, это выражается параметром API: `leaveOpen` у `StreamReader`, `disposeHandler` у
+         `HttpClient(HttpMessageHandler, bool)`. Неявная передача («я отдал поток в конструктор, дальше он сам
+         разберётся») запрещена.
+      4. **Правила для DI.**
+         - Контейнер освобождает сервисы, которые создал сам, включая регистрации через фабрику
+           `sp => new X()`, в конце своей области или при остановке приложения.
+         - Экземпляр, зарегистрированный готовым объектом (`AddSingleton(new X())`), контейнер не освобождает:
+           за него отвечает код, который его создал.
+         - Не запрашивать освобождаемые transient-сервисы из корневого провайдера: контейнер удерживает их до
+           остановки приложения, и это утечка. В фоновых задачах и `BackgroundService` создавать область через
+           `IServiceScopeFactory.CreateScope()` и освобождать её.
+         - Если нужен объект с собственным коротким временем жизни, внедрять фабрику, а объект, созданный
+           фабрикой, освобождать по правилу 1.
+      5. **Исключения, о которых договариваемся отдельно.** Например, `HttpClient` живёт долго и берётся из
+         `IHttpClientFactory`, а не создаётся и освобождается на каждый запрос.
+
+      **Как обеспечить соблюдение.**
+
+      - Включить анализаторы в `.editorconfig` как предупреждения (в .NET 10 SDK они по умолчанию не включены):
+        CA2000 (объект не освобождён до выхода из области видимости), CA2213 (освобождаемое поле не освобождено
+        в `Dispose`), CA1001 (тип владеет освобождаемым полем, но сам не освобождаемый), а также CA2215 и CA1816
+        для шаблона освобождения.
+      - Настроить в CA2000 правила передачи владения, чтобы они совпадали с принятыми в команде, и требовать
+        обоснование (`Justification`) для каждого подавления.
+      - В CI собирать с `TreatWarningsAsErrors` (или перечислить эти правила в `WarningsAsErrors`). На
+        существующем коде сначала оставить предупреждения, исправить находки по модулям и только потом
+        перевести правила в ошибки.
+      - Включить `ValidateScopes` и `ValidateOnBuild` у провайдера DI, чтобы ошибки областей видимости находились
+        при запуске, а не в продакшене.
+      - Добавить вопрос «кто владелец и кто освобождает?» в чек-лист code review и записать правила в
+        руководство команды с примерами.
+    explanation: |
+      Сборщик мусора не вызывает `Dispose`: он освобождает только память, а соединения, дескрипторы файлов и
+      таймеры остаются занятыми, пока их не освободит код. Оба наблюдаемых дефекта - утечка и
+      `ObjectDisposedException` - имеют одну причину: непонятно, кто владеет объектом. Если владельца нет,
+      объект не освобождают; если владельцев два, его освобождают раньше времени или дважды. Правило «один
+      владелец» превращает вопрос из глобального в локальный: глядя на один класс, видно, должен ли он
+      освобождать поле.
+
+      DI меняет картину: создаёт объект контейнер, значит, и освобождает он. Поэтому код, получивший сервис
+      через конструктор, не должен его освобождать, иначе другие потребители того же singleton или scoped
+      сервиса получат освобождённый объект. Обратная ловушка - освобождаемые transient-сервисы из корневого
+      провайдера: контейнер запоминает их для освобождения и держит до своей остановки.
+
+      Анализаторы проверяют правила при каждой сборке и не устают, в отличие от рецензентов. Но анализ потока
+      данных не всегда видит передачу владения, поэтому бывают ложные срабатывания. Отсюда настройка правил под
+      соглашения команды, подавления с обоснованием и чек-лист code review как второй уровень. Включать правила
+      как ошибки сразу на большой кодовой базе рискованно: сборка сломается у всех. Задача лида - сначала
+      договориться о правилах, затем постепенно довести код до нуля предупреждений и только потом закрепить это
+      в CI. Состав и настройки по умолчанию анализаторов описаны для .NET 10 SDK.
+    linkTitles:
+      - "CA2000: освобождайте объекты до потери области видимости"
+      - "CA2213: освобождаемые поля должны быть освобождены"
+      - "Рекомендации по внедрению зависимостей"
+      - "Реализация метода Dispose"
+  en:
+    title: Which ownership rules for IDisposable objects should a team adopt, and how do you enforce them?
+    prompt: |
+      The team's codebase keeps turning up connections, streams and `CancellationTokenSource` instances that are
+      never released, and sometimes the opposite - an `ObjectDisposedException` because two different classes
+      disposed the same object. You are the tech lead of a .NET 10 project. Which ownership rules for objects that
+      implement `IDisposable` and `IAsyncDisposable` do you set for the team, and how do you make sure they are
+      followed?
+    hint: Who should call `Dispose` when one class creates an object and another one uses it? And which part of that rule can the build check instead of a reviewer?
+    answer: |
+      **The main rule: every disposable object has exactly one owner, and only the owner calls `Dispose`.**
+
+      1. **Whoever creates it disposes it.**
+         - A local object is released with `using` or `await using` (for `IAsyncDisposable`), not with a manual
+           `Dispose` call at the end of the method, which an exception skips.
+         - If the object is stored in a field, the owning class itself implements `IDisposable` and disposes the
+           field in its own `Dispose`. By default such a class is `sealed` and has no finalizer; a finalizer is needed
+           only when the class directly owns an unmanaged resource, and a `SafeHandle` replaces it.
+      2. **What comes from outside is not disposed.** An object received through a constructor or method parameter,
+         including from DI, belongs to the calling code. Calling `Dispose` on it is not allowed.
+      3. **Ownership is transferred only explicitly.** A factory method that returns a new object transfers ownership
+         to the caller, and the name and documentation make that visible (`Create...`, `Open...`). If a type can take
+         ownership of a parameter, the API says so with a parameter: `leaveOpen` on `StreamReader`, `disposeHandler`
+         on `HttpClient(HttpMessageHandler, bool)`. Implicit transfer ("I passed the stream to the constructor, it will
+         deal with it") is not allowed.
+      4. **Rules for DI.**
+         - The container disposes the services it created itself, including factory registrations such as
+           `sp => new X()`, at the end of its scope or when the application stops.
+         - An instance registered as a ready object (`AddSingleton(new X())`) is not disposed by the container: the
+           code that created it is responsible for it.
+         - Do not resolve disposable transient services from the root provider: the container holds them until the
+           application stops, which is a leak. In background jobs and `BackgroundService` create a scope with
+           `IServiceScopeFactory.CreateScope()` and dispose it.
+         - If an object needs its own short lifetime, inject a factory, and dispose the object the factory creates
+           under rule 1.
+      5. **Exceptions agreed on separately.** For example, `HttpClient` is long-lived and comes from
+         `IHttpClientFactory`; it is not created and disposed per request.
+
+      **How to enforce it.**
+
+      - Enable the analyzers in `.editorconfig` as warnings (in the .NET 10 SDK they are not enabled by default):
+        CA2000 (an object is not disposed before it goes out of scope), CA2213 (a disposable field is not disposed in
+        `Dispose`), CA1001 (a type owns a disposable field but is not disposable itself), plus CA2215 and CA1816 for
+        the dispose pattern.
+      - Configure the ownership transfer options of CA2000 to match the team's conventions, and require a
+        `Justification` for every suppression.
+      - Build in CI with `TreatWarningsAsErrors` (or list these rules in `WarningsAsErrors`). On existing code keep
+        them as warnings first, fix the findings module by module, and only then turn the rules into errors.
+      - Turn on `ValidateScopes` and `ValidateOnBuild` for the DI provider, so scope mistakes surface at startup
+        rather than in production.
+      - Add "who owns this and who disposes it?" to the code review checklist, and write the rules down in the team
+        guide with examples.
+    explanation: |
+      The garbage collector does not call `Dispose`: it reclaims only memory, while connections, file handles and
+      timers stay in use until code releases them. Both observed defects - the leak and the
+      `ObjectDisposedException` - have one cause: it is unclear who owns the object. With no owner, nobody disposes it;
+      with two owners, it is disposed too early or twice. The "one owner" rule turns a global question into a local
+      one: looking at a single class, you can see whether it must dispose a field.
+
+      DI changes the picture: the container creates the object, so the container disposes it. That is why code that
+      received a service through its constructor must not dispose it, otherwise the other consumers of the same
+      singleton or scoped service get a disposed object. The opposite trap is disposable transient services resolved
+      from the root provider: the container remembers them for disposal and keeps them until it stops.
+
+      Analyzers check the rules on every build and do not get tired, unlike reviewers. But data flow analysis does not
+      always see an ownership transfer, so false positives happen. Hence configuring the rules to the team's
+      conventions, suppressions with a justification, and the code review checklist as a second layer. Turning the
+      rules into errors at once on a large codebase is risky: the build breaks for everyone. The lead's job is to agree
+      on the rules first, then bring the code to zero warnings step by step, and only then lock it in CI. The analyzer
+      set and its defaults are described for the .NET 10 SDK.
+    linkTitles:
+      - "CA2000: Dispose objects before losing scope"
+      - "CA2213: Disposable fields should be disposed"
+      - "Dependency injection guidelines"
+      - "Implement a Dispose method"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

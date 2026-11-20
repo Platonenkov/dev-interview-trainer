@@ -384,8 +384,18 @@ public sealed class StaticIslandPerformanceTests(StaticSiteFolder site)
     private long BytesUnder(string relative) =>
         site.Served.Where(request => request.Path.StartsWith(site.Prefix + relative, StringComparison.Ordinal)).Sum(request => request.Bytes);
 
-    private string IndexFile() =>
-        Directory.EnumerateFiles(Path.Combine(site.Inputs!.Directory, "data", "en", "dotnet"), "index.*.json").Single();
+    // A deployment keeps the previous build's immutable files (retained.json), so after a content change the folder holds
+    // the old index too; immutable.json lists only this build's files, which is the index the pages point to.
+    private string IndexFile()
+    {
+        string root = site.Inputs!.Directory;
+        using JsonDocument immutable = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(root, "immutable.json")));
+        string relative = immutable.RootElement.GetProperty("files").EnumerateArray()
+            .Select(file => file.GetString() ?? "")
+            .Single(file => file.StartsWith("data/en/dotnet/index.", StringComparison.Ordinal)
+                && file.EndsWith(".json", StringComparison.Ordinal));
+        return Path.Combine(root, relative);
+    }
 
     private StaticIndexDto ReadIndex() =>
         JsonSerializer.Deserialize(File.ReadAllBytes(IndexFile()), TrainerJsonContext.Default.StaticIndexDto)

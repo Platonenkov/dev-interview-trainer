@@ -1,0 +1,148 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RRPAJPR5411D4TPBY4
+slug: propertychanged-raised-before-field-assigned
+stack: dotnet
+topic: ui-dotnet
+level: middle
+type: find-bug
+grading: auto
+tags: [inotifypropertychanged, data-binding, mvvm, events]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    using System.ComponentModel;
+
+    var vm = new OrderViewModel();
+    vm.PropertyChanged += (_, e) => Console.WriteLine($"{e.PropertyName}: {vm.Status}");
+    vm.Status = "Paid";
+    vm.Status = "Shipped";
+
+    class OrderViewModel : INotifyPropertyChanged
+    {
+        private string status = "New";
+
+        public event PropertyChangedEventHandler PropertyChanged;
+
+        public string Status
+        {
+            get => status;
+            set
+            {
+                if (status == value)
+                {
+                    return;
+                }
+
+                OnPropertyChanged(nameof(Status));
+                status = value;
+            }
+        }
+
+        private void OnPropertyChanged(string propertyName) =>
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+    }
+bugLineSets: [[24], [25], [24, 25]]
+fixedSource: |
+  using System.ComponentModel;
+
+  var vm = new OrderViewModel();
+  vm.PropertyChanged += (_, e) => Console.WriteLine($"{e.PropertyName}: {vm.Status}");
+  vm.Status = "Paid";
+  vm.Status = "Shipped";
+
+  class OrderViewModel : INotifyPropertyChanged
+  {
+      private string status = "New";
+
+      public event PropertyChangedEventHandler PropertyChanged;
+
+      public string Status
+      {
+          get => status;
+          set
+          {
+              if (status == value)
+              {
+                  return;
+              }
+
+              // Store the new value first, then notify: handlers re-read the property.
+              status = value;
+              OnPropertyChanged(nameof(Status));
+          }
+      }
+
+      private void OnPropertyChanged(string propertyName) =>
+          PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+  }
+fixedExpect: { kind: output, value: "Status: Paid\nStatus: Shipped" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.componentmodel.inotifypropertychanged
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.componentmodel.propertychangedeventhandler
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строку, из-за которой подписчик PropertyChanged видит старое значение
+    prompt: |
+      Модель представления сообщает подписчикам об изменении свойства `Status`. Подписчик, как и механизм
+      привязки, в обработчике события перечитывает свойство и печатает его значение. Программа должна вывести
+      `Status: Paid`, а затем `Status: Shipped`. Вместо этого она выводит `Status: New` и `Status: Paid`: каждое
+      уведомление показывает предыдущее значение, а привязка в окне WPF или MAUI отставала бы на одно изменение.
+      Щёлкните по строке с дефектом.
+    hint: "Откуда подписчик берёт новое значение, если в аргументах события есть только имя свойства?"
+    answer: |
+      Строка 24: `OnPropertyChanged(nameof(Status))` вызывается до присваивания `status = value` в строке 25.
+      Событие нужно вызывать после того, как поле уже хранит новое значение.
+    explanation: |
+      `PropertyChangedEventArgs` несёт только имя свойства (`PropertyName`), нового значения в нём нет. Поэтому
+      подписчик, получив событие, сам вызывает геттер. Так же работает механизм привязки WPF, WinUI, Avalonia и
+      .NET MAUI: по имени из события он перечитывает свойство источника.
+
+      Событие вызывается синхронно: все обработчики выполняются внутри вызова `OnPropertyChanged`, ещё до
+      строки 25. В этот момент поле хранит прежнее значение, поэтому обработчик печатает `New`, а затем `Paid`.
+      На экране привязка всегда показывала бы предыдущее значение, а последнее не появилось бы, пока свойство
+      не изменится снова. Исключения нет, и ошибку легко принять за проблему привязки.
+
+      Исправление - поменять строки местами: сначала присвоить поле, затем вызвать событие. В том же порядке
+      работают готовые помощники, например `SetProperty` в CommunityToolkit.Mvvm. Если подписчикам нужно узнать
+      о предстоящем изменении, для этого есть отдельный интерфейс `INotifyPropertyChanging` с событием
+      `PropertyChanging`, а `PropertyChanged` сообщает об уже состоявшемся изменении.
+    linkTitles:
+      - "Интерфейс INotifyPropertyChanged"
+      - "Делегат PropertyChangedEventHandler"
+  en:
+    title: Find the line that makes a PropertyChanged subscriber see the old value
+    prompt: |
+      The view model notifies subscribers when the `Status` property changes. The subscriber, like the binding
+      engine, re-reads the property in the event handler and prints its value. The program should print
+      `Status: Paid` and then `Status: Shipped`. Instead it prints `Status: New` and `Status: Paid`: every
+      notification shows the previous value, and a binding in a WPF or MAUI window would lag one change behind.
+      Click the line that contains the defect.
+    hint: "Where does the subscriber get the new value from, if the event arguments carry only the property name?"
+    answer: |
+      Line 24: `OnPropertyChanged(nameof(Status))` is called before the assignment `status = value` on line 25.
+      The event must be raised after the field already holds the new value.
+    explanation: |
+      `PropertyChangedEventArgs` carries only the property name (`PropertyName`), not the new value. So a
+      subscriber that receives the event calls the getter itself. The binding engine of WPF, WinUI, Avalonia and
+      .NET MAUI works the same way: it uses the name from the event to re-read the source property.
+
+      The event is raised synchronously: every handler runs inside the `OnPropertyChanged` call, before line 25.
+      At that moment the field still holds the previous value, so the handler prints `New` and then `Paid`. On
+      screen a binding would always show the previous value, and the latest one would not appear until the
+      property changes again. No exception is thrown, so the bug is easy to mistake for a binding problem.
+
+      The fix is to swap the two lines: assign the field first, then raise the event. Ready-made helpers work
+      in the same order, for example `SetProperty` in CommunityToolkit.Mvvm. If subscribers need to learn about
+      an upcoming change, there is a separate interface for that, `INotifyPropertyChanging` with the
+      `PropertyChanging` event, while `PropertyChanged` reports a change that has already happened.
+    linkTitles:
+      - "INotifyPropertyChanged interface"
+      - "PropertyChangedEventHandler delegate"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

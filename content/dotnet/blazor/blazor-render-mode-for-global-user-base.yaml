@@ -1,0 +1,170 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RM338PZS22D5HSG5SJ
+slug: blazor-render-mode-for-global-user-base
+stack: dotnet
+topic: blazor
+level: architect
+type: situation
+grading: self
+tags: [blazor, render-modes, hosting, latency, signalr, multi-region]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/hosting-models
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/host-and-deploy/server
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/components/render-modes
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Приложение Blazor на InteractiveServer, сделанное для одного офиса, должно работать на нескольких континентах: как перестроить хостинг и режимы отрисовки?"
+    prompt: |
+      Внутреннее приложение Blazor Web App на .NET 10 делали для одного офиса: глобальная интерактивность в режиме
+      `InteractiveServer`, один сервер приложения и база SQL Server в том же регионе, что и офис. Теперь компания
+      открывает приложение сотрудникам и партнёрам на нескольких континентах.
+
+      Удалённые пользователи жалуются: ввод в поле поиска запаздывает, кнопки реагируют с заметной задержкой, а в
+      мобильных сетях часто появляется оверлей переподключения. Руководство просит один план, после которого
+      приложением можно будет пользоваться по всему миру.
+
+      Как вы перестроите хостинг и режимы отрисовки и в каком порядке?
+    hint: |
+      Во что обходится один щелчок в каждом режиме отрисовки и где хранится состояние пользователя режима
+      `InteractiveServer`?
+    answer: |
+      1. **Измерить, прежде чем перестраивать.** Собрать время сетевого обхода туда и обратно и число переподключений
+         по регионам пользователей, найти взаимодействия с наибольшим числом сетевых обращений
+         (`@bind:event="oninput"`, обработчики частых событий, большие диффы отрисовки) и понять, каким страницам
+         действительно нужна интерактивность.
+      2. **Перестать делать каждую страницу интерактивной на сервере.** Заменить глобальный `InteractiveServer`
+         режимами отрисовки на уровне страниц и компонентов:
+         - страницы в основном для чтения (списки, отчёты, карточки) - статическая отрисовка на сервере (static SSR)
+           с потоковой отрисовкой и улучшенной навигацией: один запрос на переход, без цепи (circuit), ответы можно
+           кэшировать ближе к пользователю;
+         - насыщенные интерактивом экраны для удалённых пользователей (редакторы, таблицы, панели с фильтрами) -
+           `InteractiveWebAssembly` или `InteractiveAuto`: события интерфейса обрабатываются в браузере, по сети
+           ходят только запросы за данными;
+         - `InteractiveServer` остаётся только там, где пользователи близко к серверу или код не должен покидать сервер.
+      3. **Переделать код под WebAssembly.** Компоненты, которые обращались к `DbContext` или серверным сервисам
+         напрямую, зависят от интерфейса: серверная реализация и клиентская реализация через `HttpClient`, вызывающая
+         веб-API. Секреты и проверка прав остаются в API, и API проверяет каждый запрос, потому что код WebAssembly
+         выполняется на машине пользователя и не защищён от просмотра и изменения. Заложить бюджет на размер загрузки
+         (обрезка неиспользуемого кода, сжатие, осознанный выбор AOT, который ускоряет выполнение ценой большего
+         размера) и проверить запуск на слабых устройствах.
+      4. **Развернуть по регионам.** Приложение и API работают в нескольких регионах за глобальной точкой входа
+         (геомаршрутизация DNS или глобальный балансировщик), которая направляет пользователя в ближайший регион.
+         Оставшемуся трафику `InteractiveServer` нужны WebSockets на всём пути и привязка сеанса: цепь живёт в
+         памяти одного сервера, поэтому все её соединения должны попадать на этот сервер в этом регионе. Это
+         привязка сеанса (sticky sessions) на балансировщике или входном шлюзе, например session affinity в Azure
+         Container Apps, либо Azure SignalR Service с `ServerStickyMode`, равным `Required`, чтобы клиент оставался
+         привязан к серверу приложения, который держит его цепь. При нескольких экземплярах ключи Data Protection
+         хранятся в общем месте, доступном всем экземплярам.
+      5. **Подтянуть данные.** Регион рядом с пользователем мало что даёт, если каждый запрос всё равно пересекает
+         океан к одной базе: нужны реплики для чтения или кэши в регионах, решение, куда идут записи (основной регион
+         или разделение по арендаторам или регионам), и проверка требований к месту хранения данных.
+      6. **Подготовиться к разрывам.** Живая цепь не переезжает на другой сервер: пользователь переподключается к тому
+         же серверу, иначе начинается новая цепь. В .NET 10 выбранное состояние компонентов можно сохранить и
+         восстановить в новой цепи, но это не замена хранению долговременных данных вне цепи (база, URL, хранилище
+         браузера). Настроить интерфейс переподключения и время хранения отключённых цепей, раскатывать изменения по
+         регионам и сравнивать с метриками из шага 1.
+    explanation: |
+      В режиме `InteractiveServer` компонент живёт на сервере: каждый щелчок, каждое нажатие клавиши при привязке к
+      `oninput`, каждый обработчик - это сообщение на сервер по SignalR и дифф отрисовки обратно. В одном офисе обход
+      занимает миллисекунды и незаметен. Между континентами каждый обход добавляет к взаимодействию заметную на глаз
+      задержку, величина которой зависит от сетевого пути, а нестабильная сеть чаще рвёт соединение. Живая цепь не
+      может переехать на другой сервер или в другой регион: пользователь либо переподключается к тому же серверу,
+      либо получает новую цепь и теряет всё, что не было сохранено отдельно. Масштабирование тоже стоит дорого:
+      каждый подключённый пользователь держит цепь в памяти сервера.
+
+      Добавление серверов в том же регионе не поможет: узкое место - расстояние и сетевой путь, а не процессор.
+      Поэтому обход либо убирают из взаимодействия (WebAssembly обрабатывает события локально, у static SSR нет
+      стоимости взаимодействия, кроме навигации), либо сокращают (регион рядом с пользователем). Обычно нужно и то,
+      и другое: WebAssembly для интерактива, регионы для первой загрузки, вызовов API и данных.
+
+      У каждого варианта своя цена: WebAssembly - это загрузка и запуск в браузере, открытый код и отдельный слой
+      API; `InteractiveAuto` требует, чтобы компонент работал в обеих средах; static SSR отказывается от богатого
+      интерактива; несколько регионов приносят репликацию данных и вопросы согласованности. Задача архитектора -
+      выбрать режим для каждой части продукта, а не один режим на всё приложение. Режимы отрисовки в Blazor Web App
+      появились в .NET 8, описание верно для .NET 10.
+    linkTitles:
+      - "Модели размещения Blazor"
+      - "Размещение и развёртывание серверных приложений Blazor"
+      - "Режимы отрисовки Blazor"
+  en:
+    title: "An InteractiveServer Blazor app built for one office must serve several continents: how do you redesign hosting and render modes?"
+    prompt: |
+      An internal Blazor Web App on .NET 10 was built for one office: global interactivity with the
+      `InteractiveServer` render mode, one app server and a SQL Server database in the same region as the office.
+      The company now opens the app to employees and partners on several continents.
+
+      Distant users complain: typing in the search field lags, buttons react with a visible delay, and on mobile
+      networks the reconnection overlay appears often. Management asks for one plan that makes the app usable
+      worldwide.
+
+      How do you redesign hosting and render modes, and in what order?
+    hint: |
+      What does one click cost in each render mode, and where does the state of an `InteractiveServer` user live?
+    answer: |
+      1. **Measure before redesigning.** Collect round-trip latency and reconnect counts per user region, find the
+         interactions with the most network calls (`@bind:event="oninput"`, handlers of frequent events, large
+         render diffs) and find out which pages actually need interactivity.
+      2. **Stop making every page interactive on the server.** Replace global `InteractiveServer` with render modes
+         per page and per component:
+         - read-mostly pages (lists, reports, details) as static server-side rendering (static SSR) with streaming
+           rendering and enhanced navigation: one request per navigation, no circuit, and responses can be cached
+           close to users;
+         - highly interactive screens for distant users (editors, grids, dashboards with filters) as
+           `InteractiveWebAssembly` or `InteractiveAuto`: UI events are handled in the browser, and only data
+           requests go over the network;
+         - `InteractiveServer` stays only where users are close to the server or where code must not leave it.
+      3. **Restructure the code for WebAssembly.** Components that used `DbContext` or server services directly
+         depend on an interface: a server implementation and a client implementation over `HttpClient` that calls a
+         web API. Secrets and authorization stay in the API, and the API checks every request, because WebAssembly
+         code runs on the user's machine and is not protected from inspection and tampering. Set a budget for the
+         download size (trimming of unused code, compression, a deliberate choice about AOT, which speeds up
+         execution at the cost of a larger app) and check startup on weak devices.
+      4. **Deploy per region.** Run the app and the API in several regions behind a global entry point (geo DNS
+         routing or a global load balancer) that sends each user to the nearest region. The remaining
+         `InteractiveServer` traffic needs WebSockets along the whole path and session affinity: a circuit lives in
+         the memory of one server, so all its connections must reach that server in that region. That means sticky
+         sessions (session affinity) on the load balancer or ingress, for example session affinity in Azure
+         Container Apps, or Azure SignalR Service configured with `ServerStickyMode` set to `Required`, so the client
+         stays bound to the app server that holds its circuit. With several instances, Data Protection keys are kept
+         in a shared location that every instance can reach.
+      5. **Bring the data along.** A nearby region helps little if every request still crosses the ocean to one
+         database: add read replicas or caches per region, decide where writes go (a primary region, or
+         partitioning by tenant or region) and check data residency requirements.
+      6. **Plan for disconnects.** A live circuit does not move to another server: the user reconnects to the same
+         server, or a new circuit starts. In .NET 10 you can persist selected component state so that a new circuit
+         restores it, but that is not a replacement for keeping durable data outside the circuit (database, URL,
+         browser storage). Tune the reconnect UI and the retention of disconnected circuits, roll out region by
+         region and compare against the metrics from step 1.
+    explanation: |
+      In `InteractiveServer` the component lives on the server: every click, every key press with an `oninput`
+      binding, every handler is a message to the server over SignalR and a render diff back. In one office the
+      round trip takes milliseconds and nobody notices. Across continents every round trip adds a visible delay to
+      the interaction, its size depending on the network path, and an unstable network drops the connection more
+      often. A live circuit cannot move to another server or region: the user either reconnects to the same server
+      or gets a new circuit and loses everything that was not saved separately. Scaling is expensive too: every
+      connected user holds a circuit in server memory.
+
+      Adding servers in the same region does not help: the bottleneck is distance and the network path, not CPU.
+      So you either remove the round trip from the interaction (WebAssembly handles events locally, and static SSR
+      has no interaction cost except navigation) or shorten it (a region near the user). Usually you need both:
+      WebAssembly for interaction, regions for the first load, API calls and data.
+
+      Every option has a price: WebAssembly means a download and startup in the browser, public code and a separate
+      API layer; `InteractiveAuto` requires the component to work in both environments; static SSR gives up rich
+      interactivity; several regions bring data replication and consistency questions. The architect's job is to
+      pick a mode per product surface, not one mode for the whole app. Render modes in a Blazor Web App appeared in
+      .NET 8, and this description holds for .NET 10.
+    linkTitles:
+      - "ASP.NET Core Blazor hosting models"
+      - "Host and deploy ASP.NET Core server-side Blazor apps"
+      - "ASP.NET Core Blazor render modes"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

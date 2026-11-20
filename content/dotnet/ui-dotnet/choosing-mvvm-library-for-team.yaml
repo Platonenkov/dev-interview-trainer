@@ -1,0 +1,173 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RRT9PH4WERV09A226X
+slug: choosing-mvvm-library-for-team
+stack: dotnet
+topic: ui-dotnet
+level: lead
+type: open
+grading: self
+tags: [mvvm, communitytoolkit-mvvm, source-generators, reactiveui, team-conventions]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/communitytoolkit/mvvm/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/communitytoolkit/mvvm/generators/observableproperty
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/communitytoolkit/mvvm/generators/relaycommand
+    lang: en
+    kind: docs
+  - url: https://github.com/reactiveui/ReactiveUI
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как техлиду выбрать MVVM-библиотеку для команды из восьми разработчиков?
+    prompt: |
+      Вы техлид нового десктопного продукта на WPF, WinUI или Avalonia. Его будет разрабатывать и несколько лет
+      сопровождать команда из восьми человек. Для слоя моделей представления есть три варианта: свои базовые
+      классы (реализация `INotifyPropertyChanged` и `RelayCommand`, написанные вручную), CommunityToolkit.Mvvm с
+      генераторами исходного кода или реактивный фреймворк, например ReactiveUI поверх Rx. Как вы будете
+      выбирать, какие критерии важны и как закрепить решение в команде?
+    hint: |
+      Сравните не только то, сколько кода экономит каждый вариант, но и чего он стоит новичку в команде,
+      человеку, который ночью разбирается со сломанной привязкой, и команде через пять лет.
+    answer: |
+      - **Критерии.**
+        - Шаблонный код и типичные ошибки: ручные свойства повторяют один и тот же сеттер, и при копировании
+          появляются ошибки - неверное имя в `PropertyChanged`, нет уведомления для зависимого свойства, забытый
+          `CanExecuteChanged`.
+        - Порог входа: через сколько времени новый разработчик пишет корректную модель представления.
+        - Отлаживаемость: насколько легко понять и пройти код, который отправляет уведомления и выполняет
+          команды, насколько читаемы стеки вызовов.
+        - Долгосрочная поддержка: лицензия, кто сопровождает библиотеку, история релизов, поддержка нужного
+          UI-фреймворка и версий .NET, цена отказа от библиотеки.
+        - Характер продукта: много ли асинхронных потоков событий (поиск по мере ввода, живые данные) или в
+          основном формы и CRUD.
+      - **Свои базовые классы.** Нет внешней зависимости, полный контроль, мало кода в базе. Но команда сама
+        владеет и сопровождает свой мини-фреймворк, а каждое свойство по-прежнему пишется вручную. Подходит,
+        если политика зависимостей запрещает сторонние пакеты или слой моделей представления маленький.
+      - **CommunityToolkit.Mvvm.** `ObservableObject` и атрибут `[ObservableProperty]` на поле `partial`-класса:
+        генератор создаёт свойство с уведомлениями `PropertyChanging` и `PropertyChanged` и частичные методы
+        `On...Changing`/`On...Changed`. `[NotifyPropertyChangedFor]` уведомляет о зависимых свойствах,
+        `[RelayCommand]` создаёт команду из метода (для метода, возвращающего `Task`, - `IAsyncRelayCommand`),
+        `[NotifyCanExecuteChangedFor]` обновляет доступность команды. Код уведомлений генерируется при
+        компиляции и остаётся обычным C#, который можно открыть и прочитать в IDE. Библиотеку сопровождает и
+        публикует Microsoft, она входит в .NET Foundation. Пакет нацелен на .NET Standard и не зависит от
+        UI-фреймворка, поэтому одни и те же модели представления работают с WPF, WinUI и другими
+        UI-фреймворками. Порог входа низкий: это обычный MVVM плюс несколько атрибутов. Цена - команда должна
+        понимать, что именно генерирует атрибут (требование `partial`, правила именования полей) и где искать
+        сгенерированный код.
+      - **Реактивный фреймворк (ReactiveUI).** Силён там, где много потоков событий: `WhenAnyValue`, задержка
+        ввода, комбинация условий для доступности команды, производные свойства как наблюдаемые
+        последовательности. Цена, по опыту многих команд: Rx - другая модель программирования, и для
+        большинства из восьми человек порог входа будет высоким; отладка обычно тяжелее (стеки через операторы,
+        планировщики, подписки, которые нужно освобождать); весь слой моделей представления зависит от
+        фреймворка. Оправдан, если команда уже знает Rx и продукт в основном состоит из потоков событий.
+      - **Процесс решения.** Оставить двух кандидатов и реализовать на каждом один показательный экран: форма с
+        валидацией, асинхронная загрузка с отменой, список, доступность команды, зависящая от нескольких
+        свойств. Дать попробовать нескольким разработчикам, включая младших. Записать решение в ADR с причинами и
+        условиями пересмотра.
+      - **Одно соглашение на команду.** Один базовый класс, один тип команды, один механизм сообщений; шаблон
+        проекта, эталонный экран, пункты в чек-листе code review. Исключения (например, операторы Rx внутри
+        модели представления на тулките для одного поискового потока) только по явной договорённости. Смешивать
+        подходы по экранам нельзя: две модели уведомлений и команд в одной кодовой базе удваивают объём знаний,
+        нужных каждому разработчику, ломают общие базовые классы и тестовые помощники и усложняют любую
+        будущую миграцию.
+      - **Типичный итог.** Для команды из восьми человек со смешанным опытом и продукта из форм и списков
+        разумный выбор по умолчанию - CommunityToolkit.Mvvm: он убирает шаблонный код при минимуме новых
+        понятий.
+    explanation: |
+      Вопрос не о том, какая библиотека лучше, а о стоимости владения слоем моделей представления за годы
+      жизни продукта. Ручные базовые классы экономят на зависимостях, но платят повторяющимся кодом и
+      ошибками, которые компилятор не ловит. Генераторы CommunityToolkit.Mvvm переносят этот повторяющийся код
+      в компиляцию: он пишется один раз в генераторе, создаётся при сборке и остаётся обычным C#, который
+      можно прочитать. Реактивный фреймворк даёт больше выразительности для сложных потоков событий, но
+      требует, чтобы вся команда освоила другую модель мышления, а ошибки в подписках и планировщиках
+      обычно дороже искать.
+
+      Решение техлида учитывает команду, а не личные предпочтения: кто будет писать и сопровождать код, как
+      быстро новичок станет продуктивным, что будет, если библиотеку перестанут развивать. Худший вариант - не
+      любой из трёх, а смесь: каждый экран устроен по-своему, ревьюеру нужно знать все подходы, а общие
+      решения (валидация, навигация, тесты) приходится писать несколько раз. Поэтому выбор фиксируется
+      письменно и поддерживается шаблонами и code review.
+    linkTitles:
+      - "Введение в MVVM Toolkit"
+      - "Атрибут ObservableProperty"
+      - "Атрибут RelayCommand"
+      - "Репозиторий ReactiveUI на GitHub"
+  en:
+    title: How does a tech lead choose an MVVM library for a team of eight developers?
+    prompt: |
+      You are the tech lead of a new desktop product built with WPF, WinUI or Avalonia. A team of eight will
+      build it and maintain it for years. For the view model layer there are three options: your own base
+      classes (an `INotifyPropertyChanged` implementation and a `RelayCommand` written by hand),
+      CommunityToolkit.Mvvm with its source generators, or a reactive framework such as ReactiveUI built on Rx.
+      How do you choose, which criteria matter, and how do you make the decision stick in the team?
+    hint: |
+      Compare not only how much code each option saves, but what it costs a newcomer to the team, the person
+      debugging a broken binding at night, and the team five years from now.
+    answer: |
+      - **Criteria.**
+        - Boilerplate and typical bugs: hand-written properties repeat the same setter, and copying it produces
+          bugs - a wrong name in `PropertyChanged`, no notification for a dependent property, a forgotten
+          `CanExecuteChanged`.
+        - Learning curve: how long until a new developer writes a correct view model.
+        - Debuggability: how easy it is to understand and step through the code that raises notifications and
+          runs commands, and how readable the stack traces are.
+        - Long-term support: licence, who maintains the library, release history, support for the target UI
+          framework and .NET versions, the cost of leaving it.
+        - The nature of the product: many asynchronous event streams (search as you type, live data) or mostly
+          forms and CRUD.
+      - **Own base classes.** No external dependency, full control, little code in the base. But the team owns
+        and maintains its own mini-framework, and every property is still written by hand. Suitable when the
+        dependency policy forbids third-party packages or the view model layer is small.
+      - **CommunityToolkit.Mvvm.** `ObservableObject` and the `[ObservableProperty]` attribute on a field of a
+        `partial` class: the generator creates a property that raises `PropertyChanging` and `PropertyChanged`,
+        plus `On...Changing`/`On...Changed` partial methods. `[NotifyPropertyChangedFor]` notifies dependent
+        properties, `[RelayCommand]` creates a command from a method (an `IAsyncRelayCommand` for a method that
+        returns `Task`), and `[NotifyCanExecuteChangedFor]` refreshes a command's enabled state. The
+        notification code is generated at compile time and stays ordinary C# that you can open and read in the
+        IDE. The library is maintained and published by Microsoft and is part of the .NET Foundation. The
+        package targets .NET Standard and is UI-framework agnostic, so the same view models work with WPF, WinUI
+        and other UI frameworks. The learning curve is low: plain MVVM plus a few attributes. The cost is that
+        the team must understand what an attribute generates (the `partial` requirement, field naming rules)
+        and where to find the generated code.
+      - **Reactive framework (ReactiveUI).** Strong where there are many event streams: `WhenAnyValue`,
+        throttling input, combining conditions for command availability, derived properties as observables.
+        The cost, in the experience of many teams: Rx is a different programming model, and for most of the
+        eight people the learning curve will be steep; debugging is usually harder (stack traces through
+        operators, schedulers, subscriptions that must be disposed); and the whole view model layer depends on
+        the framework. Justified when the team already knows Rx and the product is mostly event streams.
+      - **Decision process.** Keep two candidates and build the same representative screen with each: a form
+        with validation, an async load with cancellation, a list, and a command whose availability depends on
+        several properties. Let several developers try it, juniors included. Record the decision in an ADR with
+        the reasons and the conditions for revisiting it.
+      - **One convention for the team.** One base class, one command type, one messaging mechanism; a project
+        template, a reference screen, items in the code review checklist. Exceptions (for example Rx operators
+        inside a toolkit view model for one search stream) only by explicit agreement. Do not mix approaches per
+        screen: two models of notifications and commands in one codebase double the knowledge every developer
+        needs, break shared base classes and test helpers, and make any future migration harder.
+      - **Typical outcome.** For a team of eight with mixed experience and a product of forms and lists, a
+        sensible default is CommunityToolkit.Mvvm: it removes the boilerplate with a minimum of new concepts.
+    explanation: |
+      The question is not which library is best, but what the view model layer costs to own over the years of
+      the product's life. Hand-written base classes save on dependencies but pay with repetitive code and bugs
+      the compiler does not catch. The CommunityToolkit.Mvvm generators move that repetitive code into the
+      build: it is written once in the generator, produced at compile time, and stays ordinary C# that can be
+      read. A reactive framework is more expressive for complex event streams, but the whole team has to learn
+      a different way of thinking, and bugs in subscriptions and schedulers are usually more expensive to find.
+
+      A lead's decision is about the team, not personal taste: who will write and maintain the code, how fast
+      a newcomer becomes productive, what happens if the library stops being developed. The worst option is not
+      any of the three but a mix: every screen is built differently, a reviewer has to know every approach, and
+      shared solutions (validation, navigation, tests) have to be written several times. That is why the choice
+      is written down and backed by templates and code review.
+    linkTitles:
+      - "Introduction to the MVVM Toolkit"
+      - "ObservableProperty attribute"
+      - "RelayCommand attribute"
+      - "ReactiveUI repository on GitHub"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

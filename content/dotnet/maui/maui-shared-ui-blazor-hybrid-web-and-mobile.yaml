@@ -1,0 +1,153 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPP1E34CH66TYC577N
+slug: maui-shared-ui-blazor-hybrid-web-and-mobile
+stack: dotnet
+topic: maui
+level: architect
+type: situation
+grading: self
+tags: [maui, blazor-hybrid, blazorwebview, razor-class-library, architecture]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/hybrid/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/maui/user-interface/controls/blazorwebview
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Общий UI с веб-приложением через MAUI Blazor Hybrid или нативные XAML-клиенты - что выбрать?
+    prompt: |
+      У компании есть веб-приложение на Blazor: портал для клиентов и сотрудников с формами, таблицами и
+      дашбордами. Планируются клиенты для iOS, Android, Windows и macOS. В команде восемь .NET-разработчиков,
+      которые пишут на Blazor, мобильных специалистов нет.
+
+      Руководство спрашивает: переиспользовать UI через .NET MAUI Blazor Hybrid или писать нативные клиенты на
+      XAML в .NET MAUI? Что вы порекомендуете, от чего зависит решение и как вы построите решение (решение
+      рассчитано на .NET 10)?
+    hint: Что именно работает внутри `BlazorWebView` - только разметка или и код .NET? И на каких экранах продукта пользователь заметит, что интерфейс не нативный?
+    answer: |
+      1. **Сначала выяснить, от чего зависит выбор.** Какая доля экранов одинакова в вебе и на устройствах
+         (формы, списки, дашборды), а какая завязана на устройство (камера, карты, офлайн, фоновая работа,
+         push-уведомления, жесты, очень длинные списки). Насколько важен нативный вид. Какие платформы нужны:
+         MAUI покрывает Android, iOS, Mac Catalyst и Windows, но не Linux. Какие навыки у команды и как часто
+         нужно выпускать одни и те же функции во всех клиентах.
+      2. **Рекомендация по умолчанию для такого продукта - Blazor Hybrid с общей Razor class library.**
+         Компоненты Razor выполняются нативно в процессе .NET на устройстве, не в WebAssembly и не на сервере.
+         Они отрисовывают HTML во встроенный веб-вью (`BlazorWebView`) через локальный канал взаимодействия и
+         обращаются к API устройства напрямую через .NET (API MAUI и платформенный код). Одна кодовая база UI
+         для веба и устройств и знакомый команде стек.
+      3. **Не «всё или ничего».** `BlazorWebView` - обычный элемент управления MAUI: его можно разместить на
+         XAML-странице рядом с нативными элементами, а нативные страницы (навигация Shell, камера, карты,
+         огромный список) могут жить рядом с экранами на Blazor. На нативный XAML переводить только те экраны,
+         где веб-вью измеримо хуже.
+      4. **Структура решения.**
+         - Общая Razor class library с компонентами, страницами и стилями; два хоста - Blazor Web App и
+           приложение MAUI. В .NET 9 и .NET 10 такую структуру создаёт шаблон «.NET MAUI Blazor Hybrid and Web App».
+         - Всё, что зависит от платформы (форм-фактор, файлы, камера, геолокация), - за собственными
+           интерфейсами в общей библиотеке, с реализацией в каждом хосте и регистрацией в DI.
+         - Общие компоненты не используют `HttpContext` и серверные сервисы: в гибридном приложении сервера нет.
+         - Данные - через HTTP API, а не прямым доступом к базе: клиентское приложение на устройстве - недоверенная
+           среда.
+         - Аутентификация в приложении - нативным потоком с токенами, а не серверными cookie веб-приложения.
+      5. **Когда рекомендовать нативные XAML-клиенты.** Продукт mobile-first и нативное ощущение - его
+         конкурентное преимущество; много глубокой интеграции с платформой; тяжёлые списки и анимации; веб-часть
+         мала, и переиспользование почти ничего не даёт. Цена: вторая кодовая база UI, нужны навыки XAML и MVVM,
+         функции в вебе и в приложениях со временем расходятся.
+      6. **Риски Hybrid и что с ними делать.** Движок веб-вью разный на платформах (WebView2 на Windows,
+         Android System WebView, WKWebView на iOS и macOS) - тестировать на всех. Интерфейс не выглядит нативным -
+         дизайн-система с адаптацией под форм-фактор, размеры элементов под касание, платформенные привычки
+         навигации. Время запуска и память - измерять на недорогих Android-устройствах. JS-библиотеки, которые
+         рассчитаны на браузер и сервер, - проверить заранее.
+      7. **Подтвердить решение пилотом.** Ограниченный по времени прототип на Hybrid из двух-трёх характерных
+         экранов (форма, большой список, функция устройства), заранее заданные критерии (запуск, плавность
+         прокрутки, память, отзывы UX) на реальных устройствах, итог - в ADR.
+    explanation: |
+      Главный компромисс - переиспользование против нативности интерфейса. Blazor Hybrid - это не обёрнутый
+      сайт и не PWA: код .NET выполняется нативно, поэтому доступ к устройству не теряется, а HTML - только
+      способ отрисовки. Отсюда высокий процент переиспользования с веб-приложением без потери платформенных
+      возможностей.
+
+      Цена в том, что интерфейс остаётся веб-интерфейсом: он одинаков на всех платформах. Для единого бренда
+      это плюс, а там, где пользователи ждут привычных платформенных элементов, - минус. XAML-клиент на MAUI
+      рисует нативные элементы управления через обработчики (handlers) и даёт точный контроль над каждой
+      платформой, но требует отдельной кодовой базы UI.
+
+      Решение долгоживущее: вторая кодовая база UI удваивает стоимость каждой функции на годы вперёд. При этом
+      начать с Hybrid менее рискованно, чем кажется: так как `BlazorWebView` и нативные страницы сосуществуют в
+      одном приложении, критичные экраны можно переписывать на XAML по одному, не переделывая всё. Поэтому
+      разумная стратегия - общая библиотека компонентов как основа и нативные экраны там, где измерения или
+      UX показали необходимость. Если нужен только Windows-клиент, `BlazorWebView` есть и для WPF и Windows
+      Forms, без MAUI.
+    linkTitles:
+      - "ASP.NET Core Blazor Hybrid"
+      - "Элемент управления BlazorWebView в .NET MAUI"
+  en:
+    title: Share the UI with the web app through MAUI Blazor Hybrid, or build native XAML clients?
+    prompt: |
+      A company has a Blazor web app: a customer and staff portal with forms, tables and dashboards. It plans
+      clients for iOS, Android, Windows and macOS. The team has eight .NET developers who write Blazor, and no
+      mobile specialists.
+
+      Leadership asks: should the UI be shared through .NET MAUI Blazor Hybrid, or should the team build native
+      XAML clients in .NET MAUI? What do you recommend, what does the decision depend on, and how do you structure
+      the solution (the solution targets .NET 10)?
+    hint: What exactly runs inside a `BlazorWebView` - only the markup, or the .NET code too? And on which screens of the product would a user notice that the UI is not native?
+    answer: |
+      1. **First find out what the choice depends on.** Which share of screens is the same on the web and on
+         devices (forms, lists, dashboards), and which is device-centric (camera, maps, offline, background work,
+         push notifications, gestures, very long lists). How much a native look matters. Which platforms are
+         needed: MAUI covers Android, iOS, Mac Catalyst and Windows, but not Linux. What the team knows, and how
+         often the same features must ship in every client.
+      2. **Default recommendation for a product like this: Blazor Hybrid with a shared Razor class library.**
+         Razor components run natively in the .NET process on the device, not in WebAssembly and not on a
+         server. They render HTML into an embedded web view (`BlazorWebView`) through a local interop channel
+         and call device APIs directly through .NET (MAUI APIs and platform code). One UI codebase for the web
+         and the devices, and a stack the team already knows.
+      3. **Not all or nothing.** `BlazorWebView` is a regular MAUI control: a XAML page can host it next to
+         native controls, and native pages (Shell navigation, camera, maps, a huge list) can live next to Blazor
+         screens. Move to native XAML only the screens where the web view is measurably worse.
+      4. **Solution structure.**
+         - A shared Razor class library with components, pages and styles; two hosts, a Blazor Web App and a
+           MAUI app. In .NET 9 and .NET 10 the ".NET MAUI Blazor Hybrid and Web App" template creates this layout.
+         - Everything platform-dependent (form factor, files, camera, geolocation) sits behind your own
+           interfaces in the shared library, implemented in each host and registered in DI.
+         - Shared components do not use `HttpContext` or server-only services: a hybrid app has no server.
+         - Data goes through an HTTP API, not direct database access: a client app on a device is an untrusted
+           environment.
+         - Authentication in the app uses a native flow with tokens, not the web app's server cookies.
+      5. **When to recommend native XAML clients instead.** The product is mobile-first and a native feel is a
+         competitive feature; there is a lot of deep platform integration; lists and animations are demanding;
+         the web part is small, so reuse buys little. The cost: a second UI codebase, XAML and MVVM skills, and
+         features on the web and in the apps drifting apart over time.
+      6. **Hybrid risks and what to do about them.** The web view engine differs per platform (WebView2 on
+         Windows, Android System WebView, WKWebView on iOS and macOS): test on all of them. The UI does not look
+         native: a design system that adapts to the form factor, touch-sized targets, platform navigation habits.
+         Startup time and memory: measure on low-cost Android devices. JS libraries built for a browser and a
+         server: check them early.
+      7. **Confirm the decision with a pilot.** A time-boxed Hybrid prototype of two or three representative
+         screens (a form, a large list, a device feature), criteria set in advance (startup, scrolling
+         smoothness, memory, UX feedback) on real devices, and the result recorded in an ADR.
+    explanation: |
+      The core trade-off is reuse versus native UI fidelity. Blazor Hybrid is not a wrapped website and not a
+      PWA: the .NET code runs natively, so device access is not lost, and HTML is only the rendering technology.
+      That is why reuse with the web app is high without giving up platform capabilities.
+
+      The cost is that the UI stays a web UI: it looks the same on every platform. That is a plus for a
+      consistent brand and a minus where users expect familiar platform controls. A MAUI XAML client renders
+      native controls through handlers and gives fine-grained control over each platform, but it needs a
+      separate UI codebase.
+
+      The decision lives for years: a second UI codebase doubles the cost of every feature for a long time.
+      Starting with Hybrid is also less risky than it looks: because `BlazorWebView` and native pages coexist
+      in one app, critical screens can be rewritten in XAML one at a time without redoing everything. So a
+      sound strategy is a shared component library as the base, plus native screens where measurements or UX
+      research showed the need. If only a Windows client is needed, `BlazorWebView` also exists for WPF and
+      Windows Forms, without MAUI.
+    linkTitles:
+      - "ASP.NET Core Blazor Hybrid"
+      - "BlazorWebView control in .NET MAUI"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

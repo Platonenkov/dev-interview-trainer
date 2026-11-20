@@ -1,0 +1,128 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RRP1MVSGSJR9WTJ6KB
+slug: xbind-vs-binding-source-and-codegen
+stack: dotnet
+topic: ui-dotnet
+level: senior
+type: open
+grading: self
+tags: [winui, xbind, data-binding, xaml, performance]
+links:
+  - url: https://learn.microsoft.com/en-us/windows/uwp/data-binding/data-binding-in-depth
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/windows/apps/develop/platform/xaml/x-bind-markup-extension
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Чем {x:Bind} отличается от {Binding} в WinUI: источник, время разрешения и производительность?"
+    prompt: |
+      В WinUI 3 значение в разметке можно привязать через `{Binding}` или через `{x:Bind}`. Объясните, чем они
+      различаются: откуда каждое расширение разметки берёт источник данных, когда и как разрешается путь
+      привязки, что это даёт для производительности и для переименования свойств модели представления.
+      В каких случаях `{x:Bind}` не подходит?
+    hint: |
+      Что компилятор XAML знает о типе источника в каждом случае и от какого объекта отсчитывается путь привязки?
+    answer: |
+      - **Источник.** `{Binding}` по умолчанию отсчитывает путь от `DataContext` элемента. `DataContext`
+        наследуется по дереву, его тип неизвестен при сборке, и его можно заменить в любой момент. `{x:Bind}` не
+        использует `DataContext` как источник по умолчанию: корень пути - сам класс страницы или
+        пользовательского элемента управления, а внутри `DataTemplate` - тип, указанный в `x:DataType`. Поэтому
+        модель представления выставляют свойством страницы, например `public MainViewModel ViewModel { get; }`,
+        и пишут `{x:Bind ViewModel.Title}`.
+      - **Когда разрешается путь.** `{Binding}` ищет свойства по имени во время выполнения с помощью
+        универсальной инспекции объектов. `{x:Bind}` компилятор XAML при сборке превращает в специально
+        сгенерированный код в частичном классе страницы (файлы `<view name>.g.cs` в папке `obj`): прямые
+        обращения к свойствам, отслеживание изменений для режима `OneWay` и обратную запись в источник для
+        `TwoWay`.
+      - **Производительность.** Во время выполнения нет поиска членов по имени и универсального механизма
+        привязки, поэтому `{x:Bind}` тратит меньше времени и памяти, что особенно заметно в шаблонах элементов
+        длинных списков. По сгенерированному коду можно ставить точки останова.
+      - **Рефакторинг.** Путь `{x:Bind}` проверяется по типам при компиляции: переименованное или удалённое
+        свойство даёт ошибку сборки в XAML. Ошибку в пути `{Binding}` сборка не поймает: во время выполнения
+        привязка тихо не срабатывает, элемент обычно остаётся со значением по умолчанию, а сообщение об ошибке
+        привязки появляется в выводе отладчика.
+      - **Цена.** `{x:Bind}` не следует за `DataContext`, назначенным во время выполнения, и не подходит для
+        позднего связывания: утиной типизации или данных с заранее неизвестной структурой. В шаблоне нужен
+        `x:DataType`, в `ResourceDictionary` - класс code-behind через `x:Class` с конструктором, который
+        вызывает `InitializeComponent`. Режим по умолчанию - `OneTime`, поэтому для обновлений `Mode=OneWay`
+        указывают явно.
+    explanation: |
+      Все различия вытекают из одного решения: `{x:Bind}` привязан к типу, который известен компилятору. Класс
+      страницы и тип из `x:DataType` зафиксированы при сборке, поэтому компилятор XAML может проверить каждый шаг
+      пути и сгенерировать обычный код. `DataContext` - значение времени выполнения произвольного типа,
+      поэтому `{Binding}` вынужден разбирать строковый путь на лету, и ошибку в нём никто не проверит до запуска.
+      По той же причине `{x:Bind}` не может опираться на `DataContext`: тип объекта, который туда положат, при
+      сборке неизвестен.
+
+      Сгенерированный код даёт возможности, которых нет у `{Binding}`: последним шагом пути может быть функция,
+      например форматирование значения статическим методом без конвертера или значение, зависящее от нескольких
+      свойств. У этого есть и обратная сторона: режим `OneTime` по умолчанию выбран ради производительности,
+      потому что `OneWay` требует больше кода для отслеживания изменений. Значение читается один раз при
+      инициализации привязок, и если модель представления заполняется позже, без `Mode=OneWay` страница этого
+      не покажет. Режим по умолчанию можно поменять для части дерева через `x:DefaultBindMode`.
+
+      Модель привязки WinUI 3 унаследована от UWP, поэтому описание опирается на документацию XAML для UWP и
+      Windows App SDK. На практике `{x:Bind}` выбирают по умолчанию для страниц и шаблонов списков, где важны
+      скорость и проверка при сборке, а `{Binding}` оставляют для случаев, когда источник действительно известен
+      только во время выполнения. Их можно и смешивать, например в одном стиле.
+    linkTitles:
+      - "Подробно о привязке данных"
+      - "Расширение разметки {x:Bind}"
+  en:
+    title: "How does {x:Bind} differ from {Binding} in WinUI: source, resolution time and performance?"
+    prompt: |
+      In WinUI 3 a value in markup can be bound with `{Binding}` or with `{x:Bind}`. Explain how they differ:
+      where each markup extension gets its data source, when and how the binding path is resolved, and what that
+      means for performance and for renaming view model properties. When is `{x:Bind}` not a good fit?
+    hint: |
+      What does the XAML compiler know about the type of the source in each case, and which object is the binding path counted from?
+    answer: |
+      - **Source.** `{Binding}` resolves its path from the element's `DataContext` by default. `DataContext` is
+        inherited down the tree, its type is unknown at build time, and it can be replaced at any moment.
+        `{x:Bind}` does not use `DataContext` as its default source: the root of the path is the page or user
+        control class itself, and inside a `DataTemplate` it is the type given in `x:DataType`. That is why the
+        view model is exposed as a property of the page, for example `public MainViewModel ViewModel { get; }`,
+        and the markup says `{x:Bind ViewModel.Title}`.
+      - **When the path is resolved.** `{Binding}` looks properties up by name at run time through general-purpose
+        object inspection. `{x:Bind}` is turned by the XAML compiler at build time into special-purpose generated
+        code in the partial class of the page (files named `<view name>.g.cs` in the `obj` folder): direct
+        property access, change tracking for `OneWay` mode, and writing back to the source for `TwoWay`.
+      - **Performance.** At run time there is no member lookup by name and no general-purpose binding machinery,
+        so `{x:Bind}` takes less time and less memory, which is most visible in item templates of long lists.
+        You can set breakpoints in the generated code.
+      - **Refactoring.** An `{x:Bind}` path is type-checked at compile time: a renamed or removed property is a
+        build error in the XAML. The build does not catch a mistake in a `{Binding}` path: at run time the binding
+        fails quietly, the element typically keeps its default value, and a binding error message appears in the
+        debugger output.
+      - **The cost.** `{x:Bind}` does not follow a `DataContext` assigned at run time and does not suit late
+        binding: duck typing or data whose structure is not known in advance. A template needs `x:DataType`, and a
+        `ResourceDictionary` needs a code-behind class through `x:Class` with a constructor that calls
+        `InitializeComponent`. The default mode is `OneTime`, so `Mode=OneWay` is set explicitly when updates are
+        needed.
+    explanation: |
+      Every difference follows from one decision: `{x:Bind}` is tied to a type that the compiler knows. The page
+      class and the type from `x:DataType` are fixed at build time, so the XAML compiler can check every step of
+      the path and generate plain code. `DataContext` is a run-time value of an arbitrary type, so `{Binding}`
+      has to parse a string path on the fly, and nothing checks a mistake in it before the app runs. For the same
+      reason `{x:Bind}` cannot rely on `DataContext`: the type of the object that will be put there is unknown at
+      build time.
+
+      The generated code enables things that `{Binding}` does not have: the last step of the path can be a
+      function, for example formatting a value with a static method instead of a converter, or a value that
+      depends on several properties. There is a flip side: the `OneTime` default was chosen for performance,
+      because `OneWay` needs more generated code to track changes. The value is read once when the bindings are
+      initialized, and if the view model is filled in later, the page does not show it without `Mode=OneWay`.
+      The default mode can be changed for part of the tree with `x:DefaultBindMode`.
+
+      The WinUI 3 binding model is inherited from UWP, so this description follows the XAML docs for UWP and the
+      Windows App SDK. In practice `{x:Bind}` is the default choice for pages and list templates, where speed and
+      build-time checking matter, and `{Binding}` is kept for cases where the source really is known only at run
+      time. The two can also be mixed, for example in one style.
+    linkTitles:
+      - "Data binding in depth"
+      - "{x:Bind} markup extension"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

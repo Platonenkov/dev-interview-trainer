@@ -1,0 +1,169 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RRGF5B019B5ZCQQH65
+slug: computed-property-missing-change-notification
+stack: dotnet
+topic: ui-dotnet
+level: middle
+type: find-bug
+grading: auto
+tags: [inotifypropertychanged, data-binding, mvvm, computed-property]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    using System.ComponentModel;
+
+    var vm = new ContactViewModel();
+    vm.PropertyChanged += (_, e) => Console.WriteLine(e.PropertyName);
+    vm.FirstName = "Ada";
+    vm.LastName = "Lovelace";
+
+    class ContactViewModel : INotifyPropertyChanged
+    {
+        private string firstName = "";
+        private string lastName = "";
+
+        public event PropertyChangedEventHandler PropertyChanged;
+
+        public string FirstName
+        {
+            get => firstName;
+            set
+            {
+                firstName = value;
+                OnPropertyChanged(nameof(FirstName));
+            }
+        }
+
+        public string LastName
+        {
+            get => lastName;
+            set
+            {
+                lastName = value;
+                OnPropertyChanged(nameof(LastName));
+            }
+        }
+
+        public string FullName => $"{FirstName} {LastName}";
+
+        private void OnPropertyChanged(string propertyName) =>
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+    }
+bugLineSets: [[21, 31], [20, 21, 30, 31]]
+fixedSource: |
+  using System.ComponentModel;
+
+  var vm = new ContactViewModel();
+  vm.PropertyChanged += (_, e) => Console.WriteLine(e.PropertyName);
+  vm.FirstName = "Ada";
+  vm.LastName = "Lovelace";
+
+  class ContactViewModel : INotifyPropertyChanged
+  {
+      private string firstName = "";
+      private string lastName = "";
+
+      public event PropertyChangedEventHandler PropertyChanged;
+
+      public string FirstName
+      {
+          get => firstName;
+          set
+          {
+              firstName = value;
+              OnPropertyChanged(nameof(FirstName));
+              // FullName is computed from FirstName, so its bindings must refresh too.
+              OnPropertyChanged(nameof(FullName));
+          }
+      }
+
+      public string LastName
+      {
+          get => lastName;
+          set
+          {
+              lastName = value;
+              OnPropertyChanged(nameof(LastName));
+              // FullName is computed from LastName, so its bindings must refresh too.
+              OnPropertyChanged(nameof(FullName));
+          }
+      }
+
+      public string FullName => $"{FirstName} {LastName}";
+
+      private void OnPropertyChanged(string propertyName) =>
+          PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+  }
+fixedExpect: { kind: output, value: "FirstName\nFullName\nLastName\nFullName" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.componentmodel.inotifypropertychanged
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/communitytoolkit/mvvm/generators/observableproperty
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строки, из-за которых подпись с полным именем не обновляется
+    prompt: |
+      На экране WPF или MAUI есть подпись, привязанная к вычисляемому свойству `FullName` модели представления.
+      Подписчик в примере печатает имя свойства из каждого события `PropertyChanged`, как его увидел бы механизм
+      привязки. После изменения имени и фамилии программа должна сообщить и о `FullName`, то есть вывести
+      `FirstName`, `FullName`, `LastName`, `FullName`. Вместо этого она выводит только `FirstName` и `LastName`,
+      а подпись на экране показывала бы старое значение. Исключения нет.
+      Отметьте строки, сразу после которых должно выполняться недостающее уведомление.
+    hint: "У `FullName` нет сеттера. Кто тогда может вызвать `PropertyChanged` с именем этого свойства?"
+    answer: |
+      Строки 21 и 31: сеттеры `FirstName` и `LastName` сообщают только о своём свойстве, и сразу после этих
+      уведомлений не хватает вызова `OnPropertyChanged(nameof(FullName))`. Выделение тел обоих сеттеров целиком
+      (строки 20-21 и 30-31) тоже засчитывается.
+    explanation: |
+      Механизм привязки перечитывает значение только для тех привязок, путь которых совпадает с
+      `e.PropertyName`. У `FullName` нет ни сеттера, ни поля: значение вычисляется из `FirstName` и `LastName`
+      при каждом чтении. Значит, само свойство никогда не вызовет `PropertyChanged`, и о его изменении должны
+      сообщать сеттеры свойств, от которых оно зависит. Здесь каждый сеттер сообщает только о себе, поэтому
+      привязка к `FullName` остаётся со значением, прочитанным при создании привязки. Если прочитать
+      `vm.FullName` в коде, оно уже верное - устарел только экран, поэтому ошибку легко пропустить.
+
+      Исправление - в обоих сеттерах после собственного уведомления вызвать `OnPropertyChanged(nameof(FullName))`.
+      Тогда программа выводит `FirstName`, `FullName`, `LastName`, `FullName`. Такие зависимости легко забыть при
+      добавлении нового вычисляемого свойства, поэтому их держат рядом с сеттером. В CommunityToolkit.Mvvm для
+      этого есть атрибут `[NotifyPropertyChangedFor(nameof(FullName))]` на поле с `[ObservableProperty]`:
+      сгенерированный сеттер сам отправит второе уведомление.
+    linkTitles:
+      - "Интерфейс INotifyPropertyChanged"
+      - "Атрибут ObservableProperty в CommunityToolkit.Mvvm"
+  en:
+    title: Find the lines that keep a full-name label from updating
+    prompt: |
+      A WPF or MAUI screen has a label bound to the computed property `FullName` of the view model. The
+      subscriber in the example prints the property name from every `PropertyChanged` event, as the binding
+      engine would see it. After the first and last names change, the program should also report `FullName`,
+      that is print `FirstName`, `FullName`, `LastName`, `FullName`. Instead it prints only `FirstName` and
+      `LastName`, and the label on the screen would show a stale value. No exception is thrown.
+      Select the lines right after which the missing notification must be raised.
+    hint: "`FullName` has no setter. Who can then raise `PropertyChanged` with the name of that property?"
+    answer: |
+      Lines 21 and 31: the `FirstName` and `LastName` setters report only their own property, and right after
+      these notifications a call to `OnPropertyChanged(nameof(FullName))` is missing. Selecting both setter
+      bodies as a whole (lines 20-21 and 30-31) is also accepted.
+    explanation: |
+      The binding engine re-reads the value only for the bindings whose path matches `e.PropertyName`.
+      `FullName` has neither a setter nor a field: its value is computed from `FirstName` and `LastName` on every
+      read. So the property itself never raises `PropertyChanged`, and its change has to be reported by the
+      setters of the properties it depends on. Here each setter reports only itself, so a binding to `FullName`
+      keeps the value it read when the binding was created. Reading `vm.FullName` in code already gives the
+      right value - only the screen is stale, which makes the bug easy to miss.
+
+      The fix is to call `OnPropertyChanged(nameof(FullName))` in both setters after their own notification.
+      The program then prints `FirstName`, `FullName`, `LastName`, `FullName`. Such dependencies are easy to
+      forget when a new computed property is added, so they are kept next to the setter. CommunityToolkit.Mvvm
+      has the `[NotifyPropertyChangedFor(nameof(FullName))]` attribute for this on a field marked
+      `[ObservableProperty]`: the generated setter raises the second notification itself.
+    linkTitles:
+      - "INotifyPropertyChanged interface"
+      - "ObservableProperty attribute in CommunityToolkit.Mvvm"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

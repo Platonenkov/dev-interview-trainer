@@ -1,0 +1,155 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RP3R7BX2HHN9DFCMB6
+slug: maui-shell-vs-navigationpage-choice
+stack: dotnet
+topic: maui
+level: senior
+type: open
+grading: self
+tags: [maui, shell, navigationpage, navigation, routing]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/maui/fundamentals/shell/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/maui/user-interface/pages/navigationpage
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/maui/fundamentals/shell/navigation
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/maui/fundamentals/dependency-injection
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Когда приложению .NET MAUI лучше подходит Shell, а когда NavigationPage, и что Shell ограничивает?
+    prompt: |
+      Команда начинает приложение на .NET MAUI и выбирает модель навигации: `Shell` или стек страниц на основе
+      `NavigationPage`. Объясните, что даёт каждая модель, в каких приложениях Shell подходит лучше, какие
+      ограничения он накладывает и можно ли совмещать обе модели в одном приложении.
+    hint: Сравните, кто в каждой модели владеет структурой приложения и стеком страниц и как в каждой из них адресуется нужная страница.
+    answer: |
+      - **Что даёт Shell.** Визуальная иерархия приложения описывается один раз в подклассе `Shell` (обычно
+        `AppShell.xaml`): `FlyoutItem` или `TabBar`, `Tab`, `ShellContent`. Сами эти объекты не рисуют
+        интерфейс: по ним Shell строит flyout, нижние и верхние вкладки. Навигация идёт по URI: маршруты из
+        иерархии и маршруты страниц деталей, зарегистрированные через `Routing.RegisterRoute`, переход
+        `Shell.Current.GoToAsync("orders/details")`, абсолютные маршруты `//`, возврат `..`. Параметры
+        передаются строкой запроса или словарём `IDictionary<string, object>` и принимаются через
+        `IQueryAttributable` или `[QueryProperty]`. Страницы создаются по требованию, в ответ на навигацию.
+        Если тип страницы зарегистрирован в контейнере DI, Shell при навигации получает её из контейнера
+        вместе с зависимостями конструктора. Событие `Navigating` позволяет отменить переход, а
+        `BackButtonBehavior` - переопределить кнопку назад.
+      - **Когда Shell подходит лучше.** Приложение с типичной структурой из flyout или вкладок, много экранов,
+        нужны deep links, переходы должны идти по строковым маршрутам без знания типов страниц, а страницы и
+        модели представления должны получать зависимости через DI.
+      - **Что Shell ограничивает.** Иерархия фиксирована: `Shell` -> `FlyoutItem` или `TabBar` -> `Tab` ->
+        `ShellContent`, в `ShellContent` лежит `ContentPage`, вкладок не больше двух уровней (нижние и
+        верхние). Внешний вид flyout и панели вкладок настраивается в пределах свойств и шаблонов Shell,
+        дальше нужен платформенный код. `Tab.Stack` доступен только для чтения: стек меняется навигацией, а
+        сбрасывается абсолютным маршрутом. `TabbedPage`, `FlyoutPage` и `NavigationPage` не предназначены
+        для использования внутри Shell: вкладки, flyout и стек каждой вкладки Shell даёт сам. Маршруты -
+        строки: переход по несуществующему маршруту выбрасывает `ArgumentException`, поэтому опечатка
+        обнаруживается только во время выполнения.
+      - **Что даёт NavigationPage.** Стек страниц, которым код управляет явно: `PushAsync`, `PopAsync`,
+        `PopToRootAsync`, `InsertPageBefore`, `RemovePage`, модальные `PushModalAsync`. Маршрутов нет: код
+        сам создаёт страницу (или явно берёт её из контейнера) и передаёт данные через конструктор или
+        `BindingContext`. `NavigationPage` сочетается с `TabbedPage` и `FlyoutPage`, например по одному стеку
+        на вкладку.
+      - **Когда NavigationPage лучше.** Небольшое приложение с линейным стеком или мастером из шагов;
+        нестандартная структура корня, которую не выразить иерархией Shell; код, который активно перестраивает
+        стек; перенос приложения Xamarin.Forms на `NavigationPage` без переписывания навигации.
+      - **Не вкладывать одну модель в другую.** Для корня окна выбирается одна модель. Допустимо заменить
+        корень целиком, например после входа присвоить `Window.Page` новый `AppShell`, либо держать в самом
+        Shell отдельный маршрут `//login` с отключённым flyout. Начиная с .NET 9 шаблон проекта задаёт
+        корневую страницу в переопределённом `CreateWindow`, а в .NET 10 `Application.MainPage` помечено
+        устаревшим в пользу `Window.Page`.
+    explanation: |
+      Shell - готовый контейнер приложения с собственным мнением о структуре: он сам строит flyout, вкладки и
+      стеки и сам решает, какую страницу создать по маршруту. Маршрут отвязывает вызывающий код от типа
+      страницы: так становятся возможны deep links, переходы из модели представления без знания типов страниц
+      и создание страниц через DI. При этом `Shell.Current.GoToAsync` - API из `Microsoft.Maui.Controls`, и
+      модель, которая вызывает его напрямую, зависит от UI-фреймворка. Чтобы модель тестировалась без
+      устройства, вызов оборачивают в собственный сервис навигации и внедряют его через интерфейс. Цена Shell -
+      иерархия, которую нельзя произвольно перестроить, и строковые маршруты без проверки на этапе сборки.
+
+      `NavigationPage` - примитив: один стек и полный ручной контроль. Его выбирают, когда структура Shell
+      мешает больше, чем помогает, и когда ручное управление стеком - требование, а не неудобство.
+
+      Обе модели отвечают за одно и то же: стек страниц, кнопку назад и панель навигации. Shell уже ведёт свой
+      стек для каждой вкладки, поэтому вложенная `NavigationPage` дублирует его работу, а не добавляет
+      возможностей: модели задуманы как альтернативы, а не как слои. Сведения о `CreateWindow` и
+      `Application.MainPage` даны для .NET 9 и .NET 10.
+    linkTitles:
+      - "Shell в .NET MAUI"
+      - "NavigationPage в .NET MAUI"
+      - "Навигация в Shell"
+      - "Внедрение зависимостей в .NET MAUI"
+  en:
+    title: When does Shell fit a .NET MAUI app better than NavigationPage, and what does Shell constrain?
+    prompt: |
+      A team starts a .NET MAUI app and has to choose a navigation model: `Shell` or a page stack built on
+      `NavigationPage`. Explain what each model gives you, which apps Shell suits better, what constraints it
+      imposes, and whether the two models can be combined in one app.
+    hint: Compare who owns the app structure and the page stack in each model, and how each model addresses the page you want to open.
+    answer: |
+      - **What Shell gives.** The visual hierarchy of the app is described once in a `Shell` subclass (usually
+        `AppShell.xaml`): `FlyoutItem` or `TabBar`, `Tab`, `ShellContent`. These objects draw no UI
+        themselves: Shell uses them to build the flyout and the bottom and top tabs. Navigation is URI-based:
+        routes from the hierarchy and detail page routes registered with `Routing.RegisterRoute`, navigation
+        with `Shell.Current.GoToAsync("orders/details")`, absolute routes with `//`, going back with `..`.
+        Parameters travel in a query string or an `IDictionary<string, object>` and are received through
+        `IQueryAttributable` or `[QueryProperty]`. Pages are created on demand, in response to navigation. If
+        the page type is registered in the DI container, Shell resolves it from the container together with
+        its constructor dependencies when it navigates. The `Navigating` event lets you cancel navigation, and
+        `BackButtonBehavior` overrides the back button.
+      - **When Shell fits better.** An app with a typical flyout or tab structure, many screens, a need for
+        deep links, navigation by string routes without knowing page types, and pages and view models that get
+        their dependencies through DI.
+      - **What Shell constrains.** The hierarchy is fixed: `Shell` -> `FlyoutItem` or `TabBar` -> `Tab` ->
+        `ShellContent`, a `ShellContent` holds a `ContentPage`, and there are at most two levels of tabs
+        (bottom and top). The look of the flyout and the tab bar is customizable within Shell properties and
+        templates; beyond that you need platform code. `Tab.Stack` is read-only: the stack changes through
+        navigation and is reset with an absolute route. `TabbedPage`, `FlyoutPage` and `NavigationPage` are
+        not meant to be used inside Shell: Shell provides the tabs, the flyout and a stack per tab itself.
+        Routes are strings: navigating to a non-existent route throws `ArgumentException`, so a typo shows up
+        only at run time.
+      - **What NavigationPage gives.** A page stack that code controls explicitly: `PushAsync`, `PopAsync`,
+        `PopToRootAsync`, `InsertPageBefore`, `RemovePage`, and modal `PushModalAsync`. There are no routes:
+        the code creates the page itself (or resolves it from the container explicitly) and passes data through
+        the constructor or the `BindingContext`. `NavigationPage` combines with `TabbedPage` and `FlyoutPage`,
+        for example one stack per tab.
+      - **When NavigationPage fits better.** A small app with a linear stack or a step-by-step wizard; a root
+        structure that the Shell hierarchy cannot express; code that rebuilds the stack a lot; moving a
+        Xamarin.Forms app built on `NavigationPage` without rewriting its navigation.
+      - **Do not nest one model in the other.** Pick one model for the window root. Replacing the root as a
+        whole is fine, for example assigning a new `AppShell` to `Window.Page` after sign-in, or keeping a
+        separate `//login` route with the flyout disabled inside Shell itself. Since .NET 9 the project
+        template sets the root page in an overridden `CreateWindow`, and in .NET 10 `Application.MainPage` is
+        obsolete in favour of `Window.Page`.
+    explanation: |
+      Shell is a ready-made app container with opinions about structure: it builds the flyout, the tabs and the
+      stacks itself and decides which page to create for a route. A route decouples the calling code from the
+      page type, which is what makes deep links, navigation from a view model without knowing page types, and
+      page creation through DI possible. Still, `Shell.Current.GoToAsync` is an API of
+      `Microsoft.Maui.Controls`, and a view model that calls it directly depends on the UI framework. To keep
+      the view model testable without a device, wrap the call in your own navigation service and inject it
+      through an interface. The price of Shell is a hierarchy you cannot reshape freely and string routes that
+      are not checked at build time.
+
+      `NavigationPage` is a primitive: one stack and full manual control. You choose it when the Shell
+      structure gets in the way more than it helps, and when manual control of the stack is a requirement
+      rather than an inconvenience.
+
+      Both models own the same things: the page stack, the back button and the navigation bar. Shell already
+      keeps its own stack per tab, so a nested `NavigationPage` duplicates that work instead of adding
+      anything: the models are designed as alternatives, not as layers. The `CreateWindow` and
+      `Application.MainPage` details are given for .NET 9 and .NET 10.
+    linkTitles:
+      - "Shell in .NET MAUI"
+      - "NavigationPage in .NET MAUI"
+      - "Shell navigation"
+      - "Dependency injection in .NET MAUI"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

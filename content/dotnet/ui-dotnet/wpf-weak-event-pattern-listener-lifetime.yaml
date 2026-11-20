@@ -1,0 +1,133 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RR0D63FZH3WZYBWVHN
+slug: wpf-weak-event-pattern-listener-lifetime
+stack: dotnet
+topic: ui-dotnet
+level: senior
+type: open
+grading: self
+tags: [wpf, weak-events, memory-leaks, mvvm, garbage-collection]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/desktop/wpf/events/weak-event-patterns
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.windows.weakeventmanager
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какую проблему решает шаблон слабых событий в WPF и как WeakEventManager меняет граф ссылок?
+    prompt: |
+      Модель представления экрана подписывается на событие долгоживущего сервиса, например синглтона из
+      контейнера DI: `settingsService.SettingsChanged += OnSettingsChanged`. Окно закрывают, а отписку никто
+      не вызывает.
+
+      Что произойдёт с моделью представления (и, возможно, с окном)? Какую проблему решает шаблон слабых
+      событий WPF, как `WeakEventManager` меняет граф ссылок и чем за это приходится платить?
+    hint: |
+      Кто на кого ссылается после `+=`, и какая из этих ссылок не даёт сборщику мусора освободить объект?
+    answer: |
+      - **Обычная подписка.** `+=` сохраняет делегат в поле события источника, а делегат хранит `Target` -
+        ссылку на экземпляр, чей метод вызывается. Получается сильная цепочка: корень (контейнер DI, статическое
+        поле) -> сервис -> делегат -> модель представления. Пока жив сервис, модель представления достижима и
+        не собирается вместе со всем, на что она ссылается. Если обработчик - метод окна или его code-behind,
+        в памяти остаётся и окно со всем визуальным деревом.
+      - **Побочный эффект.** Обработчик закрытого экрана продолжает вызываться: делает лишнюю работу, обращается
+        к уже ненужным данным, иногда падает.
+      - **Шаблон слабых событий.** Между источником и слушателем встаёт посредник - класс, производный от
+        `WeakEventManager`. Он сам подписывается на событие источника и хранит слушателей через слабые ссылки.
+        Сильной ссылки от источника к модели представления больше нет, поэтому закрытый экран и его модель
+        представления могут быть собраны без явной отписки. Когда событие возникает, менеджер доставляет его
+        живым слушателям (`DeliverEvent`), а записи об уже собранных слушателях удаляет при очистке (`Purge`,
+        `ScheduleCleanup`).
+      - **Как подключить.** Документация называет четыре способа: готовый менеджер, если он есть для нужного
+        события (`PropertyChangedEventManager`, `CollectionChangedEventManager`); обобщённый
+        `WeakEventManager<TEventSource, TEventArgs>.AddHandler(source, "SettingsChanged", handler)` - проще
+        всего, но находит событие по имени через отражение и менее эффективен; собственный наследник
+        `WeakEventManager` с `StartListening`/`StopListening` - больше кода, но эффективнее; сторонний менеджер
+        из NuGet или MVVM-фреймворка.
+      - **Цена.** Слабая ссылка не освобождает слушателя в момент закрытия экрана: он исчезает только тогда,
+        когда его соберёт сборщик мусора, и до этого обработчик закрытого экрана всё ещё может вызываться.
+        Посредник добавляет накладные расходы. Менеджер не удерживает объект-цель обработчика, поэтому лямбда,
+        замыкание которой больше никто не держит, может быть собрана раньше времени, и подписка тихо перестанет
+        работать; надёжнее подписывать метод самого объекта-слушателя. Если момент закрытия известен, явная
+        отписка (в `Closed`/`Unloaded` или в `Dispose` модели представления) понятнее, а слабые события -
+        страховка для слушателей, которые не знают, когда перестают быть нужны.
+    explanation: |
+      Сборщик мусора освобождает объект, только когда до него нельзя дойти от корней. Поле события - это обычная
+      ссылка на делегат, а делегат ссылается на свой `Target`. Значит, ссылка направлена от источника к
+      слушателю. Документация `WeakEventManager` говорит об этом прямо: обычная подписка через `+=` заставляет
+      источник держать ссылку на слушателей и не даёт собрать их своевременно. Если источник живёт столько же,
+      сколько слушатель, или меньше, проблемы нет. Утечка появляется, когда источник живёт дольше: синглтон,
+      статическое событие, главное окно. Так выглядит типичная утечка в MVVM-приложении: каждый открытый и
+      закрытый экран оставляет в памяти свою модель представления.
+
+      `WeakEventManager` разрывает эту цепочку: сильная ссылка от источника идёт только к менеджеру, а от
+      менеджера к слушателю ссылка слабая и не мешает сборке. Сам WPF широко использует этот приём: по словам
+      документации, многие части привязки данных уже реализованы через шаблон слабых событий, потому что
+      источник привязки обычно живёт независимо от элемента-цели. Главный подвох в том, что слабые события
+      решают проблему времени жизни слушателя, но делают его зависимым от того, когда придёт сборщик мусора.
+      Поэтому они не заменяют продуманную отписку там, где время жизни экрана известно.
+    linkTitles:
+      - "Шаблоны слабых событий в WPF"
+      - "Класс WeakEventManager"
+  en:
+    title: What problem does the WPF weak event pattern solve, and how does WeakEventManager change the reference graph?
+    prompt: |
+      A screen's view model subscribes to an event of a long-lived service, for example a singleton from the DI
+      container: `settingsService.SettingsChanged += OnSettingsChanged`. The window is closed, and nobody
+      unsubscribes.
+
+      What happens to the view model (and possibly the window)? What problem does the WPF weak event pattern
+      solve, how does `WeakEventManager` change the reference graph, and what do you pay for it?
+    hint: |
+      Who references whom after `+=`, and which of these references stops the garbage collector from freeing an object?
+    answer: |
+      - **A normal subscription.** `+=` stores a delegate in the source's event field, and the delegate holds
+        `Target`, a reference to the instance whose method is called. That gives a strong chain: a root (the DI
+        container, a static field) -> the service -> the delegate -> the view model. As long as the service is
+        alive, the view model is reachable and is not collected, together with everything it references. If the
+        handler is a method of the window or its code-behind, the window with its whole visual tree stays in
+        memory too.
+      - **A side effect.** The handler of a closed screen keeps being called: it does useless work, touches data
+        nobody needs and sometimes fails.
+      - **The weak event pattern.** An intermediary, a class derived from `WeakEventManager`, sits between the
+        source and the listener. It subscribes to the source event itself and holds the listeners through weak
+        references. There is no strong reference from the source to the view model any more, so a closed screen
+        and its view model can be collected without an explicit unsubscribe. When the event fires, the manager
+        delivers it to the live listeners (`DeliverEvent`) and removes entries for collected listeners during
+        cleanup (`Purge`, `ScheduleCleanup`).
+      - **How to use it.** The documentation lists four ways: an existing manager when the event has one
+        (`PropertyChangedEventManager`, `CollectionChangedEventManager`); the generic
+        `WeakEventManager<TEventSource, TEventArgs>.AddHandler(source, "SettingsChanged", handler)`, which is the
+        easiest but finds the event by name through reflection and is less efficient; your own subclass of
+        `WeakEventManager` with `StartListening`/`StopListening`, which is more code but more efficient; or a
+        third-party manager from NuGet or an MVVM framework.
+      - **The cost.** A weak reference does not release the listener when the screen closes: the listener goes
+        away only when the garbage collector collects it, and until then the handler of a closed screen can
+        still be called. The intermediary adds overhead. The manager does not keep the handler's target alive,
+        so a lambda whose closure nothing else references can be collected early, and the subscription silently
+        stops working; subscribing a method of the listener object itself is safer. When the moment of closing
+        is known, an explicit unsubscribe (in `Closed`/`Unloaded` or in the view model's `Dispose`) is clearer,
+        and weak events are a safety net for listeners that cannot know when they stop being needed.
+    explanation: |
+      The garbage collector frees an object only when it cannot be reached from the roots. An event field is a
+      plain reference to a delegate, and the delegate references its `Target`. So the reference points from the
+      source to the listener. The `WeakEventManager` documentation says so directly: a regular `+=` hookup makes
+      the source hold a reference to the listeners and prevents them from being collected in a timely fashion.
+      If the source lives as long as the listener or shorter, there is no problem. The leak appears when the
+      source lives longer: a singleton, a static event, the main window. That is how the typical MVVM leak
+      looks: every screen that was opened and closed leaves its view model in memory.
+
+      `WeakEventManager` breaks this chain: the strong reference from the source goes only to the manager, and
+      the reference from the manager to the listener is weak and does not prevent collection. WPF itself uses
+      this technique widely: according to the documentation, many parts of data binding already apply the weak
+      event pattern, because a binding source usually lives independently of the target element. The main catch
+      is that weak events solve the listener lifetime problem but make the listener depend on when the garbage
+      collector runs. So they do not replace a deliberate unsubscribe where the screen lifetime is known.
+    linkTitles:
+      - "Weak event patterns in WPF"
+      - "WeakEventManager class"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

@@ -1,0 +1,155 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RM1TY61B28EDS8NB86
+slug: blazor-global-vs-per-page-interactivity-decision
+stack: dotnet
+topic: blazor
+level: lead
+type: situation
+grading: self
+tags: [blazor, render-modes, static-ssr, interactivity, architecture]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/components/render-modes
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/hosting-models
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Глобальная или постраничная интерактивность в Blazor Web App с публичными страницами и админкой: как принять решение?"
+    prompt: |
+      Команда делает Blazor Web App на .NET 10. Основной трафик приходится на публичные страницы с контентом:
+      статьи, описания продуктов, лендинг. Их индексируют поисковики, и открывают их в основном анонимные
+      посетители. Есть и небольшая админка, с которой работают несколько десятков сотрудников: таблицы,
+      диалоги, формы.
+
+      Половина команды хочет глобальную интерактивность (`InteractiveServer` на компоненте `Routes`), «чтобы всё
+      просто работало». Другая половина хочет статические страницы и интерактивность только там, где она нужна.
+
+      Как вы примете решение и какое правило зафиксируете для команды?
+    hint: |
+      Во что обходится серверу и браузеру каждый посетитель публичной страницы в каждом варианте, и каким
+      компонентам интерактивность действительно нужна на всех страницах сразу?
+    answer: |
+      1. **Сравнить цену режимов, а не вкусы.** Статическая отрисовка на сервере (static SSR) - это HTML на
+         каждый запрос без цепи (circuit), без соединения SignalR и без загрузки WebAssembly. Улучшенная навигация,
+         потоковая отрисовка и формы в static SSR при этом работают. Глобальный `InteractiveServer` означает, что
+         каждый читатель статьи открывает цепь, которая держит дерево компонентов и scoped-сервисы в памяти
+         сервера, пока цепь не завершится. Глобальные `InteractiveWebAssembly` или `InteractiveAuto` заставляют
+         загружать среду выполнения .NET и сборки ради страниц, которым они не нужны. Пререндеринг сохраняет HTML
+         для поисковиков, но цена интерактивности остаётся, а компонент инициализируется дважды.
+      2. **Провести инвентаризацию.** Что на публичных страницах реально интерактивно: поиск, баннер cookies,
+         форма комментария? Это отдельные интерактивные «острова» или формы static SSR. В админке интерактивно
+         почти всё. Главный вопрос - layout: нужно ли шапке и меню интерактивное состояние, общее для всех страниц
+         и переживающее навигацию? Это единственный сильный довод за глобальную интерактивность.
+      3. **Принять решение.** По умолчанию - интерактивность на уровне страницы или компонента. Публичные страницы
+         остаются в static SSR. Страницы админки получают `@rendermode InteractiveServer`: пользователей мало, код
+         и доступ к данным остаются на сервере, отдельный web API не нужен. WebAssembly для админки - только если
+         важны задержка или офлайн. Если интерактивным должен быть сам layout админки, глобальную интерактивность
+         включают только для этой области: `App.razor` выбирает режим для `Routes` и `HeadOutlet` по запросу (так в
+         документации сделаны статические страницы внутри интерактивного приложения, в .NET 9 и позже - через
+         `[ExcludeFromInteractiveRouting]` и `HttpContext.AcceptsInteractiveRouting()`). Глобально для всего
+         приложения - только если интерактивными должны быть компоненты layout на каждой странице.
+      4. **Записать ограничения постраничного режима.** Layout остаётся статическим, его интерактивные части - это
+         отдельные компоненты со своим режимом. Параметры через границу режимов должны сериализоваться, поэтому
+         `RenderFragment` (child content) из статического родителя в интерактивный компонент не передаётся.
+         Внутри интерактивного компонента нельзя использовать другой интерактивный режим. Каскадные значения и
+         экземпляры scoped-сервисов не пересекают границу режимов. Компоненты для WebAssembly лежат в проекте
+         `.Client`.
+      5. **Зафиксировать правило.** ADR с критериями выбора. По умолчанию static SSR, а добавление режима
+         отрисовки - осознанное решение с обоснованием в code review. Режим задаётся на странице или на листовом
+         компоненте, а не где попало в глубине дерева. Общие компоненты не предполагают конкретный режим (в
+         .NET 9 и позже есть `RendererInfo` и `AssignedRenderMode`).
+      6. **Проверить цифрами.** Нагрузочный тест публичных страниц в обоих вариантах: число цепей, память на одну
+         цепь, вес страницы, время первого ответа. Заранее назвать условия, при которых решение пересматривают.
+    explanation: |
+      Спор «глобально или постранично» на самом деле о том, кто платит за интерактивность. В постраничном режиме
+      платят только страницы, которым она нужна. В глобальном платит каждый посетитель, включая анонимного
+      читателя статьи: при `InteractiveServer` это цепь в памяти сервера на всё время сессии (и ещё на время
+      удержания отключённой цепи), при WebAssembly - мегабайты загрузки. Для контентной части, где посетителей
+      много, а интерактивности мало, это прямые деньги и хуже время загрузки, без пользы.
+
+      Глобальная интерактивность действительно нужна, когда интерактивным должен быть layout: постраничный режим
+      не делает layout интерактивным, потому что тело страницы передаётся в него как `RenderFragment`, который не
+      пересекает границу режимов. Если такой layout нужен только админке, интерактивность можно включить только
+      для её маршрутов и не платить за неё на публичных страницах.
+
+      Правило надо зафиксировать рано: переключение позже - это не одна строка в `App.razor`. Код, написанный в
+      расчёте на статическую отрисовку (например, работа с `HttpContext`), ломается в интерактивном режиме, а код,
+      который полагается на интерактивный layout, ломается при переходе на постраничный режим. Режимы отрисовки
+      появились в Blazor Web App в .NET 8, атрибут `[ExcludeFromInteractiveRouting]` и свойства `RendererInfo`
+      и `AssignedRenderMode` - в .NET 9, всё описанное верно для .NET 10.
+    linkTitles:
+      - "Режимы отрисовки Blazor"
+      - "Модели размещения Blazor"
+  en:
+    title: "Global or per-page interactivity in a Blazor Web App with public pages and an admin area: how do you decide?"
+    prompt: |
+      A team builds a Blazor Web App on .NET 10. Most traffic goes to public content pages: articles, product
+      descriptions, a landing page. Search engines index them, and mostly anonymous visitors open them. There is
+      also a small admin area used by a few dozen employees: grids, dialogs, forms.
+
+      Half the team wants global interactivity (`InteractiveServer` on the `Routes` component) "so that everything
+      just works". The other half wants static pages with interactivity only where it is needed.
+
+      How do you make the decision, and what rule do you set for the team?
+    hint: |
+      What does each visitor of a public page cost the server and the browser in each option, and which
+      components really need to be interactive on every page at once?
+    answer: |
+      1. **Compare the cost of the modes, not tastes.** Static server-side rendering (static SSR) is HTML per
+         request with no circuit, no SignalR connection and no WebAssembly download. Enhanced navigation, streaming
+         rendering and static SSR forms still work. Global `InteractiveServer` means every reader of an article
+         opens a circuit that keeps the component tree and scoped services in server memory until the circuit
+         ends. Global `InteractiveWebAssembly` or `InteractiveAuto` makes browsers download the .NET runtime and
+         assemblies for pages that do not need them. Prerendering keeps the HTML for search engines, but the
+         interactive cost stays, and the component is initialized twice.
+      2. **Take an inventory.** What on the public pages is really interactive: a search box, a cookie banner, a
+         comment form? These are separate interactive "islands" or static SSR forms. In the admin area almost
+         everything is interactive. The key question is the layout: do the header and menu need interactive
+         state shared by all pages that survives navigation? That is the only strong argument for global
+         interactivity.
+      3. **Decide.** The default is per-page or per-component interactivity. Public pages stay static SSR. Admin
+         pages get `@rendermode InteractiveServer`: there are few users, code and data access stay on the server,
+         and no separate web API is needed. WebAssembly for the admin area only if latency or offline use matters.
+         If the admin layout itself must be interactive, enable global interactivity only for that area:
+         `App.razor` picks the render mode for `Routes` and `HeadOutlet` from the request (this is how the docs
+         build static pages inside an interactive app, in .NET 9 and later with `[ExcludeFromInteractiveRouting]`
+         and `HttpContext.AcceptsInteractiveRouting()`). Global for the whole app only if layout components must
+         be interactive on every page.
+      4. **Write down the limits of the per-page mode.** The layout stays static, and its interactive parts are
+         separate components with their own render mode. Parameters crossing a render mode boundary must be
+         serializable, so a `RenderFragment` (child content) from a static parent cannot be passed to an
+         interactive component. Inside an interactive component you cannot use a different interactive mode.
+         Cascading values and scoped service instances do not cross the render mode boundary. Components for
+         WebAssembly live in the `.Client` project.
+      5. **Set the rule.** An ADR with the decision criteria. Static SSR by default, and adding a render mode is a
+         deliberate decision justified in code review. The render mode is set on a page or a leaf component, not
+         ad hoc deep in the tree. Shared components do not assume a specific mode (.NET 9 and later provide
+         `RendererInfo` and `AssignedRenderMode`).
+      6. **Check it with numbers.** Load test the public pages in both options: number of circuits, memory per
+         circuit, page weight, time to first byte. Agree up front on the conditions that reopen the decision.
+    explanation: |
+      The "global or per page" argument is really about who pays for interactivity. In the per-page mode only the
+      pages that need it pay. In the global mode every visitor pays, including an anonymous article reader: with
+      `InteractiveServer` it is a circuit in server memory for the whole session (plus the retention time of a
+      disconnected circuit), with WebAssembly it is megabytes of download. For the content part, with many
+      visitors and little interactivity, this is real money and slower loading for no benefit.
+
+      Global interactivity is truly needed when the layout must be interactive: the per-page mode does not make
+      the layout interactive, because the page body is passed to it as a `RenderFragment`, which cannot cross a
+      render mode boundary. If only the admin area needs such a layout, interactivity can be enabled for its
+      routes alone, without paying for it on public pages.
+
+      Set the rule early: switching later is not a one-line change in `App.razor`. Code written for static
+      rendering (for example, code that uses `HttpContext`) breaks in interactive mode, and code that relies on an
+      interactive layout breaks when you move to the per-page mode. Render modes appeared in Blazor Web Apps in
+      .NET 8, the `[ExcludeFromInteractiveRouting]` attribute and the `RendererInfo` and `AssignedRenderMode`
+      properties in .NET 9, and everything described here holds for .NET 10.
+    linkTitles:
+      - "ASP.NET Core Blazor render modes"
+      - "ASP.NET Core Blazor hosting models"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

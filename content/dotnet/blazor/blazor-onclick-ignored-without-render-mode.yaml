@@ -1,0 +1,116 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RMNY5YW5C54QGHKRGY
+slug: blazor-onclick-ignored-without-render-mode
+stack: dotnet
+topic: blazor
+level: middle
+type: single
+grading: auto
+tags: [blazor, render-modes, static-ssr, event-handling]
+code:
+  language: razor
+  harness: none
+  source: |
+    @page "/counter"
+
+    <p>Count: @count</p>
+    <button @onclick="Increment">+1</button>
+
+    @code {
+        private int count;
+
+        private void Increment() => count++;
+    }
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/components/render-modes
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/components/event-handling
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему кнопка с @onclick в Blazor Web App ничего не делает?
+    prompt: |
+      Приложение Blazor Web App на .NET 10 создано из шаблона с интерактивностью Interactive Server на уровне
+      отдельных страниц и компонентов. В `Program.cs` вызваны `AddInteractiveServerComponents()` и
+      `AddInteractiveServerRenderMode()`, а в `App.razor` компоненты `Routes` и `HeadOutlet` объявлены без
+      `@rendermode`. Разработчик добавил страницу, показанную в коде.
+
+      Страница открывается и показывает `Count: 0`, но нажатие кнопки ничего не меняет. Какая причина наиболее вероятна?
+    hint: Что должно работать в браузере после загрузки страницы, чтобы нажатие дошло до C#-метода, и где это включается для конкретной страницы?
+    options:
+      a: "Метод `Increment` объявлен как `private`, а обработчик для `@onclick` должен быть `public`."
+      b: "У страницы нет режима отрисовки, а глобальная интерактивность не включена, поэтому страница отрисована статически на сервере (static SSR): браузер получил обычный HTML без подключённых обработчиков событий."
+      c: "Обработчик `@onclick` должен возвращать `Task`: синхронный метод `void` не вызывается."
+      d: "В обработчике после изменения поля не вызван `StateHasChanged`, поэтому значение меняется, но интерфейс не перерисовывается."
+    optionExplanations:
+      a: "Обработчик события может быть закрытым методом компонента: разметка компилируется в код того же класса, и `private` ему доступен."
+      c: "`@onclick` принимает и синхронные методы `void`, и асинхронные методы, возвращающие `Task`. Тип возврата здесь ни на что не влияет."
+      d: "`ComponentBase` сам вызывает `StateHasChanged` после обработчика события, который вызвал рендерер. К тому же здесь обработчик вообще не вызывается: на странице нет интерактивности."
+    answer: "Страница отрисована в режиме static SSR, потому что ей не назначен интерактивный режим отрисовки и глобальной интерактивности нет."
+    explanation: |
+      В Blazor Web App (начиная с .NET 8, где появились режимы отрисовки, и так же в .NET 10) компонент без
+      режима отрисовки по умолчанию отрисовывается статически на сервере. Сервер один раз превращает компонент в
+      HTML и отправляет его в ответе, после чего экземпляр компонента больше не существует. Нет ни соединения
+      SignalR (circuit), ни среды выполнения WebAssembly, поэтому событию `click` некуда попасть: атрибут
+      `@onclick` не превращается в работающий обработчик, и счётчик остаётся `0`.
+
+      Вызовы `AddInteractiveServerComponents()` и `AddInteractiveServerRenderMode()` только разрешают режим
+      Interactive Server в приложении, но ни к одному компоненту его не применяют. Исправление - назначить режим:
+      на странице директивой `@rendermode InteractiveServer` или глобально, указав
+      `@rendermode="InteractiveServer"` для `Routes` и `HeadOutlet` в `App.razor`. Глобальная интерактивность
+      делает интерактивными все страницы, поэтому для статических страниц с контентом обычно выбирают режим на
+      уровне отдельной страницы.
+    linkTitles:
+      - "Режимы отрисовки Blazor"
+      - "Обработка событий в Blazor"
+  en:
+    title: Why does a button with @onclick do nothing in a Blazor Web App?
+    prompt: |
+      A Blazor Web App on .NET 10 was created from the template with Interactive Server interactivity per page
+      and component. `Program.cs` calls `AddInteractiveServerComponents()` and `AddInteractiveServerRenderMode()`,
+      and `App.razor` declares the `Routes` and `HeadOutlet` components without `@rendermode`. A developer added
+      the page shown in the code.
+
+      The page opens and shows `Count: 0`, but clicking the button changes nothing. What is the most likely cause?
+    hint: What must be running in the browser after the page loads for a click to reach a C# method, and where is that switched on for a particular page?
+    options:
+      a: "The `Increment` method is `private`, while an `@onclick` handler must be `public`."
+      b: "The page has no render mode and global interactivity is not enabled, so it is rendered with static server-side rendering (static SSR): the browser received plain HTML with no event handlers attached."
+      c: "An `@onclick` handler must return `Task`: a synchronous `void` method is not called."
+      d: "The handler does not call `StateHasChanged` after changing the field, so the value changes but the UI is not re-rendered."
+    optionExplanations:
+      a: "An event handler can be a private method of the component: the markup compiles into code of the same class, so `private` is accessible."
+      c: "`@onclick` accepts both synchronous `void` methods and asynchronous methods that return `Task`. The return type changes nothing here."
+      d: "`ComponentBase` calls `StateHasChanged` itself after an event handler invoked by the renderer. Besides, here the handler is not called at all: the page has no interactivity."
+    answer: "The page is rendered with static SSR because it has no interactive render mode and there is no global interactivity."
+    explanation: |
+      In a Blazor Web App (since .NET 8, where render modes appeared, and the same in .NET 10) a component with no
+      render mode is rendered statically on the server by default. The server turns the component into HTML once
+      and sends it in the response, after which the component instance no longer exists. There is no SignalR
+      connection (circuit) and no WebAssembly runtime, so a `click` event has nowhere to go: the `@onclick`
+      attribute does not become a working handler, and the counter stays at `0`.
+
+      The `AddInteractiveServerComponents()` and `AddInteractiveServerRenderMode()` calls only enable the
+      Interactive Server mode in the app; they do not apply it to any component. The fix is to assign a mode: on
+      the page with the `@rendermode InteractiveServer` directive, or globally by setting
+      `@rendermode="InteractiveServer"` on `Routes` and `HeadOutlet` in `App.razor`. Global interactivity makes
+      every page interactive, so for static content pages a per-page mode is usually chosen.
+    linkTitles:
+      - "ASP.NET Core Blazor render modes"
+      - "ASP.NET Core Blazor event handling"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"
+  noRunReason: "Razor component markup: a Blazor page needs the ASP.NET Core host and renderer, which the BCL-only sandbox does not provide."

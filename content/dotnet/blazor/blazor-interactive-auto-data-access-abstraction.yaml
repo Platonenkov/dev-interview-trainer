@@ -1,0 +1,143 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RM2N88NW0SBM0X6QHT
+slug: blazor-interactive-auto-data-access-abstraction
+stack: dotnet
+topic: blazor
+level: senior
+type: open
+grading: self
+tags: [blazor, render-modes, interactive-auto, dependency-injection, httpclient]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/components/render-modes
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/call-web-api
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/blazor-ef-core
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как спроектировать доступ к данным для компонента Blazor в режиме InteractiveAuto?
+    prompt: |
+      В Blazor Web App на .NET 10 есть страница `Orders` с директивой `@rendermode InteractiveAuto`. Она должна
+      показывать заказы вошедшего пользователя, которые хранятся в SQL Server и читаются через EF Core.
+
+      Как вы спроектируете доступ к данным для этого компонента, чтобы он работал везде, где может выполняться?
+      Объясните, в каком проекте лежит каждая часть и почему.
+    hint: "Кто и где создаёт экземпляр этого компонента в разные моменты жизни страницы и до чего этот код может дотянуться?"
+    answer: |
+      1. **Понять, где выполняется код.** В `InteractiveAuto` компонент сначала работает интерактивно на сервере
+         (в circuit), пока файлы WebAssembly загружаются в фоне и кэшируются. При следующих посещениях новый
+         экземпляр создаётся уже в WebAssembly в браузере. Уже отрисованный компонент режим не меняет. Кроме того,
+         по умолчанию компонент предварительно отрисовывается на сервере. Поэтому он лежит в проекте `.Client` и не
+         может ссылаться на `DbContext` или другой серверный код.
+      2. **Зависеть от интерфейса.** Компонент внедряет `IOrderService` с методами вроде
+         `Task<IReadOnlyList<OrderDto>> GetMyOrdersAsync(CancellationToken)`. Интерфейс и DTO объявлены в клиентском
+         проекте или в общей библиотеке. Наружу выходят DTO, а не сущности EF Core.
+      3. **Серверная реализация.** `ServerOrderService` в серверном проекте читает базу напрямую через EF Core, лучше
+         через `IDbContextFactory<T>` с коротким контекстом на одну операцию. Она регистрируется в `Program.cs`
+         сервера и обслуживает и пререндеринг, и режим `InteractiveServer`.
+      4. **Клиентская реализация.** `ClientOrderService` в клиентском проекте вызывает веб-API через `HttpClient`
+         (`GetFromJsonAsync`). Она регистрируется в `Program.cs` клиента вместе с `HttpClient`, у которого
+         `BaseAddress` указывает на адрес приложения.
+      5. **Конечная точка API.** Сервер публикует конечную точку (через `MapGet` или контроллер), которая делегирует
+         той же серверной реализации, чтобы логика запроса была в одном месте.
+      6. **Безопасность.** Конечная точка доступна любому, кто знает её адрес, поэтому аутентификация, авторизация и
+         проверка, что пользователь получает только свои заказы, выполняются на самой конечной точке. В клиентском
+         проекте нет строк подключения и секретов: его сборки скачиваются в браузер.
+      7. **Двойная загрузка.** Данные, загруженные при пререндеринге, иначе загрузятся ещё раз при переходе в
+         интерактивный режим. Их переносят через `PersistentComponentState` (в .NET 10 также декларативно, атрибутом
+         `[PersistentState]`) или отключают пререндеринг для этого компонента.
+    explanation: |
+      Главная особенность `InteractiveAuto` в том, что один и тот же код компонента выполняется в двух разных средах:
+      на сервере с полным доступом к базе и в браузере, где доступна только сеть. Интерфейс с двумя реализациями
+      переносит выбор среды из компонента в контейнер внедрения зависимостей: каждый `Program.cs` регистрирует свою
+      реализацию, а компонент об этом не знает. Ветвиться по `RendererInfo.Name` внутри компонента не нужно.
+
+      Почему простые варианты не подходят:
+
+      - `DbContext` прямо в компоненте не заработает в WebAssembly: браузер не может открыть соединение с SQL Server,
+        а строка подключения попала бы в скачиваемые сборки.
+      - Если зарегистрировать сервис только в клиентском проекте, упадёт серверная сторона: при пререндеринге и в
+        режиме `InteractiveServer` контейнер сервера не найдёт реализацию интерфейса.
+      - Вариант «везде `HttpClient`» работает, но на сервере приложение вызывает само себя по HTTP: лишний сетевой
+        переход, а серверной регистрации нужен абсолютный базовый адрес API. Запрос отправляет сервер, а не браузер
+        пользователя, поэтому сведения о пользователе сами с ним не передаются, и это приходится решать отдельно.
+
+      `IDbContextFactory<T>` нужен потому, что в режиме `InteractiveServer` область внедрения зависимостей живёт
+      столько же, сколько circuit: `DbContext`, зарегистрированный через `AddDbContext` (время жизни `Scoped`),
+      держался бы долго и мог бы использоваться одновременно из нескольких обработчиков, а `DbContext` не
+      потокобезопасен. Обе реализации должны одинаково вести себя при ошибках, отмене и постраничном выводе, и это
+      стоит проверить тестами для каждой из них.
+
+      Режимы отрисовки появились в .NET 8, описанное поведение верно для .NET 10.
+    linkTitles:
+      - "Режимы отрисовки Blazor"
+      - "Вызов веб-API из приложения Blazor"
+      - "Blazor и Entity Framework Core"
+  en:
+    title: How do you design data access for a Blazor component in the InteractiveAuto render mode?
+    prompt: |
+      A Blazor Web App on .NET 10 has an `Orders` page with the `@rendermode InteractiveAuto` directive. It must
+      show the orders of the signed-in user, which are stored in SQL Server and read through EF Core.
+
+      How do you design data access for this component so that it works everywhere it can run? Explain which
+      project holds each piece and why.
+    hint: "Who creates an instance of this component, and where, at different moments in the life of the page, and what can that code reach?"
+    answer: |
+      1. **Know where the code runs.** With `InteractiveAuto` the component first runs interactively on the server
+         (in a circuit) while the WebAssembly files download in the background and are cached. On later visits a new
+         instance is created in WebAssembly in the browser. A component already rendered never changes its mode.
+         The component is also prerendered on the server by default. So it lives in the `.Client` project and cannot
+         reference a `DbContext` or other server code.
+      2. **Depend on an interface.** The component injects `IOrderService` with methods such as
+         `Task<IReadOnlyList<OrderDto>> GetMyOrdersAsync(CancellationToken)`. The interface and the DTOs are declared
+         in the client project or in a shared library. DTOs cross the boundary, not EF Core entities.
+      3. **Server implementation.** `ServerOrderService` in the server project reads the database directly through
+         EF Core, preferably with `IDbContextFactory<T>` and a short-lived context per operation. It is registered
+         in the server `Program.cs` and serves both prerendering and the `InteractiveServer` mode.
+      4. **Client implementation.** `ClientOrderService` in the client project calls a web API through `HttpClient`
+         (`GetFromJsonAsync`). It is registered in the client `Program.cs` together with an `HttpClient` whose
+         `BaseAddress` points to the app.
+      5. **API endpoint.** The server exposes an endpoint (with `MapGet` or a controller) that delegates to the same
+         server implementation, so the query logic lives in one place.
+      6. **Security.** Anyone who knows its address can reach the endpoint, so authentication, authorization and the
+         check that users get only their own orders happen on the endpoint itself. The client project holds no
+         connection strings or secrets: its assemblies are downloaded to the browser.
+      7. **Double loading.** Data loaded during prerendering would otherwise be loaded again when the component
+         becomes interactive. Carry it over with `PersistentComponentState` (in .NET 10 also declaratively with the
+         `[PersistentState]` attribute) or disable prerendering for this component.
+    explanation: |
+      The key property of `InteractiveAuto` is that the same component code runs in two different environments: on
+      the server with full access to the database, and in the browser where only the network is available. An
+      interface with two implementations moves the choice of environment from the component into the dependency
+      injection container: each `Program.cs` registers its own implementation, and the component does not know which
+      one it gets. There is no need to branch on `RendererInfo.Name` inside the component.
+
+      Why the simple options fail:
+
+      - A `DbContext` used directly in the component cannot work in WebAssembly: the browser cannot open a
+        connection to SQL Server, and the connection string would end up in the downloaded assemblies.
+      - If the service is registered only in the client project, the server side breaks: during prerendering and in
+        the `InteractiveServer` mode the server container finds no implementation of the interface.
+      - "`HttpClient` everywhere" works, but on the server the app calls itself over HTTP: an extra network hop, and
+        the server registration needs the absolute base address of the API. The request is sent by the server, not
+        by the user's browser, so information about the user does not travel with it on its own and has to be
+        handled separately.
+
+      `IDbContextFactory<T>` matters because in the `InteractiveServer` mode a dependency injection scope lives as long
+      as the circuit: a `DbContext` registered with `AddDbContext` (lifetime `Scoped`) would live for a long time and
+      could be used concurrently by several handlers, while `DbContext` is not thread-safe. Both implementations must
+      behave the same on errors, cancellation and paging, which is worth covering with tests for each of them.
+
+      Render modes appeared in .NET 8, and the behaviour described here holds for .NET 10.
+    linkTitles:
+      - "ASP.NET Core Blazor render modes"
+      - "Call a web API from an ASP.NET Core Blazor app"
+      - "ASP.NET Core Blazor with Entity Framework Core (EF Core)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

@@ -1,0 +1,149 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RRNFWTGK5HQ4JG9C3X
+slug: wpf-binding-target-must-be-dependency-property
+stack: dotnet
+topic: ui-dotnet
+level: middle
+type: single
+grading: auto
+tags: [wpf, data-binding, dependency-property]
+code:
+  language: csharp
+  harness: none
+  source: |
+    public class OrderCard : UserControl
+    {
+        public static readonly DependencyProperty SubtitleProperty =
+            DependencyProperty.Register(
+                nameof(Subtitle), typeof(string), typeof(OrderCard),
+                new PropertyMetadata(string.Empty));
+
+        public string Subtitle
+        {
+            get => (string)GetValue(SubtitleProperty);
+            set => SetValue(SubtitleProperty, value);
+        }
+
+        public string Title { get; set; }
+    }
+
+    public class OrderViewModel : INotifyPropertyChanged
+    {
+        private string _customerName;
+
+        public event PropertyChangedEventHandler PropertyChanged;
+
+        public string CustomerName
+        {
+            get => _customerName;
+            set
+            {
+                _customerName = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CustomerName)));
+            }
+        }
+    }
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/desktop/wpf/properties/dependency-properties-overview
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/desktop/wpf/data/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/desktop/wpf/properties/custom-dependency-properties
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какое свойство в WPF может быть целью привязки {Binding}?
+    prompt: |
+      Пользовательский элемент `OrderCard` и модель представления `OrderViewModel` объявлены так, как в коде
+      к вопросу. В разметке окна WPF `DataContext` - экземпляр `OrderViewModel`, и нужно написать привязку вида
+      `Property="{Binding CustomerName}"`.
+
+      Какое свойство может стоять слева, то есть быть целью (target) такой привязки?
+    hint: "Как механизм привязки записывает значение в целевое свойство: через обычный сеттер CLR или каким-то другим путём?"
+    options:
+      a: "`OrderCard.Title` - обычное автосвойство CLR с публичным сеттером"
+      b: "`OrderCard.Subtitle` - свойство зависимостей, зарегистрированное через `DependencyProperty.Register`"
+      c: "`OrderViewModel.CustomerName`, потому что его сеттер вызывает `PropertyChanged`"
+      d: "Любое из трёх: целью привязки может быть любое публичное свойство с сеттером"
+    optionExplanations:
+      a: "`Title` не является свойством зависимостей, поэтому привязку на нём установить нельзя: при загрузке такой разметки WPF сообщает об ошибке (во время выполнения это `XamlParseException`). Чтобы привязывать `Title`, его нужно зарегистрировать как свойство зависимостей."
+      c: "`INotifyPropertyChanged` делает свойство хорошим источником привязки: механизм привязки узнаёт о его изменениях. Но `OrderViewModel` не наследует `DependencyObject`, а `CustomerName` не свойство зависимостей, поэтому целью привязки оно быть не может."
+      d: "Требования к источнику и к цели разные. Источником может быть почти любое публичное свойство, а цель обязана быть свойством зависимостей объекта `DependencyObject`, поэтому `Title` и `CustomerName` не подходят."
+    answer: "`OrderCard.Subtitle`: целью привязки может быть только свойство зависимостей объекта `DependencyObject`."
+    explanation: |
+      У привязки WPF две стороны с разными требованиями. Цель - свойство зависимостей (`DependencyProperty`)
+      объекта, наследующего `DependencyObject`. Привязка хранится в системе свойств зависимостей как выражение,
+      которое поставляет значение свойства, а сама система учитывает приоритеты значений и сообщает об изменениях
+      цели, что нужно для режима `TwoWay`. У обычного свойства CLR такой инфраструктуры нет, поэтому
+      `{Binding}` на нём приводит к ошибке при загрузке разметки (`XamlParseException`).
+
+      Источник может быть почти любым: публичное свойство обычного объекта CLR, свойство зависимостей, элемент
+      коллекции. Чтобы цель получала изменения источника, он реализует `INotifyPropertyChanged` или сам является
+      свойством зависимостей. Поэтому правильная разметка - `<local:OrderCard Subtitle="{Binding CustomerName}" />`:
+      `Subtitle` здесь цель, а `CustomerName` - источник.
+
+      Типичная ошибка автора элемента управления - объявить свойство вроде `Title` как обычное свойство CLR.
+      Пользователи элемента не смогут его привязать, пока его не зарегистрируют через `DependencyProperty.Register`.
+      Ещё одна деталь касается обёртки CLR (`get`/`set` свойства `Subtitle`). Загрузчик XAML может вызывать
+      `SetValue` напрямую, минуя обёртку, а значение из привязки тоже попадает в свойство через систему свойств,
+      а не через сеттер. Поэтому в обёртке не должно быть ничего, кроме вызовов `GetValue` и `SetValue`.
+    linkTitles:
+      - "Обзор свойств зависимостей"
+      - "Обзор привязки данных в WPF"
+      - "Пользовательские свойства зависимостей"
+  en:
+    title: Which property in WPF can be the target of a {Binding}?
+    prompt: |
+      The custom control `OrderCard` and the view model `OrderViewModel` are declared as in the code of the
+      question. In the markup of a WPF window the `DataContext` is an `OrderViewModel` instance, and you need to
+      write a binding of the form `Property="{Binding CustomerName}"`.
+
+      Which property can stand on the left, that is, be the target of such a binding?
+    hint: "How does the binding engine write a value into the target property: through a plain CLR setter or some other way?"
+    options:
+      a: "`OrderCard.Title`, a plain CLR auto-property with a public setter"
+      b: "`OrderCard.Subtitle`, a dependency property registered with `DependencyProperty.Register`"
+      c: "`OrderViewModel.CustomerName`, because its setter raises `PropertyChanged`"
+      d: "Any of the three: any public property with a setter can be a binding target"
+    optionExplanations:
+      a: "`Title` is not a dependency property, so a binding cannot be set on it: when such markup is loaded, WPF reports an error (at run time it is a `XamlParseException`). To bind `Title`, it has to be registered as a dependency property."
+      c: "`INotifyPropertyChanged` makes a property a good binding source: the binding engine learns about its changes. But `OrderViewModel` does not derive from `DependencyObject` and `CustomerName` is not a dependency property, so it cannot be a binding target."
+      d: "The source and the target have different requirements. Almost any public property can be a source, but the target must be a dependency property of a `DependencyObject`, so `Title` and `CustomerName` do not qualify."
+    answer: "`OrderCard.Subtitle`: only a dependency property of a `DependencyObject` can be a binding target."
+    explanation: |
+      A WPF binding has two sides with different requirements. The target is a dependency property
+      (`DependencyProperty`) of an object derived from `DependencyObject`. The binding is stored in the dependency
+      property system as an expression that supplies the property value, and that system applies value precedence
+      and reports changes of the target, which `TwoWay` mode needs. A plain CLR property has no such
+      infrastructure, so a `{Binding}` on it fails when the markup is loaded (`XamlParseException`).
+
+      The source can be almost anything: a public property of a plain CLR object, a dependency property, a
+      collection item. For the target to receive source changes, the source implements `INotifyPropertyChanged` or
+      is itself a dependency property. So the correct markup is `<local:OrderCard Subtitle="{Binding CustomerName}" />`:
+      `Subtitle` is the target here and `CustomerName` is the source.
+
+      A typical mistake of a control author is to declare a property such as `Title` as a plain CLR property.
+      Users of the control cannot bind it until it is registered with `DependencyProperty.Register`. One more
+      detail concerns the CLR wrapper (the `get`/`set` of `Subtitle`). The XAML loader may call `SetValue`
+      directly and bypass the wrapper, and a value from a binding also reaches the property through the property
+      system, not through the setter. So the wrapper must contain nothing but the `GetValue` and `SetValue` calls.
+    linkTitles:
+      - "Dependency properties overview"
+      - "Data binding overview in WPF"
+      - "Custom dependency properties"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  noRunReason: The code declares a WPF UserControl and is meant to be used from XAML; the sandbox has no WPF.

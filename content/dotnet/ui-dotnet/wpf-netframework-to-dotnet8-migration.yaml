@@ -1,0 +1,189 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RR0A2X9TAMX26FV6C7
+slug: wpf-netframework-to-dotnet8-migration
+stack: dotnet
+topic: ui-dotnet
+level: lead
+type: situation
+grading: self
+tags: [wpf, migration, net-framework, upgrade-assistant, planning]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/core/porting/upgrade-assistant-overview
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/porting/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/porting/net-framework-tech-unavailable
+    lang: en
+    kind: docs
+  - url: https://dotnet.microsoft.com/en-us/platform/support/policy/dotnet-core
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Руководство хочет перевести WPF-приложение с .NET Framework 4.8 на .NET 8 за квартал. Как оценить и спланировать переход?
+    prompt: |
+      Ваша команда сопровождает корпоративное WPF-приложение на .NET Framework 4.8: около 30 проектов в решении,
+      пакет сторонних элементов управления, несколько библиотек, которые писали в разные годы. Руководство
+      ставит задачу перевести приложение на .NET 8 в этом квартале. Вы технический лидер команды.
+      Как вы оцените задачу, что скажете руководству и как организуете сам переход?
+    hint: |
+      Где в таком приложении настоящий риск: в самом WPF или в том, что его окружает? И можно ли разбить переход
+      на шаги, каждый из которых можно выпустить?
+    answer: |
+      1. **Уточнить цель, версию и срок.** Выяснить, зачем нужен переход (библиотека, которой нужен .NET,
+         производительность, безопасность, конец поддержки чего-то у поставщика) и что значит «перевести за
+         квартал»: выпуск для всех пользователей или пилот. Сразу проверить жизненный цикл: поддержка .NET 8 (LTS)
+         заканчивается 10 ноября 2026 года, поэтому цель «.NET 8» уже вне поддержки или вот-вот из неё выйдет, а
+         Microsoft прямо рекомендует не использовать неподдерживаемые версии. .NET 10 - LTS с поддержкой до ноября
+         2028 года. Предложить руководству цель .NET 10, если её не блокирует какая-то зависимость: обычно «на
+         .NET 8» означает «на поддерживаемый .NET». Срок называть после инвентаризации на одну-две недели, а не до неё.
+      2. **Провести инвентаризацию.** Для каждого проекта: формат файла проекта (старый `csproj`,
+         `packages.config`), целевая платформа, зависимости. Прогнать анализ решения и построить граф зависимостей
+         проектов. .NET Upgrade Assistant официально объявлен устаревшим; вместо него Microsoft предлагает агент
+         GitHub Copilot modernization в Visual Studio 2026 и Visual Studio 2022 17.14.16 и новее: он анализирует
+         проекты и зависимости и строит пошаговый план миграции. Заранее проверить, разрешает ли политика компании
+         такой инструмент. Отдельно выписать:
+         - **сторонние пакеты элементов управления** и другие закрытые библиотеки: есть ли версия для
+           `net8.0-windows` или `net10.0-windows`, покрывает ли её лицензия, какие критические изменения в
+           мажорной версии поставщика. Часто это и есть критический путь;
+         - **NuGet-пакеты только для .NET Framework**: через совместимость они могут собраться с предупреждением
+           `NU1701`, но упасть во время выполнения;
+         - **технологии, которых нет в .NET**: создание дополнительных `AppDomain`, .NET Remoting, Code Access
+           Security, серверный WCF, Windows Workflow Foundation, ASP.NET на `System.Web`. Клиент WCF работает
+           через пакеты `System.ServiceModel.*`;
+         - **различия в поведении, которые компилируются без ошибок**: `Process.Start` для URL или документа
+           требует `UseShellExecute = true`, кодовые страницы вроде windows-1251 требуют регистрации
+           `CodePagesEncodingProvider`, в .NET 9 и далее `BinaryFormatter` всегда выбрасывает
+           `PlatformNotSupportedException`, секции `app.config`;
+         - **развёртывание**: .NET Framework 4.8 входит в Windows, а для .NET на каждой машине нужен Windows
+           Desktop Runtime или публикация self-contained. Проверить установщик, механизм обновлений и политики IT.
+      3. **Классифицировать риски.** По каждому пункту решить: обновить, заменить, изолировать или убрать.
+         Блокеры определяют, реален ли срок. Если для пакета элементов управления нет поддерживаемой версии, это
+         отдельный проект со своей оценкой.
+      4. **Переводить по проектам, снизу вверх, в основной ветке.**
+         - Перевести все проекты в SDK-формат, оставив `net48` (для WPF-проектов `<UseWPF>true</UseWPF>`), и
+           `PackageReference`. Это выпускается как обычный релиз, пользователи ничего не замечают.
+         - Библиотеки в порядке графа зависимостей перевести на `netstandard2.0` или на несколько целей
+           (`net48;net10.0-windows`): выпускаемое приложение остаётся на `net48`, а библиотеки уже собираются и
+           тестируются под .NET.
+         - Последним переключить проект приложения на `net10.0-windows` (или `net8.0-windows`, если руководство
+           осознанно выбрало его). WPF в .NET работает только в Windows. Процесс выполняется в одной среде
+           выполнения, поэтому этот шаг единый, но к этому моменту он небольшой.
+         - Без долгоживущей ветки и без заморозки разработки функций.
+      5. **Проверить.** Модульные тесты под обеими целями, дымовые или UI-тесты ключевых сценариев, сравнение
+         производительности и памяти, затем пилотная группа пользователей с возможностью вернуться на старую
+         сборку, затем общий выпуск.
+      6. **Доложить руководству.** План с этапами (инвентаризация, SDK-формат, библиотеки, приложение, пилот,
+         выпуск), выбор целевой версии с обоснованием, явные блокеры и то, что реально успеть за квартал. Нередко
+         за квартал успевают всё, кроме выпуска на всех пользователей.
+    explanation: |
+      Сам WPF переносится хорошо: в .NET это тот же фреймворк с почти тем же API, только целевая платформа
+      `net8.0-windows` или `net10.0-windows` и работа только в Windows. Риск лежит вокруг него: в закрытых
+      пакетах сторонних поставщиков, в технологиях .NET Framework, которых в .NET нет, в старом формате проектов
+      и в различиях поведения, которые компилятор не покажет. Поэтому оценка начинается с инвентаризации, а не
+      с запуска инструмента конвертации.
+
+      Переход «одним махом» означает долгую ветку, которая расходится с основной, все проблемы одновременно и
+      ни одного промежуточного состояния, которое можно выпустить. Переход по проектам с несколькими целевыми
+      платформами держит продукт готовым к выпуску каждую неделю и выносит блокеры на поверхность в начале, а не
+      в конце квартала. Инструменты (агент GitHub Copilot modernization, который пришёл на смену устаревшему
+      .NET Upgrade Assistant) автоматизируют механическую часть: файлы проектов, целевую платформу, замену
+      устаревших API, исправление ошибок сборки. Но они не решат за команду, чем заменить серверный WCF или
+      Remoting, и не найдут различия поведения, которые проявляются только во время выполнения: их находят
+      инвентаризация и тесты.
+
+      Задача лидера здесь - превратить срок, названный руководством, в решение на основе данных: что
+      блокирует, сколько это стоит и что можно выпустить к концу квартала. Выбор целевой версии тоже часть этого
+      решения: переход на версию, которая уже вне поддержки или вот-вот из неё выйдет, оставляет приложение без
+      исправлений безопасности и почти сразу потребует следующего перехода.
+    linkTitles:
+      - "Обзор .NET Upgrade Assistant"
+      - "Обзор обновления приложений .NET"
+      - "Технологии .NET Framework, недоступные в .NET"
+      - "Политика поддержки .NET"
+  en:
+    title: Management wants a .NET Framework 4.8 WPF app moved to .NET 8 this quarter. How do you assess and plan the move?
+    prompt: |
+      Your team maintains a line-of-business WPF application on .NET Framework 4.8: about 30 projects in the
+      solution, a third-party control suite and several libraries written over many years. Management wants the
+      application moved to .NET 8 this quarter. You are the team's tech lead.
+      How do you assess the task, what do you tell management, and how do you organise the move itself?
+    hint: |
+      Where is the real risk in such an application: in WPF itself or in what surrounds it? And can the move be
+      split into steps that can each be shipped?
+    answer: |
+      1. **Clarify the goal, the version and the deadline.** Find out why the move is needed (a library that
+         requires .NET, performance, security, the end of vendor support for something) and what "moved this
+         quarter" means: shipped to every user or a pilot. Check the lifecycle right away: support for .NET 8 (LTS)
+         ends on November 10, 2026, so a ".NET 8" target is already out of support or about to leave it, and
+         Microsoft explicitly recommends against using out-of-support versions. .NET 10 is an LTS release
+         supported until November 2028. Propose .NET 10 to management unless a dependency blocks it: "to .NET 8"
+         usually means "to a supported .NET". Give a date after a one- to two-week inventory, not before.
+      2. **Take an inventory.** For each project: project file format (old-style `csproj`, `packages.config`),
+         target framework, dependencies. Run an analysis of the solution and build the project dependency graph.
+         The .NET Upgrade Assistant is officially deprecated; Microsoft points to the GitHub Copilot modernization
+         agent in Visual Studio 2026 and Visual Studio 2022 17.14.16 or later instead: it analyses projects and
+         dependencies and produces a step-by-step migration plan. Check up front whether company policy allows
+         such a tool. List separately:
+         - **third-party control suites** and other closed-source libraries: is there a version for
+           `net8.0-windows` or `net10.0-windows`, does the licence cover it, what breaking changes come with the
+           vendor's major version. This is often the critical path;
+         - **NuGet packages that target only .NET Framework**: through compatibility they may build with warning
+           `NU1701` but fail at run time;
+         - **technologies that do not exist in .NET**: creating additional `AppDomain` instances, .NET Remoting,
+           Code Access Security, WCF server, Windows Workflow Foundation, ASP.NET on `System.Web`. A WCF client
+           works through the `System.ServiceModel.*` packages;
+         - **behaviour differences that compile without errors**: `Process.Start` for a URL or a document needs
+           `UseShellExecute = true`, code pages such as windows-1251 need `CodePagesEncodingProvider` to be
+           registered, from .NET 9 onwards `BinaryFormatter` always throws `PlatformNotSupportedException`,
+           `app.config` sections;
+         - **deployment**: .NET Framework 4.8 ships with Windows, while .NET needs the Windows Desktop Runtime on
+           every machine or a self-contained publish. Check the installer, the update mechanism and IT policies.
+      3. **Classify the risks.** For each item decide: upgrade, replace, isolate or remove. Blockers decide
+         whether the deadline is realistic. If a control suite has no supported version, that is a separate
+         project with its own estimate.
+      4. **Upgrade project by project, bottom up, in the main branch.**
+         - Convert every project to the SDK format while keeping `net48` (`<UseWPF>true</UseWPF>` for WPF projects)
+           and `PackageReference`. This ships as an ordinary release, and users notice nothing.
+         - Move the libraries, in dependency graph order, to `netstandard2.0` or to several targets
+           (`net48;net10.0-windows`): the shipped app stays on `net48` while the libraries already build and run
+           tests on .NET.
+         - Switch the application project to `net10.0-windows` (or `net8.0-windows`, if management chose it
+           knowingly) last. WPF on .NET runs only on Windows. A process runs on one runtime, so this step is a
+           single switch, but by then it is small.
+         - No long-lived branch and no feature freeze.
+      5. **Verify.** Unit tests on both targets, smoke or UI tests of the key scenarios, a performance and memory
+         comparison, then a pilot group of users with a way back to the old build, then the general release.
+      6. **Report to management.** A plan with milestones (inventory, SDK format, libraries, application, pilot,
+         release), the choice of target version with its reasons, explicit blockers and what is realistic for the
+         quarter. Often the quarter delivers everything except the rollout to every user.
+    explanation: |
+      WPF itself ports well: on .NET it is the same framework with almost the same API, only the target framework
+      is `net8.0-windows` or `net10.0-windows` and it runs only on Windows. The risk lies around it: in
+      closed-source vendor packages, in .NET Framework technologies that .NET does not have, in the old project
+      format and in behaviour differences that the compiler does not show. That is why the assessment starts with
+      an inventory, not with running a conversion tool.
+
+      A big-bang switch means a long branch that drifts away from the main one, every problem at once and no
+      intermediate state that can be shipped. A project-by-project move with multi-targeting keeps the product
+      shippable every week and surfaces blockers at the start of the quarter rather than at its end. Tools (the
+      GitHub Copilot modernization agent, which replaced the deprecated .NET Upgrade Assistant) automate the
+      mechanical part: project files, the target framework, replacing deprecated APIs, fixing build errors. But
+      they do not decide for the team what replaces a WCF server or Remoting, and they do not find behaviour
+      differences that show up only at run time: the inventory and the tests find those.
+
+      The lead's job here is to turn a deadline named by management into a decision based on data: what blocks,
+      what it costs and what can ship by the end of the quarter. The choice of target version is part of that
+      decision: moving to a version that is already out of support or about to leave it leaves the app without
+      security fixes and almost immediately requires the next move.
+    linkTitles:
+      - "Overview of the .NET Upgrade Assistant"
+      - "Overview of upgrading .NET apps"
+      - ".NET Framework technologies unavailable on .NET"
+      - ".NET and .NET Core support policy"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

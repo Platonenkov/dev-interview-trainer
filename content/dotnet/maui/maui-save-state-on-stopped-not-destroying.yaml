@@ -1,0 +1,131 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPD0NPV229CMVJVM74
+slug: maui-save-state-on-stopped-not-destroying
+stack: dotnet
+topic: maui
+level: senior
+type: single
+grading: auto
+tags: [maui, lifecycle, window, state-persistence]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/maui/fundamentals/app-lifecycle
+    lang: en
+    kind: docs
+  - url: https://developer.android.com/guide/components/activities/process-lifecycle
+    lang: en
+    kind: docs
+  - url: https://developer.android.com/reference/android/app/Activity
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: В каком событии Window приложения .NET MAUI надёжно сохранять несохранённый черновик?
+    prompt: |
+      Экран редактора в приложении .NET MAUI держит несохранённый черновик в памяти. Пользователи Android и
+      iOS жалуются: они переключаются в другое приложение, возвращаются через несколько часов, приложение
+      запускается заново, и черновик пропадает.
+
+      В каком событии `Window`, на которое подписывается общий для всех платформ код, надёжно сохранять
+      черновик, чтобы он пережил такое завершение процесса?
+    hint: Подумайте, что приложение ещё успевает сделать после того, как пользователь из него ушёл, и до того, как система решит судьбу процесса.
+    options:
+      a: "`Destroying`"
+      b: "`Stopped`"
+      c: "`Resumed`"
+      d: "`Created`"
+      e: "`Backgrounding`"
+    optionExplanations:
+      a: "`Destroying` не гарантирован, когда система завершает процесс приложения в фоне, поэтому полагаться на него для сохранения данных нельзя."
+      c: "`Resumed` возникает при возврате из остановленного состояния. Если процесс завершили в фоне, возврата не будет, приложение запустится заново."
+      d: "`Created` возникает при создании окна, когда сохранять ещё нечего. Это место, где черновик можно восстановить, а не сохранить."
+      e: "`Backgrounding` возникает только на iOS и Mac Catalyst, поэтому общий код на Android на него рассчитывать не может."
+    answer: "`Stopped`"
+    explanation: |
+      `Stopped` возникает, когда окно перестаёт быть видимым, то есть приложение ушло в фон. Документация
+      .NET MAUI предупреждает, что нет гарантии возврата из этого состояния: операционная система может
+      завершить приложение. Android описывает то же со своей стороны: время жизни процесса определяет не
+      приложение, а система, и ненужные процессы она завершает, когда ей нужна память. iOS тоже может
+      выгрузить приостановленное приложение без уведомления.
+
+      Страница о жизненном цикле MAUI говорит, что при завершении остановленного приложения устройством
+      возникает `Destroying`. Но на Android `Destroying` отображается на `OnDestroy`, а справочник `Activity`
+      предупреждает, что на `onDestroy` нельзя рассчитывать для сохранения данных: система может завершить
+      процесс, не вызвав его. Значит, именно в сценарии из жалоб `Destroying` не гарантирован, и код, который
+      сохраняет состояние только там, работает при обычном закрытии и теряет данные после завершения процесса
+      в фоне. `Stopped` - последнее кроссплатформенное событие, на которое можно рассчитывать перед возможным
+      завершением.
+
+      Сохранять ещё раньше, в `Deactivated`, тоже допустимо, но это событие возникает чаще: например, когда
+      окно теряет фокус и остаётся видимым. Надёжная схема - сохранять черновик по ходу редактирования с
+      задержкой (debounce), в `Stopped` делать последнюю короткую запись в локальное хранилище, а в `Created`
+      или при открытии редактора восстанавливать черновик. Долгие операции, например отправку на сервер, в
+      обработчике `Stopped` начинать не стоит: система не обязана ждать их завершения.
+
+      Подписаться на события окна можно, переопределив `CreateWindow` в классе `App`, или в собственном
+      наследнике `Window` через переопределение `OnStopped`.
+    linkTitles:
+      - "Жизненный цикл приложения .NET MAUI"
+      - "Процессы и жизненный цикл приложения в Android"
+      - "Класс Activity в Android (справочник API)"
+  en:
+    title: Which Window event in a .NET MAUI app is the reliable place to persist an unsaved draft?
+    prompt: |
+      An editor screen in a .NET MAUI app keeps an unsaved draft in memory. Android and iOS users complain:
+      they switch to another app, come back a few hours later, the app starts from scratch, and the draft is
+      gone.
+
+      Which `Window` event, subscribed to from code shared across platforms, is the reliable place to persist
+      the draft so that it survives such a process termination?
+    hint: Think about what the app can still do after the user leaves it, before the system decides what happens to the process.
+    options:
+      a: "`Destroying`"
+      b: "`Stopped`"
+      c: "`Resumed`"
+      d: "`Created`"
+      e: "`Backgrounding`"
+    optionExplanations:
+      a: "`Destroying` is not guaranteed when the system kills the app's process in the background, so do not rely on it for saving data."
+      c: "`Resumed` is raised on return from the stopped state. If the process was terminated in the background there is no return, the app starts from scratch."
+      d: "`Created` is raised when the window is created, when there is nothing to save yet. It is where you can restore the draft, not save it."
+      e: "`Backgrounding` is raised only on iOS and Mac Catalyst, so shared code cannot rely on it on Android."
+    answer: "`Stopped`"
+    explanation: |
+      `Stopped` is raised when the window is no longer visible, that is, when the app goes to the background.
+      The .NET MAUI documentation warns that there is no guarantee the app will resume from this state, because
+      the operating system may terminate it. Android describes the same thing from its side: the system, not the
+      app, decides how long the process lives, and it kills processes that are no longer needed when it must
+      reclaim memory. iOS can likewise purge a suspended app without notifying it.
+
+      The MAUI lifecycle page says that `Destroying` is raised when a device terminates a stopped app. But on
+      Android `Destroying` maps to `OnDestroy`, and the Android `Activity` reference warns not to count on
+      `onDestroy` for saving data: the system can kill the process without calling it. So in exactly the
+      scenario users complain about `Destroying` is not guaranteed, and code that saves state only there works
+      on an orderly close and loses data after a kill in the background. `Stopped` is the last cross-platform
+      event the app can rely on before a possible termination.
+
+      Saving even earlier, in `Deactivated`, is also fine, but that event fires more often: for example, when
+      the window loses focus and stays visible. A robust scheme saves the draft during editing with a debounce,
+      does a last short write to local storage in `Stopped`, and restores the draft in `Created` or when the
+      editor opens. Do not start long operations such as uploading to a server in the `Stopped` handler: the
+      system does not have to wait for them to finish.
+
+      You can subscribe to window events by overriding `CreateWindow` in the `App` class, or in your own
+      `Window` subclass by overriding `OnStopped`.
+    linkTitles:
+      - ".NET MAUI app lifecycle"
+      - "Processes and app lifecycle on Android"
+      - "Android Activity class (API reference)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

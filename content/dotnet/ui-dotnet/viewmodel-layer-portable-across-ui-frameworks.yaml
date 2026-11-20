@@ -1,0 +1,125 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RR93Y85BXWEDBG5521
+slug: viewmodel-layer-portable-across-ui-frameworks
+stack: dotnet
+topic: ui-dotnet
+level: architect
+type: multi
+grading: auto
+tags: [mvvm, wpf, winui, avalonia, architecture, communitytoolkit-mvvm]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+  - id: e
+    correct: true
+  - id: f
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/communitytoolkit/mvvm/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.componentmodel.inotifypropertychanged
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.windows.input.icommand
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какие решения позволяют использовать одну библиотеку моделей представления в WPF, WinUI и Avalonia?
+    prompt: |
+      Продукт должен получить три клиента: на WPF, на WinUI 3 и на Avalonia. Логику экранов решили держать в
+      одной общей библиотеке моделей представления на .NET 10, а в каждом клиенте писать только представления.
+
+      Выберите все проектные решения, которые сохраняют эту библиотеку переносимой между тремя фреймворками.
+    hint: Какие типы одинаково понимают механизмы привязки всех трёх фреймворков, а какие у каждого фреймворка свои?
+    options:
+      a: "Вынести модели представления в отдельную библиотеку с целевой платформой `net10.0` (а не `net10.0-windows`) без ссылок на пакеты WPF, WinUI и Avalonia."
+      b: "Наследовать модели представления от `DependencyObject` и объявлять их свойства как `DependencyProperty`, чтобы привязки работали без `INotifyPropertyChanged`."
+      c: "Сообщать об изменениях только через контракты BCL: `INotifyPropertyChanged` для свойств, `ICommand` для команд, `ObservableCollection<T>` для списков."
+      d: "Отдавать представлению готовые значения UI-типов: свойство типа `Visibility` для панели деталей и `Brush` для цвета статуса, чтобы обойтись без конвертеров."
+      e: "Диалоги, навигацию, выбор файлов и буфер обмена вызывать через интерфейсы (например, `IDialogService`), которые внедряются в конструктор и реализуются отдельно в каждом клиенте."
+      f: "Возвращаться в UI-поток из фоновой работы вызовом `Application.Current.Dispatcher.Invoke` прямо в модели представления."
+    optionExplanations:
+      b: "`DependencyObject` и `DependencyProperty` - типы конкретного фреймворка: в WPF это `System.Windows.DependencyObject`, в WinUI 3 - `Microsoft.UI.Xaml.DependencyObject`, в Avalonia аналогом служат `AvaloniaObject` и `AvaloniaProperty`. Такая модель представления привязана к одному фреймворку и к потоку его диспетчера, а её тесты требуют UI-инфраструктуры."
+      d: "Перечисление видимости у каждого фреймворка своё: в WPF `System.Windows.Visibility` со значениями `Visible`, `Hidden` и `Collapsed`, в WinUI 3 `Microsoft.UI.Xaml.Visibility` только с `Visible` и `Collapsed`, а в Avalonia у элементов вообще булево свойство `IsVisible`. Кисти тоже у каждого фреймворка свои. Модель представления должна отдавать состояние (`bool`, перечисление статуса), а превращать его в видимость и цвет - представление через конвертер или стиль."
+      f: "`Application.Current.Dispatcher` - API WPF. В WinUI 3 для этого служит `DispatcherQueue`, в Avalonia - `Dispatcher.UIThread`, поэтому код не скомпилируется в общей библиотеке без ссылки на WPF. Вдобавок синхронный `Invoke` блокирует фоновый поток, а в модульном тесте нет ни приложения, ни диспетчера. Переносимые варианты - продолжение `await`, которое возвращается в `SynchronizationContext` UI-потока, или внедрённая абстракция диспетчера."
+    answer: "Отдельная библиотека на `net10.0` без ссылок на UI-фреймворки, только контракты BCL (`INotifyPropertyChanged`, `ICommand`, `ObservableCollection<T>`) и UI-службы через внедряемые интерфейсы."
+    explanation: |
+      Переносимость модели представления определяется графом ссылок. Если библиотека нацелена на обычный
+      `net10.0` и не ссылается ни на один UI-фреймворк, компилятор сам не даст использовать `Visibility`, кисти
+      или диспетчер конкретной платформы: архитектурное правило проверяется при каждой сборке, а не на code review.
+
+      Механизмы привязки WPF, WinUI 3 и Avalonia понимают одни и те же интерфейсы BCL: `INotifyPropertyChanged`
+      для свойств, `INotifyCollectionChanged` (его реализует `ObservableCollection<T>`) для списков и `ICommand`
+      для команд. Несмотря на пространство имён `System.Windows.Input`, `ICommand` входит в BCL, а не в WPF. В
+      WinUI 3 проекция C#/WinRT сопоставляет эти интерфейсы с их аналогами WinRT, поэтому модель представления
+      видит обычные типы .NET.
+
+      Всё, что у фреймворков различается, остаётся в клиентах: визуальные типы и конвертеры - в представлении,
+      окна, диалоги и навигация - в реализациях интерфейсов служб, которые регистрирует корень композиции каждого
+      приложения. Тот же приём делает модели представления тестируемыми обычными модульными тестами без UI-потока.
+      Для перехода в UI-поток хватает продолжения `await` (все три фреймворка устанавливают свой
+      `SynchronizationContext`) или внедрённой абстракции диспетчера; учтите, что фреймворки по-разному
+      переносят уведомления из фоновых потоков, поэтому привязанное состояние надёжнее менять в UI-потоке.
+
+      Библиотека CommunityToolkit.Mvvm построена именно под эту схему: она не зависит от UI-фреймворка и даёт
+      `ObservableObject`, `RelayCommand`, `AsyncRelayCommand` и обмен сообщениями между моделями представления.
+    linkTitles:
+      - "Введение в MVVM Toolkit"
+      - "Интерфейс INotifyPropertyChanged"
+      - "Интерфейс ICommand"
+  en:
+    title: Which design decisions let one view model library serve WPF, WinUI and Avalonia front ends?
+    prompt: |
+      A product needs three clients: one on WPF, one on WinUI 3 and one on Avalonia. The screen logic is to live
+      in one shared view model library on .NET 10, and each client contains only the views.
+
+      Select all design decisions that keep this library portable across the three frameworks.
+    hint: Which types do the binding engines of all three frameworks understand in the same way, and which types does each framework define for itself?
+    options:
+      a: "Put the view models in a separate library that targets plain `net10.0` (not `net10.0-windows`) and references no WPF, WinUI or Avalonia packages."
+      b: "Derive the view models from `DependencyObject` and declare their properties as `DependencyProperty`, so bindings work without `INotifyPropertyChanged`."
+      c: "Report changes only through BCL contracts: `INotifyPropertyChanged` for properties, `ICommand` for commands, `ObservableCollection<T>` for lists."
+      d: "Give the view ready-made values of UI types: a `Visibility` property for the details panel and a `Brush` for the status colour, so no converters are needed."
+      e: "Call dialogs, navigation, file pickers and the clipboard through interfaces (for example `IDialogService`) that are injected into the constructor and implemented separately in each client."
+      f: "Return to the UI thread from background work by calling `Application.Current.Dispatcher.Invoke` directly in the view model."
+    optionExplanations:
+      b: "`DependencyObject` and `DependencyProperty` belong to a specific framework: in WPF it is `System.Windows.DependencyObject`, in WinUI 3 it is `Microsoft.UI.Xaml.DependencyObject`, and Avalonia uses `AvaloniaObject` and `AvaloniaProperty` instead. Such a view model is tied to one framework and to the thread of its dispatcher, and its tests need UI infrastructure."
+      d: "Each framework has its own visibility type: WPF has `System.Windows.Visibility` with `Visible`, `Hidden` and `Collapsed`, WinUI 3 has `Microsoft.UI.Xaml.Visibility` with only `Visible` and `Collapsed`, and Avalonia controls have a boolean `IsVisible` property instead. Brushes are framework types too. The view model should expose state (a `bool`, a status enum), and the view should turn it into visibility and colour with a converter or a style."
+      f: "`Application.Current.Dispatcher` is a WPF API. WinUI 3 uses `DispatcherQueue` and Avalonia uses `Dispatcher.UIThread`, so the code does not compile in the shared library without a WPF reference. On top of that, a synchronous `Invoke` blocks the background thread, and a unit test has neither an application nor a dispatcher. The portable options are an `await` continuation that resumes on the UI thread's `SynchronizationContext`, or an injected dispatcher abstraction."
+    answer: "A separate `net10.0` library with no UI framework references, only BCL contracts (`INotifyPropertyChanged`, `ICommand`, `ObservableCollection<T>`), and UI services behind injected interfaces."
+    explanation: |
+      Portability of a view model is decided by its reference graph. If the library targets plain `net10.0` and
+      references no UI framework, the compiler itself stops anyone from using `Visibility`, brushes or a
+      platform dispatcher: the architecture rule is checked on every build, not in code review.
+
+      The binding engines of WPF, WinUI 3 and Avalonia understand the same BCL interfaces:
+      `INotifyPropertyChanged` for properties, `INotifyCollectionChanged` (implemented by `ObservableCollection<T>`)
+      for lists and `ICommand` for commands. Despite its `System.Windows.Input` namespace, `ICommand` is part of the
+      BCL, not of WPF. In WinUI 3 the C#/WinRT projection maps these interfaces to their WinRT counterparts, so the
+      view model sees ordinary .NET types.
+
+      Everything that differs between the frameworks stays in the clients: visual types and converters in the
+      view, windows, dialogs and navigation in service implementations registered by each application's
+      composition root. The same approach makes the view models testable with plain unit tests and no UI thread.
+      To get back to the UI thread, an `await` continuation is enough (all three frameworks install their own
+      `SynchronizationContext`), or an injected dispatcher abstraction; note that the frameworks differ in how they
+      handle notifications raised from background threads, so bound state is safest changed on the UI thread.
+
+      CommunityToolkit.Mvvm is built for exactly this layout: it does not depend on a UI framework and provides
+      `ObservableObject`, `RelayCommand`, `AsyncRelayCommand` and messaging between view models.
+    linkTitles:
+      - "Introduction to the MVVM Toolkit"
+      - "INotifyPropertyChanged interface"
+      - "ICommand interface"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

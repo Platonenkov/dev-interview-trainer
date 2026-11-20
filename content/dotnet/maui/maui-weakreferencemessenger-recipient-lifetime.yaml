@@ -1,0 +1,129 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RP26MGMKBGFWCVXTY5
+slug: maui-weakreferencemessenger-recipient-lifetime
+stack: dotnet
+topic: maui
+level: senior
+type: single
+grading: auto
+tags: [maui, mvvm, communitytoolkit-mvvm, messenger, weak-references, memory-leaks]
+code:
+  language: csharp
+  harness: none
+  source: |
+    using CommunityToolkit.Mvvm.Messaging;
+
+    public sealed record OrderChanged(int OrderId);
+
+    public sealed class OrderDetailsViewModel
+    {
+        public OrderDetailsViewModel(IMessenger messenger)
+        {
+            // The page never calls Unregister or UnregisterAll.
+            messenger.Register<OrderDetailsViewModel, OrderChanged>(
+                this, static (recipient, message) => recipient.Reload(message.OrderId));
+        }
+
+        private void Reload(int orderId)
+        {
+            // Reload the order from a service.
+        }
+    }
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/communitytoolkit/mvvm/messenger
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/communitytoolkit/mvvm/observablerecipient
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Чем WeakReferenceMessenger отличается от StrongReferenceMessenger, когда страницу с подписанной моделью представления закрыли?
+    prompt: |
+      Модель представления страницы деталей заказа подписывается на сообщения в конструкторе (код ниже) и нигде
+      не отписывается. Страница зарегистрирована как transient. Пользователь возвращается назад, страница
+      снимается со стека навигации, и кроме мессенджера на модель представления больше никто не ссылается.
+
+      В качестве `messenger` передаётся либо `WeakReferenceMessenger.Default`, либо `StrongReferenceMessenger.Default`
+      из CommunityToolkit.Mvvm. Какое утверждение верно?
+    hint: Какую ссылку на получателя хранит каждый из мессенджеров и кто, кроме сборщика мусора, может эту ссылку убрать?
+    options:
+      a: "С `WeakReferenceMessenger` мессенджер не удерживает модель представления: сборщик мусора может её собрать без отписки, но до сборки она ещё может получать сообщения. С `StrongReferenceMessenger` модель остаётся достижимой и продолжает получать сообщения, пока не вызван `Unregister` или `UnregisterAll`."
+      b: "Оба мессенджера отписывают получателя автоматически: при возврате назад MAUI вызывает `UnregisterAll` для `BindingContext` закрытой страницы."
+      c: "`WeakReferenceMessenger` перестаёт доставлять сообщения ровно в момент закрытия страницы, а `StrongReferenceMessenger` - после ближайшей сборки мусора."
+      d: "Время жизни получателя в обоих случаях одинаковое. Разница только в потоке доставки: `StrongReferenceMessenger` вызывает обработчики в UI-потоке, а `WeakReferenceMessenger` - в пуле потоков."
+    optionExplanations:
+      b: "MAUI ничего не знает о подписках в мессенджере и никого не отписывает. Отписка - задача кода приложения, например через `IsActive = false` у `ObservableRecipient`, который в `OnDeactivated` вызывает `UnregisterAll`."
+      c: "Мессенджер не связан с навигацией и не знает, что страница закрыта. Слабая ссылка перестаёт работать только после того, как сборщик мусора соберёт объект, а сильная ссылка не даёт собрать его вовсе."
+      d: "Время жизни как раз и есть главное различие: один мессенджер хранит получателей через слабые ссылки, другой - через сильные. Ни один из них не переключает поток: `Send` вызывает обработчики синхронно в потоке отправителя."
+    answer: "С `WeakReferenceMessenger` неотписанную модель представления можно собрать, хотя до сборки она ещё получает сообщения. `StrongReferenceMessenger` удерживает её и доставляет ей сообщения до явной отписки."
+    explanation: |
+      `WeakReferenceMessenger` хранит получателей через слабые ссылки. Если на модель представления больше
+      никто не ссылается, сама подписка не мешает сборщику мусора её собрать, а мессенджер потом удаляет
+      обработчики собранных получателей. Это страховка от утечек, а не мгновенная отписка: пока сборка не
+      произошла, объект жив, и `Send` по-прежнему вызывает его обработчик.
+
+      `StrongReferenceMessenger` хранит получателей через обычные ссылки. Он быстрее и экономнее по памяти,
+      но взамен требует явной отписки. Без `Unregister` или `UnregisterAll` каждая открытая и закрытая
+      страница оставляет в памяти свою модель представления (и всё, на что она ссылается), а каждое
+      сообщение `OrderChanged` вызывает `Reload` у всех этих «призраков».
+
+      Поэтому надёжная практика одна для обоих мессенджеров: отписываться явно, когда страница уходит с
+      экрана, например через `ObservableRecipient.IsActive` или `UnregisterAll(this)` при скрытии страницы.
+      Слабые ссылки при этом остаются защитой на случай, если отписку забыли. Статический обработчик с
+      параметром `recipient`, как в примере, не захватывает `this` в замыкание - так рекомендует документация.
+    linkTitles:
+      - "Messenger в CommunityToolkit.Mvvm"
+      - "ObservableRecipient в CommunityToolkit.Mvvm"
+  en:
+    title: How does WeakReferenceMessenger differ from StrongReferenceMessenger when a page with a registered view model is closed?
+    prompt: |
+      The view model of an order detail page registers for messages in its constructor (code below) and never
+      unregisters. The page is registered as transient. The user navigates back, the page is popped from the
+      navigation stack, and apart from the messenger nothing references the view model any more.
+
+      The `messenger` passed in is either `WeakReferenceMessenger.Default` or `StrongReferenceMessenger.Default`
+      from CommunityToolkit.Mvvm. Which statement is true?
+    hint: What kind of reference to the recipient does each messenger hold, and who other than the garbage collector can remove that reference?
+    options:
+      a: "With `WeakReferenceMessenger` the messenger does not keep the view model alive: the garbage collector can collect it without unregistering, but until then it can still receive messages. With `StrongReferenceMessenger` the view model stays reachable and keeps receiving messages until `Unregister` or `UnregisterAll` is called."
+      b: "Both messengers unregister the recipient automatically: on back navigation MAUI calls `UnregisterAll` for the `BindingContext` of the closed page."
+      c: "`WeakReferenceMessenger` stops delivering messages exactly when the page is closed, and `StrongReferenceMessenger` after the next garbage collection."
+      d: "The recipient lifetime is the same in both cases. The only difference is the delivery thread: `StrongReferenceMessenger` calls handlers on the UI thread, and `WeakReferenceMessenger` on the thread pool."
+    optionExplanations:
+      b: "MAUI knows nothing about messenger registrations and unregisters nobody. Unregistering is the app code's job, for example through `IsActive = false` on `ObservableRecipient`, whose `OnDeactivated` calls `UnregisterAll`."
+      c: "The messenger is not tied to navigation and does not know that the page was closed. A weak reference stops working only after the garbage collector collects the object, and a strong reference prevents the collection altogether."
+      d: "Lifetime is exactly the main difference: one messenger holds recipients through weak references, the other through strong ones. Neither switches threads: `Send` calls the handlers synchronously on the sender's thread."
+    answer: "With `WeakReferenceMessenger` the unregistered view model can be collected, although until then it still receives messages. `StrongReferenceMessenger` keeps it alive and delivers messages to it until it is unregistered explicitly."
+    explanation: |
+      `WeakReferenceMessenger` holds recipients through weak references. If nothing else references the view
+      model, the registration itself does not stop the garbage collector from collecting it, and the messenger
+      later removes the handlers of collected recipients. This is a safety net against leaks, not an instant
+      unregistration: until a collection happens the object is alive, and `Send` still calls its handler.
+
+      `StrongReferenceMessenger` holds recipients through ordinary references. It is faster and uses less
+      memory, but in exchange it requires explicit unregistration. Without `Unregister` or `UnregisterAll`,
+      every page that is opened and closed leaves its view model (and everything it references) in memory, and
+      every `OrderChanged` message calls `Reload` on all of these "ghosts".
+
+      So the reliable practice is the same for both messengers: unregister explicitly when the page leaves the
+      screen, for example through `ObservableRecipient.IsActive` or `UnregisterAll(this)` when the page is
+      hidden. Weak references then remain a safety net in case unregistration was forgotten. A static handler
+      that takes a `recipient` parameter, as in the example, does not capture `this` in a closure, which is what
+      the documentation recommends.
+    linkTitles:
+      - "Messenger in CommunityToolkit.Mvvm"
+      - "ObservableRecipient in CommunityToolkit.Mvvm"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  noRunReason: The snippet needs the CommunityToolkit.Mvvm NuGet package and a MAUI page lifecycle, which the sandbox does not provide.

@@ -1,0 +1,105 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPX6VPVVJD6ZDNPKD9
+slug: maui-entry-handler-mapper-applies-globally
+stack: dotnet
+topic: maui
+level: senior
+type: find-bug
+grading: auto
+tags: [maui, handlers, property-mapper, android, platform-code]
+code:
+  language: csharp
+  harness: none
+  source: |
+    using Microsoft.Maui.Handlers;
+    using Microsoft.Maui.Platform;
+
+    namespace Shop;
+
+    public class BorderlessEntry : Entry
+    {
+    }
+
+    public static class MauiProgram
+    {
+        public static MauiApp CreateMauiApp()
+        {
+            var builder = MauiApp.CreateBuilder();
+            builder.UseMauiApp<App>();
+
+            EntryHandler.Mapper.AppendToMapping("Borderless", (handler, view) =>
+            {
+    #if ANDROID
+                handler.PlatformView.SetBackgroundColor(Colors.Transparent.ToPlatform());
+    #endif
+            });
+
+            return builder.Build();
+        }
+    }
+bugLineSets: [[20], [17]]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/maui/user-interface/handlers/customize
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/maui/user-interface/handlers/
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строку, из-за которой подчёркивание пропадает у всех Entry в приложении .NET MAUI
+    prompt: |
+      Команда хотела убрать подчёркивание на Android только у собственного элемента `BorderlessEntry`. После
+      сборки подчёркивание пропало у всех полей ввода приложения: у полей логина, поиска и любых других `Entry`,
+      которые должны были остаться прежними.
+
+      Щёлкните по строке с дефектом.
+    hint: Для каких элементов вызывается действие, добавленное в `EntryHandler.Mapper`, и что внутри действия известно о конкретном элементе?
+    answer: Строка 20, изменение нативного `EditText` без проверки, что `view` - это `BorderlessEntry`. Также принимается строка 17, где регистрируется это действие.
+    explanation: |
+      `EntryHandler.Mapper` - статический маппер свойств, общий для всех элементов, которые обслуживает
+      `EntryHandler`. `AppendToMapping` добавляет действие в этот общий маппер, и оно выполняется для каждого
+      `Entry` в приложении, включая наследников вроде `BorderlessEntry`. Ключ `"Borderless"` - лишь имя
+      записи в маппере, он ничего не ограничивает.
+
+      Поэтому строка 20 меняет фон нативного поля у любого `Entry`, а на Android именно фоновый drawable
+      рисует подчёркивание. Исправление - сузить действие до нужного типа: обернуть строку 20 в
+      `if (view is BorderlessEntry)`. Тот же приём подходит, если настройка нужна только части экземпляров:
+      проверять в действии свойство элемента, которое включает поведение.
+
+      Настройка обработчика по своей природе глобальна, поэтому любая регистрация в `Mapper` должна сама
+      проверять, к какому элементу она применяется. Код не запускается: ему нужна рабочая нагрузка MAUI и
+      платформа Android.
+    linkTitles:
+      - "Настройка элементов управления с помощью обработчиков"
+      - "Обработчики в .NET MAUI"
+  en:
+    title: Find the line that removes the underline from every Entry in a .NET MAUI app
+    prompt: |
+      The team wanted to remove the Android underline only from its own `BorderlessEntry` control. After the build
+      the underline disappeared from every input field in the app: the login fields, the search field and any
+      other `Entry` that should have stayed unchanged.
+
+      Click the line that contains the defect.
+    hint: For which elements does an action added to `EntryHandler.Mapper` run, and what does the action know about the specific element?
+    answer: Line 20, which changes the native `EditText` without checking that `view` is a `BorderlessEntry`. Line 17, where the action is registered, is also accepted.
+    explanation: |
+      `EntryHandler.Mapper` is a static property mapper shared by every element that `EntryHandler` serves.
+      `AppendToMapping` adds an action to that shared mapper, and it runs for every `Entry` in the app,
+      including subclasses such as `BorderlessEntry`. The `"Borderless"` key is only the name of the mapper
+      entry; it does not restrict anything.
+
+      That is why line 20 changes the background of the native field for any `Entry`, and on Android it is the
+      background drawable that draws the underline. The fix is to narrow the action to the intended type: wrap
+      line 20 in `if (view is BorderlessEntry)`. The same technique works when only some instances need the
+      customization: check a property of the element that turns the behaviour on.
+
+      Handler customization is global by nature, so every registration in `Mapper` must itself check which
+      element it applies to. The code is not executed: it needs the MAUI workload and the Android platform.
+    linkTitles:
+      - "Customize controls with handlers"
+      - "Handlers in .NET MAUI"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  noRunReason: The code needs the .NET MAUI workload and the Android platform to create native controls, which the sandbox does not provide.

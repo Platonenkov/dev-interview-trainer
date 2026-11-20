@@ -1,0 +1,112 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RRY59NCVF3RA5BB0E9
+slug: wpf-binding-wrong-path-fails-silently
+stack: dotnet
+topic: ui-dotnet
+level: middle
+type: single
+grading: auto
+tags: [wpf, data-binding, diagnostics, presentationtracesources]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: false
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.diagnostics.presentationtracesources
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.windows.data.bindingbase.fallbackvalue
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/desktop/wpf/data/
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что произойдёт в WPF, если путь привязки указывает на свойство, которого нет в DataContext?
+    prompt: |
+      В окне WPF есть элемент `<TextBlock Text="{Binding CustomerNmae}" />`. В `DataContext` окна назначена
+      модель представления со свойством `CustomerName`, а в пути привязки опечатка. `FallbackValue` в привязке
+      не задан. Проект собирается, приложение запускают под отладчиком Visual Studio.
+
+      Что произойдёт при открытии окна?
+    hint: Когда WPF разбирает путь `{Binding}` - при компиляции XAML или во время работы? И куда он сообщает о проблемах привязки?
+    options:
+      a: "Сборка завершится ошибкой: компилятор XAML проверит путь по типу модели представления."
+      b: "При загрузке окна будет выброшено исключение, и окно не откроется."
+      c: "Окно откроется без исключения, `TextBlock` останется пустым, а сообщение об ошибке пути привязки от источника трассировки `System.Windows.Data` появится в окне Output отладчика."
+      d: "`TextBlock` покажет результат `ToString()` самой модели представления, потому что свойство не найдено."
+    optionExplanations:
+      a: "Путь `{Binding}` разрешается во время работы по реальному объекту в `DataContext`. Тип этого объекта компилятору XAML неизвестен, поэтому опечатка сборку не ломает."
+      b: "Механизм привязки не выбрасывает исключение, если путь не разрешается: привязка просто не даёт значения, а ошибка пишется в трассировку."
+      d: "Сам объект `DataContext` привязка возвращает, когда путь не указан (`{Binding}`). Если путь указан, но не разрешается, цель получает `FallbackValue` или значение по умолчанию своего свойства."
+    answer: "Исключения нет: `TextBlock` получает значение по умолчанию для `Text` (пустую строку), а об ошибке пути сообщает только трассировка привязки данных `System.Windows.Data`, которую под отладчиком видно в окне Output."
+    explanation: |
+      `{Binding}` в WPF разрешает путь во время работы по объекту, который лежит в `DataContext` в данный момент.
+      Этот объект может быть назначен позже или замениться, поэтому механизм привязки не считает неразрешённый
+      путь фатальной ошибкой. Если привязка не может получить значение, цель получает `FallbackValue`, а если он
+      не задан - значение по умолчанию целевого свойства зависимостей. Для `TextBlock.Text` это пустая строка.
+
+      О проблеме WPF сообщает только через источник трассировки привязки данных
+      (`PresentationTraceSources.DataBindingSource`, сообщения с префиксом `System.Windows.Data`). Под отладчиком
+      Visual Studio ошибка пути появляется в окне Output в виде сообщения
+      `System.Windows.Data Error: ... BindingExpression path error: 'CustomerNmae' property not found ...`.
+      Без отладчика по умолчанию ничего не видно, поэтому такую ошибку легко пропустить.
+
+      Подробности о шагах разрешения пути для конкретной привязки включает присоединённое свойство
+      `PresentationTraceSources.TraceLevel`. Класс находится в пространстве имён `System.Diagnostics` сборки
+      `WindowsBase`, поэтому в XAML нужно сопоставление
+      `xmlns:diag="clr-namespace:System.Diagnostics;assembly=WindowsBase"`, а затем
+      `{Binding CustomerNmae, diag:PresentationTraceSources.TraceLevel=High}`.
+    linkTitles:
+      - "Класс PresentationTraceSources"
+      - "Свойство BindingBase.FallbackValue"
+      - "Обзор привязки данных в WPF"
+  en:
+    title: What happens in WPF when a binding path names a property that the DataContext does not have?
+    prompt: |
+      A WPF window contains `<TextBlock Text="{Binding CustomerNmae}" />`. The window `DataContext` is a view
+      model with a `CustomerName` property, and the binding path has a typo. The binding sets no
+      `FallbackValue`. The project builds, and the application is started under the Visual Studio debugger.
+
+      What happens when the window opens?
+    hint: When does WPF resolve a `{Binding}` path - when XAML is compiled or at run time? And where does it report binding problems?
+    options:
+      a: "The build fails: the XAML compiler checks the path against the view model type."
+      b: "An exception is thrown when the window loads, and the window does not open."
+      c: "The window opens without an exception, the `TextBlock` stays empty, and a binding path error from the `System.Windows.Data` trace source appears in the debugger Output window."
+      d: "The `TextBlock` shows `ToString()` of the view model itself, because the property was not found."
+    optionExplanations:
+      a: "A `{Binding}` path is resolved at run time against the actual object in `DataContext`. The XAML compiler does not know the type of that object, so a typo does not break the build."
+      b: "The binding engine does not throw when a path cannot be resolved: the binding simply produces no value, and the error goes to the trace output."
+      d: "A binding returns the `DataContext` object itself when no path is given (`{Binding}`). When a path is given but cannot be resolved, the target gets `FallbackValue` or the default value of its property."
+    answer: "No exception is thrown: the `TextBlock` gets the default value of `Text` (an empty string), and the path error is reported only by the `System.Windows.Data` data-binding trace, which shows up in the Output window under a debugger."
+    explanation: |
+      A WPF `{Binding}` resolves its path at run time against whatever object is in `DataContext` at that moment.
+      That object may be assigned later or replaced, so the binding engine does not treat an unresolved path as a
+      fatal error. When the binding cannot produce a value, the target gets `FallbackValue`, or, if it is not set,
+      the default value of the target dependency property. For `TextBlock.Text` that is an empty string.
+
+      WPF reports the problem only through the data-binding trace source
+      (`PresentationTraceSources.DataBindingSource`, messages prefixed with `System.Windows.Data`). Under the
+      Visual Studio debugger a path error appears in the Output window as a message such as
+      `System.Windows.Data Error: ... BindingExpression path error: 'CustomerNmae' property not found ...`.
+      Without a debugger nothing is shown by default, so this error is easy to miss.
+
+      Details of each step of resolving the path for one binding are turned on with the attached property
+      `PresentationTraceSources.TraceLevel`. The class lives in the `System.Diagnostics` namespace of the
+      `WindowsBase` assembly, so XAML needs the mapping
+      `xmlns:diag="clr-namespace:System.Diagnostics;assembly=WindowsBase"` and then
+      `{Binding CustomerNmae, diag:PresentationTraceSources.TraceLevel=High}`.
+    linkTitles:
+      - "PresentationTraceSources class"
+      - "BindingBase.FallbackValue property"
+      - "Data binding overview in WPF"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

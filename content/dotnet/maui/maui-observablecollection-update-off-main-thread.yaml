@@ -1,0 +1,118 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPT6RQFJ2VJ855B1A0
+slug: maui-observablecollection-update-off-main-thread
+stack: dotnet
+topic: maui
+level: middle
+type: find-bug
+grading: auto
+tags: [maui, observablecollection, configureawait, main-thread, threading]
+code:
+  language: csharp
+  harness: none
+  source: |
+    public class OrdersViewModel
+    {
+        private readonly IOrderService _orderService;
+
+        public OrdersViewModel(IOrderService orderService) => _orderService = orderService;
+
+        public ObservableCollection<Order> Orders { get; } = new();
+
+        public async Task LoadAsync()
+        {
+            List<Order> loaded = await _orderService.GetOrdersAsync().ConfigureAwait(false);
+
+            foreach (Order order in loaded)
+            {
+                Orders.Add(order);
+            }
+        }
+    }
+bugLineSets: [[11], [15], [11, 15]]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/maui/platform-integration/appmodel/main-thread
+    lang: en
+    kind: docs
+  - url: https://devblogs.microsoft.com/dotnet/configureawait-faq/
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Найдите дефект в модели представления .NET MAUI, из-за которого приложение падает на Android при загрузке заказов
+    prompt: |
+      Страница вызывает `await viewModel.LoadAsync()` из `OnAppearing`, а `CollectionView` на странице привязан
+      к `Orders`. Под Windows при отладке всё иногда работает, но на Android приложение падает в момент, когда
+      заказы приходят с сервера и попадают в список.
+
+      Щёлкните по строке с дефектом.
+    hint: В каком потоке выполняется код после `await` в этом методе и какой поток работает с нативным списком на экране?
+    answer: |
+      Строка 11: `ConfigureAwait(false)` переносит продолжение в поток из пула потоков, и строка 15 меняет
+      привязанную к `CollectionView` коллекцию не в главном потоке. Засчитывается выбор строки 11, строки 15
+      или обеих.
+    explanation: |
+      `LoadAsync` вызывается из `OnAppearing`, то есть в главном потоке, где установлен `SynchronizationContext`
+      интерфейса. Обычный `await` захватывает этот контекст и продолжает метод в главном потоке.
+      `ConfigureAwait(false)` от контекста отказывается: если задача ещё не завершена, код после `await`
+      выполняется в потоке из пула потоков. Если же `GetOrdersAsync` завершится синхронно (например, данные из
+      кэша), продолжение останется в главном потоке, поэтому дефект может проявляться не каждый раз.
+
+      `Orders.Add` синхронно вызывает событие `CollectionChanged` в том же потоке, а обработчик `CollectionView`
+      по нему обновляет нативный список. Интерфейс в .NET MAUI можно менять только из главного потока, и
+      Android строго за этим следит, поэтому изменение привязанной коллекции из фонового потока приводит к
+      исключению или рассинхронизации коллекции и нативного списка.
+
+      Исправления:
+
+      - убрать `ConfigureAwait(false)` в модели представления: её код работает с состоянием интерфейса и должен
+        продолжаться в главном потоке;
+      - или явно перейти в главный поток: `await MainThread.InvokeOnMainThreadAsync(() => { foreach (...) Orders.Add(order); });`
+        либо `MainThread.BeginInvokeOnMainThread(...)`, если ждать завершения не нужно.
+
+      `ConfigureAwait(false)` при этом уместен внутри `IOrderService`: код сервиса не трогает интерфейс, и ему
+      возврат в главный поток не нужен.
+    linkTitles:
+      - "Выполнение кода в главном потоке интерфейса в .NET MAUI"
+      - "Stephen Toub: ConfigureAwait FAQ"
+  en:
+    title: Find the defect in a .NET MAUI view model that crashes the app on Android when orders load
+    prompt: |
+      The page calls `await viewModel.LoadAsync()` from `OnAppearing`, and a `CollectionView` on the page is
+      bound to `Orders`. On Windows it sometimes works during debugging, but on Android the app crashes at the
+      moment the orders arrive from the server and go into the list.
+
+      Click the line that contains the defect.
+    hint: On which thread does the code after `await` run in this method, and which thread works with the native list on screen?
+    answer: |
+      Line 11: `ConfigureAwait(false)` moves the continuation to a thread-pool thread, and line 15 then changes
+      the collection bound to `CollectionView` off the main thread. Selecting line 11, line 15 or both is
+      accepted.
+    explanation: |
+      `LoadAsync` is called from `OnAppearing`, that is on the main thread, where the UI
+      `SynchronizationContext` is installed. A plain `await` captures that context and continues the method on
+      the main thread. `ConfigureAwait(false)` gives the context up: if the task is not yet complete, the code
+      after `await` runs on a thread-pool thread. If `GetOrdersAsync` completes synchronously (for example, from
+      a cache), the continuation stays on the main thread, which is why the defect may not show every time.
+
+      `Orders.Add` raises `CollectionChanged` synchronously on the same thread, and the `CollectionView` handler
+      updates the native list in response. In .NET MAUI the UI may be changed only from the main thread, and
+      Android enforces this strictly, so changing a bound collection from a background thread leads to an
+      exception or to the collection and the native list getting out of sync.
+
+      Fixes:
+
+      - remove `ConfigureAwait(false)` in the view model: its code works with UI state and should continue on
+        the main thread;
+      - or switch to the main thread explicitly: `await MainThread.InvokeOnMainThreadAsync(() => { foreach (...) Orders.Add(order); });`,
+        or `MainThread.BeginInvokeOnMainThread(...)` when you do not need to wait for completion.
+
+      `ConfigureAwait(false)` is still appropriate inside `IOrderService`: the service code does not touch the
+      UI and does not need to return to the main thread.
+    linkTitles:
+      - "Run code on the main UI thread in .NET MAUI"
+      - "Stephen Toub: ConfigureAwait FAQ"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  noRunReason: A .NET MAUI view model bound to a CollectionView; reproducing the crash needs the MAUI workload and an Android UI thread, which the sandbox does not provide.

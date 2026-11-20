@@ -1,0 +1,143 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RRXSFPM9QZMPVRPZJ0
+slug: integration-test-fake-authentication-scheme
+stack: dotnet
+topic: testing
+level: senior
+type: single
+grading: auto
+tags: [integration-tests, aspnet-core, webapplicationfactory, authentication, authorization]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/test/integration-tests
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/microsoft.aspnetcore.authentication.authenticationhandler-1
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как тестировать эндпоинты с [Authorize] через WebApplicationFactory без настоящего провайдера удостоверений?
+    prompt: |
+      Эндпоинт `POST /orders/{id}/refund` помечен `[Authorize(Policy = "CanRefund")]`. Политика требует утверждение (claim)
+      `permission` со значением `refunds`. API принимает токены JWT Bearer, которые в production выдаёт внешний
+      провайдер удостоверений по OIDC.
+
+      В интеграционных тестах на `WebApplicationFactory<Program>` нужно проверить три случая: `200` для пользователя
+      с нужным утверждением, `403` для пользователя без него и `401` для анонимного запроса. Ходить к настоящему
+      провайдеру тесты не должны. Какой подход это обеспечивает?
+    hint: |
+      Три случая отличаются тем, кто пользователь и что решает политика. Что тесту нужно контролировать, а что должно остаться настоящим, чтобы ответ `403` что-то доказывал?
+    options:
+      a: |
+        В `ConfigureTestServices` заменить `IAuthorizationService` (или `IPolicyEvaluator`) реализацией, которая всегда возвращает успех, чтобы любой запрос к эндпоинту с `[Authorize]` проходил без токена и без обращения к провайдеру.
+      b: |
+        В `ConfigureTestServices` зарегистрировать схему `Test` с обработчиком-наследником `AuthenticationHandler<AuthenticationSchemeOptions>` и сделать её схемой по умолчанию. Обработчик возвращает `AuthenticateResult.Success` с утверждениями, заданными тестом, или `AuthenticateResult.NoResult()` для анонимного запроса.
+      c: |
+        Обернуть `app.UseAuthentication()` и `app.UseAuthorization()` в `Program` в условие `if (!app.Environment.IsEnvironment("Testing"))` и запускать фабрику с `UseEnvironment("Testing")`, чтобы в тестах токены не проверялись.
+      d: |
+        На сервере ничего не менять: `TestServer` обрабатывает запросы от `CreateClient()` в памяти и пропускает аутентификацию, поэтому достаточно добавить заголовок `Authorization: Bearer test`.
+    optionExplanations:
+      a: |
+        Так отключается сама проверка прав: политика `CanRefund` не вычисляется, ответ `403` для пользователя без утверждения получить нельзя, а ошибка в политике (например, опечатка в имени утверждения) пройдёт все тесты незамеченной.
+      c: |
+        Тестовая ветка попадает в боевой код, и тесты проверяют уже не ту конфигурацию конвейера, что работает в production. Главное - этот подход нигде не создаёт пользователя с утверждением `permission`, поэтому случай `200` для разрешённого пользователя и `403` по решению политики так не проверить. Эндпоинт с `[Authorize]` от этого не становится просто открытым: что именно произойдёт без явных вызовов middleware, зависит от настройки хоста, но настоящие три случая тест не увидит.
+      d: |
+        `TestServer` выполняет весь конвейер middleware приложения, включая аутентификацию. Боевой обработчик JWT Bearer попытается проверить строку `test` как токен, проверка не пройдёт, и все запросы к защищённому эндпоинту получат `401`.
+    answer: |
+      Зарегистрировать в `ConfigureTestServices` тестовую схему аутентификации на базе `AuthenticationHandler<AuthenticationSchemeOptions>`, сделать её схемой по умолчанию и выдавать из неё `ClaimsPrincipal` с нужными тесту утверждениями (или `NoResult()` для анонимного запроса). Подменяется только «кто пользователь», а настоящие политики авторизации продолжают работать.
+    explanation: |
+      Аутентификация и авторизация в ASP.NET Core разделены. Обработчик схемы аутентификации отвечает на вопрос «кто
+      это» и формирует `ClaimsPrincipal`. Middleware авторизации по этому принципалу вычисляет политики эндпоинта.
+      Внешний провайдер удостоверений и проверка JWT нужны только первому шагу, поэтому в тесте подменяют именно его.
+
+      Документация по интеграционным тестам описывает этот приём: класс-наследник `AuthenticationHandler<TOptions>`
+      в `HandleAuthenticateAsync` создаёт `ClaimsIdentity` с утверждениями, оборачивает его в `AuthenticationTicket`
+      и возвращает `AuthenticateResult.Success`. В `ConfigureTestServices` вызывают `AddAuthentication`, чтобы
+      тестовая схема стала схемой по умолчанию (например, `AddAuthentication("Test")`), и `AddScheme` с этим
+      обработчиком. Этот обратный вызов выполняется после регистраций приложения, поэтому тестовая схема
+      перекрывает боевую. Какие утверждения выдать, тест может сообщить обработчику, например, через заголовок запроса.
+
+      Все три случая проверяются честно:
+
+      - пользователь с `permission=refunds` проходит политику и получает `200`;
+      - пользователь без утверждения аутентифицирован, но политика отказывает, и обработчик схемы отвечает `403`;
+      - если обработчик вернул `AuthenticateResult.NoResult()`, авторизация вызывает challenge схемы по умолчанию,
+        и ответ - `401`.
+
+      Важная деталь: если приложение явно задаёт `DefaultAuthenticateScheme` или `DefaultChallengeScheme`, либо
+      политика указывает конкретную схему, их тоже нужно направить на тестовую схему, иначе запросы по-прежнему
+      будут обрабатываться боевым обработчиком JWT Bearer. Документация подчёркивает, что имя тестовой схемы должно
+      совпадать со схемой, которую ожидает приложение.
+    linkTitles:
+      - "Интеграционные тесты в ASP.NET Core"
+      - "Класс AuthenticationHandler<TOptions>"
+  en:
+    title: How do you test [Authorize] endpoints with WebApplicationFactory without a real identity provider?
+    prompt: |
+      The endpoint `POST /orders/{id}/refund` is marked `[Authorize(Policy = "CanRefund")]`. The policy requires the claim
+      `permission` with the value `refunds`. The API accepts JWT Bearer tokens that, in production, are issued by an
+      external identity provider over OIDC.
+
+      The integration tests on `WebApplicationFactory<Program>` must check three cases: `200` for a user with the
+      required claim, `403` for a user without it and `401` for an anonymous request. The tests must not call the
+      real provider. Which approach achieves this?
+    hint: |
+      The three cases differ in who the user is and what the policy decides. What does the test need to control, and what must stay real so that a `403` actually proves something?
+    options:
+      a: |
+        In `ConfigureTestServices` replace `IAuthorizationService` (or `IPolicyEvaluator`) with an implementation that always returns success, so that every request to an `[Authorize]` endpoint passes without a token and without calling the provider.
+      b: |
+        In `ConfigureTestServices` register a `Test` scheme whose handler derives from `AuthenticationHandler<AuthenticationSchemeOptions>`, and make it the default scheme. The handler returns `AuthenticateResult.Success` with the claims the test asked for, or `AuthenticateResult.NoResult()` for an anonymous request.
+      c: |
+        Wrap `app.UseAuthentication()` and `app.UseAuthorization()` in `Program` in `if (!app.Environment.IsEnvironment("Testing"))` and run the factory with `UseEnvironment("Testing")`, so that tokens are not checked in tests.
+      d: |
+        Change nothing on the server: `TestServer` handles requests from `CreateClient()` in memory and skips authentication, so adding the header `Authorization: Bearer test` is enough.
+    optionExplanations:
+      a: |
+        This switches off the permission check itself: the `CanRefund` policy is never evaluated, a `403` for a user without the claim cannot be produced, and a bug in the policy (for example, a typo in the claim name) passes every test unnoticed.
+      c: |
+        The test branch ends up in production code, and the tests exercise a different pipeline configuration from the one that runs in production. More importantly, this approach never creates a user with the `permission` claim, so the `200` case for an allowed user and a `403` decided by the policy cannot be checked. An `[Authorize]` endpoint does not simply become open either: what exactly happens without the explicit middleware calls depends on the host setup, but the tests do not see the real three cases.
+      d: |
+        `TestServer` runs the application's whole middleware pipeline, including authentication. The production JWT Bearer handler tries to validate the string `test` as a token, validation fails, and every request to the protected endpoint gets `401`.
+    answer: |
+      Register a test authentication scheme based on `AuthenticationHandler<AuthenticationSchemeOptions>` in `ConfigureTestServices`, make it the default scheme and have it issue a `ClaimsPrincipal` with the claims the test needs (or `NoResult()` for an anonymous request). Only "who the user is" is replaced, while the real authorization policies keep running.
+    explanation: |
+      Authentication and authorization are separate in ASP.NET Core. An authentication scheme handler answers "who is
+      this" and builds a `ClaimsPrincipal`. The authorization middleware evaluates the endpoint's policies against
+      that principal. The external identity provider and JWT validation are needed only by the first step, so that is
+      the step the test replaces.
+
+      The integration testing documentation describes this technique: a class derived from
+      `AuthenticationHandler<TOptions>` creates a `ClaimsIdentity` with claims in `HandleAuthenticateAsync`, wraps it
+      in an `AuthenticationTicket` and returns `AuthenticateResult.Success`. In `ConfigureTestServices` you call
+      `AddAuthentication` so that the test scheme becomes the default (for example, `AddAuthentication("Test")`), and
+      `AddScheme` with the handler. That callback runs after the application's own registrations, so the test scheme
+      overrides the production one. The test can tell the handler which claims to issue, for example through a
+      request header.
+
+      All three cases are checked for real:
+
+      - a user with `permission=refunds` passes the policy and gets `200`;
+      - a user without the claim is authenticated, but the policy denies access, and the scheme handler answers `403`;
+      - when the handler returns `AuthenticateResult.NoResult()`, authorization issues a challenge on the default
+        scheme, and the response is `401`.
+
+      One detail matters: if the application explicitly sets `DefaultAuthenticateScheme` or `DefaultChallengeScheme`,
+      or a policy names a specific scheme, those must also point to the test scheme, otherwise requests are still
+      handled by the production JWT Bearer handler. The documentation stresses that the test scheme name must match
+      the scheme the application expects.
+    linkTitles:
+      - "Integration tests in ASP.NET Core"
+      - "AuthenticationHandler<TOptions> class"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

@@ -1,0 +1,145 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RRHZ314XCB1SAANYPX
+slug: managed-vs-self-hosted-datastore-decision
+stack: dotnet
+topic: system-design
+level: lead
+type: open
+grading: self
+tags: [managed-services, total-cost-of-ownership, self-hosting, databases, caching, well-architected]
+links:
+  - url: https://learn.microsoft.com/en-us/azure/well-architected/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/azure/well-architected/cost-optimization/
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как тимлиду выбрать между управляемой облачной базой данных или кэшем и тем же движком на своих VM или в Kubernetes?
+    prompt: |
+      Сервису нужна реляционная база данных и распределённый кэш. Есть два пути: взять управляемые облачные
+      сервисы (например, управляемый PostgreSQL и управляемый Redis) или развернуть те же движки самостоятельно
+      на виртуальных машинах или в Kubernetes. Часть команды говорит, что свои VM обойдутся заметно дешевле
+      по счёту за инфраструктуру. Как вы как тимлид примете это решение, что будете сравнивать и в каких
+      случаях выберете самостоятельное развёртывание?
+    hint: |
+      Кроме счёта за VM, кто и сколько времени будет тратить на эту базу в течение года, в том числе ночью и в
+      день, когда что-то сломается?
+    answer: |
+      1. **Сравнивать полную стоимость владения (TCO), а не цену VM.** Самостоятельное развёртывание - это не
+         только вычисления, диски и сеть, но и работа людей:
+         - обновления ОС и движка, переходы между мажорными версиями;
+         - резервное копирование и, главное, регулярная проверка восстановления;
+         - репликация, автоматическое переключение при отказе и учения по нему;
+         - мониторинг, оповещения и дежурства (on-call) с ночными инцидентами;
+         - защита: сетевой доступ, шифрование, ротация секретов, аудит для соответствия требованиям;
+         - планирование ёмкости и рост дисков.
+         Эти часы надо оценить честно, умножить на стоимость инженера и добавить к счёту за инфраструктуру.
+      2. **Учесть цену и ограничения управляемого сервиса.** Наценка за эксплуатацию; фиксированные тарифные
+         уровни; пределы размера, числа соединений и производительности; не все расширения, версии и параметры
+         конфигурации доступны; окна обслуживания назначает провайдер; зависимость от провайдера. SLA - это
+         компенсация в виде кредитов, а не гарантия, и высокая доступность или зонная избыточность часто
+         включается и оплачивается отдельно.
+      3. **Помнить о разделении ответственности.** Управляемый сервис снимает инфраструктуру, обновления,
+         резервные копии и переключение, но схема, индексы, производительность запросов, права доступа и
+         проверка восстановления остаются за командой.
+      4. **Когда самостоятельное развёртывание оправдано.**
+         - Большой и стабильный масштаб, на котором наценка управляемого сервиса превышает стоимость выделенной
+           платформенной команды или команды DBA.
+         - Нужны возможности, которых нет в управляемом варианте: расширения, версии, тонкая настройка.
+         - Регуляторные требования или изолированная среда, где облачного сервиса нет.
+         - Переносимость между облаками - реальное требование, а не гипотеза.
+         - В компании уже есть опытная команда, которая эксплуатирует этот движок для других сервисов.
+      5. **Как принять решение.** Записать требования (SLO, RPO и RTO, объём, нужные возможности), проверить
+         пределы управляемого сервиса прототипом или нагрузочным тестом, посчитать TCO обоих вариантов с
+         учётом людей и риска потери данных, оформить ADR с условиями пересмотра (например, рост счёта или
+         упор в предел тарифа). Снизить зависимость от провайдера: выбрать стандартный движок и изолировать
+         проприетарные возможности.
+      6. **Типичный вывод.** Небольшой команде почти всегда выгоднее купить эксплуатацию, то есть взять
+         управляемый сервис, и тратить время на продукт.
+    explanation: |
+      Аргумент «свои VM дешевле» сравнивает только видимую часть затрат. Корректная эксплуатация stateful-системы
+      - отдельная дисциплина: резервные копии, которые ни разу не восстанавливали, и переключение при отказе,
+      которое ни разу не проверяли, выглядят работающими до первого инцидента. Такие сбои редки, но обходятся
+      дорого: простой и потеря данных. Управляемый сервис превращает эту работу и этот риск в понятную строку
+      счёта.
+
+      Есть и цена упущенных возможностей: часы, которые команда тратит на обновления и дежурства у базы, не
+      идут в продукт. В небольшой команде знания об эксплуатации часто сосредоточены у одного-двух человек, и
+      их отпуск или уход становится риском. Kubernetes сам по себе эту работу не убирает: для stateful-нагрузок
+      он добавляет операторы, постоянные тома и свои режимы отказа, которые команда тоже должна понимать.
+
+      Решение не вечное. При большом и предсказуемом масштабе или особых требованиях баланс может сместиться в
+      сторону самостоятельного развёртывания, поэтому важно записать, на каких условиях выбор пересматривается.
+      Azure Well-Architected Framework даёт удобную рамку: решение затрагивает сразу надёжность, безопасность,
+      оптимизацию затрат и операционное превосходство, и сравнивать варианты нужно по всем этим направлениям.
+    linkTitles:
+      - "Microsoft Azure Well-Architected Framework"
+      - "Оптимизация затрат (Azure Well-Architected Framework)"
+  en:
+    title: How does a tech lead choose between a managed cloud database or cache and running the same engine on their own VMs or Kubernetes?
+    prompt: |
+      A service needs a relational database and a distributed cache. There are two paths: use managed cloud
+      services (for example managed PostgreSQL and managed Redis), or run the same engines yourself on virtual
+      machines or in Kubernetes. Part of the team says their own VMs will be noticeably cheaper on the
+      infrastructure bill. As the tech lead, how do you make this decision, what do you compare, and when would
+      you choose to self-host?
+    hint: |
+      Besides the VM bill, who will spend how much time on this database over a year, including at night and
+      on the day something breaks?
+    answer: |
+      1. **Compare total cost of ownership (TCO), not the VM price.** Self-hosting is not only compute, disks
+         and network, it is also people's work:
+         - patching the OS and the engine, major version upgrades;
+         - backups and, above all, regularly testing restores;
+         - replication, automatic failover and failover drills;
+         - monitoring, alerting and on-call with incidents at night;
+         - security: network access, encryption, secret rotation, audit evidence for compliance;
+         - capacity planning and disk growth.
+         Estimate these hours honestly, multiply them by the cost of an engineer and add them to the
+         infrastructure bill.
+      2. **Account for the managed service's price and limits.** A premium for operations; fixed pricing
+         tiers; limits on size, connection count and throughput; not every extension, version and configuration
+         parameter is available; the provider schedules maintenance windows; dependence on the provider. An SLA
+         means compensation in credits, not a guarantee, and high availability or zone redundancy is often a
+         separate option that you enable and pay for.
+      3. **Remember the shared responsibility.** A managed service takes over infrastructure, patching, backups
+         and failover, but the schema, indexes, query performance, access rights and restore testing stay with
+         the team.
+      4. **When self-hosting is justified.**
+         - A large, steady scale at which the managed premium exceeds the cost of a dedicated platform or DBA
+           team.
+         - You need capabilities the managed offering lacks: extensions, versions, fine-grained tuning.
+         - Regulatory requirements or an isolated environment where the cloud service is not available.
+         - Portability across clouds is a real requirement, not a hypothesis.
+         - The company already has an experienced team operating this engine for other services.
+      5. **How to decide.** Write down the requirements (SLO, RPO and RTO, data volume, required features),
+         check the managed service's limits with a prototype or a load test, compute the TCO of both options
+         including people and the risk of data loss, and record an ADR with the conditions for revisiting it
+         (for example a growing bill or hitting a tier limit). Reduce provider lock-in: choose a standard engine
+         and isolate proprietary features.
+      6. **The typical conclusion.** A small team almost always gains by buying operations, that is by using
+         the managed service, and spending its time on the product.
+    explanation: |
+      The "our own VMs are cheaper" argument compares only the visible part of the cost. Operating a stateful
+      system correctly is a discipline of its own: backups that were never restored and failover that was never
+      tested look fine until the first incident. Such failures are rare but expensive: downtime and data loss.
+      A managed service turns this work and this risk into a predictable line on the bill.
+
+      There is also the opportunity cost: the hours the team spends on database patching and on-call do not go
+      into the product. In a small team operational knowledge is often held by one or two people, and their
+      vacation or departure becomes a risk. Kubernetes does not remove this work by itself: for stateful
+      workloads it adds operators, persistent volumes and its own failure modes, which the team must also
+      understand.
+
+      The decision is not permanent. At a large and predictable scale, or with special requirements, the balance
+      can shift toward self-hosting, so it matters to record under which conditions the choice is revisited. The
+      Azure Well-Architected Framework is a handy frame: the decision touches reliability, security, cost
+      optimization and operational excellence at once, and the options should be compared on all of them.
+    linkTitles:
+      - "Microsoft Azure Well-Architected Framework"
+      - "Cost Optimization (Azure Well-Architected Framework)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

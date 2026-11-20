@@ -1,0 +1,174 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQFR4PBQ4NS4CF72K2
+slug: decorator-misses-inner-self-calls
+stack: dotnet
+topic: patterns
+level: senior
+type: output
+grading: auto
+tags: [decorator, gof, delegation, self-calls]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    var inner = new InMemoryRepository();
+    var counting = new CountingRepository(inner);
+    IRepository repo = counting;
+
+    repo.GetAll();
+
+    Console.Write($"{counting.GetCalls} {inner.GetCalls}");
+
+    interface IRepository
+    {
+        string Get(int id);
+        List<string> GetAll();
+    }
+
+    class InMemoryRepository : IRepository
+    {
+        public int GetCalls;
+
+        public string Get(int id)
+        {
+            GetCalls++;
+            return $"item{id}";
+        }
+
+        public List<string> GetAll()
+        {
+            var items = new List<string>();
+            for (int id = 1; id <= 3; id++)
+            {
+                items.Add(Get(id));
+            }
+            return items;
+        }
+    }
+
+    class CountingRepository : IRepository
+    {
+        private readonly IRepository _inner;
+        public int GetCalls;
+
+        public CountingRepository(IRepository inner) => _inner = inner;
+
+        public string Get(int id)
+        {
+            GetCalls++;
+            return _inner.Get(id);
+        }
+
+        public List<string> GetAll() => _inner.GetAll();
+    }
+expect:
+  kind: output
+  value: "0 3"
+acceptedOutputs: ["0 3"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "0 3" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "3 3" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "3 0" }
+  - id: d
+    correct: false
+    expect: { kind: output, value: "0 0" }
+links:
+  - url: https://refactoring.guru/design-patterns/decorator
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/this
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Сколько вызовов Get насчитает декоратор, если GetAll внутри сам вызывает Get?
+    prompt: |
+      `CountingRepository` - декоратор, который считает вызовы `Get` и передаёт их в обёрнутый репозиторий.
+      Метод `GetAll` у `InMemoryRepository` внутри три раза вызывает собственный `Get`. Программа вызывает
+      `GetAll` через ссылку на декоратор. Что она выведет в консоль?
+    hint: Через какую ссылку `InMemoryRepository` вызывает собственный `Get` внутри `GetAll`?
+    options:
+      a: "0 3"
+      b: "3 3"
+      c: "3 0"
+      d: "0 0"
+    optionExplanations:
+      b: "Внутренний `GetAll` вызывает `Get(id)`, то есть `this.Get(id)`, а `this` там - это `InMemoryRepository`, а не декоратор. Ссылки на декоратор у внутреннего объекта нет, поэтому эти вызовы проходят мимо счётчика декоратора."
+      c: "Декоратор не заменяет внутренний объект, а делегирует ему работу: `GetAll` декоратора вызывает `_inner.GetAll()`, и внутренний `Get` выполняется три раза, увеличивая `inner.GetCalls`."
+      d: "`InMemoryRepository.GetAll` действительно вызывает свой `Get` три раза, и каждый вызов увеличивает его собственный счётчик `GetCalls`, поэтому второе число равно 3."
+    answer: "0 3"
+    explanation: |
+      Вызов `repo.GetAll()` попадает в `CountingRepository.GetAll`. Как и базовый декоратор в описании паттерна
+      на Refactoring.Guru, этот метод просто делегирует работу обёрнутому объекту: вызывает `_inner.GetAll()`.
+      В структуре паттерна ссылка есть только у обёртки на обёрнутый объект, обратной ссылки нет.
+
+      Дальше код выполняется внутри `InMemoryRepository`. Неквалифицированный вызов `Get(id)` в методе
+      экземпляра - это вызов на текущем экземпляре, то есть `this.Get(id)`, а по документации C# ключевое слово
+      `this` ссылается на текущий экземпляр класса. Здесь текущий экземпляр - внутренний репозиторий, поэтому
+      все три вызова идут прямо в `InMemoryRepository.Get`. Отсюда и результат: счётчик декоратора остаётся `0`,
+      счётчик внутреннего объекта становится `3`.
+
+      Это ограничение композиции, выведенное из делегирования и семантики `this`: обёрнутый объект не знает о
+      своей обёртке, и его вызовы самого себя проходят мимо неё. На практике кэширующий, логирующий или
+      проверяющий права декоратор над `Get` не сработает для поиска, который выполняется внутри `GetAll`.
+
+      Что можно сделать, если нужно перехватывать и внутренние вызовы:
+
+      - реализовать `GetAll` в самом декораторе через его собственный `Get`, а не делегировать целиком;
+      - вынести общую логику так, чтобы внутренний объект не вызывал сам себя через публичный контракт;
+      - использовать наследование с `virtual`-методами: в подклассе с переопределённым `Get` вызов `Get(id)`
+        из базового `GetAll` диспетчеризуется в переопределение. Цена - жёсткая связь с базовым классом.
+    linkTitles:
+      - "Паттерн Декоратор (Refactoring.Guru)"
+      - "Ключевое слово this"
+  en:
+    title: How many Get calls does a decorator count when GetAll calls Get internally?
+    prompt: |
+      `CountingRepository` is a decorator that counts `Get` calls and passes them on to the wrapped repository.
+      The `GetAll` method of `InMemoryRepository` calls its own `Get` three times internally. The program calls
+      `GetAll` through the decorator reference. What does it print to the console?
+    hint: Through which reference does `InMemoryRepository` call its own `Get` inside `GetAll`?
+    options:
+      a: "0 3"
+      b: "3 3"
+      c: "3 0"
+      d: "0 0"
+    optionExplanations:
+      b: "The inner `GetAll` calls `Get(id)`, that is `this.Get(id)`, and `this` there is the `InMemoryRepository`, not the decorator. The inner object has no reference to the decorator, so these calls bypass the decorator's counter."
+      c: "A decorator does not replace the inner object, it delegates work to it: the decorator's `GetAll` calls `_inner.GetAll()`, and the inner `Get` runs three times, incrementing `inner.GetCalls`."
+      d: "`InMemoryRepository.GetAll` really does call its own `Get` three times, and each call increments its own `GetCalls` counter, so the second number is 3."
+    answer: "0 3"
+    explanation: |
+      The call `repo.GetAll()` reaches `CountingRepository.GetAll`. Like the base decorator in the Refactoring.Guru
+      description of the pattern, this method simply delegates the work to the wrapped object: it calls
+      `_inner.GetAll()`. In the structure of the pattern only the wrapper holds a reference to the wrapped object;
+      there is no reference back.
+
+      From then on the code runs inside `InMemoryRepository`. An unqualified call `Get(id)` in an instance method
+      is a call on the current instance, that is `this.Get(id)`, and according to the C# documentation the `this`
+      keyword refers to the current instance of the class. Here the current instance is the inner repository, so
+      all three calls go straight to `InMemoryRepository.Get`. Hence the result: the decorator's counter stays at
+      `0` and the inner object's counter reaches `3`.
+
+      This is a limit of composition that follows from delegation and the meaning of `this`: the wrapped object
+      does not know about its wrapper, and its calls to itself go around it. In practice a caching, logging or
+      permission-checking decorator over `Get` does not apply to the lookups that happen inside `GetAll`.
+
+      What you can do if internal calls must be intercepted too:
+
+      - implement `GetAll` in the decorator itself on top of its own `Get` instead of delegating it as a whole;
+      - restructure the code so that the inner object does not call itself through the public contract;
+      - use inheritance with `virtual` methods: in a subclass that overrides `Get`, the call `Get(id)` from the
+        base `GetAll` is dispatched to the override. The cost is tight coupling to the base class.
+    linkTitles:
+      - "Decorator pattern (Refactoring.Guru)"
+      - "The this keyword"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

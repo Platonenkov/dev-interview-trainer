@@ -1,0 +1,189 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RRHC5W4WA61DEK6AHV
+slug: wait-until-helper-silent-timeout
+stack: dotnet
+topic: testing
+level: senior
+type: find-bug
+grading: auto
+tags: [async, test-design, false-positive, polling, flaky-tests]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    using System.Threading.Channels;
+
+    // Test: the consumer must process a published order message.
+    var channel = Channel.CreateUnbounded<string>();
+    var consumer = new OrderConsumer(channel.Reader);
+    _ = Task.Run(() => consumer.RunAsync());
+
+    await channel.Writer.WriteAsync("order:42");
+    await WaitUntil(() => consumer.ProcessedCount == 1, TimeSpan.FromMilliseconds(500));
+    Console.WriteLine("PASS");
+
+    static async Task WaitUntil(Func<bool> condition, TimeSpan timeout)
+    {
+        DateTime deadline = DateTime.UtcNow + timeout;
+        while (!condition())
+        {
+            if (DateTime.UtcNow >= deadline)
+            {
+                return;
+            }
+            await Task.Delay(20);
+        }
+    }
+
+    class OrderConsumer
+    {
+        private readonly ChannelReader<string> _reader;
+        private int _processed;
+
+        public OrderConsumer(ChannelReader<string> reader) => _reader = reader;
+
+        public int ProcessedCount => Volatile.Read(ref _processed);
+
+        public async Task RunAsync()
+        {
+            await foreach (string message in _reader.ReadAllAsync())
+            {
+                if (message.StartsWith("orders:", StringComparison.Ordinal))
+                {
+                    Interlocked.Increment(ref _processed);
+                }
+            }
+        }
+    }
+bugLineSets: [[19]]
+fixedSource: |
+  using System.Threading.Channels;
+
+  // Test: the consumer must process a published order message.
+  var channel = Channel.CreateUnbounded<string>();
+  var consumer = new OrderConsumer(channel.Reader);
+  _ = Task.Run(() => consumer.RunAsync());
+
+  await channel.Writer.WriteAsync("order:42");
+  await WaitUntil(() => consumer.ProcessedCount == 1, TimeSpan.FromMilliseconds(500));
+  Console.WriteLine("PASS");
+
+  static async Task WaitUntil(Func<bool> condition, TimeSpan timeout)
+  {
+      DateTime deadline = DateTime.UtcNow + timeout;
+      while (!condition())
+      {
+          if (DateTime.UtcNow >= deadline)
+          {
+              throw new TimeoutException($"Condition was not met within {timeout}.");
+          }
+          await Task.Delay(20);
+      }
+  }
+
+  class OrderConsumer
+  {
+      private readonly ChannelReader<string> _reader;
+      private int _processed;
+
+      public OrderConsumer(ChannelReader<string> reader) => _reader = reader;
+
+      public int ProcessedCount => Volatile.Read(ref _processed);
+
+      public async Task RunAsync()
+      {
+          await foreach (string message in _reader.ReadAllAsync())
+          {
+              if (message.StartsWith("orders:", StringComparison.Ordinal))
+              {
+                  Interlocked.Increment(ref _processed);
+              }
+          }
+      }
+  }
+fixedExpect: { kind: exception, value: System.TimeoutException }
+links:
+  - url: https://martinfowler.com/articles/nonDeterminism.html
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.timeoutexception
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему тест фонового обработчика печатает PASS, хотя сообщение не обработано?
+    prompt: |
+      Самописный тест проверяет, что фоновый обработчик `OrderConsumer` обрабатывает опубликованное сообщение.
+      Результат тест ждёт через вспомогательный метод `WaitUntil`, который периодически проверяет условие.
+      В обработчике есть ошибка, и сообщение не обрабатывается никогда, но примерно через полсекунды тест
+      печатает `PASS`. Щёлкните по строке во вспомогательном методе `WaitUntil` (не в обработчике), из-за
+      которой ошибка остаётся незамеченной.
+    hint: |
+      Чем для вызывающего кода отличается выход из `WaitUntil` после выполнения условия от выхода после
+      истечения времени ожидания?
+    answer: |
+      Строка 19, `return;` в ветке истечения времени: по таймауту `WaitUntil` завершается так же, как при
+      выполненном условии, и тест доходит до `PASS`.
+    explanation: |
+      Обработчик засчитывает только сообщения с префиксом `"orders:"` (строка 38), а тест публикует
+      `"order:42"`, поэтому счётчик остаётся равным нулю. `WaitUntil` проверяет условие каждые 20 мс, через
+      500 мс попадает в ветку истечения времени и выполняет `return;`. Для вызывающего кода обычный возврат из
+      метода означает «условие выполнено», поэтому тест печатает `PASS`. Успех и таймаут неотличимы, и тест
+      проходит при любом поведении обработчика.
+
+      Вспомогательный метод ожидания условия обязан проваливаться по таймауту: выбрасывать исключение
+      (например, `TimeoutException` с описанием того, чего ждали) или вызывать провал теста средствами
+      фреймворка. Мартин Фаулер в статье о недетерминизме в тестах советует вместо голых пауз опрашивать условие
+      с ограничением по времени, и смысл этого ограничения в том, что по его истечении тест падает. В
+      исправленном коде строка 19 выбрасывает `TimeoutException`, программа завершается необработанным
+      исключением, то есть тест наконец сообщает о дефекте. После этого исправляют сам обработчик, и тест
+      проходит по правильной причине.
+
+      Такая ошибка выживает, потому что тест ни разу не видели падающим. Вспомогательные методы ожидания стоит
+      проверять отдельно: намеренно сделать условие невыполнимым и убедиться, что тест падает. Таймаут можно
+      брать с запасом (секунды для CI): при успехе опрос заканчивается сразу, как только условие выполнено, и
+      большой таймаут не замедляет зелёный прогон, но снижает нестабильность на медленной машине. Если код
+      умеет сам сигнализировать о завершении (например, через `TaskCompletionSource`), лучше ждать этот сигнал
+      через `Task.WaitAsync(timeout)`: он тоже выбрасывает `TimeoutException`, если время вышло.
+    linkTitles:
+      - "Eradicating Non-Determinism in Tests (Мартин Фаулер)"
+      - "Класс TimeoutException"
+  en:
+    title: Why does a background consumer test print PASS although the message was never processed?
+    prompt: |
+      A hand-written test checks that the background consumer `OrderConsumer` processes a published message.
+      The test waits for the result with a helper method `WaitUntil` that polls a condition.
+      The consumer has a bug and never processes the message, yet after about half a second the test prints
+      `PASS`. Click the line in the `WaitUntil` helper (not in the consumer) that lets the bug go unnoticed.
+    hint: |
+      For the calling code, how does leaving `WaitUntil` after the condition holds differ from leaving it after
+      the time runs out?
+    answer: |
+      Line 19, `return;` in the timeout branch: on timeout `WaitUntil` finishes exactly as it does when the
+      condition holds, and the test goes on to `PASS`.
+    explanation: |
+      The consumer counts only messages with the `"orders:"` prefix (line 38), while the test publishes
+      `"order:42"`, so the counter stays at zero. `WaitUntil` checks the condition every 20 ms, reaches the
+      timeout branch after 500 ms and executes `return;`. For the caller a normal return means "the condition
+      holds", so the test prints `PASS`. Success and timeout are indistinguishable, and the test passes whatever
+      the consumer does.
+
+      A wait-for-condition helper must fail on timeout: throw an exception (for example `TimeoutException`
+      describing what was awaited) or fail the test through the framework. In his article on non-determinism in
+      tests Martin Fowler recommends polling a condition with a time limit instead of bare sleeps, and the point
+      of that limit is that the test fails when it expires. In the corrected code line 19 throws
+      `TimeoutException`, the program ends with an unhandled exception, so the test finally reports the defect.
+      Then the consumer itself is fixed, and the test passes for the right reason.
+
+      This bug survives because nobody ever saw the test fail. Wait helpers deserve their own check: make the
+      condition impossible on purpose and confirm that the test fails. The timeout can be generous (seconds in
+      CI): on success polling stops as soon as the condition holds, so a large timeout does not slow down a green
+      run, but it reduces flakiness on a slow machine. If the code can signal completion itself (for example
+      through a `TaskCompletionSource`), it is better to wait for that signal with `Task.WaitAsync(timeout)`,
+      which also throws `TimeoutException` when the time runs out.
+    linkTitles:
+      - "Eradicating Non-Determinism in Tests (Martin Fowler)"
+      - "TimeoutException class"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

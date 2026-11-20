@@ -1,0 +1,150 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQQH62PPKVGJGZXJ5X
+slug: distributed-cache-hot-key-single-shard
+stack: dotnet
+topic: system-design
+level: senior
+type: situation
+grading: self
+tags: [redis, caching, hot-key, sharding, flash-sale]
+links:
+  - url: https://learn.microsoft.com/en-us/azure/architecture/best-practices/caching
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/azure/architecture/patterns/sharding
+    lang: en
+    kind: docs
+  - url: https://redis.io/docs/latest/operate/oss_and_stack/reference/cluster-spec/
+    lang: en
+    kind: spec
+locales:
+  ru:
+    title: Во время распродажи один шард кластера Redis перегружен, остальные простаивают, и добавление шардов не помогло
+    prompt: |
+      API интернет-магазина на ASP.NET Core работает в нескольких десятках экземпляров и кэширует данные о
+      товарах в кластерном Redis из 6 шардов. Когда стартует распродажа, один шард упирается в 100% CPU и в
+      сеть, вызовы Redis в приложении падают по тайм-ауту, а остальные шарды загружены примерно на 10%.
+      Команда увеличила кэш до 12 шардов, но картина не изменилась: по-прежнему перегружен один шард.
+      Как вы будете диагностировать и исправлять проблему?
+    hint: |
+      Как кластер решает, на каком шарде хранится ключ, и что происходит, когда почти все запросы спрашивают одно и то же?
+    answer: |
+      1. **Вспомнить, как размещаются ключи.** Redis Cluster относит каждый ключ к одному из 16 384 слотов
+         (CRC16 от ключа по модулю 16384), и каждый слот обслуживает ровно один основной шард. Добавление
+         шардов перемещает слоты между узлами, но один ключ всегда живёт в одном слоте на одном узле. Если
+         почти все запросы во время распродажи читают один и тот же ключ (товар распродажи, текущие настройки
+         акции, счётчик остатка), почти вся нагрузка достаётся одному узлу при любом числе шардов. Команды на
+         узле Redis выполняет по сути в одном потоке, поэтому потолком становится CPU этого узла.
+      2. **Найти виновника.** Метрики по шардам (операции в секунду, CPU, исходящий трафик) подтверждают
+         перекос. Затем найти ключи: самый дешёвый и безопасный способ - телеметрия самого приложения
+         (выборочно записывать, какие ключи запрашиваются); на стороне Redis - `redis-cli --hotkeys` (нужна
+         политика вытеснения LFU) и коротко и осторожно `MONITOR`, который сам нагружает сервер. Различить три
+         случая:
+         - **горячий ключ**: небольшой ключ, который читает почти каждый запрос;
+         - **большой ключ**: одно крупное значение (сериализованный каталог, `HGETALL` по огромному хешу),
+           которое забивает сеть даже при умеренном числе операций; найти его помогают `redis-cli --bigkeys` и
+           `MEMORY USAGE`;
+         - **горячий слот**: много разных ключей с общим hash tag, например `{sale}:...`, попадают в один слот.
+      3. **Поглотить горячие чтения рядом с приложением.** Держать локальную копию горячего ключа в памяти
+         каждого экземпляра API (`IMemoryCache`) с коротким TTL в несколько секунд и обновлять её одним
+         запросом на экземпляр. Тогда Redis видит примерно одно чтение на экземпляр за TTL, а не одно на каждый
+         запрос пользователя. Цена - устарелость до TTL и короткие расхождения между экземплярами. Для карточки
+         товара это допустимо, если цена и остаток повторно проверяются при оформлении заказа.
+      4. **Или размножить ключ.** Хранить N копий под именами, которые попадают в разные слоты (например,
+         `product:42:c0` ... `product:42:c7`), читать случайную копию и обновлять при записи все копии. Копии
+         могут кратковременно расходиться: запись в несколько слотов не атомарна. Чтение с реплик, если сервис
+         его поддерживает, добавляет мощность только этому одному шарду и добавляет задержку репликации.
+      5. **Разделить горячую запись.** Если горячий ключ - счётчик, который уменьшает каждый покупатель,
+         локальная копия не поможет. Разбить его на несколько подсчётчиков в разных слотах, выдавать остаток
+         экземплярам пачками или хранить достоверный остаток в базе с резервированием, а кэш использовать только
+         для отображения.
+      6. **Исправить большие ключи и hash tags.** Разбить крупные значения и читать только нужные поля;
+         использовать hash tags только там, где многоключевым операциям действительно нужен один слот.
+      7. **Не допустить повторения.** Нагрузочный тест с реалистичным перекосом (несколько очень популярных
+         товаров, а не равномерное распределение), алерты на нагрузку отдельного шарда, а не среднюю по
+         кластеру, прогрев локальных кэшей перед плановой распродажей и ревью схемы ключей для заведомо горячих
+         сущностей.
+    explanation: |
+      Шардирование увеличивает пропускную способность, только когда нагрузка распределена по многим ключам.
+      Кластер делит пространство ключей, а не трафик: единица распределения - слот, и один ключ нельзя
+      разнести по узлам. Во время распродажи распределение обращений сильно перекошено, поэтому шард, которому
+      принадлежит ключ акции, получает почти всё, и новые шарды для этого ключа ничего не меняют. Средняя
+      загрузка кластера при этом выглядит нормально, поэтому важны метрики по каждому шарду.
+
+      Руководство по паттерну Sharding предупреждает, что неравномерное распределение создаёт горячие точки и
+      ключ шардирования должен распределять нагрузку. Но один горячий ключ - это предел любого разбиения по
+      ключам. Руководство по кэшированию описывает сочетание локального частного кэша в каждом экземпляре с
+      общим кэшем, и здесь это именно нужный инструмент: локальный кэш умножает мощность чтения на число
+      экземпляров.
+
+      Компромиссы, которые стоит назвать: локальные копии и размноженные ключи меняют свежесть и согласованность
+      на мощность; остаток товара нельзя отдавать устаревшим, поэтому запись требует другого решения;
+      вертикальное масштабирование узла Redis даёт лишь постоянный множитель и не устраняет перекос.
+    linkTitles:
+      - "Рекомендации по кэшированию"
+      - "Паттерн Sharding"
+      - "Спецификация Redis Cluster"
+  en:
+    title: During a flash sale one Redis cluster shard is saturated while the others idle, and adding shards did not help
+    prompt: |
+      An ASP.NET Core shop API runs as several dozen instances and caches product data in a clustered Redis
+      cache with 6 shards. When a flash sale starts, one shard reaches 100% CPU and saturates its network,
+      Redis calls in the application time out, while the other shards stay at about 10% load. The team scaled
+      the cache to 12 shards, but the picture did not change: one shard is still saturated.
+      How do you diagnose and fix the problem?
+    hint: |
+      How does the cluster decide which shard stores a key, and what happens when almost every request asks for the same thing?
+    answer: |
+      1. **Recall how keys are placed.** Redis Cluster maps every key to one of 16,384 hash slots (CRC16 of the
+         key modulo 16384), and every slot is served by exactly one primary shard. Adding shards moves slots
+         between nodes, but one key always lives in one slot on one node. If almost every request during the
+         sale reads the same key (the sale product, the current sale settings, a stock counter), almost all the
+         load lands on one node whatever the number of shards. Redis executes commands on a node essentially in
+         one thread, so the CPU of that node becomes the ceiling.
+      2. **Find the culprit.** Per-shard metrics (operations per second, CPU, outgoing network) confirm the
+         imbalance. Then identify the keys: the cheapest and safest way is the application's own telemetry
+         (sample which keys are requested); on the Redis side, `redis-cli --hotkeys` (needs an LFU eviction
+         policy) and, briefly and carefully, `MONITOR`, which itself loads the server. Distinguish three cases:
+         - a **hot key**: a small key read by almost every request;
+         - a **big key**: one large value (a serialized catalog, `HGETALL` on a huge hash) that saturates the
+           network even at a moderate operation rate; `redis-cli --bigkeys` and `MEMORY USAGE` help find it;
+         - a **hot slot**: many different keys share a hash tag such as `{sale}:...` and land in one slot.
+      3. **Absorb hot reads close to the application.** Keep a local in-memory copy of the hot key in every API
+         instance (`IMemoryCache`) with a short TTL of a few seconds, refreshed by one request per instance.
+         Redis then sees about one read per instance per TTL instead of one per user request. The price is
+         staleness up to the TTL and short disagreements between instances. That is acceptable for a product
+         card if price and stock are checked again at checkout.
+      4. **Or spread the key.** Store N copies under names that land in different slots (for example
+         `product:42:c0` ... `product:42:c7`), read a random copy and update all copies on write. Copies can
+         briefly differ, because a write to several slots is not atomic. Reading from replicas, where the
+         service supports it, adds capacity only to that one shard and adds replication lag.
+      5. **Split hot writes.** If the hot key is a counter that every buyer decrements, a local copy does not
+         help. Split it into several sub-counters in different slots, hand out stock to instances in batches, or
+         keep the authoritative stock in the database with a reservation flow and use the cache for display only.
+      6. **Fix big keys and hash tags.** Split large values and read only the needed fields; use hash tags only
+         where multi-key operations really need one slot.
+      7. **Prevent a repeat.** Load-test with realistic skew (a few very popular products, not a uniform
+         distribution), alert on the load of each shard rather than the cluster average, warm the local caches
+         before a planned sale, and review the key design for entities that are known to be hot.
+    explanation: |
+      Sharding raises throughput only when the load is spread across many keys. A cluster partitions the key
+      space, not the traffic: the unit of distribution is the slot, and one key cannot be split across nodes.
+      During a flash sale access is extremely skewed, so the shard that owns the sale's key gets almost all of
+      it, and new shards change nothing for that key. The cluster average still looks healthy, which is why
+      per-shard metrics matter.
+
+      The Sharding pattern guidance warns that uneven distribution creates hotspots and that the shard key
+      should spread the load. But a single hot key is the limit of any key-based partitioning. The Caching
+      guidance describes combining a local private cache in each instance with a shared cache, and here that
+      is exactly the right tool: the local cache multiplies read capacity by the number of instances.
+
+      Trade-offs worth naming: local copies and replicated keys trade freshness and consistency for capacity;
+      stock must not be served stale, so writes need a different design; scaling a Redis node up buys only a
+      constant factor and does not remove the skew.
+    linkTitles:
+      - "Caching guidance"
+      - "Sharding pattern"
+      - "Redis cluster specification"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

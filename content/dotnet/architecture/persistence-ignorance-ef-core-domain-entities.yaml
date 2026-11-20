@@ -1,0 +1,159 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RKC27TAX3EMDKBKRWV
+slug: persistence-ignorance-ef-core-domain-entities
+stack: dotnet
+topic: architecture
+level: senior
+type: open
+grading: self
+tags: [clean-architecture, ddd, persistence-ignorance, ef-core, backing-fields]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/architecture/microservices/microservice-ddd-cqrs-patterns/infrastructure-persistence-layer-implementation-entity-framework-core
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/ef/core/modeling/backing-field
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/ef/core/modeling/constructors
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Можно ли отображать доменные сущности напрямую через EF Core или нужна отдельная модель хранения?
+    prompt: |
+      Приложение на .NET построено по чистой архитектуре в стиле DDD: доменный слой не должен зависеть от
+      инфраструктуры. Часть команды предлагает завести для каждой доменной сущности отдельный класс модели
+      хранения (например, `Order` в домене и `OrderRecord` в инфраструктуре) и маппить их друг в друга в
+      репозиториях, чтобы домен ничего не знал об EF Core.
+
+      Нужно ли это? Какие возможности EF Core позволяют отображать доменные сущности напрямую, не ломая их
+      инкапсуляцию? Где у такого подхода пределы и когда отдельная модель хранения всё-таки оправдана?
+    hint: Где обязательно должна жить информация об отображении на таблицы и что EF Core умеет делать с непубличными членами класса?
+    answer: |
+      1. **Persistence ignorance не требует второй модели.** Достаточно, чтобы доменный проект не ссылался на
+         пакеты EF Core и не содержал атрибутов отображения. Всё отображение живёт в инфраструктуре: в
+         `OnModelCreating` контекста или в классах `IEntityTypeConfiguration<T>` (их можно подключить через
+         `ApplyConfigurationsFromAssembly`). Fluent API заменяет атрибуты аннотаций данных.
+      2. **EF Core работает с инкапсулированной сущностью:**
+         - **закрытые сеттеры** (`public decimal Total { get; private set; }`): EF Core заполняет такие
+           свойства при материализации, а код приложения менять их не может;
+         - **поля поддержки** для коллекций: `private readonly List<OrderLine> _lines` и наружу только
+           `IReadOnlyCollection<OrderLine> Lines`. EF Core находит поле по соглашению об именах, его можно
+           указать явно через `HasField`, а режим доступа задать через `UsePropertyAccessMode`. Добавлять
+           позиции можно только методом корня, например `AddLine`, который проверяет инварианты;
+         - **конструкторы с параметрами**: EF Core может вызвать конструктор, параметры которого совпадают
+           по имени и типу с отображаемыми свойствами, или закрытый конструктор без параметров. Публичный
+           конструктор или фабричный метод остаётся для кода приложения и проверяет инварианты;
+         - **объекты-значения**: принадлежащие типы (`OwnsOne`, `OwnsMany`), сложные типы (`ComplexProperty`,
+           с EF Core 8) и преобразователи значений (`HasConversion`), например для строго типизированных
+           идентификаторов;
+         - **теневые свойства** для чисто технических столбцов (дата изменения, часть внешних ключей) и
+           `Ignore` для того, что хранить не нужно, например списка доменных событий.
+      3. **Отдельная модель хранения обычно - лишнее дублирование.** Два класса на каждую сущность, маппинг в
+         обе стороны, а главное - потеря отслеживания изменений: при сохранении нужно загрузить отслеживаемую
+         запись и перенести в неё поля, вручную вычислить разницу дочерних коллекций, не потерять токен
+         параллелизма. Именно здесь появляются ошибки вроде забытого поля или удалённой позиции, которая
+         осталась в базе.
+      4. **Пределы прямого отображения - небольшие уступки домена.** Нужен конструктор, который EF Core может
+         вызвать (часто это закрытый конструктор «для EF»), ключ, свойства внешних ключей или навигации для
+         связей. Прокси ленивой загрузки требуют `virtual` навигаций и незапечатанных классов, поэтому для
+         агрегатов ленивую загрузку лучше не включать.
+      5. **Отдельная модель оправдана, когда домен и схема действительно расходятся:** унаследованная или
+         общая с другими системами база, схемой владеет другая команда или DBA, один агрегат разложен по
+         таблицам так, что Fluent API не выражает это без искажения модели, либо хранилище вообще не
+         отображается через EF Core. Решение принимается по каждому агрегату, а не для всей системы сразу.
+    explanation: |
+      Цель persistence ignorance - чтобы правила предметной области не зависели от того, как данные
+      хранятся, и не менялись из-за смены схемы. Этой цели служит направление зависимостей, а не количество
+      классов: если инфраструктура ссылается на домен и описывает отображение снаружи через Fluent API,
+      доменные классы остаются обычными классами C#. Руководство Microsoft по DDD-микросервисам показывает
+      именно такой вариант: агрегат `Order` с закрытыми полями и коллекцией позиций, доступной только для
+      чтения, отображается EF Core напрямую, а конфигурация лежит в инфраструктурном слое.
+
+      Отдельная модель хранения выглядит «чище», но переносит сложность в ручной маппинг и отключает то, ради
+      чего берут EF Core: отслеживание изменений, единицу работы и автоматическое вычисление изменений в
+      графе агрегата. В итоге команда пишет собственный маленький ORM внутри репозиториев.
+
+      Частая ошибка в обратную сторону - открыть публичные сеттеры и публичный `List<T>` «потому что так
+      нужно EF». EF Core этого не требует, а открытая коллекция позволяет любому коду обойти методы корня и
+      нарушить инварианты агрегата.
+
+      Перечисленные возможности доступны в EF Core 10 (.NET 10); сложные типы появились в EF Core 8, остальное
+      существует давно. Сильный ответ называет и цену прямого отображения - небольшие уступки вроде закрытого
+      конструктора - и признаёт, что при сильном расхождении модели и схемы вторая модель становится
+      оправданной.
+    linkTitles:
+      - "Реализация инфраструктурного слоя хранения с EF Core"
+      - "Поля поддержки в EF Core"
+      - "Типы сущностей с конструкторами в EF Core"
+  en:
+    title: Can EF Core map domain entities directly, or do you need a separate persistence model?
+    prompt: |
+      A .NET application follows clean architecture in a DDD style: the domain layer must not depend on
+      infrastructure. Part of the team proposes a separate persistence class for every domain entity (for
+      example `Order` in the domain and `OrderRecord` in infrastructure) and mapping between them in the
+      repositories, so that the domain knows nothing about EF Core.
+
+      Is that needed? Which EF Core features let you map domain entities directly without breaking their
+      encapsulation? Where are the limits of that approach, and when is a separate persistence model still
+      justified?
+    hint: Where must the information about mapping to tables live, and what can EF Core do with non-public members of a class?
+    answer: |
+      1. **Persistence ignorance does not require a second model.** It is enough that the domain project does
+         not reference EF Core packages and has no mapping attributes. All mapping lives in infrastructure: in
+         the context's `OnModelCreating` or in `IEntityTypeConfiguration<T>` classes (applied with
+         `ApplyConfigurationsFromAssembly`). The Fluent API replaces data annotation attributes.
+      2. **EF Core works with an encapsulated entity:**
+         - **private setters** (`public decimal Total { get; private set; }`): EF Core sets such properties when
+           it materializes an entity, while application code cannot change them;
+         - **backing fields** for collections: `private readonly List<OrderLine> _lines` with only
+           `IReadOnlyCollection<OrderLine> Lines` exposed. EF Core finds the field by naming convention, it can
+           be named explicitly with `HasField`, and the access mode set with `UsePropertyAccessMode`. Lines can
+           be added only through a root method such as `AddLine`, which checks the invariants;
+         - **constructors with parameters**: EF Core can call a constructor whose parameters match mapped
+           properties by name and type, or a private parameterless constructor. A public constructor or factory
+           method stays for application code and enforces the invariants;
+         - **value objects**: owned types (`OwnsOne`, `OwnsMany`), complex types (`ComplexProperty`, since
+           EF Core 8) and value converters (`HasConversion`), for example for strongly typed identifiers;
+         - **shadow properties** for purely technical columns (a last-modified date, some foreign keys) and
+           `Ignore` for what must not be stored, such as a list of domain events.
+      3. **A separate persistence model is usually just duplication.** Two classes per entity, mapping in both
+         directions and, above all, the loss of change tracking: on save you must load the tracked record and
+         copy fields into it, diff child collections by hand and not lose the concurrency token. This is where
+         bugs such as a forgotten field or a removed line that stays in the database come from.
+      4. **The limits of direct mapping are small concessions in the domain.** EF Core needs a constructor it
+         can call (often a private constructor "for EF"), a key, and foreign key properties or navigations for
+         relationships. Lazy-loading proxies need `virtual` navigations and unsealed classes, so it is better not
+         to enable lazy loading for aggregates.
+      5. **A separate model is justified when the domain and the schema really diverge:** a legacy database or
+         one shared with other systems, a schema owned by another team or a DBA, an aggregate spread across
+         tables in a way the Fluent API cannot express without distorting the model, or a store that is not
+         mapped through EF Core at all. Decide per aggregate, not for the whole system at once.
+    explanation: |
+      The goal of persistence ignorance is that domain rules do not depend on how data is stored and do not
+      change when the schema changes. That goal is served by the direction of dependencies, not by the number
+      of classes: if infrastructure references the domain and describes the mapping from outside with the
+      Fluent API, domain classes remain plain C# classes. Microsoft's guidance on DDD microservices shows exactly
+      this: an `Order` aggregate with private fields and a read-only collection of items is mapped by EF Core
+      directly, and the configuration sits in the infrastructure layer.
+
+      A separate persistence model looks "cleaner", but it moves the complexity into manual mapping and turns
+      off what EF Core is used for: change tracking, the unit of work and automatic detection of changes in the
+      aggregate graph. The team ends up writing its own small ORM inside the repositories.
+
+      A common mistake in the other direction is to expose public setters and a public `List<T>` "because EF
+      needs it". EF Core does not require that, and an exposed collection lets any code bypass the root's
+      methods and break the aggregate's invariants.
+
+      The features listed are available in EF Core 10 (.NET 10); complex types appeared in EF Core 8, the rest
+      has existed for a long time. A strong answer names the cost of direct mapping too - small concessions such
+      as a private constructor - and admits that when the model and the schema diverge strongly, a second model
+      becomes justified.
+    linkTitles:
+      - "Implement the infrastructure persistence layer with Entity Framework Core"
+      - "Backing fields in EF Core"
+      - "Entity types with constructors in EF Core"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

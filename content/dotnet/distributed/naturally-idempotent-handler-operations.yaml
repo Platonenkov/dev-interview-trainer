@@ -1,0 +1,129 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RN8JEYMBVQF4T0KSF3
+slug: naturally-idempotent-handler-operations
+stack: dotnet
+topic: distributed
+level: middle
+type: multi
+grading: auto
+tags: [idempotency, idempotent-consumer, at-least-once, messaging]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+  - id: e
+    correct: true
+  - id: f
+    correct: false
+links:
+  - url: https://microservices.io/patterns/communication-style/idempotent-consumer.html
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/dotnet/architecture/microservices/multi-container-microservice-net-applications/subscribe-events
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какие операции обработчика сообщений идемпотентны по своей природе?
+    prompt: |
+      Обработчик сообщений работает с доставкой at-least-once, поэтому одно и то же сообщение может прийти
+      дважды. Отдельной защиты от повторов (таблицы обработанных сообщений, ключей идемпотентности) нет.
+
+      Выберите все операции, которые идемпотентны по своей природе: повторная обработка того же сообщения
+      оставляет систему в том же состоянии, что и однократная.
+    hint: Мысленно выполните каждую операцию дважды подряд с теми же данными и сравните итог с однократным выполнением.
+    options:
+      a: "Установить статус заказа: `UPDATE Orders SET Status = 'Shipped' WHERE Id = @orderId`."
+      b: "Сохранить адрес доставки через upsert по `CustomerId`: если строки клиента нет, она вставляется, иначе адрес перезаписывается значением из сообщения."
+      c: "Пополнить баланс: `UPDATE Accounts SET Balance = Balance + @amount WHERE Id = @accountId`."
+      d: "Вставить строку в таблицу `Payments` с автоинкрементным первичным ключом и без уникального ограничения на данные сообщения."
+      e: "Удалить резерв: `DELETE FROM Reservations WHERE Id = @reservationId`."
+      f: "Отправить клиенту письмо с подтверждением заказа через SMTP-сервер."
+    optionExplanations:
+      c: "Изменение относительное: каждая обработка снова прибавляет сумму, и после повтора баланс увеличен вдвое."
+      d: "Повторная вставка создаёт вторую строку с новым значением ключа: ничто не связывает её с первой, поэтому платёж записан дважды."
+      f: "Письмо - внешний побочный эффект: повторная обработка отправит второе письмо, и отменить его нельзя."
+    answer: "Установка статуса, upsert по ключу клиента и удаление по идентификатору."
+    explanation: |
+      Операция идемпотентна по своей природе, если повторное выполнение с теми же входными данными приводит к
+      тому же итоговому состоянию, что и однократное. Примените каждую операцию дважды:
+
+      - установка статуса `Shipped` - абсолютное присваивание: второй `UPDATE` записывает то же значение;
+      - upsert по `CustomerId` находит строку, созданную первой обработкой, и перезаписывает её теми же данными;
+      - второй `DELETE` по идентификатору затрагивает ноль строк, состояние не меняется. Обработчик должен
+        считать «0 затронутых строк» успехом, а не ошибкой, из-за которой сообщение уйдёт на повтор или в DLQ;
+      - пополнение баланса относительное: каждая обработка снова прибавляет сумму;
+      - вставка без уникального ключа создаёт ещё одну строку;
+      - письмо - внешний эффект, второй прогон отправляет второе письмо.
+
+      Неидемпотентные операции защищают паттерном Idempotent Consumer: идентификатор сообщения записывается в
+      таблицу обработанных сообщений в той же транзакции, что и бизнес-изменение, а сообщение с уже известным
+      идентификатором пропускается. Другой путь - сделать операцию ключевой: уникальное ограничение на
+      идентификатор сообщения в `Payments` превращает повторную вставку в нарушение ограничения, которое
+      обработчик трактует как «уже сделано». Письмо нельзя зафиксировать в одной транзакции с базой, поэтому
+      факт отправки записывают отдельно и, если провайдер это поддерживает, передают ему ключ идемпотентности;
+      небольшой риск повторного письма всё равно остаётся.
+
+      Оговорка: естественная идемпотентность защищает только от повтора того же сообщения. Если задержанный
+      дубликат старого сообщения придёт после более нового (статус `Paid` после `Shipped`), абсолютное
+      присваивание откатит статус назад. Порядок защищают отдельно, например номером версии сущности в
+      сообщении, который обработчик сравнивает перед записью.
+    linkTitles:
+      - "Паттерн Idempotent Consumer (microservices.io)"
+      - "Подписка на события и идемпотентные обработчики интеграционных событий"
+  en:
+    title: Which message handler operations are idempotent by nature?
+    prompt: |
+      A message handler runs with at-least-once delivery, so the same message can arrive twice. There is no
+      separate protection against repeats (no table of processed messages, no idempotency keys).
+
+      Select all operations that are idempotent by nature: processing the same message again leaves the system
+      in the same state as processing it once.
+    hint: Mentally run each operation twice in a row with the same data and compare the result with a single run.
+    options:
+      a: "Set the order status: `UPDATE Orders SET Status = 'Shipped' WHERE Id = @orderId`."
+      b: "Save the delivery address with an upsert by `CustomerId`: if the customer row does not exist it is inserted, otherwise the address is overwritten with the value from the message."
+      c: "Top up the balance: `UPDATE Accounts SET Balance = Balance + @amount WHERE Id = @accountId`."
+      d: "Insert a row into the `Payments` table with an auto-increment primary key and no unique constraint on the message data."
+      e: "Delete a reservation: `DELETE FROM Reservations WHERE Id = @reservationId`."
+      f: "Send the customer an order confirmation email through an SMTP server."
+    optionExplanations:
+      c: "The change is relative: every run adds the amount again, so after a repeat the balance is increased twice."
+      d: "A repeated insert creates a second row with a new key value: nothing ties it to the first one, so the payment is recorded twice."
+      f: "An email is an external side effect: processing again sends a second email, and it cannot be taken back."
+    answer: "Setting the status, the upsert by customer key and the delete by id."
+    explanation: |
+      An operation is idempotent by nature when running it again with the same input leads to the same final
+      state as running it once. Apply each operation twice:
+
+      - setting the status to `Shipped` is an absolute assignment: the second `UPDATE` writes the same value;
+      - the upsert by `CustomerId` finds the row created by the first run and overwrites it with the same data;
+      - the second `DELETE` by id affects zero rows, and the state does not change. The handler must treat
+        "0 rows affected" as success, not as an error that sends the message to a retry or a DLQ;
+      - the balance top-up is relative: every run adds the amount again;
+      - the insert without a unique key creates one more row;
+      - the email is an external effect, and the second run sends a second email.
+
+      Non-idempotent operations are protected with the Idempotent Consumer pattern: the message id is written to a
+      table of processed messages in the same transaction as the business change, and a message whose id is
+      already known is skipped. Another way is to make the operation keyed: a unique constraint on the message id
+      in `Payments` turns a repeated insert into a constraint violation that the handler treats as "already
+      done". An email cannot be committed in one transaction with the database, so the fact of sending is
+      recorded separately and, if the provider supports it, an idempotency key is passed to it; a small risk of a
+      duplicate email still remains.
+
+      A caveat: natural idempotency only protects against a repeat of the same message. If a delayed duplicate of
+      an older message arrives after a newer one (status `Paid` after `Shipped`), the absolute assignment rolls
+      the status back. Ordering is protected separately, for example with an entity version number in the message
+      that the handler compares before writing.
+    linkTitles:
+      - "Idempotent Consumer pattern (microservices.io)"
+      - "Subscribing to events and idempotent integration event handlers"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

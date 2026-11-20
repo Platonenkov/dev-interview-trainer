@@ -1,0 +1,175 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQGNCPHG904GJF5BTF
+slug: static-singletons-flaky-tests-migration
+stack: dotnet
+topic: patterns
+level: lead
+type: situation
+grading: self
+tags: [singleton, static-state, ambient-context, flaky-tests, dependency-injection, anti-patterns]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/core/extensions/dependency-injection/guidelines
+    lang: en
+    kind: docs
+  - url: https://refactoring.guru/design-patterns/singleton
+    lang: en
+    kind: article
+  - url: https://refactoring.guru/ru/design-patterns/singleton
+    lang: ru
+    kind: article
+locales:
+  ru:
+    title: "Тесты падают случайным образом из-за статических синглтонов и ambient-контекстов: что решает техлид и как провести миграцию?"
+    prompt: |
+      В большом решении на .NET нестабильные тесты: один и тот же прогон то зелёный, то красный, а упавший тест,
+      запущенный отдельно, всегда проходит. Разбор показал, что в коде несколько десятков статических синглтонов
+      (`PriceCache.Instance`, `Settings.Current` и подобные) и ambient-контекстов (статические `CurrentUser` и
+      `TenantContext.Current`), а также прямые обращения к `DateTime.UtcNow`. Статические кэши и контексты
+      хранят состояние между тестами.
+
+      Часть команды предлагает зафиксировать порядок запуска тестов и отключить их параллельное выполнение.
+      Вы техлид. Что вы решите и как организуете переход, не останавливая разработку новых функций?
+    hint: |
+      Чем время жизни статического поля отличается от времени жизни синглтона в DI-контейнере? И все ли из этих
+      десятков мест на самом деле ломают тесты?
+    answer: |
+      1. **Решение: лечить причину, а не симптом.** Фиксированный порядок и отключённая параллельность только
+         прячут связность тестов: следующий новый тест, запуск части тестов по фильтру или обновление тестового
+         фреймворка вернут падения, а прогон станет медленнее. Допустимо лишь временно, с владельцем и сроком,
+         вынести несколько самых проблемных тестов в непараллельную группу, пока идёт миграция.
+      2. **Остановить рост.** Договориться с командой и записать в инженерные правила: новое изменяемое
+         статическое состояние и новые `static Instance` не принимаются. Подкрепить это механически: пункт в
+         чек-листе code review, запрет обращений к статическим точкам доступа уже мигрированных классов через
+         анализатор или архитектурный тест. Иначе статики появляются быстрее, чем их убирают.
+      3. **Инвентаризация и приоритеты.** Составить список статиков и разделить их на группы. Неизменяемые и
+         без состояния (константы, чистые вспомогательные функции) можно оставить. Изменяемые кэши и реестры,
+         которых касаются тесты, и ambient-контексты (текущий пользователь, арендатор, часы) идут первыми.
+         Связать их с падениями: прогнать набор тестов несколько раз и в случайном порядке и посмотреть, какое
+         общее состояние затрагивают упавшие тесты. Порядок работы определяется вредом для тестов.
+      4. **Переводить по одному, небольшими отдельными изменениями.** Для каждого статика: выделить интерфейс,
+         зарегистрировать реализацию в корне композиции (для действительно общего состояния, например кэша или
+         реестра, через `AddSingleton`) и получать её через конструктор. Старый `Instance` пометить
+         `[Obsolete]`, чтобы оставшиеся вызовы были видны как предупреждения, переводить вызывающий код
+         постепенно и удалить статик, когда вызовов не останется. Не заменять статик статическим доступом к
+         `IServiceProvider`: это service locator, и глобальное состояние никуда не девается.
+      5. **Ambient-контексты превратить в явные зависимости.** Часы - `TimeProvider` (начиная с .NET 8) с
+         фейковой реализацией в тестах. Текущий пользователь и арендатор - scoped-сервис, который заполняется на
+         границе запроса. Статические словари-кэши - `IMemoryCache` или собственный сервис кэша,
+         зарегистрированный в DI.
+      6. **Учесть новые риски.** Синглтон из DI в production по-прежнему общий для всех запросов: он должен быть
+         потокобезопасным и не должен захватывать scoped-сервисы (captive dependency). В разработке и тестах
+         включить `ValidateScopes` и `ValidateOnBuild`. Каждый тест или фикстура строит свой контейнер или хост,
+         поэтому экземпляры между тестами больше не разделяются.
+      7. **Вести миграцию как проект.** Владелец, фиксированная доля каждого спринта, видимая метрика (сколько
+         статиков осталось, доля нестабильных прогонов на сервере сборки), первые переводы в паре, чтобы команда
+         освоила рецепт. Владельцу продукта объяснить пользу в его терминах: время, потерянное на перезапуски
+         сборок, и надёжность релизов.
+    explanation: |
+      Статическое поле живёт, пока загружен его тип, то есть обычно весь процесс, поэтому его видят все тесты
+      прогона. Результат теста начинает зависеть от того, что до него и параллельно с ним сделали другие тесты,
+      отсюда и случайные падения. Синглтон в DI - это один экземпляр на контейнер. В production приложение
+      строит один контейнер, и поведение "один экземпляр на приложение" сохраняется. В тестах у каждого
+      контейнера свой экземпляр, и состояние изолировано. Поэтому перевод на время жизни singleton в DI не
+      меняет семантику в production, но возвращает тестам независимость.
+
+      Рекомендации Microsoft по DI поддерживают детали этого рецепта: избегать статического доступа к сервисам
+      и паттерна service locator, делать singleton-сервисы потокобезопасными, включать проверку областей,
+      чтобы синглтоны не захватывали scoped-сервисы, и использовать время жизни singleton только для сервисов
+      с собственным состоянием, которое дорого создавать или которое должно быть общим. Там же среди недостатков
+      синглтонов названы трудности тестирования: общее состояние и связность усложняют модульные тесты. Поэтому
+      миграция не заканчивается регистрацией в контейнере: каждому тесту нужен свой контейнер. Refactoring.Guru
+      отмечает, что паттерн Singleton может маскировать плохой дизайн и затрудняет модульное тестирование
+      клиентского кода. На практике к этому добавляется то, что зависимость не видна в сигнатуре класса.
+
+      Подгонка порядка тестов плоха не только тем, что она хрупкая. Зависимость тестов от порядка - сама по
+      себе дефект, и то же общее состояние часто даёт ошибки и в production, например кэш, который протекает
+      между арендаторами или пользователями. Тесты здесь работают как ранний сигнал, и заглушать его опасно.
+
+      Переписывать всё разом не стоит: статиков десятки, миграция затрагивает много вызывающего кода, риск
+      регрессий высок, а разработка функций остановится. Статики без состояния тестам не мешают, поэтому
+      приоритет по реальному вреду даёт большую часть выигрыша за малую часть работы. Задача лида - не только
+      выбрать технический рецепт, но и сделать так, чтобы правило соблюдалось без его личного контроля: запрет
+      на новые статики, проверка в инструментах, метрика и владелец.
+    linkTitles:
+      - "Рекомендации по внедрению зависимостей"
+      - "Singleton (Refactoring.Guru, английская версия)"
+      - "Одиночка (Refactoring.Guru)"
+  en:
+    title: "Tests fail randomly because of static singletons and ambient contexts: what does a tech lead decide and how is the migration run?"
+    prompt: |
+      In a large .NET solution the tests are flaky: the same run is green one time and red the next, and a
+      failed test always passes when run on its own. The investigation shows several dozen static singletons
+      (`PriceCache.Instance`, `Settings.Current` and the like) and ambient contexts (static `CurrentUser` and
+      `TenantContext.Current`), plus direct calls to `DateTime.UtcNow`. The static caches and contexts keep
+      state between tests.
+
+      Part of the team proposes fixing the test execution order and switching off parallel test execution.
+      You are the tech lead. What do you decide, and how do you run the transition without stopping feature work?
+    hint: |
+      How does the lifetime of a static field differ from the lifetime of a singleton in a DI container? And do
+      all of those dozens of places actually break the tests?
+    answer: |
+      1. **Decision: fix the cause, not the symptom.** A fixed order and disabled parallelism only hide the
+         coupling between tests: the next new test, running a subset of tests through a filter or a test
+         framework upgrade brings the failures back, and the run gets slower. At most, as a temporary measure
+         with an owner and a date, move a few of the worst tests into a non-parallel group while the migration runs.
+      2. **Stop the growth.** Agree with the team and write into the engineering guidelines that new mutable
+         static state and new `static Instance` members are not accepted. Back it up mechanically: a code review
+         checklist item, and a ban on the static accessors of already migrated classes through an analyzer or an
+         architecture test. Otherwise statics appear faster than they are removed.
+      3. **Inventory and prioritise.** List the statics and split them into groups. Immutable and stateless
+         ones (constants, pure helper functions) can stay. Mutable caches and registries that tests touch, and
+         ambient contexts (current user, tenant, clock), go first. Link them to failures: run the suite several
+         times and in random order, and see which shared state the failing tests touch. The order of work is
+         set by the damage to the tests.
+      4. **Migrate one at a time, in small separate changes.** For each static: extract an interface, register
+         the implementation in the composition root (with `AddSingleton` for truly shared state such as a cache
+         or a registry) and receive it through constructors. Mark the old `Instance` as `[Obsolete]` so the
+         remaining callers show up as warnings, migrate callers gradually and delete the static when no callers
+         are left. Do not replace the static with static access to `IServiceProvider`: that is a service
+         locator, and the global state stays.
+      5. **Turn ambient contexts into explicit dependencies.** The clock becomes `TimeProvider` (.NET 8 and
+         later) with a fake implementation in tests. The current user and tenant become a scoped service filled
+         at the request boundary. Static dictionary caches become `IMemoryCache` or an own cache service
+         registered in DI.
+      6. **Watch the new risks.** A DI singleton is still shared by all requests in production: it must be
+         thread-safe and must not capture scoped services (a captive dependency). Turn on `ValidateScopes` and
+         `ValidateOnBuild` in development and tests. Each test or fixture builds its own container or host, so
+         instances are no longer shared between tests.
+      7. **Run the migration as a project.** An owner, a fixed share of every sprint, a visible metric (how
+         many statics remain, the share of flaky runs on the build server), the first migrations done in pairs
+         so the team learns the recipe. Explain the benefit to the product owner in their terms: time lost on
+         build reruns and release reliability.
+    explanation: |
+      A static field lives as long as its type stays loaded, normally the whole process, so every test in the
+      run sees it. A test's result starts to depend on what other tests did before it and in parallel with it,
+      hence the random failures. A DI singleton is one instance per container. In production the application
+      builds one container, and the "one instance per application" behaviour is kept. In tests every container
+      has its own instance, and the state is isolated. That is why moving to the DI singleton lifetime does not
+      change production semantics but gives the tests their independence back.
+
+      The Microsoft DI guidelines support the details of this recipe: avoid static access to services and the
+      service locator pattern, make singleton services thread-safe, enable scope validation so that singletons
+      do not capture scoped services, and use the singleton lifetime only for services whose own state is
+      expensive to create or globally shared. The same page lists testing challenges among the drawbacks of
+      singletons: shared state and coupling make unit testing harder. That is why the migration does not end
+      with the container registration: each test needs its own container. Refactoring.Guru notes that the
+      Singleton pattern can mask bad design and makes the client code hard to unit-test. In practice the
+      dependency is also hidden from the class signature.
+
+      Tuning the test order is bad not only because it is fragile. A dependency of tests on their order is a
+      defect in itself, and the same shared state often causes production bugs too, for example a cache that
+      leaks between tenants or users. The tests are an early signal here, and silencing it is dangerous.
+
+      Rewriting everything at once is not worth it: there are dozens of statics, the migration touches a lot of
+      calling code, the regression risk is high, and feature work would stop. Stateless statics do not hurt the
+      tests, so prioritising by real damage gives most of the benefit for a small part of the work. The lead's
+      job is not only to choose the technical recipe but to make the rule hold without personal policing: a ban
+      on new statics, a check in the tooling, a metric and an owner.
+    linkTitles:
+      - "Dependency injection guidelines"
+      - "Singleton (Refactoring.Guru)"
+      - "Singleton (Refactoring.Guru, Russian version)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

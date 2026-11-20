@@ -1,0 +1,124 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNN56237MMS9MHZZ4K
+slug: kafka-log-compaction-latest-per-key
+stack: dotnet
+topic: distributed
+level: middle
+type: single
+grading: auto
+tags: [kafka, log-compaction, retention, tombstone]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+links:
+  - url: https://docs.confluent.io/kafka/design/log_compaction.html
+    lang: en
+    kind: docs
+  - url: https://docs.confluent.io/platform/current/installation/configuration/topic-configs.html
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что остаётся в топике Kafka с cleanup.policy=compact и что делает запись со значением null?
+    prompt: |
+      Топик Kafka хранит профили пользователей, ключ сообщения - идентификатор пользователя, для топика задано
+      `cleanup.policy=compact`. В одну партицию для ключа `user-42` записаны три версии профиля, а затем запись
+      с тем же ключом и значением `null`.
+
+      Что Kafka гарантирует для ключей топика после уплотнения журнала (log compaction) и что произойдёт с
+      ключом `user-42`?
+    hint: Что `compact` использует вместо возраста записи и как в такой модели сообщить, что ключ удалён?
+    options:
+      a: "Удаляются записи старше `retention.ms` независимо от ключа, а запись со значением `null` хранится как обычная запись, пока не истечёт этот срок."
+      b: "Для каждого ключа в партиции остаётся как минимум последняя запись. Запись со значением `null` - маркер удаления (tombstone): она стирает предыдущие значения ключа, а сама удаляется после `delete.retention.ms`, и ключ исчезает из топика."
+      c: "Для каждого ключа остаётся последняя запись, поэтому запись со значением `null` навсегда остаётся последним значением ключа `user-42`."
+      d: "Для каждого ключа остаётся первая записанная запись, а последующие записи с тем же ключом отбрасываются как дубликаты."
+      e: "Брокер отклонит запись со значением `null`, потому что в уплотняемом топике у каждой записи должно быть значение."
+    optionExplanations:
+      a: "Это поведение политики `delete`: записи удаляются по времени или размеру журнала независимо от ключа. При `compact` последнее значение ключа сохраняется, как бы давно его ни записали."
+      c: "Запись со значением `null` - не обычное значение, а маркер удаления. Он стирает предыдущие значения ключа и сам удаляется из журнала после `delete.retention.ms`, поэтому ключ не остаётся в топике навсегда."
+      d: "Уплотнение сохраняет последнее значение ключа, а не первое: более ранние записи с тем же ключом считаются устаревшими и удаляются."
+      e: "В уплотняемый топик нельзя записать сообщение без ключа, но значение `null` при наличии ключа разрешено: именно так продюсер помечает ключ как удалённый."
+    answer: "Для каждого ключа в партиции остаётся как минимум последняя запись. Запись со значением `null` - маркер удаления: она стирает предыдущие значения ключа, а сама удаляется после `delete.retention.ms`, и ключ `user-42` исчезает из топика."
+    explanation: |
+      При `cleanup.policy=compact` Kafka удаляет записи не по возрасту, а по ключу: фоновый процесс уплотнения
+      (log cleaner) оставляет в каждой партиции как минимум последнюю запись для каждого ключа, а более ранние
+      записи того же ключа удаляет. Поэтому топик работает как журнал изменений: потребитель, прочитавший его с
+      начала, восстанавливает последнее состояние каждого ключа. Так устроены, например, внутренний топик
+      `__consumer_offsets` и changelog-топики хранилищ состояния Kafka Streams.
+
+      Запись с ключом и значением `null` - маркер удаления (tombstone). При уплотнении она стирает все
+      предыдущие значения ключа, а сама остаётся в журнале ещё на время, заданное параметром топика
+      `delete.retention.ms`, и затем тоже удаляется. После этого ключ `user-42` пропадает из топика полностью.
+
+      Почему «как минимум», а не «ровно одна запись»:
+
+      - активный сегмент журнала, в который идёт запись, не уплотняется, а очистка выполняется в фоне, поэтому
+        какое-то время в топике видно несколько значений одного ключа;
+      - смещения записей при уплотнении не меняются: в журнале появляются пропуски, а порядок оставшихся
+        записей сохраняется.
+
+      Практическое следствие: потребитель, который строит по топику кэш или локальную копию данных, должен
+      обрабатывать `null` как удаление ключа. Если он уже прочитал старое значение ключа, а до маркера удаления
+      добрался позже, чем через `delete.retention.ms`, маркер может быть уже удалён, и устаревший ключ
+      останется в его копии.
+    linkTitles:
+      - "Confluent: уплотнение журнала в Kafka"
+      - "Confluent: параметры конфигурации топика Kafka"
+  en:
+    title: What does a Kafka topic with cleanup.policy=compact keep, and what does a record with a null value do?
+    prompt: |
+      A Kafka topic stores user profiles, the message key is the user id, and the topic has
+      `cleanup.policy=compact`. One partition received three profile versions for the key `user-42`, followed by
+      a record with the same key and a `null` value.
+
+      What does Kafka guarantee for the keys of the topic after log compaction, and what happens to the key
+      `user-42`?
+    hint: What does `compact` use instead of a record's age, and how do you signal in such a model that a key was deleted?
+    options:
+      a: "Records older than `retention.ms` are deleted regardless of the key, and a record with a `null` value is kept as an ordinary record until that time passes."
+      b: "At least the latest record of every key in the partition is kept. A record with a `null` value is a delete marker (tombstone): it erases the earlier values of the key, is itself removed after `delete.retention.ms`, and the key disappears from the topic."
+      c: "The latest record of every key is kept, so the record with the `null` value stays forever as the latest value of the key `user-42`."
+      d: "The first record written for each key is kept, and later records with the same key are discarded as duplicates."
+      e: "The broker rejects the record with the `null` value, because every record in a compacted topic must have a value."
+    optionExplanations:
+      a: "That is the behaviour of the `delete` policy: records are removed by time or log size regardless of the key. With `compact` the latest value of a key is kept no matter how long ago it was written."
+      c: "A record with a `null` value is not an ordinary value but a delete marker. It erases the earlier values of the key and is itself removed from the log after `delete.retention.ms`, so the key does not stay in the topic forever."
+      d: "Compaction keeps the latest value of a key, not the first one: earlier records with the same key are considered obsolete and are removed."
+      e: "A compacted topic does not accept a message without a key, but a `null` value with a key is allowed: that is exactly how a producer marks a key as deleted."
+    answer: "At least the latest record of every key in the partition is kept. A record with a `null` value is a delete marker: it erases the earlier values of the key, is itself removed after `delete.retention.ms`, and the key `user-42` disappears from the topic."
+    explanation: |
+      With `cleanup.policy=compact` Kafka removes records by key, not by age: a background compaction process
+      (the log cleaner) keeps at least the latest record for every key in each partition and removes earlier
+      records with the same key. The topic therefore works as a changelog: a consumer that reads it from the
+      beginning restores the latest state of every key. The internal `__consumer_offsets` topic and the changelog
+      topics of Kafka Streams state stores work this way.
+
+      A record with a key and a `null` value is a delete marker (tombstone). During compaction it erases all
+      earlier values of the key, stays in the log for the time set by the topic setting `delete.retention.ms`,
+      and is then removed as well. After that the key `user-42` is gone from the topic completely.
+
+      Why "at least" and not "exactly one record":
+
+      - the active log segment that receives writes is not compacted, and cleaning runs in the background, so
+        for some time the topic shows several values of the same key;
+      - compaction does not change record offsets: the log gets gaps, and the remaining records keep their order.
+
+      The practical consequence: a consumer that builds a cache or a local copy of the data from the topic must
+      treat `null` as the deletion of the key. If it has already read an old value of the key and reaches the
+      delete marker later than `delete.retention.ms`, the marker may already be gone, and the stale key stays in
+      its copy.
+    linkTitles:
+      - "Confluent: Kafka log compaction"
+      - "Confluent: Kafka topic configuration reference"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

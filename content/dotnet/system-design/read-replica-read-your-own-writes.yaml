@@ -1,0 +1,158 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQ5TYK8YN88VVCAZHZ
+slug: read-replica-read-your-own-writes
+stack: dotnet
+topic: system-design
+level: middle
+type: situation
+grading: self
+tags: [read-replicas, replication-lag, read-your-writes, consistency, scaling-reads]
+links:
+  - url: https://learn.microsoft.com/en-us/azure/azure-sql/database/read-scale-out
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/azure/cosmos-db/consistency-levels
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/azure/cosmos-db/nosql/how-to-manage-consistency
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "После переноса чтения профилей на реплику пользователь сохраняет профиль и видит старые данные: что происходит и что менять?"
+    prompt: |
+      Сервис на ASP.NET Core хранит данные в Azure SQL Database уровня Business Critical. На этом уровне read
+      scale-out включён по умолчанию, и, чтобы разгрузить основную реплику, команда перевела чтение профилей на
+      реплику только для чтения: для этих запросов используется отдельная строка подключения с
+      `ApplicationIntent=ReadOnly`. Запись по-прежнему идёт на основную реплику.
+
+      После релиза пользователи жалуются: они сохраняют профиль, их перенаправляет на страницу профиля, а там
+      показаны прежние значения. Если обновить страницу через несколько секунд, всё правильно. Локально
+      воспроизвести не удаётся. Что происходит и что вы измените?
+    hint: |
+      Куда идёт запись, куда идёт следующее чтение и что должно случиться между ними, чтобы чтение увидело
+      запись?
+    answer: |
+      1. **Подтвердить причину.** Запись выполняется на основной реплике, а запрос страницы после редиректа
+         читает с реплики для чтения. Чтение с реплики асинхронно по отношению к основной: обычно изменения
+         доходят за время от десятков миллисекунд до единиц секунд, но фиксированной верхней границы у этой
+         задержки нет. Проверить: логировать, через какое подключение обслужен запрос, воспроизвести «записать и
+         сразу прочитать» через оба подключения, измерить отставание реплики. Заодно исключить кэши (output
+         caching, CDN, браузер): симптом «через несколько секунд всё правильно» подходит и им.
+      2. **Разделить чтения по требованиям к свежести.**
+         - Должны видеть только что сделанную запись: собственные данные пользователя сразу после изменения, а
+           также данные, на основе которых принимается решение перед записью (остаток, баланс).
+         - Терпят отставание: чужие публичные профили, каталоги, поиск, отчёты. Они остаются на реплике.
+      3. **Выбрать механизм для первой группы.**
+         - **Читать с основной реплики.** Самый простой вариант: чтение собственного профиля идёт через
+           подключение для записи (два `DbContext` или две строки подключения, выбор явный в коде). Таких
+           чтений немного, поэтому выигрыш от реплики почти сохраняется.
+         - **Привязка к основной после записи.** После сохранения пользователь получает отметку (например,
+           cookie со временем записи), и в течение окна, заметно большего типичного отставания, его чтения
+           идут на основную реплику. Просто, но не гарантирует результат, если отставание превысит окно.
+         - **Проверка версии.** Сохранение возвращает версию записи (например, `rowversion`), она хранится в
+           сессии пользователя. Чтение с реплики сравнивает версию и при отставании перечитывает с основной.
+           Это точная гарантия для конкретной записи.
+         - **Если хранилище - Azure Cosmos DB,** уровень согласованности Session гарантирует read-your-writes в
+           пределах клиентской сессии. Сессию определяет session token, который возвращается в ответе на запись.
+           Если запросы одного пользователя обслуживают разные экземпляры приложения, токен нужно передавать
+           между ними, например в cookie или заголовке, и указывать при чтении.
+         - **Дополнительно на стороне UI:** ответ на сохранение может сразу отдать сохранённые данные. Это
+           помогает на этой странице, но не на другой вкладке или устройстве, поэтому только в дополнение.
+      4. **Чего не делать.** Не ставить задержку перед редиректом (отставание не ограничено сверху), не
+         возвращать все чтения на основную реплику (теряется смысл масштабирования) и не рассчитывать, что
+         чтение с реплики когда-нибудь станет синхронным.
+      5. **Закрепить.** Метрика и алерт на отставание реплики, интеграционный тест «записать и сразу
+         прочитать» для критичных сценариев, явное разделение в коде на чтения, которым разрешена реплика, и
+         чтения, которым нужна основная база.
+    explanation: |
+      Read scale-out обменивает согласованность на пропускную способность чтения. Документация Azure SQL
+      прямо говорит, что чтение с реплики для чтения всегда асинхронно по отношению к основной реплике: если
+      приложение изменило данные через подключение для записи и сразу прочитало их через подключение только для
+      чтения, последние изменения могут быть ещё не видны. Там же сказано, что типичная задержка - от десятков
+      миллисекунд до единиц секунд, но фиксированной верхней границы нет. Локально ошибка не воспроизводится,
+      потому что там обычно одна база без реплик.
+
+      Пользователю почти никогда не нужна строгая согласованность всей системы. Ему нужна гарантия
+      read-your-writes: собственная запись видна ему же. Это гарантия уровня сессии, и её можно дать точечно:
+      маршрутизацией на основную реплику или проверкой версии, не отказываясь от реплик для остальных чтений.
+      Так устроен уровень Session в Azure Cosmos DB: он гарантирует read-your-writes внутри клиентской сессии,
+      не требуя уровня Strong для всей учётной записи.
+
+      Родственная аномалия - немонотонное чтение: разные реплики могут находиться в разных точках времени, и
+      после переподключения к другой реплике пользователь может увидеть обновлённые данные, а следующим запросом -
+      снова старые. Механизм с версией закрывает и этот случай для проверяемой записи.
+    linkTitles:
+      - "Read scale-out в Azure SQL Database"
+      - "Уровни согласованности в Azure Cosmos DB"
+      - "Управление согласованностью в Azure Cosmos DB, session tokens"
+  en:
+    title: "After profile reads moved to a read replica, users save their profile and see the old data: what is happening and what do you change?"
+    prompt: |
+      An ASP.NET Core service stores its data in an Azure SQL Database in the Business Critical tier. In this tier
+      read scale-out is enabled by default, and to take load off the primary the team moved profile reads to a
+      read-only replica: these queries use a separate connection string with `ApplicationIntent=ReadOnly`.
+      Writes still go to the primary replica.
+
+      After the release users complain: they save their profile, get redirected to the profile page, and it
+      shows the previous values. If they refresh the page a few seconds later, everything is correct. The team
+      cannot reproduce it locally. What is happening, and what do you change?
+    hint: |
+      Where does the write go, where does the next read go, and what has to happen between them for the read to
+      see the write?
+    answer: |
+      1. **Confirm the cause.** The write runs on the primary replica, while the page request after the redirect
+         reads from the read-only replica. Reads from the replica are asynchronous with respect to the primary:
+         changes usually arrive within tens of milliseconds to single-digit seconds, but this delay has no fixed
+         upper bound. Check it: log which connection served each request, reproduce "write and read immediately"
+         through both connections, and measure the replica lag. Also rule out caches (output caching, a CDN, the
+         browser): the symptom "correct a few seconds later" fits them too.
+      2. **Split reads by freshness requirements.**
+         - Must see a write that was just made: the user's own data right after a change, and data used to make
+           a decision before a write (stock, balance).
+         - Tolerate lag: other users' public profiles, catalogs, search, reports. These stay on the replica.
+      3. **Choose a mechanism for the first group.**
+         - **Read from the primary.** The simplest option: reads of the user's own profile go through the
+           read-write connection (two `DbContext` types or two connection strings, chosen explicitly in code).
+           There are few such reads, so most of the replica's benefit remains.
+         - **Stick to the primary after a write.** After saving, the user gets a marker (for example a cookie
+           with the write time), and for a window clearly longer than the typical lag their reads go to the
+           primary. Simple, but no guarantee if the lag exceeds the window.
+         - **Version check.** Saving returns the record version (for example a `rowversion`), which is kept in
+           the user's session. A read from the replica compares the version and re-reads from the primary if the
+           replica is behind. This is an exact guarantee for that record.
+         - **If the store is Azure Cosmos DB,** the Session consistency level guarantees read-your-writes within
+           a client session. The session is identified by a session token returned in the write response. If one
+           user's requests are served by different application instances, the token has to travel between them,
+           for example in a cookie or a header, and be passed with the read.
+         - **Additionally in the UI:** the save response can return the saved data right away. That helps on this
+           page but not in another tab or on another device, so it is only a complement.
+      4. **What not to do.** Do not add a delay before the redirect (the lag has no upper bound), do not move all
+         reads back to the primary (that defeats the scaling), and do not expect replica reads to ever become
+         synchronous.
+      5. **Lock it in.** A metric and an alert on replica lag, an integration test "write and read immediately" for
+         critical scenarios, and an explicit split in code between reads allowed on the replica and reads that need
+         the primary.
+    explanation: |
+      Read scale-out trades consistency for read throughput. The Azure SQL documentation says plainly that reads
+      from a read-only replica are always asynchronous with respect to the primary: if an application changes data
+      through a read-write session and immediately reads it through a read-only session, the latest changes may not
+      be visible yet. It also says the typical latency is tens of milliseconds to single-digit seconds, with no
+      fixed upper bound. It does not reproduce locally because there is usually a single database without replicas.
+
+      A user almost never needs strong consistency of the whole system. They need the read-your-writes guarantee:
+      their own write is visible to them. That is a session-level guarantee, and it can be provided selectively, by
+      routing to the primary or by a version check, without giving up replicas for the other reads. This is how the
+      Session level in Azure Cosmos DB works: it guarantees read-your-writes within a client session without
+      requiring the Strong level for the whole account.
+
+      A related anomaly is non-monotonic reads: different replicas can be at different points in time, and after a
+      reconnect to another replica a user can see updated data and then old data again on the next request. The
+      version mechanism covers this case too for the record it checks.
+    linkTitles:
+      - "Read scale-out in Azure SQL Database"
+      - "Consistency levels in Azure Cosmos DB"
+      - "Manage consistency in Azure Cosmos DB, session tokens"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

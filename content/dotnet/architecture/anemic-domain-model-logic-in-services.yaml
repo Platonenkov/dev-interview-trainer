@@ -1,0 +1,117 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RKSV9TWNKTJF6W1H11
+slug: anemic-domain-model-logic-in-services
+stack: dotnet
+topic: architecture
+level: middle
+type: open
+grading: self
+tags: [ddd, anemic-domain-model, rich-domain-model, invariants, encapsulation]
+links:
+  - url: https://martinfowler.com/bliki/AnemicDomainModel.html
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/dotnet/architecture/microservices/microservice-ddd-cqrs-patterns/microservice-domain-model
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Что такое анемичная модель предметной области, чем она опасна и когда допустима?"
+    prompt: |
+      В проекте сущности вроде `Order` содержат только свойства с публичными `get` и `set`, а все правила
+      (можно ли добавить позицию, как пересчитать сумму, когда заказ можно отправить) живут в классах
+      `OrderService`, `ShippingService` и подобных. Как называется такой подход, чем он опасен и в каких случаях
+      он всё же приемлем?
+    hint: Кто может изменить свойство `Status` у такого заказа и кто проверит, что это изменение допустимо?
+    answer: |
+      - **Это анемичная модель предметной области.** Сущности - просто контейнеры данных без поведения, а логика
+        вынесена в сервисы. По сути это процедурный код: структуры данных плюс функции, которые их обрабатывают.
+      - **Инварианты не защищены.** Правила живут отдельно от данных, которые они охраняют. Любой код с доступом к
+        сущности может написать `order.Status = OrderStatus.Shipped` для неоплаченного заказа или добавить
+        элемент в `order.Lines`, не пересчитав `Total`. Корректность держится на том, что каждый вызывающий не
+        забудет пройти через нужный сервис.
+      - **Правила дублируются и расходятся.** Одна и та же проверка повторяется в нескольких сервисах, со временем
+        копии начинают отличаться, а чтобы понять, что вообще можно делать с заказом, приходится читать все
+        сервисы, которые его трогают.
+      - **Цена без выгоды.** Фаулер замечает, что такая модель несёт расходы модели предметной области
+        (отображение на базу через ORM, отдельный слой), но не даёт её преимуществ.
+      - **Альтернатива - богатая модель.** Сущность сама охраняет свои правила: свойства с `private set`,
+        коллекции наружу как `IReadOnlyCollection<T>`, конструктор, который не даёт создать невалидный объект, и
+        методы с бизнес-смыслом (`order.AddLine(...)`, `order.Ship()`), которые проверяют условия и меняют
+        состояние согласованно. Сервис приложения остаётся тонким: загрузить агрегат, вызвать метод, сохранить.
+      - **Когда анемичная модель допустима.** Простой CRUD-сервис, где данные почти без правил проходят от формы до
+        базы, а также модели для чтения, отчёты и DTO, у которых нет инвариантов. Там богатая модель только
+        усложняет код и ничего не защищает. Выбор определяется сложностью правил предметной области.
+    explanation: |
+      Смысл объектной модели предметной области в том, что данные и правила, которые их ограничивают, находятся
+      в одном месте. Если сущность сама не позволяет перейти в недопустимое состояние, нарушить инвариант можно
+      только изменив её код, а не забыв вызвать сервис. В анемичной модели защита держится на дисциплине:
+      достаточно одного нового места в коде, которое меняет свойства напрямую.
+
+      Сервисы при этом не исчезают. Доменная служба нужна для логики, которая не принадлежит одной сущности
+      (например, расчёт, затрагивающий несколько агрегатов), а сервис приложения координирует сценарий:
+      транзакцию, репозитории, отображение в DTO. Фаулер подчёркивает, что слой сервисов поверх модели - это
+      нормально, но он должен работать вместе с богатой поведением моделью. Проблема не в наличии сервисов, а в
+      том, что сущности лишены всего поведения.
+
+      Руководство Microsoft по микросервисам с DDD требует, чтобы сущности реализовывали поведение, а не только
+      данные, и предупреждает: если в сложном микросервисе логика живёт в классах сервисов, а не в сущностях, это
+      признак анемичной модели. Фаулер в свою очередь оговаривает, что модель предметной области не всегда
+      лучший инструмент: её расходы окупаются, только когда она организует сложную логику. Поэтому для простого
+      CRUD-сервиса сущности только с данными могут быть достаточны. Сильный ответ связывает выбор со сложностью
+      правил: чем больше инвариантов, тем дороже держать их вне сущностей.
+    linkTitles:
+      - "Anemic Domain Model (Martin Fowler)"
+      - "Проектирование модели предметной области микросервиса"
+  en:
+    title: "What is an anemic domain model, why is it risky and when is it acceptable?"
+    prompt: |
+      In a project, entities such as `Order` have only properties with public `get` and `set`, and all the rules
+      (whether a line can be added, how the total is recalculated, when the order can be shipped) live in classes
+      such as `OrderService` and `ShippingService`. What is this approach called, what is the risk, and when is
+      it still acceptable?
+    hint: Who can change the `Status` property of such an order, and who checks that the change is allowed?
+    answer: |
+      - **This is an anemic domain model.** Entities are plain data containers with no behaviour, and the logic
+        sits in services. In essence it is procedural code: data structures plus functions that process them.
+      - **Invariants are not protected.** The rules live apart from the data they guard. Any code with access to
+        the entity can write `order.Status = OrderStatus.Shipped` for an unpaid order, or add an item to
+        `order.Lines` without recalculating `Total`. Correctness depends on every caller remembering to go
+        through the right service.
+      - **Rules get duplicated and drift apart.** The same check is repeated in several services, the copies
+        diverge over time, and to learn what you may do with an order you have to read every service that
+        touches it.
+      - **Cost without benefit.** Fowler notes that such a model carries the costs of a domain model (mapping to
+        the database through an ORM, a separate layer) without delivering its benefits.
+      - **The alternative is a rich model.** The entity guards its own rules: properties with `private set`,
+        collections exposed as `IReadOnlyCollection<T>`, a constructor that does not allow an invalid object, and
+        methods with business meaning (`order.AddLine(...)`, `order.Ship()`) that check conditions and change the
+        state consistently. The application service stays thin: load the aggregate, call a method, save.
+      - **When an anemic model is acceptable.** A simple CRUD service where data passes from a form to the
+        database with almost no rules, and also read models, reports and DTOs that have no invariants. There a
+        rich model only makes the code more complex and protects nothing. The choice follows the complexity of
+        the domain rules.
+    explanation: |
+      The point of an object-oriented domain model is that data and the rules that constrain it live in one
+      place. If the entity itself cannot be moved into an invalid state, the only way to break an invariant is to
+      change the entity's code, not to forget a service call. In an anemic model the protection rests on
+      discipline: one new place in the code that sets properties directly is enough.
+
+      Services do not disappear. A domain service holds logic that does not belong to a single entity (for
+      example a calculation that spans several aggregates), and an application service coordinates a use case:
+      the transaction, the repositories, the mapping to DTOs. Fowler stresses that a service layer on top of the
+      model is fine, but it is meant to work together with a behaviourally rich model. The problem is not that
+      services exist, but that the entities are stripped of all behaviour.
+
+      The Microsoft guidance on DDD microservices requires entities to implement behaviour, not only data, and
+      warns that a complex microservice with its logic in service classes instead of in the entities is a sign of
+      an anemic domain model. Fowler in turn notes that a domain model is not always the best tool: its costs pay
+      off only when it organizes complex logic. So for a simple CRUD service, data-only entities can be good
+      enough. A strong answer ties the choice to the complexity of the rules: the more invariants there are, the
+      more it costs to keep them outside the entities.
+    linkTitles:
+      - "Anemic Domain Model (Martin Fowler)"
+      - "Design a microservice domain model"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

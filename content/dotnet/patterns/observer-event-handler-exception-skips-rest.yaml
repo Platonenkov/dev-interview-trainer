@@ -1,0 +1,146 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQCC6C8CYPKMQ7C1GQ
+slug: observer-event-handler-exception-skips-rest
+stack: dotnet
+topic: patterns
+level: senior
+type: output
+grading: auto
+tags: [observer, events, multicast-delegate, exceptions]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    var feed = new PriceFeed();
+    feed.PriceChanged += (_, price) => Console.Write($"A{price} ");
+    feed.PriceChanged += (_, price) => throw new InvalidOperationException("B failed");
+    feed.PriceChanged += (_, price) => Console.Write($"C{price} ");
+
+    feed.Publish(5);
+    Console.Write("done");
+
+    class PriceFeed
+    {
+        public event EventHandler<int> PriceChanged;
+
+        public void Publish(int price)
+        {
+            try
+            {
+                PriceChanged?.Invoke(this, price);
+            }
+            catch (InvalidOperationException)
+            {
+                Console.Write("caught ");
+            }
+        }
+    }
+expect:
+  kind: output
+  value: "A5 caught done"
+acceptedOutputs: ["A5 caught done"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "A5 caught done" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "A5 caught C5 done" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "A5 C5 caught done" }
+  - id: d
+    correct: false
+    expect: { kind: output, value: "caught done" }
+  - id: e
+    correct: false
+    expect: { kind: exception, value: System.InvalidOperationException }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/language-specification/delegates
+    lang: en
+    kind: spec
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/delegates/how-to-combine-delegates-multicast-delegates
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.delegate.getinvocationlist
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что выведет издатель события, если второй из трёх подписчиков выбрасывает исключение?
+    prompt: |
+      Класс `PriceFeed` играет роль субъекта в паттерне Observer: подписчики регистрируются через событие
+      `PriceChanged`. На событие подписаны три обработчика, второй из них выбрасывает исключение, а издатель
+      оборачивает вызов события в `try`/`catch`. Что выведет эта программа в консоль?
+    hint: Событие - это один многоадресный делегат. Что делает обход его списка вызовов при исключении?
+    options:
+      a: "A5 caught done"
+      b: "A5 caught C5 done"
+      c: "A5 C5 caught done"
+      d: "caught done"
+      e: Необработанное исключение `InvalidOperationException`
+    optionExplanations:
+      b: После того как исключение вылетело из `Invoke`, управление уже находится в блоке `catch` издателя. Возвращаться в список вызовов и запускать третий обработчик некому, поэтому `C5` не печатается ни до, ни после `caught`.
+      c: Многоадресный делегат не собирает исключения, чтобы выбросить их в конце. Исключение второго обработчика сразу прерывает обход списка вызовов, и третий обработчик не запускается.
+      d: Обработчики вызываются по очереди в порядке подписки. Первый успевает отработать и напечатать `A5` до того, как второй выбросит исключение.
+      e: "`Publish` перехватывает `InvalidOperationException` вокруг `Invoke`, поэтому исключение не выходит за пределы издателя, и программа доходит до вывода `done`."
+    answer: "A5 caught done"
+    explanation: |
+      Событие хранит один многоадресный делегат, в списке вызовов которого три метода в порядке подписки.
+      `PriceChanged?.Invoke(this, price)` вызывает их синхронно, один за другим, в том же потоке. Первый печатает
+      `A5`. Второй выбрасывает исключение и не перехватывает его. Спецификация C# в разделе о вызове делегатов
+      описывает этот случай прямо: поиск блока `catch` продолжается в методе, который вызвал делегат, а методы
+      дальше по списку вызовов не вызываются. Блок `catch` издателя печатает `caught`, затем программа печатает
+      `done`. Третий подписчик уведомление так и не получил.
+
+      Для паттерна Observer это значит, что один неисправный наблюдатель лишает уведомлений всех, кто подписался
+      после него, а `try`/`catch` вокруг вызова события этого не исправляет: он лишь не даёт исключению уронить
+      издателя. Если подписчики должны быть изолированы друг от друга, издатель сам получает массив делегатов
+      через `GetInvocationList()`, приводит каждый элемент к `EventHandler<int>` и вызывает его в отдельном
+      `try`/`catch`, а пойманные исключения логирует или собирает в `AggregateException` и выбрасывает после
+      обхода.
+    linkTitles:
+      - "Спецификация C#: делегаты"
+      - "Объединение делегатов (многоадресные делегаты)"
+      - "Метод Delegate.GetInvocationList"
+  en:
+    title: What does an event publisher print when the second of three subscribers throws?
+    prompt: |
+      The `PriceFeed` class is the subject of the Observer pattern: subscribers register through the
+      `PriceChanged` event. Three handlers are subscribed, the second one throws an exception, and the publisher
+      wraps the event invocation in `try`/`catch`. What does this program print to the console?
+    hint: An event is one multicast delegate. What happens to the walk through its invocation list when a call throws?
+    options:
+      a: "A5 caught done"
+      b: "A5 caught C5 done"
+      c: "A5 C5 caught done"
+      d: "caught done"
+      e: Unhandled `InvalidOperationException`
+    optionExplanations:
+      b: Once the exception has left `Invoke`, control is already in the publisher's `catch` block. Nothing goes back into the invocation list to run the third handler, so `C5` is printed neither before nor after `caught`.
+      c: A multicast delegate does not collect exceptions to throw them at the end. The second handler's exception stops the walk through the invocation list at once, and the third handler never runs.
+      d: The handlers are called one by one in subscription order. The first one runs and prints `A5` before the second one throws.
+      e: "`Publish` catches `InvalidOperationException` around `Invoke`, so the exception does not leave the publisher, and the program reaches the output of `done`."
+    answer: "A5 caught done"
+    explanation: |
+      The event holds one multicast delegate whose invocation list contains three methods in subscription order.
+      `PriceChanged?.Invoke(this, price)` calls them synchronously, one after another, on the same thread. The
+      first prints `A5`. The second throws and does not catch the exception. The C# specification covers this
+      case directly in its section on delegate invocation: the search for a `catch` clause continues in the
+      method that called the delegate, and methods further down the invocation list are not invoked. The
+      publisher's `catch` block prints `caught`, then the program prints `done`. The third subscriber never
+      receives the notification.
+
+      For the Observer pattern this means that one faulty observer silences everyone who subscribed after it,
+      and a `try`/`catch` around the event invocation does not fix that: it only stops the exception from
+      crashing the publisher. If subscribers must be isolated from each other, the publisher gets the array of
+      delegates from `GetInvocationList()` itself, casts each entry to `EventHandler<int>` and calls it inside
+      its own `try`/`catch`, then logs the caught exceptions or collects them into an `AggregateException`
+      thrown after the loop.
+    linkTitles:
+      - "C# language specification: Delegates"
+      - "How to combine delegates (multicast delegates)"
+      - "Delegate.GetInvocationList method"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

@@ -1,0 +1,143 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RRT43PFM0RTAMMAN8H
+slug: legacy-change-without-tests-characterization
+stack: dotnet
+topic: testing
+level: lead
+type: situation
+grading: self
+tags: [legacy-code, characterization-tests, refactoring, test-design]
+links:
+  - url: https://en.wikipedia.org/wiki/Characterization_test
+    lang: en
+    kind: article
+  - url: https://martinfowler.com/articles/practical-test-pyramid.html
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Нужно изменить правила биллинга в старом модуле без тестов. Как техлиду организовать работу?
+    prompt: |
+      Команде нужно изменить правила расчёта счетов в старом модуле биллинга. Тестов у модуля нет, классы
+      создают свои зависимости через `new`, читают текущее время через `DateTime.Now` и обращаются к базе напрямую.
+      Ошибка в расчёте будет стоить денег: клиентам выставят неверные суммы. Часть команды предлагает аккуратно
+      поправить код и проверить вручную, часть - переписать модуль с нуля. Вы техлид. Как вы организуете работу
+      и в каком порядке?
+    hint: |
+      Как убедиться, что изменение затронуло только нужные правила, если никто точно не знает, что модуль
+      делает сейчас?
+    answer: |
+      1. **Оценить риск и договориться о рамках.** Вместе с владельцем продукта и финансами зафиксировать, какие
+         правила меняются, на конкретных примерах: входные данные и ожидаемая сумма. Договориться, что
+         переписывание модуля целиком в эту задачу не входит, а время на страховочные тесты заложено в оценку,
+         а не делается «если успеем».
+      2. **Найти шов и зафиксировать текущее поведение.** Найти ближайшую точку, через которую можно вызвать
+         расчёт и увидеть результат: публичный метод, возвращающий счёт, или, если до него не добраться, границу
+         модуля (запись в таблицу, сформированный документ). Написать характеризационные тесты: прогнать через
+         текущий код широкий набор входов, включая обезличенные реальные данные и граничные случаи (нулевые суммы,
+         округление, смена тарифа в середине периода), и записать фактический результат как ожидаемый. Подходит
+         подход golden master (approval tests): сравнение с сохранённым эталоном. Если результат похож на ошибку,
+         не исправлять его молча: зафиксировать как есть, завести задачу и выяснить у бизнеса, не опираются ли
+         на это клиенты или отчёты.
+      3. **Разорвать зависимости минимальными безопасными рефакторингами.** Только механические шаги, по
+         возможности автоматическими рефакторингами IDE: выделить метод, выделить интерфейс, передать зависимость
+         через конструктор вместо `new` и статических вызовов, заменить `DateTime.Now` на внедрённый `TimeProvider`.
+         Маленькие коммиты, после каждого характеризационные тесты зелёные. Цель - не красивая архитектура, а
+         возможность проверять правила расчёта быстрыми модульными тестами.
+      4. **Менять поведение через тесты.** Сначала падающие тесты на новые правила по примерам из шага 1, затем
+         изменение кода. Характеризационные тесты, которые должны измениться, обновляются осознанно: каждое
+         расхождение с эталоном на review объясняется новой спецификацией. Неожиданное расхождение - это регрессия.
+      5. **Выкатывать с подстраховкой.** Новые правила за флагом функции. Если возможно, параллельный расчёт:
+         старый и новый алгоритмы считают одни и те же реальные счета, расхождения сверяются до переключения.
+         План отката и мониторинг сумм после включения.
+      6. **Организовать команду.** Самые рискованные места делать в паре с тем, кто знает домен; изменения в
+         расчётах проходят review с участием второго человека; не расширять задачу попутными «улучшениями».
+         Оставить после себя тесты и выделенные швы, чтобы следующее изменение стоило дешевле.
+    explanation: |
+      Без тестов команда не может узнать, что изменение затронуло только нужные правила. Старый модуль биллинга
+      обычно содержит неявные правила: исключения для отдельных клиентов, особенности округления, на которые
+      опираются отчёты. Их нет в документации, они есть только в коде. Поэтому оба крайних варианта опасны:
+      правка без страховки ломает такие правила незаметно, а переписывание с нуля теряет их все сразу и
+      растягивается на месяцы.
+
+      Характеризационный тест (термин Майкла Физерса из книги «Working Effectively with Legacy Code») описывает
+      фактическое поведение кода, а не задуманное. Он не говорит, правилен ли код, он говорит, изменилось ли
+      поведение. Именно это нужно при рефакторинге: зафиксировать «как есть», затем менять структуру, не меняя
+      результата, и только потом менять сами правила.
+
+      Здесь возникает замкнутый круг: чтобы безопасно рефакторить, нужны тесты, а чтобы писать модульные тесты,
+      нужно рефакторить. Выход - начать с тестов на том уровне, до которого можно дотянуться сейчас (часто это
+      более крупные и медленные тесты высоко в пирамиде), а после разрыва зависимостей опустить проверки правил
+      на уровень быстрых модульных тестов, как советует пирамида тестов. Часть крупных характеризационных тестов
+      потом можно удалить.
+
+      На уровне lead важна не только техника: время на страховочные тесты должно быть в оценке и согласовано с
+      бизнесом, спорные текущие результаты разбираются с владельцами, а выкатка идёт поэтапно, потому что ошибка
+      стоит денег.
+    linkTitles:
+      - "Характеризационный тест (Википедия)"
+      - "Практическая пирамида тестов"
+  en:
+    title: A team must change billing rules in an old module with no tests. How does the tech lead organise the work?
+    prompt: |
+      The team has to change the invoice calculation rules in an old billing module. The module has no tests, its
+      classes create their dependencies with `new`, read the current time through `DateTime.Now` and talk to the
+      database directly. A bug in the calculation will cost money: customers will be charged wrong amounts. Part of
+      the team suggests carefully editing the code and checking it by hand, another part wants to rewrite the module
+      from scratch. You are the tech lead. How do you organise the work, and in what order?
+    hint: |
+      How do you make sure a change touched only the intended rules if nobody knows exactly what the module does
+      today?
+    answer: |
+      1. **Assess the risk and agree on the scope.** Together with the product owner and finance, pin down which
+         rules change, using concrete examples: input data and the expected amount. Agree that rewriting the whole
+         module is not part of this task, and that the time for safety-net tests is in the estimate, not done
+         "if there is time left".
+      2. **Find a seam and pin the current behaviour.** Find the nearest point where you can trigger the calculation
+         and observe the result: a public method that returns the invoice or, if you cannot reach it, the module
+         boundary (a row written to a table, a generated document). Write characterization tests: run a broad set
+         of inputs through the current code, including anonymised real data and edge cases (zero amounts, rounding,
+         a tariff change in the middle of a period), and record the actual result as the expected one. The golden
+         master (approval tests) approach fits: compare against a stored reference. If a result looks like a bug,
+         do not fix it silently: pin it as it is, open a ticket and ask the business whether customers or reports
+         rely on it.
+      3. **Break dependencies with minimal safe refactorings.** Only mechanical steps, preferably with automated IDE
+         refactorings: extract method, extract interface, pass a dependency through the constructor instead of `new`
+         and static calls, replace `DateTime.Now` with an injected `TimeProvider`. Small commits, with the
+         characterization tests green after each one. The goal is not a beautiful architecture but the ability to
+         check the calculation rules with fast unit tests.
+      4. **Change behaviour test-first.** First failing tests for the new rules, based on the examples from step 1,
+         then the code change. Characterization tests that must change are updated deliberately: in review every
+         difference from the reference is explained by the new specification. An unexpected difference is a regression.
+      5. **Roll out with a safety net.** The new rules sit behind a feature flag. If possible, run in parallel: the
+         old and the new algorithm calculate the same real invoices, and differences are reconciled before the
+         switch. A rollback plan and monitoring of the amounts after the switch.
+      6. **Organise the team.** Pair on the riskiest parts with someone who knows the domain; changes to calculations
+         are reviewed by a second person; do not grow the task with incidental "improvements". Leave the tests and
+         the extracted seams behind so that the next change is cheaper.
+    explanation: |
+      Without tests the team has no way to know that a change touched only the intended rules. An old billing module
+      usually contains implicit rules: exceptions for particular customers, rounding quirks that reports rely on.
+      They are not documented, they exist only in the code. That is why both extremes are dangerous: editing without
+      a safety net breaks such rules unnoticed, and a rewrite from scratch loses all of them at once and drags on
+      for months.
+
+      A characterization test (a term from Michael Feathers' book "Working Effectively with Legacy Code") describes
+      what the code actually does, not what it was meant to do. It does not say whether the code is correct, it says
+      whether the behaviour changed. That is exactly what a refactoring needs: pin "as is", then change the structure
+      without changing the result, and only then change the rules themselves.
+
+      This creates a loop: to refactor safely you need tests, and to write unit tests you need to refactor. The way
+      out is to start with tests at the level you can reach now (often larger, slower tests high in the pyramid), and
+      once the dependencies are broken, push the rule checks down to fast unit tests, as the test pyramid advises.
+      Some of the large characterization tests can be deleted later.
+
+      At lead level the technique is not the whole answer: the time for the safety net must be in the estimate and
+      agreed with the business, questionable current results are resolved with their owners, and the rollout is
+      gradual because a bug costs money.
+    linkTitles:
+      - "Characterization test (Wikipedia)"
+      - "The Practical Test Pyramid"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

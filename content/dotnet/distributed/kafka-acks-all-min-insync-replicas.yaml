@@ -1,0 +1,118 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RN5WR3ZFHV6R76X3J9
+slug: kafka-acks-all-min-insync-replicas
+stack: dotnet
+topic: distributed
+level: senior
+type: multi
+grading: auto
+tags: [kafka, acks, min-insync-replicas, replication, durability]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: true
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+  - id: f
+    correct: false
+links:
+  - url: https://kafka.apache.org/39/documentation.html
+    lang: en
+    kind: docs
+  - url: https://kafka.apache.org/39/javadoc/org/apache/kafka/clients/producer/KafkaProducer.html
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Как acks и min.insync.replicas в Kafka ведут себя при отказе брокеров?"
+    prompt: |
+      Кластер работает на Apache Kafka 3.9. У топика фактор репликации 3 и настройка `min.insync.replicas=2`.
+      Продюсеры пишут в него с разными значениями `acks`. Выберите все верные утверждения о том, что происходит
+      при отказе брокеров.
+    hint: "Чего именно ждёт лидер при `acks=all`: всех реплик из фактора репликации или только тех, что сейчас синхронизированы с ним?"
+    options:
+      a: "При `acks=all`, если один из трёх брокеров отказал и выпал из ISR, запись продолжает проходить: лидер и оставшийся фолловер - это 2 синхронные реплики, и условие `min.insync.replicas=2` выполнено."
+      b: "Если отказали два брокера из трёх и в ISR остался только лидер, брокер отклоняет запись с `acks=all` ошибкой `NotEnoughReplicas`, а не подтверждает её с одной копией."
+      c: "При `acks=1` запись, которую лидер уже подтвердил, может потеряться, если лидер откажет до того, как фолловеры её скопировали, и новым лидером станет фолловер."
+      d: "При `acks=all` лидер ждёт все три реплики из фактора репликации, поэтому отказ любого одного брокера блокирует запись, пока этот брокер не вернётся."
+      e: "`min.insync.replicas=2` защищает и продюсеров с `acks=1`: когда ISR становится меньше 2, лидер отклоняет и их запись."
+      f: "Когда ISR становится меньше `min.insync.replicas`, потребители перестают читать партицию, пока реплики не догонят лидера."
+    optionExplanations:
+      d: "Лидер ждёт не все реплики из фактора репликации, а текущий набор синхронных реплик (ISR). Отказавший брокер исключается из ISR, после чего запись снова подтверждается оставшимися репликами, пока их не меньше `min.insync.replicas`."
+      e: "`min.insync.replicas` применяется только к записи с `acks=all` (`-1`). Продюсер с `acks=1` получает подтверждение сразу после записи в журнал лидера, сколько бы реплик ни было в ISR."
+      f: "Настройка ограничивает только приём записи с `acks=all`. Чтение идёт через лидера и продолжается, пока у партиции есть лидер, даже если в ISR осталась одна реплика."
+    answer: "Верны утверждения a, b и c."
+    explanation: |
+      ISR (in-sync replicas) - это реплики партиции, которые успевают за лидером. Фолловер исключается из ISR,
+      если его брокер отказал или реплика слишком долго отстаёт (`replica.lag.time.max.ms`).
+
+      - При `acks=all` лидер подтверждает запись, когда её получили все реплики из текущего ISR, а не все
+        реплики из фактора репликации. Поэтому после исключения отказавшего брокера запись продолжается.
+      - `min.insync.replicas` задаёт минимальное число реплик, которые должны подтвердить запись с `acks=all`.
+        Если это условие не выполняется, продюсер получает ошибку `NotEnoughReplicas` (или
+        `NotEnoughReplicasAfterAppend`, если ISR сократился уже после записи в журнал лидера). Ошибка
+        временная: продюсер повторяет отправку, пока не истечёт `delivery.timeout.ms`.
+      - Сочетание фактора репликации 3, `min.insync.replicas=2` и `acks=all` документация Kafka приводит как
+        типичную конфигурацию для надёжности: кластер переживает отказ одного брокера без остановки записи, а при
+        отказе двух записи останавливаются, но подтверждённая запись не существует в единственной копии. Это
+        осознанный выбор надёжности в ущерб доступности записи.
+      - При `acks=1` лидер отвечает сразу после записи в свой журнал. Если он откажет до репликации, новым
+        лидером станет фолловер без этой записи, и подтверждённые данные потеряются. При `acks=0` продюсер не ждёт
+        даже лидера.
+
+      В Kafka 3.9 настройка не отклоняет запись с `acks=1` и `acks=0` и не останавливает чтение. В .NET-клиенте
+      Confluent.Kafka уровень подтверждений задаётся свойством `ProducerConfig.Acks`, например `Acks.All`.
+    linkTitles:
+      - "Документация Apache Kafka 3.9"
+      - "Apache Kafka 3.9: класс KafkaProducer"
+  en:
+    title: "How do Kafka acks and min.insync.replicas behave when brokers fail?"
+    prompt: |
+      The cluster runs Apache Kafka 3.9. A topic has replication factor 3 and the setting `min.insync.replicas=2`.
+      Producers write to it with different `acks` values. Select every true statement about what happens when
+      brokers fail.
+    hint: "What exactly does the leader wait for with `acks=all`: every replica of the replication factor, or only the replicas currently in sync with it?"
+    options:
+      a: "With `acks=all`, if one of the three brokers fails and drops out of the ISR, writes keep succeeding: the leader and the remaining follower are 2 in-sync replicas, which satisfies `min.insync.replicas=2`."
+      b: "If two of the three brokers fail and only the leader stays in the ISR, the broker rejects `acks=all` writes with a `NotEnoughReplicas` error instead of acknowledging them with a single copy."
+      c: "With `acks=1`, a record the leader has already acknowledged can be lost if the leader fails before the followers have copied it and a follower becomes the new leader."
+      d: "With `acks=all`, the leader waits for all three replicas of the replication factor, so any single broker failure blocks writes until that broker returns."
+      e: "`min.insync.replicas=2` also protects producers with `acks=1`: when the ISR shrinks below 2, the leader rejects their writes as well."
+      f: "When the ISR shrinks below `min.insync.replicas`, consumers can no longer read the partition until the replicas catch up."
+    optionExplanations:
+      d: "The leader waits not for every replica of the replication factor but for the current set of in-sync replicas (ISR). A failed broker is removed from the ISR, after which writes are acknowledged by the remaining replicas again, as long as there are at least `min.insync.replicas` of them."
+      e: "`min.insync.replicas` applies only to writes with `acks=all` (`-1`). A producer with `acks=1` is acknowledged right after the write to the leader's log, however many replicas are in the ISR."
+      f: "The setting restricts only the acceptance of `acks=all` writes. Reads go through the leader and continue as long as the partition has a leader, even if only one replica is left in the ISR."
+    answer: "Statements a, b and c are true."
+    explanation: |
+      The ISR (in-sync replicas) are the replicas of a partition that keep up with the leader. A follower is
+      removed from the ISR when its broker fails or the replica lags for too long (`replica.lag.time.max.ms`).
+
+      - With `acks=all` the leader acknowledges a write once every replica in the current ISR has it, not every
+        replica of the replication factor. So once the failed broker is removed, writes continue.
+      - `min.insync.replicas` sets the minimum number of replicas that must acknowledge an `acks=all` write. If
+        that cannot be met, the producer gets a `NotEnoughReplicas` error (or `NotEnoughReplicasAfterAppend` if
+        the ISR shrank after the write reached the leader's log). The error is retriable: the producer resends
+        until `delivery.timeout.ms` expires.
+      - The Kafka documentation gives replication factor 3, `min.insync.replicas=2` and `acks=all` as the typical
+        durability setup: the cluster survives one broker failure without stopping writes, and with two failures
+        writes stop, but no acknowledged record exists in a single copy. This deliberately trades write
+        availability for durability.
+      - With `acks=1` the leader answers right after writing to its own log. If it fails before replication, a
+        follower without that record becomes the leader, and acknowledged data is lost. With `acks=0` the producer
+        does not even wait for the leader.
+
+      In Kafka 3.9 the setting does not reject `acks=1` and `acks=0` writes and does not stop reads. In the .NET
+      client Confluent.Kafka the acknowledgement level is set with the `ProducerConfig.Acks` property, for example
+      `Acks.All`.
+    linkTitles:
+      - "Apache Kafka 3.9 documentation"
+      - "Apache Kafka 3.9: KafkaProducer class"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

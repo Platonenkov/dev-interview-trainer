@@ -1,0 +1,132 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RN6BZ8P8523G6SERD0
+slug: rabbitmq-unroutable-message-confirmed
+stack: dotnet
+topic: distributed
+level: senior
+type: single
+grading: auto
+tags: [rabbitmq, publisher-confirms, mandatory-flag, alternate-exchange]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+links:
+  - url: https://www.rabbitmq.com/docs/confirms
+    lang: en
+    kind: docs
+  - url: https://www.rabbitmq.com/docs/publishers
+    lang: en
+    kind: docs
+  - url: https://www.rabbitmq.com/docs/ae
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему RabbitMQ подтверждает издателю сообщения, которые не попали ни в одну очередь?
+    prompt: |
+      Сервис публикует события заказов в direct exchange `orders` с ключом маршрутизации по региону:
+      `order.eu`, `order.us` или `order.apac`. На канале включены publisher confirms, и издатель считает
+      сообщение отправленным только после `basic.ack` от брокера. Очереди привязаны к exchange только с
+      ключами `order.eu` и `order.us`: привязку для `order.apac` забыли создать.
+
+      На каждое сообщение приходит `basic.ack`, ошибок в логах нет, но события с ключом `order.apac` не
+      попадают ни в одну очередь. Почему брокер их подтвердил и как издателю узнавать о таких сообщениях?
+    hint: "Что именно обещает подтверждение издателю: что сообщение лежит в очереди или что брокер закончил с ним работать?"
+    options:
+      a: "Для немаршрутизируемого сообщения брокер отправляет `basic.ack`, как только exchange определил, что подходящих очередей нет. Чтобы узнавать о таких сообщениях, нужно публиковать с флагом `mandatory` и обрабатывать `basic.return` или настроить для exchange альтернативный exchange (alternate exchange)."
+      b: "`basic.ack` издателю приходит после того, как потребитель подтвердил обработку. Раз подтверждение пришло, сообщения получил какой-то потребитель и потерял их он: нужно проверить ручное подтверждение у потребителей."
+      c: "Сообщения опубликованы как непостоянные (transient), поэтому брокер подтвердил их, не записав на диск, а затем отбросил. Нужно публиковать их как persistent."
+      d: "Нужно настроить dead-letter exchange для очередей: брокер направит туда сообщения, для которых не нашлось привязки."
+      e: "Брокер отправил для них `basic.nack`, но клиентская библиотека по умолчанию считает nack успехом. Нужно добавить отдельную обработку nack."
+    optionExplanations:
+      b: "Publisher confirms не связаны с подтверждениями потребителей. Брокер подтверждает сообщение издателю, когда сам принял за него ответственность, и не ждёт, пока его кто-то обработает."
+      c: "Режим доставки определяет, переживёт ли сообщение в очереди перезапуск брокера. Немаршрутизируемое сообщение не попадает ни в одну очередь, поэтому флаг persistent его не сохранит."
+      d: "Dead-letter exchange задаётся для очереди и получает сообщения, которые уже были в этой очереди: отклонённые без возврата, истёкшие по TTL, вытесненные лимитом длины. Немаршрутизируемое сообщение в очередь не попадает; для него на уровне exchange есть alternate exchange."
+      e: "`basic.nack` брокер отправляет только при внутренней ошибке процесса, который отвечает за очередь. Отсутствие привязки для брокера не ошибка, а штатный результат маршрутизации, и на него приходит `basic.ack`."
+    answer: "Брокер подтверждает немаршрутизируемое сообщение сразу, как только exchange не нашёл для него очередей. Узнать о таких сообщениях можно через флаг `mandatory` и `basic.return` или через alternate exchange."
+    explanation: |
+      Подтверждение издателю означает, что брокер принял на себя ответственность за сообщение, а не что
+      сообщение лежит в какой-то очереди. Для маршрутизируемого сообщения `basic.ack` приходит, когда его
+      приняли все очереди, куда оно направлено: для persistent-сообщения в durable-очереди это запись на диск,
+      для кворумной очереди - подтверждение от кворума реплик. Для немаршрутизируемого сообщения брокеру
+      делать больше нечего: как только exchange вернул пустой список очередей, брокер подтверждает сообщение и
+      отбрасывает его. Поэтому подтверждения сами по себе не обнаруживают ошибку в топологии.
+
+      Способы узнать о таких сообщениях:
+
+      - **Флаг `mandatory`.** Брокер возвращает немаршрутизируемое сообщение издателю методом `basic.return`, и
+        при включённых publisher confirms `basic.return` приходит раньше `basic.ack`. В RabbitMQ.Client 7.x это
+        параметр `mandatory` у `BasicPublishAsync` и событие `BasicReturnAsync` у `IChannel`; в 6.x - событие
+        `BasicReturn` у `IModel`. Обработчик возврата должен логировать сообщение, поднимать тревогу или
+        сохранять его для повторной отправки.
+      - **Alternate exchange.** Для exchange задаётся альтернативный exchange (аргументом `alternate-exchange`
+        или политикой), и брокер отправляет туда всё, что не удалось маршрутизировать. Обычно это fanout
+        exchange с отдельной очередью, за длиной которой следит мониторинг. Сообщения не теряются, даже если
+        издатель не обрабатывает возвраты.
+
+      Сама причина здесь - расхождение топологии и кода публикации, поэтому привязки стоит объявлять кодом или
+      конфигурацией, которая проходит review, а не создавать вручную.
+    linkTitles:
+      - "RabbitMQ: подтверждения потребителей и издателей"
+      - "RabbitMQ: издатели"
+      - "RabbitMQ: альтернативные exchange"
+  en:
+    title: Why does RabbitMQ confirm messages to the publisher that never reached any queue?
+    prompt: |
+      A service publishes order events to the direct exchange `orders` with a routing key per region:
+      `order.eu`, `order.us` or `order.apac`. Publisher confirms are enabled on the channel, and the publisher
+      treats a message as sent only after the broker returns `basic.ack`. Queues are bound to the exchange only
+      with the keys `order.eu` and `order.us`: the binding for `order.apac` was never created.
+
+      Every message gets a `basic.ack` and the logs show no errors, yet events with the key `order.apac` never
+      reach any queue. Why did the broker confirm them, and how can the publisher learn about such messages?
+    hint: "What exactly does a publisher confirm promise: that the message sits in a queue, or that the broker is done with it?"
+    options:
+      a: "For an unroutable message the broker sends `basic.ack` as soon as the exchange has found that no queue matches. To learn about such messages, publish with the `mandatory` flag and handle `basic.return`, or configure an alternate exchange for the exchange."
+      b: "The publisher gets `basic.ack` after a consumer has acknowledged processing. Since the confirm arrived, some consumer received the messages and lost them: check manual acknowledgement in the consumers."
+      c: "The messages were published as transient, so the broker confirmed them without writing them to disk and then dropped them. Publish them as persistent."
+      d: "Configure a dead-letter exchange on the queues: the broker routes messages that matched no binding there."
+      e: "The broker sent `basic.nack` for them, but the client library treats a nack as success by default. Add separate handling for nacks."
+    optionExplanations:
+      b: "Publisher confirms are not tied to consumer acknowledgements. The broker confirms a message to the publisher once it has taken responsibility for it, without waiting for anyone to process it."
+      c: "The delivery mode decides whether a message in a queue survives a broker restart. An unroutable message never enters any queue, so the persistent flag cannot keep it."
+      d: "A dead-letter exchange is configured per queue and receives messages that were already in that queue: rejected without requeue, expired by TTL, dropped by a length limit. An unroutable message never enters a queue; the exchange-level mechanism for it is the alternate exchange."
+      e: "The broker sends `basic.nack` only on an internal error in the process responsible for a queue. A missing binding is not an error for the broker but a normal routing result, and it answers with `basic.ack`."
+    answer: "The broker confirms an unroutable message as soon as the exchange finds no queue for it. You learn about such messages through the `mandatory` flag and `basic.return`, or through an alternate exchange."
+    explanation: |
+      A publisher confirm means that the broker has taken responsibility for the message, not that the message
+      sits in some queue. For a routable message `basic.ack` arrives once every queue it was routed to has
+      accepted it: for a persistent message in a durable queue that means writing it to disk, for a quorum queue
+      a confirmation from a quorum of replicas. For an unroutable message the broker has nothing more to do: as
+      soon as the exchange returns an empty list of queues, the broker confirms the message and drops it. That is
+      why confirms alone never reveal a topology mistake.
+
+      Ways to learn about such messages:
+
+      - **The `mandatory` flag.** The broker returns an unroutable message to the publisher with `basic.return`,
+        and with publisher confirms enabled `basic.return` arrives before `basic.ack`. In RabbitMQ.Client 7.x this
+        is the `mandatory` parameter of `BasicPublishAsync` and the `BasicReturnAsync` event of `IChannel`; in
+        6.x it is the `BasicReturn` event of `IModel`. The return handler should log the message, raise an alert
+        or store it for a later resend.
+      - **An alternate exchange.** The exchange gets an alternate exchange (with the `alternate-exchange`
+        argument or a policy), and the broker sends everything it could not route there. This is usually a fanout
+        exchange with a dedicated queue whose length is monitored. Messages are not lost even if the publisher
+        does not handle returns.
+
+      The root cause here is a mismatch between the topology and the publishing code, so bindings should be
+      declared in code or in configuration that goes through code review, not created by hand.
+    linkTitles:
+      - "RabbitMQ: consumer acknowledgements and publisher confirms"
+      - "RabbitMQ: publishers"
+      - "RabbitMQ: alternate exchanges"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

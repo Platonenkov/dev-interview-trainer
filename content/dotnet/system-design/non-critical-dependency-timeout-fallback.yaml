@@ -1,0 +1,131 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQW7CN8TZAEN0PE2N1
+slug: non-critical-dependency-timeout-fallback
+stack: dotnet
+topic: system-design
+level: middle
+type: situation
+grading: self
+tags: [circuit-breaker, timeouts, graceful-degradation, fallback, resilience]
+links:
+  - url: https://learn.microsoft.com/en-us/azure/architecture/patterns/circuit-breaker
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/resilience/http-resilience
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Страница товара тормозит каждый раз, когда медленно отвечает сервис рекомендаций: что изменить?"
+    prompt: |
+      Страница товара в ASP.NET Core при каждом запросе синхронно вызывает сервис рекомендаций и показывает
+      блок «С этим товаром покупают». Когда сервис рекомендаций начинает отвечать медленно, медленной становится
+      вся страница, хотя название, цена и кнопка покупки от рекомендаций не зависят. Что вы измените?
+    hint: |
+      Нужна ли странице информация о рекомендациях, чтобы покупатель мог купить товар? И сколько страница сейчас
+      готова ждать ответа рекомендаций?
+    answer: |
+      1. **Подтвердить причину.** По распределённой трассировке (например, OpenTelemetry) убедиться, что время
+         ответа страницы повторяет задержку вызова рекомендаций: страница ждёт его синхронно, часто последовательно
+         с другими вызовами, а таймаут не задан или оставлен по умолчанию (у `HttpClient.Timeout` это 100 секунд).
+      2. **Признать зависимость необязательной.** Договориться с продуктом: товар, цена и кнопка покупки -
+         обязательная часть страницы, рекомендации - нет. Страница должна отрисовываться и без них.
+      3. **Ограничить время ожидания.** Выделить вызову бюджет из целевого времени ответа страницы, например на
+         уровне p99 сервиса рекомендаций в нормальном режиме плюс небольшой запас: сотни миллисекунд, а не секунды.
+         Передавать `CancellationToken`, чтобы по истечении бюджета запрос действительно отменялся. Вызывать
+         рекомендации параллельно с загрузкой основных данных, а не после неё. Повторов для необязательного вызова
+         либо нет, либо не больше одного и только в пределах того же бюджета.
+      4. **Добавить circuit breaker.** Если доля ошибок и таймаутов превышает порог, цепь размыкается, и страница
+         какое-то время вообще не ходит в сервис рекомендаций, сразу используя запасной вариант. Затем пробные
+         запросы проверяют, восстановился ли сервис. В .NET это настраивается конвейером устойчивости для
+         `HttpClient` из пакета `Microsoft.Extensions.Http.Resilience` (построен на Polly): таймаут и circuit
+         breaker с параметрами именно для этой зависимости, потому что таймауты стандартного обработчика
+         измеряются секундами.
+      5. **Определить запасной вариант.** Пустой или скрытый блок, последние удачные рекомендации из кэша или
+         заранее посчитанный список популярных товаров категории. Запасной вариант не должен сам обращаться к
+         медленной зависимости.
+      6. **Рассмотреть вынос с критического пути.** Отдавать страницу без рекомендаций и подгружать блок отдельным
+         запросом из браузера, или заранее рассчитывать рекомендации в фоне и читать их из кэша. Тогда задержка
+         сервиса рекомендаций вообще не влияет на основную страницу.
+      7. **Наблюдать.** Метрики доли таймаутов, состояния circuit breaker и доли страниц, показанных с запасным
+         вариантом, плюс алерт: деградация не должна неделями оставаться незамеченной.
+    explanation: |
+      При синхронном вызове время ответа страницы не меньше времени самой медленной зависимости на её пути.
+      Поэтому необязательная функция фактически становится обязательной: её задержка решает, как быстро откроется
+      страница. Медленная зависимость при этом опаснее упавшей: ошибка возвращается быстро, а медленный ответ
+      удерживает запросы, соединения из пула и память, пока число ожидающих запросов растёт.
+
+      Таймаут ограничивает худший случай одного запроса, а circuit breaker - суммарный ущерб: когда сервис явно
+      деградировал, нет смысла каждый раз ждать весь бюджет, к тому же постоянный поток запросов мешает ему
+      восстановиться. Паттерн Circuit Breaker предполагает запасное поведение при разомкнутой цепи, здесь это
+      страница без рекомендаций или с кэшированными рекомендациями.
+
+      Компромиссы, которые стоит назвать:
+
+      - слишком короткий таймаут без нужды отключает рекомендации, а они приносят выручку, поэтому бюджет
+        выбирают по реальным перцентилям задержки и согласуют с продуктом;
+      - кэшированные рекомендации устаревают, это допустимо для необязательного блока, но не для цены или остатка;
+      - повторы внутри короткого бюджета помогают мало, а при деградации сервиса только увеличивают нагрузку на него.
+    linkTitles:
+      - "Паттерн Circuit Breaker"
+      - "Построение устойчивых HTTP-приложений в .NET"
+  en:
+    title: "The product page slows down whenever the recommendation service is slow: what do you change?"
+    prompt: |
+      An ASP.NET Core product page synchronously calls a recommendation service on every request and shows a
+      "Frequently bought together" block. Whenever the recommendation service starts responding slowly, the whole
+      page becomes slow, even though the product name, price and buy button do not depend on recommendations.
+      What do you change?
+    hint: |
+      Does the page need recommendations for the customer to buy the product? And how long is the page currently
+      willing to wait for them?
+    answer: |
+      1. **Confirm the cause.** Use distributed tracing (for example, OpenTelemetry) to check that the page response
+         time follows the latency of the recommendation call: the page waits for it synchronously, often
+         sequentially after other calls, and the timeout is not set or left at the default (for `HttpClient.Timeout`
+         it is 100 seconds).
+      2. **Treat the dependency as optional.** Agree with the product owner: product, price and the buy button are
+         the mandatory part of the page, recommendations are not. The page must render without them.
+      3. **Bound the wait.** Give the call a budget taken from the page's target response time, for example the
+         recommendation service's normal p99 plus a small margin: hundreds of milliseconds, not seconds. Pass a
+         `CancellationToken` so that the request is really cancelled when the budget runs out. Call
+         recommendations in parallel with loading the main data, not after it. An optional call gets no retries, or
+         at most one and only within the same budget.
+      4. **Add a circuit breaker.** When the share of errors and timeouts exceeds a threshold, the circuit opens and
+         for a while the page does not call the recommendation service at all, going straight to the fallback.
+         Trial requests then check whether the service has recovered. In .NET this is configured with a resilience
+         pipeline for `HttpClient` from the `Microsoft.Extensions.Http.Resilience` package (built on Polly): a
+         timeout and a circuit breaker tuned for this dependency, because the standard handler's timeouts are
+         measured in seconds.
+      5. **Define the fallback.** An empty or hidden block, the last successful recommendations from a cache, or a
+         precomputed list of popular products in the category. The fallback must not call the slow dependency
+         itself.
+      6. **Consider moving it off the critical path.** Return the page without recommendations and load the block
+         with a separate request from the browser, or precompute recommendations in the background and read them
+         from a cache. Then the recommendation service's latency does not affect the main page at all.
+      7. **Observe.** Metrics for the timeout rate, the circuit breaker state and the share of pages rendered with
+         the fallback, plus an alert: degradation must not go unnoticed for weeks.
+    explanation: |
+      With a synchronous call, the page response time is at least the time of the slowest dependency on its path.
+      So an optional feature effectively becomes mandatory: its latency decides how fast the page opens. A slow
+      dependency is also more dangerous than a failed one: an error returns quickly, while a slow response holds
+      requests, pooled connections and memory as the number of waiting requests grows.
+
+      A timeout bounds the worst case of one request, and a circuit breaker bounds the total damage: once the
+      service is clearly degraded there is no point in waiting out the full budget every time, and a constant
+      stream of requests keeps it from recovering. The Circuit Breaker pattern expects fallback behaviour while
+      the circuit is open; here it is a page without recommendations or with cached ones.
+
+      Trade-offs worth naming:
+
+      - a timeout that is too short switches recommendations off needlessly, and they bring revenue, so the
+        budget is chosen from real latency percentiles and agreed with the product owner;
+      - cached recommendations go stale, which is acceptable for an optional block but not for a price or stock
+        level;
+      - retries within a short budget help little, and while the service is degraded they only add load to it.
+    linkTitles:
+      - "Circuit Breaker pattern"
+      - "Build resilient HTTP apps in .NET"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

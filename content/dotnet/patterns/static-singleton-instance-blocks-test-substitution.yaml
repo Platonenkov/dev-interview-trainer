@@ -1,0 +1,138 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQ8QRCXYJDR5P7GMXP
+slug: static-singleton-instance-blocks-test-substitution
+stack: dotnet
+topic: patterns
+level: middle
+type: single
+grading: auto
+tags: [singleton, dependency-injection, testability, anti-patterns]
+code:
+  language: csharp
+  harness: none
+  source: |
+    // Variant 1: static Singleton
+    public sealed class ExchangeRates
+    {
+        public static ExchangeRates Instance { get; } = new ExchangeRates();
+        private ExchangeRates() { }
+
+        // Calls a remote rates API.
+        public decimal GetRate(string currency) => throw new NotImplementedException();
+    }
+
+    public class PriceCalculator
+    {
+        public decimal ToUsd(decimal amount, string currency) =>
+            amount * ExchangeRates.Instance.GetRate(currency);
+    }
+
+    // Variant 2: singleton lifetime in DI
+    public interface IExchangeRates
+    {
+        decimal GetRate(string currency);
+    }
+
+    public class PriceCalculatorDi
+    {
+        private readonly IExchangeRates _rates;
+        public PriceCalculatorDi(IExchangeRates rates) => _rates = rates;
+
+        public decimal ToUsd(decimal amount, string currency) =>
+            amount * _rates.GetRate(currency);
+    }
+
+    // Registration: services.AddSingleton<IExchangeRates, ExchangeRatesService>();
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/core/extensions/dependency-injection/guidelines
+    lang: en
+    kind: docs
+  - url: https://refactoring.guru/design-patterns/singleton
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Чем статический Singleton.Instance хуже сервиса с временем жизни singleton в DI?
+    prompt: |
+      В первом варианте `PriceCalculator` обращается к статическому `ExchangeRates.Instance`. Во втором
+      `PriceCalculatorDi` получает `IExchangeRates` через конструктор, а реализация зарегистрирована в контейнере
+      через `AddSingleton`. В обоих вариантах в приложении один объект курсов валют.
+      В чём главный недостаток первого варианта?
+    hint: Представьте модульный тест `PriceCalculator` - как в каждом варианте сделать так, чтобы он не ходил в настоящий внешний API?
+    options:
+      a: Чтение статического свойства `Instance` заметно медленнее, чем получение сервиса из контейнера.
+      b: "`PriceCalculator` скрыто зависит от конкретного глобального объекта: зависимость не видна в конструкторе, и тест не может подставить вместо `ExchangeRates` фейк, не меняя сам класс."
+      c: Статический Singleton невозможно сделать потокобезопасным, а singleton из DI потокобезопасен автоматически.
+      d: "С `AddSingleton` контейнер создаёт новый `ExchangeRatesService` на каждую область запроса, поэтому второй вариант на самом деле не singleton."
+      e: Объект в статическом свойстве никогда не собирается сборщиком мусора, а singleton из DI освобождается после каждого запроса.
+    optionExplanations:
+      a: "Наоборот, чтение статического свойства - это обычный доступ к полю, а разрешение через контейнер делает больше работы. Но при внедрении через конструктор сервис разрешается один раз при создании объекта, и разница в скорости здесь не главное."
+      c: "Инициализатор статического свойства выполняется в инициализаторе типа, который среда выполнения запускает не более одного раза, так что создание экземпляра уже потокобезопасно. А время жизни singleton в DI не делает сервис потокобезопасным: один экземпляр используют все потоки сразу, поэтому потокобезопасность должен обеспечить сам сервис."
+      d: "Новый экземпляр на каждую область создаёт `AddScoped`. С `AddSingleton` контейнер создаёт один экземпляр и отдаёт его всем потребителям."
+      e: "Singleton из DI тоже живёт долго: его хранит корневой контейнер, и освобождается он вместе с контейнером, обычно при остановке приложения. По времени жизни объекта варианты почти не отличаются."
+    answer: "`PriceCalculator` скрыто зависит от конкретного глобального объекта: зависимость не видна в конструкторе, и тест не может подставить вместо `ExchangeRates` фейк, не меняя сам класс."
+    explanation: |
+      Оба варианта дают один экземпляр на приложение, разница в том, как потребитель его получает. Вызов
+      `ExchangeRates.Instance` зашит внутрь метода: по сигнатуре `PriceCalculator` не видно, что он ходит во
+      внешний API, а заменить `ExchangeRates` можно, только переписав класс. Модульный тест вынужден работать
+      с настоящим объектом, а если тот хранит изменяемое состояние, оно переживает тест и протекает в соседние
+      тесты того же процесса.
+
+      Во втором варианте зависимость явная: `PriceCalculatorDi` получает абстракцию `IExchangeRates`, тест
+      передаёт в конструктор фейк, а в приложении контейнер с `AddSingleton` по-прежнему создаёт один экземпляр.
+      То есть время жизни singleton сохраняет пользу паттерна (один общий объект), но убирает глобальный доступ.
+      Рекомендации Microsoft по DI советуют то же самое: избегать статических классов и членов с состоянием и
+      вместо глобального состояния проектировать приложение на singleton-сервисах.
+    linkTitles:
+      - "Рекомендации по внедрению зависимостей в .NET"
+      - "Паттерн Singleton (Refactoring.Guru)"
+  en:
+    title: Why is a static Singleton.Instance worse than a service with a singleton lifetime in DI?
+    prompt: |
+      In the first variant `PriceCalculator` calls the static `ExchangeRates.Instance`. In the second
+      `PriceCalculatorDi` receives `IExchangeRates` through its constructor, and the implementation is
+      registered in the container with `AddSingleton`. In both variants the application has one exchange rates
+      object. What is the main drawback of the first variant?
+    hint: Imagine a unit test of `PriceCalculator` - in each variant, how do you keep it from calling the real external API?
+    options:
+      a: Reading the static `Instance` property is noticeably slower than resolving a service from the container.
+      b: "`PriceCalculator` has a hidden dependency on a concrete global object: the dependency is not visible in the constructor, and a test cannot substitute a fake for `ExchangeRates` without changing the class itself."
+      c: A static Singleton cannot be made thread-safe, while a DI singleton is thread-safe automatically.
+      d: "With `AddSingleton` the container creates a new `ExchangeRatesService` per request scope, so the second variant is not really a singleton."
+      e: An object in a static property is never collected by the garbage collector, while a DI singleton is released after each request.
+    optionExplanations:
+      a: "It is the other way round: reading a static property is a plain field access, and resolving through a container does more work. But with constructor injection the service is resolved once when the object is created, and speed is not the issue here."
+      c: "A static property initializer runs in the type initializer, which the runtime executes at most once, so creating the instance is already thread-safe. And a singleton lifetime in DI does not make a service thread-safe: all threads share the one instance, so the service itself has to be thread-safe."
+      d: "A new instance per scope is what `AddScoped` does. With `AddSingleton` the container creates one instance and hands it to every consumer."
+      e: "A DI singleton lives long too: the root container holds it, and it is disposed together with the container, usually at application shutdown. The two variants hardly differ in object lifetime."
+    answer: "`PriceCalculator` has a hidden dependency on a concrete global object: the dependency is not visible in the constructor, and a test cannot substitute a fake for `ExchangeRates` without changing the class itself."
+    explanation: |
+      Both variants give one instance per application; the difference is how the consumer gets it. The call
+      `ExchangeRates.Instance` is hard-wired inside the method: nothing in the signature of `PriceCalculator`
+      says it calls an external API, and the only way to replace `ExchangeRates` is to rewrite the class. A unit
+      test has to work with the real object, and if that object holds mutable state, the state outlives the test
+      and leaks into other tests in the same process.
+
+      In the second variant the dependency is explicit: `PriceCalculatorDi` receives the `IExchangeRates`
+      abstraction, a test passes a fake to the constructor, and in the application the container with
+      `AddSingleton` still creates one instance. So the singleton lifetime keeps the benefit of the pattern (one
+      shared object) but removes the global access. Microsoft's DI guidelines give the same advice: avoid
+      stateful static classes and members, and design the app around singleton services instead of global state.
+    linkTitles:
+      - "Dependency injection guidelines in .NET"
+      - "Singleton pattern (Refactoring.Guru)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  noRunReason: "Illustrative fragment: no entry point, ExchangeRatesService is not defined, and GetRate stands for a call to an external API; the registration shown in the comment needs Microsoft.Extensions.DependencyInjection."

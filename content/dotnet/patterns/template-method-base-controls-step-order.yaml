@@ -1,0 +1,133 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQNW8K6ZNT5JCSZ29M
+slug: template-method-base-controls-step-order
+stack: dotnet
+topic: patterns
+level: junior
+type: output
+grading: auto
+tags: [template-method, gof, inheritance, virtual-methods]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    Exporter exporter = new CsvExporter();
+    exporter.Export();
+
+    abstract class Exporter
+    {
+        public void Export()
+        {
+            Open();
+            Write();
+            Close();
+        }
+
+        protected void Open() => Console.Write("open ");
+        protected virtual void Write() => Console.Write("text ");
+        protected void Close() => Console.Write("close");
+    }
+
+    class CsvExporter : Exporter
+    {
+        protected override void Write() => Console.Write("csv ");
+    }
+expect:
+  kind: output
+  value: "open csv close"
+acceptedOutputs: ["open csv close"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "open csv close" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "csv" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "open text close" }
+  - id: d
+    correct: false
+    expect: { kind: output, value: "open text csv close" }
+  - id: e
+    correct: false
+    expect: { kind: compile-error }
+links:
+  - url: https://refactoring.guru/design-patterns/template-method
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/abstract
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что выведет шаблонный метод, если наследник переопределил только один шаг?
+    prompt: |
+      Базовый класс `Exporter` содержит невиртуальный метод `Export`, который вызывает шаги `Open`, `Write` и
+      `Close` в фиксированном порядке. Наследник `CsvExporter` переопределяет только шаг `Write`.
+      Что выведет эта программа в консоль?
+    hint: Какой метод вызывается через переменную типа `Exporter` - и кто из классов решает, в каком порядке идут шаги?
+    options:
+      a: "open csv close"
+      b: "csv"
+      c: "open text close"
+      d: "open text csv close"
+      e: Ошибка компиляции
+    optionExplanations:
+      b: "`CsvExporter` заменяет только метод `Write`, а не `Export`. Метод `Export` наследуется из базового класса и по-прежнему вызывает `Open` и `Close` вокруг `Write`."
+      c: "`Write` объявлен как `virtual`, а наследник его переопределяет через `override`. Вызов `Write()` внутри `Export` диспетчеризуется по реальному типу объекта, то есть `CsvExporter`, поэтому базовая версия с `text` не выполняется."
+      d: "Переопределённый метод не вызывает базовую реализацию автоматически. Версия из `Exporter` выполнилась бы, только если бы в `CsvExporter.Write` был явный вызов `base.Write()`."
+      e: "Код корректен. Абстрактный класс может не иметь абстрактных членов, защищённые методы доступны наследнику, а типы можно объявлять после инструкций верхнего уровня."
+    answer: "open csv close"
+    explanation: |
+      `Export` - это шаблонный метод: он невиртуальный, поэтому наследник не может его переопределить, и порядок
+      шагов `Open` -> `Write` -> `Close` задаёт только базовый класс. `Open` и `Close` тоже невиртуальные и
+      всегда печатают `open ` и `close`.
+
+      Шаг `Write` объявлен как `virtual`, и `CsvExporter` переопределяет его. Вызов `Write()` внутри `Export`
+      - это виртуальный вызов на объекте типа `CsvExporter`, поэтому выполняется версия наследника и печатает
+      `csv `. В итоге получается `open csv close`.
+
+      В этом суть паттерна Template Method: базовый класс владеет алгоритмом, а наследники меняют только
+      разрешённые шаги. Если шаг обязателен для каждого наследника, его делают `abstract` (тогда класс тоже
+      должен быть `abstract`), а если у шага есть разумное поведение по умолчанию - `virtual`, как здесь.
+    linkTitles:
+      - "Template Method (Refactoring.Guru)"
+      - "Ключевое слово abstract"
+  en:
+    title: What does a template method print when a subclass overrides only one step?
+    prompt: |
+      The base class `Exporter` has a non-virtual `Export` method that calls the steps `Open`, `Write` and
+      `Close` in a fixed order. The subclass `CsvExporter` overrides only the `Write` step.
+      What does this program print to the console?
+    hint: Which method is called through a variable of type `Exporter` - and which class decides the order of the steps?
+    options:
+      a: "open csv close"
+      b: "csv"
+      c: "open text close"
+      d: "open text csv close"
+      e: Compile error
+    optionExplanations:
+      b: "`CsvExporter` replaces only the `Write` method, not `Export`. `Export` is inherited from the base class and still calls `Open` and `Close` around `Write`."
+      c: "`Write` is declared `virtual`, and the subclass overrides it with `override`. The `Write()` call inside `Export` is dispatched on the runtime type of the object, `CsvExporter`, so the base version with `text` does not run."
+      d: "An override does not call the base implementation automatically. The `Exporter` version would run only if `CsvExporter.Write` called `base.Write()` explicitly."
+      e: "The code is valid. An abstract class may have no abstract members, protected methods are accessible to the subclass, and types may be declared after top-level statements."
+    answer: "open csv close"
+    explanation: |
+      `Export` is the template method: it is non-virtual, so a subclass cannot override it, and only the base
+      class decides the order `Open` -> `Write` -> `Close`. `Open` and `Close` are non-virtual too and always
+      print `open ` and `close`.
+
+      The `Write` step is declared `virtual`, and `CsvExporter` overrides it. The `Write()` call inside `Export`
+      is a virtual call on an object of type `CsvExporter`, so the subclass version runs and prints `csv `.
+      The result is `open csv close`.
+
+      This is the core of the Template Method pattern: the base class owns the algorithm, and subclasses change
+      only the steps it allows. If every subclass must supply a step, make it `abstract` (and the class must then
+      be `abstract` too); if the step has a sensible default, make it `virtual`, as here.
+    linkTitles:
+      - "Template Method (Refactoring.Guru)"
+      - "The abstract keyword"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

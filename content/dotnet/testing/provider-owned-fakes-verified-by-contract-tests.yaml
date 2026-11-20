@@ -1,0 +1,154 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RRJDZKWGA8AD1NX62M
+slug: provider-owned-fakes-verified-by-contract-tests
+stack: dotnet
+topic: testing
+level: architect
+type: open
+grading: self
+tags: [test-doubles, fakes, contract-testing, client-library]
+links:
+  - url: https://martinfowler.com/bliki/ContractTest.html
+    lang: en
+    kind: article
+  - url: https://martinfowler.com/bliki/TestDouble.html
+    lang: en
+    kind: article
+  - url: https://abseil.io/resources/swe-book/html/ch13.html
+    lang: en
+    kind: book
+locales:
+  ru:
+    title: Как организовать фейки общего платформенного сервиса для десятков команд, чтобы они не расходились с реальностью?
+    prompt: |
+      Общим платформенным сервисом (например, биллингом) пользуются несколько десятков команд. Каждая команда
+      написала свой фейк его клиента для модульных тестов. Тесты у всех зелёные, но после очередного релиза
+      сервиса в production начинаются ошибки: сервис стал отклонять повторные запросы с тем же ключом
+      идемпотентности и уменьшил размер страницы, а фейки об этом не знают.
+
+      Как организовать тестовые двойники этого сервиса на уровне всей организации, чтобы схема работала годами?
+      Кто за что отвечает, как гарантировать, что фейк ведёт себя как настоящий сервис, и какие у подхода
+      ограничения?
+    hint: |
+      Кто первым узнаёт, что поведение сервиса изменилось, и где должна выполняться проверка того, что фейк
+      ведёт себя так же, как настоящий сервис?
+    answer: |
+      - **Почему копии не работают.** Каждый самодельный фейк фиксирует представление одной команды о сервисе на
+        момент написания, и больше его никто не проверяет. Сервис меняется (новая валидация, ответ 409 на
+        повторный ключ, другой лимит страницы), фейки нет, и тесты остаются зелёными именно там, где должны падать.
+        Десятки копий умножают и стоимость поддержки, и число разных неверных предположений.
+      - **Фейк поставляет владелец сервиса.** Команда-владелец публикует официальный фейк в памяти вместе с
+        клиентской библиотекой, например пакет `Billing.Client.Testing` рядом с `Billing.Client`. Фейк реализует
+        тот же интерфейс клиента и выпускается с той же версией: обновив клиент, потребитель получает
+        соответствующий фейк. Так устроены и библиотеки .NET: `FakeTimeProvider` в пакете
+        `Microsoft.Extensions.TimeProvider.Testing`, `FakeLogger` в `Microsoft.Extensions.Diagnostics.Testing`.
+      - **Один набор контрактных тестов, две реализации.** Владелец описывает поведение интерфейса клиента
+        абстрактным набором тестов (в xUnit это абстрактный класс с тестами и абстрактным фабричным методом) и
+        запускает его против обеих реализаций: против фейка в каждой сборке, против настоящего сервиса (временное
+        окружение или staging) в пайплайне сервиса и по расписанию. Если изменение сервиса меняет наблюдаемое
+        поведение, набор падает на фейке, пока фейк не обновят, а пакет с фейком выпускается только из зелёного
+        прогона. Поэтому фейк не может незаметно разойтись с сервисом.
+      - **Что фейк обязан покрывать.** Задокументированную семантику, а не только успешный сценарий: ошибки
+        валидации, отсутствие записи, конфликты и идемпотентность, лимиты и постраничную выдачу, а также сбои,
+        которые потребитель обязан обрабатывать (троттлинг, таймауты), с возможностью включить их из теста. То,
+        что фейк не моделирует, выбрасывает `NotSupportedException`, а не возвращает правдоподобное значение по
+        умолчанию: пробел проявится как упавший тест потребителя, а не как ложный зелёный.
+      - **Процесс на годы.** В definition of done сервиса: изменение поведения включает изменение фейка и
+        контрактный тест. Потребители сообщают о пробелах задачей или pull request в репозиторий владельца (inner
+        source), а не правят локальные копии. Миграция: найти самодельные фейки, перевести команды на официальный и
+        удалить копии. Контракты, управляемые потребителями, дополняют схему: они показывают владельцу, на какое
+        поведение опираются потребители, и это поведение попадает в общий набор.
+      - **Ограничения и цена.** Команде-владельцу нужно выделить на это время, а фейк - вторая реализация,
+        которую надо поддерживать, поэтому он должен оставаться узким. Прогоны против настоящего сервиса требуют
+        окружения, тестовых данных и учётных данных. Тайминги и итоговую согласованность трудно смоделировать
+        точно. Потребителям всё равно нужны несколько интеграционных тестов против настоящего сервиса, чтобы
+        проверить конфигурацию, аутентификацию и сеть.
+    explanation: |
+      Фейк полезен, только пока ведёт себя как настоящая реализация. Тестовый двойник, который никто не
+      сверяет с реальной зависимостью, со временем превращается в описание того, что кто-то думал о сервисе
+      несколько месяцев назад. Мартин Фаулер называет такую сверку контрактными тестами: они проверяют, что
+      вызовы тестового двойника дают те же результаты, что и вызовы настоящего сервиса. Они медленнее и зависят
+      от внешней системы, поэтому их запускают отдельно от обычных тестов, а их падение означает, что двойник
+      пора обновить.
+
+      На масштабе организации такая проверка может жить только у владельца сервиса: он знает семантику, он её
+      меняет, и в его пайплайне изменение и проверка встречаются. Это превращает N непроверенных копий в один
+      фейк и один набор тестов, которые проверяются при каждом изменении. Тот же вывод делает книга Software
+      Engineering at Google: фейк должен поддерживать владелец настоящей реализации, и у фейка должны быть свои
+      тесты, подтверждающие соответствие настоящему API.
+
+      Сильный ответ сочетает четыре вещи: владение (фейк пишет владелец), проверку (общий набор тестов против
+      фейка и сервиса), поставку (фейк версионируется вместе с клиентом) и процесс (изменение поведения без
+      изменения фейка не считается законченным), а также честно называет пределы: фейк не заменяет немногие
+      интеграционные тесты против настоящего сервиса.
+    linkTitles:
+      - "Мартин Фаулер: Contract Test"
+      - "Мартин Фаулер: Test Double"
+      - "Software Engineering at Google, глава 13: Test Doubles"
+  en:
+    title: How do you organise fakes of a shared platform service across dozens of teams so that they do not drift?
+    prompt: |
+      Several dozen teams use a shared platform service (for example, billing). Each team has written its own fake
+      of the service client for its unit tests. Everyone's tests are green, but after a release of the service
+      production starts failing: the service now rejects repeated requests with the same idempotency key and has
+      reduced the page size, and the fakes know nothing about it.
+
+      How do you organise the test doubles of this service across the whole organisation so that the approach works
+      for years? Who is responsible for what, how do you guarantee that a fake behaves like the real service, and
+      what are the limits of the approach?
+    hint: |
+      Who learns first that the behaviour of the service has changed, and where should the check that a fake
+      behaves like the real service run?
+    answer: |
+      - **Why the copies fail.** Each homemade fake captures one team's idea of the service at the time it was
+        written, and nobody checks it again. The service changes (new validation, a 409 on a repeated key, a different
+        page limit), the fakes do not, and the tests stay green exactly where they should fail. Dozens of copies
+        multiply both the maintenance cost and the number of different wrong assumptions.
+      - **The owner of the service ships the fake.** The owning team publishes an official in-memory fake together
+        with its client library, for example a `Billing.Client.Testing` package next to `Billing.Client`. The fake
+        implements the same client interface and is released with the same version: a consumer that upgrades the
+        client gets the matching fake. The .NET libraries follow the same pattern: `FakeTimeProvider` in the
+        `Microsoft.Extensions.TimeProvider.Testing` package, `FakeLogger` in `Microsoft.Extensions.Diagnostics.Testing`.
+      - **One contract suite, two implementations.** The owner writes the behaviour of the client interface as an
+        abstract test suite (in xUnit, an abstract class with the tests and an abstract factory method) and runs it
+        against both implementations: against the fake in every build, against the real service (an ephemeral
+        environment or staging) in the service pipeline and on a schedule. If a change to the service changes
+        observable behaviour, the suite fails on the fake until the fake is updated, and the fake package is released
+        only from a green run. That is why the fake cannot silently drift away from the service.
+      - **What the fake must cover.** The documented semantics, not only the happy path: validation errors, missing
+        records, conflicts and idempotency, limits and paging, and the failures consumers must handle (throttling,
+        timeouts), which a test can switch on. Anything the fake does not model throws `NotSupportedException`
+        instead of returning a plausible default: a gap shows up as a failing consumer test, not as a false green.
+      - **A process for years.** In the service's definition of done: a behaviour change includes the fake change
+        and a contract test. Consumers report gaps as an issue or a pull request to the owner's repository (inner
+        source) instead of patching local copies. Migration: find the homemade fakes, move the teams to the official
+        one and delete the copies. Consumer-driven contracts complement this: they show the owner which behaviour the
+        consumers rely on, and that behaviour goes into the shared suite.
+      - **Limits and cost.** The owning team needs time allocated for this, and the fake is a second implementation to
+        maintain, so it must stay narrow. Runs against the real service need an environment, test data and
+        credentials. Timing and eventual consistency are hard to model faithfully. Consumers still need a few
+        integration tests against the real service to check configuration, authentication and the network.
+    explanation: |
+      A fake is useful only while it behaves like the real implementation. A test double that nobody checks
+      against the real dependency gradually becomes a description of what someone believed about the service months
+      ago. Martin Fowler calls this check contract tests: they verify that calls to the test double give the same
+      results as calls to the real service. They are slower and depend on an external system, so they run separately
+      from the ordinary tests, and a failure means that the double needs updating.
+
+      At the scale of an organisation this check can live only with the owner of the service: the owner knows the
+      semantics, changes them, and its pipeline is where a change and its check meet. This turns N unverified copies
+      into one fake and one suite that are checked on every change. Software Engineering at Google reaches the same
+      conclusion: a fake should be maintained by the owner of the real implementation, and the fake needs its own
+      tests that confirm it conforms to the real API.
+
+      A strong answer combines four things: ownership (the owner writes the fake), verification (one suite against
+      the fake and the service), distribution (the fake is versioned with the client) and process (a behaviour change
+      without a fake change is not done), and it names the limits honestly: the fake does not replace a few
+      integration tests against the real service.
+    linkTitles:
+      - "Martin Fowler: Contract Test"
+      - "Martin Fowler: Test Double"
+      - "Software Engineering at Google, chapter 13: Test Doubles"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

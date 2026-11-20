@@ -1,0 +1,129 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RR4APCN19K7Z0AGE79
+slug: deterministic-async-consumer-test-techniques
+stack: dotnet
+topic: testing
+level: senior
+type: multi
+grading: auto
+tags: [async, taskcompletionsource, flaky-tests, test-design]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: true
+  - id: e
+    correct: false
+  - id: f
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.tasks.taskcompletionsource-1
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.tasks.task.waitasync
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.tasks.taskcreationoptions
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как сделать тест асинхронного потребителя сообщений детерминированным без пауз?
+    prompt: |
+      Фоновый потребитель читает сообщения из `Channel<T>` и для каждого вызывает `IOrderHandler`. Тест
+      публикует сообщение, выполняет `await Task.Delay(2000)` и проверяет результат. На загруженных агентах CI
+      тест иногда падает, а локально всегда тратит две секунды. Выберите все приёмы, которые делают такой тест
+      детерминированным.
+    hint: |
+      Проверьте каждый вариант в двух крайних случаях: обработка на перегруженном агенте заняла втрое больше
+      обычного, и сообщение не обработано никогда.
+    options:
+      a: "Подменить обработчик фейком, который после обработки вызывает `TrySetResult` у `TaskCompletionSource`, и в тесте ждать `await` этой задачи перед проверками."
+      b: "Ограничить ожидание через `await signal.Task.WaitAsync(TimeSpan.FromSeconds(5))`, чтобы необработанное сообщение роняло тест с `TimeoutException`, а не подвешивало прогон."
+      c: "Заменить `Task.Delay(2000)` на `Thread.Sleep(5000)`, чтобы медленному агенту CI хватило времени."
+      d: "Если тест ждёт три сообщения, фейк считает их через `Interlocked.Increment` и завершает сигнал, только когда счётчик дойдёт до 3, чтобы тест ждал все сообщения, а не первое."
+      e: "Ждать через `signal.Task.Wait(100)`, не проверяя возвращённое значение, и сразу переходить к проверкам."
+      f: "Пометить тест для автоматического перезапуска до трёх раз, чтобы редкий сбой по времени не делал сборку красной."
+    optionExplanations:
+      c: "Это та же пауза, только длиннее: тест всегда тратит пять секунд, блокирует поток и всё равно упадёт, если обработка займёт больше. Время ожидания по-прежнему угадывается, а не определяется событием."
+      e: "`Task.Wait(int)` возвращает `false`, если задача не завершилась за отведённое время. Раз результат игнорируется, через 100 мс тест идёт к проверкам, даже если сообщение ещё не обработано: это снова пауза фиксированной длины, только короче и с блокировкой потока."
+      f: "Перезапуск скрывает состояние гонки и умножает время прогона, но тест остаётся недетерминированным: он по-прежнему зависит от того, успел ли потребитель за две секунды."
+    answer: "a, b и d."
+    explanation: |
+      Пауза - это угадывание: тест надеется, что за заданное время обработка закончится. На быстрой машине он
+      ждёт зря, на медленной - падает. Детерминированный тест ждёт не время, а событие: явный сигнал о том, что
+      работа выполнена.
+
+      - **a.** `TaskCompletionSource` создаёт задачу, состоянием которой управляет код, вызывающий его методы.
+        Так «обработчик вызван» превращается в задачу, которую тест может ожидать, и тест продолжает работу ровно
+        в момент обработки. Рекомендуемая практика - создавать источник с
+        `TaskCreationOptions.RunContinuationsAsynchronously`: этот флаг заставляет продолжения задачи выполняться
+        асинхронно, поэтому продолжение теста не запустится внутри вызова `TrySetResult` в потоке потребителя.
+      - **b.** Сигнал без ограничения превращает ошибку («сообщение не обработано») в зависший прогон.
+        `Task.WaitAsync(TimeSpan)` возвращает задачу, которая завершится вместе с исходной или завершится с
+        `TimeoutException` по истечении срока. Таймаут здесь - верхняя граница на случай поломки, а не ожидаемая
+        длительность, поэтому его можно брать с запасом: успешный тест его не ждёт. Вопрос рассматривает .NET 10,
+        где эта перегрузка есть.
+      - **d.** Если сигнал срабатывает на первом сообщении, проверка остальных снова зависит от времени. Счётчик с
+        `Interlocked.Increment` безопасен при параллельной обработке и завершает сигнал по условию «обработано всё
+        ожидаемое».
+
+      Неверные варианты по-прежнему ждут время, а не событие (c, e), или маскируют нестабильность (f).
+    linkTitles:
+      - "Класс TaskCompletionSource<TResult>"
+      - "Метод Task.WaitAsync"
+      - "Перечисление TaskCreationOptions"
+  en:
+    title: How do you make a test of an asynchronous message consumer deterministic without sleeps?
+    prompt: |
+      A background consumer reads messages from a `Channel<T>` and calls `IOrderHandler` for each one. The test
+      publishes a message, runs `await Task.Delay(2000)` and checks the result. On busy CI agents the test
+      sometimes fails, and locally it always spends two seconds. Select all techniques that make such a test
+      deterministic.
+    hint: |
+      Check each option against two extreme cases: processing on an overloaded agent takes three times longer than
+      usual, and the message is never processed at all.
+    options:
+      a: "Replace the handler with a fake that calls `TrySetResult` on a `TaskCompletionSource` after processing, and make the test `await` that task before the assertions."
+      b: "Bound the wait with `await signal.Task.WaitAsync(TimeSpan.FromSeconds(5))`, so a message that is never processed fails the test with `TimeoutException` instead of hanging the run."
+      c: "Replace `Task.Delay(2000)` with `Thread.Sleep(5000)` so that a slow CI agent has enough time."
+      d: "When the test expects three messages, the fake counts them with `Interlocked.Increment` and completes the signal only when the counter reaches 3, so the test waits for all messages and not just the first."
+      e: "Wait with `signal.Task.Wait(100)`, ignore the returned value, and go straight to the assertions."
+      f: "Mark the test for automatic retry up to three times, so a rare timing failure does not turn the build red."
+    optionExplanations:
+      c: "It is the same sleep, only longer: the test always spends five seconds, blocks a thread and still fails if processing takes longer. The wait time is still a guess, not determined by an event."
+      e: "`Task.Wait(int)` returns `false` if the task did not complete in the given time. Because the result is ignored, after 100 ms the test moves on to the assertions even if the message is not processed yet: it is again a fixed-length sleep, only shorter and with a blocked thread."
+      f: "A retry hides the race condition and multiplies the run time, but the test stays nondeterministic: it still depends on whether the consumer finished within two seconds."
+    answer: "a, b and d."
+    explanation: |
+      A sleep is a guess: the test hopes that processing finishes within the given time. On a fast machine it waits
+      for nothing, on a slow one it fails. A deterministic test waits for an event, not for time: an explicit
+      signal that the work is done.
+
+      - **a.** `TaskCompletionSource` creates a task whose state is controlled by the code that calls its methods.
+        This turns "the handler was called" into a task the test can await, and the test continues exactly when
+        processing happens. A recommended practice is to create the source with
+        `TaskCreationOptions.RunContinuationsAsynchronously`: this flag forces the task's continuations to run
+        asynchronously, so the test continuation does not run inside the `TrySetResult` call on the consumer thread.
+      - **b.** A signal without a bound turns a defect ("the message was not processed") into a hung run.
+        `Task.WaitAsync(TimeSpan)` returns a task that completes with the original one or completes with
+        `TimeoutException` when the time is up. The timeout here is an upper bound for the failure case, not the
+        expected duration, so it can be generous: a passing test never waits for it. The question targets .NET 10,
+        where this overload exists.
+      - **d.** If the signal fires on the first message, checking the rest depends on timing again. A counter with
+        `Interlocked.Increment` is safe under concurrent processing and completes the signal on the condition "all
+        expected messages are processed".
+
+      The wrong options still wait for time rather than for an event (c, e), or mask the flakiness (f).
+    linkTitles:
+      - "TaskCompletionSource<TResult> class"
+      - "Task.WaitAsync method"
+      - "TaskCreationOptions enum"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

@@ -1,0 +1,119 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQE8XGGJ2XRCQKM1Y3
+slug: dispatchproxy-proxy-constraints
+stack: dotnet
+topic: patterns
+level: senior
+type: multi
+grading: auto
+tags: [proxy, dispatchproxy, reflection, gof, async]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: true
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+  - id: f
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.reflection.dispatchproxy
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.reflection.dispatchproxy.create
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.reflection.targetinvocationexception
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что верно о построении Proxy через System.Reflection.DispatchProxy?
+    prompt: |
+      Нужно добавить логирование и замер времени вокруг всех методов интерфейса `IOrderService`, не меняя
+      его реализацию. Для этого выбран `System.Reflection.DispatchProxy`. Выберите все верные утверждения о
+      таком прокси.
+    hint: Подумайте, какой тип `DispatchProxy` генерирует во время выполнения, что этот тип знает о вашем исходном объекте и в какой момент возвращается вызов асинхронного метода.
+    options:
+      a: "`DispatchProxy.Create<T, TProxy>()` работает, только если `T` - интерфейс: для класса вызов выбрасывает `ArgumentException` во время выполнения, потому что в C# нет ограничения обобщённого параметра, требующего интерфейс."
+      b: "`TProxy` должен наследовать `DispatchProxy` и переопределить абстрактный метод `Invoke(MethodInfo, object[])`: через него проходит каждый вызов члена интерфейса на прокси."
+      c: "Для метода, возвращающего `Task`, `Invoke` получает задачу от целевого объекта ещё до завершения асинхронной работы, поэтому логирование длительности или ошибки нужно привязать к возвращённой задаче, например вернуть новую задачу, которая её ожидает."
+      d: "`DispatchProxy` умеет проксировать и незапечатанный класс, перехватывая его виртуальные методы, так что интерфейс у целевого объекта не обязателен."
+      e: "Прокси сам передаёт вызовы исходной реализации, а `Invoke` - лишь точка для кода до и после вызова."
+      f: "Если целевой метод, вызванный через `targetMethod.Invoke(target, args)`, выбрасывает исключение, вызывающий код получит исходный тип исключения без изменений."
+    optionExplanations:
+      d: "`DispatchProxy` генерирует тип, который реализует интерфейс `T`, а для класса `Create` выбрасывает `ArgumentException`. Перехват виртуальных методов класса дают сторонние библиотеки вроде Castle DynamicProxy, но не `DispatchProxy`."
+      e: "У `DispatchProxy` нет понятия целевого объекта: сгенерированный метод только вызывает `Invoke`. Ссылку на реализацию нужно сохранить в поле своего класса-прокси и самому вызвать `targetMethod.Invoke(target, args)`, иначе реальная работа не выполняется вовсе."
+      f: "`MethodInfo.Invoke` оборачивает исключение целевого метода в `TargetInvocationException`. Чтобы вызывающий код видел исходное исключение, его нужно развернуть, например через `ExceptionDispatchInfo.Capture(ex.InnerException).Throw()`, или вызвать перегрузку `MethodInfo.Invoke` с флагом `BindingFlags.DoNotWrapExceptions`."
+    answer: "Верны утверждения a, b и c: только интерфейсы, наследник `DispatchProxy` с переопределённым `Invoke`, а для асинхронных методов обработка после вызова привязывается к возвращённой задаче."
+    explanation: |
+      `DispatchProxy` - встроенный способ сделать динамический Proxy. `Create<T, TProxy>()` во время выполнения
+      генерирует тип, который наследует `TProxy` и реализует интерфейс `T`. Каждый метод этого интерфейса
+      превращается в вызов `Invoke` с `MethodInfo` вызванного метода и массивом аргументов. Поэтому `T` обязан
+      быть интерфейсом, а `TProxy` - наследником `DispatchProxy`. Проверка того, что `T` - интерфейс, выполняется
+      только во время выполнения: ограничения `where T : interface` в C# нет.
+
+      Сгенерированный тип ничего не знает о реальной реализации. Обычно в классе-прокси пишут статический
+      фабричный метод: он вызывает `DispatchProxy.Create`, приводит результат к своему типу и записывает целевой
+      объект в поле. В `Invoke` прокси выполняет свою логику и вызывает `targetMethod.Invoke(_target, args)`.
+      Исключения целевого метода при этом приходят обёрнутыми в `TargetInvocationException`, и их нужно
+      развернуть, иначе прокси меняет контракт ошибок интерфейса.
+
+      Главная ловушка - асинхронные методы. `Invoke` синхронный: он возвращается, как только целевой метод вернул
+      `Task`, то есть обычно до окончания работы. Код после вызова в `Invoke` измерит только время создания
+      задачи и не увидит исключение, которое окажется в задаче. Нужно вернуть вызывающему коду новую задачу,
+      которая ожидает исходную и делает обработку после её завершения. Для `Task<TResult>` такую обёртку
+      пишут обобщённым вспомогательным методом и выбирают его через `MakeGenericMethod` по типу результата.
+    linkTitles:
+      - "Класс DispatchProxy"
+      - "Метод DispatchProxy.Create"
+      - "Класс TargetInvocationException"
+  en:
+    title: What is true about building a Proxy with System.Reflection.DispatchProxy?
+    prompt: |
+      You need to add logging and timing around every method of the `IOrderService` interface without
+      changing its implementation, and `System.Reflection.DispatchProxy` has been chosen for that. Select all
+      true statements about such a proxy.
+    hint: Think about what type `DispatchProxy` generates at run time, what that type knows about your original object, and when the call to an asynchronous method returns.
+    options:
+      a: "`DispatchProxy.Create<T, TProxy>()` works only when `T` is an interface: for a class the call throws `ArgumentException` at run time, because C# has no generic constraint that requires an interface."
+      b: "`TProxy` must derive from `DispatchProxy` and override the abstract `Invoke(MethodInfo, object[])` method: every call to an interface member on the proxy goes through it."
+      c: "For a method that returns `Task`, `Invoke` gets the task back from the target before the asynchronous work completes, so logging the duration or the error has to be attached to the returned task, for example by returning a new task that awaits it."
+      d: "`DispatchProxy` can also proxy a non-sealed class and intercept its virtual methods, so the target does not need an interface."
+      e: "The proxy forwards calls to the original implementation by itself, and `Invoke` is only a hook for code before and after the call."
+      f: "If the target method called through `targetMethod.Invoke(target, args)` throws, the caller of the proxy receives the original exception type unchanged."
+    optionExplanations:
+      d: "`DispatchProxy` generates a type that implements the interface `T`, and for a class `Create` throws `ArgumentException`. Intercepting virtual methods of a class is what third-party libraries such as Castle DynamicProxy offer, not `DispatchProxy`."
+      e: "`DispatchProxy` has no notion of a target object: the generated method only calls `Invoke`. You must keep a reference to the implementation in a field of your proxy class and call `targetMethod.Invoke(target, args)` yourself, otherwise the real work never runs."
+      f: "`MethodInfo.Invoke` wraps the target method's exception in `TargetInvocationException`. To let callers see the original exception you have to unwrap it, for example with `ExceptionDispatchInfo.Capture(ex.InnerException).Throw()`, or call the `MethodInfo.Invoke` overload with the `BindingFlags.DoNotWrapExceptions` flag."
+    answer: "Statements a, b and c are true: interfaces only, a `DispatchProxy` subclass that overrides `Invoke`, and for asynchronous methods any post-processing is attached to the returned task."
+    explanation: |
+      `DispatchProxy` is the built-in way to build a dynamic Proxy. At run time `Create<T, TProxy>()` generates a
+      type that derives from `TProxy` and implements the interface `T`. Every method of that interface becomes a
+      call to `Invoke` with the `MethodInfo` of the called method and an array of arguments. That is why `T` must
+      be an interface and `TProxy` must derive from `DispatchProxy`. The check that `T` is an interface happens
+      only at run time: C# has no `where T : interface` constraint.
+
+      The generated type knows nothing about the real implementation. A proxy class usually has a static factory
+      method that calls `DispatchProxy.Create`, casts the result to its own type and stores the target object in
+      a field. In `Invoke` the proxy runs its own logic and calls `targetMethod.Invoke(_target, args)`. Exceptions
+      from the target then arrive wrapped in `TargetInvocationException`, and they must be unwrapped, otherwise
+      the proxy changes the error contract of the interface.
+
+      The main trap is asynchronous methods. `Invoke` is synchronous: it returns as soon as the target method has
+      returned a `Task`, which is usually before the work is done. Code after the call in `Invoke` measures only
+      the time to create the task and does not see an exception that ends up in the task. You have to return a
+      new task to the caller that awaits the original one and does the post-processing after it completes. For
+      `Task<TResult>` such a wrapper is written as a generic helper method and picked with `MakeGenericMethod`
+      by the result type.
+    linkTitles:
+      - "DispatchProxy class"
+      - "DispatchProxy.Create method"
+      - "TargetInvocationException class"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

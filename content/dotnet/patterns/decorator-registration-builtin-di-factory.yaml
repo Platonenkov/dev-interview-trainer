@@ -1,0 +1,155 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQM5Z1EEVW5JV62KYG
+slug: decorator-registration-builtin-di-factory
+stack: dotnet
+topic: patterns
+level: senior
+type: single
+grading: auto
+tags: [decorator, dependency-injection, gof]
+code:
+  language: csharp
+  harness: none
+  source: |
+    public interface IProductRepository
+    {
+        Product GetById(int id);
+    }
+
+    public sealed class SqlProductRepository : IProductRepository
+    {
+        public SqlProductRepository(AppDbContext db) { /* ... */ }
+        public Product GetById(int id) { /* query the database */ }
+    }
+
+    public sealed class CachingProductRepository : IProductRepository
+    {
+        private readonly IProductRepository _inner;
+        private readonly IMemoryCache _cache;
+
+        public CachingProductRepository(IProductRepository inner, IMemoryCache cache)
+        {
+            _inner = inner;
+            _cache = cache;
+        }
+
+        public Product GetById(int id) =>
+            _cache.GetOrCreate(id, _ => _inner.GetById(id));
+    }
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/core/extensions/dependency-injection
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/microsoft.extensions.dependencyinjection.extensions.servicecollectiondescriptorextensions.tryaddscoped
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/microsoft.extensions.dependencyinjection.servicecollectionserviceextensions.addkeyedscoped
+    lang: en
+    kind: docs
+  - url: https://github.com/khellang/Scrutor
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как зарегистрировать декоратор во встроенном DI-контейнере .NET без сторонних библиотек?
+    prompt: |
+      Есть репозиторий `SqlProductRepository` и кэширующий декоратор `CachingProductRepository` (код ниже).
+      `IMemoryCache` уже зарегистрирован через `AddMemoryCache()`, `AppDbContext` тоже зарегистрирован. Все
+      нужные `using` подключены, включая `Microsoft.Extensions.DependencyInjection.Extensions`. Какая
+      регистрация во встроенном контейнере `Microsoft.Extensions.DependencyInjection` (.NET 10, без Scrutor и
+      других библиотек) приведёт к тому, что потребители `IProductRepository` получат декоратор, внутри
+      которого находится `SqlProductRepository`?
+    hint: Как контейнер выбирает реализацию, если для интерфейса есть несколько регистраций, и откуда декоратор получит свой внутренний объект?
+    options:
+      a: "`services.AddScoped<IProductRepository, SqlProductRepository>();` и затем `services.AddScoped<IProductRepository, CachingProductRepository>();`"
+      b: "`services.AddScoped<SqlProductRepository>();` и `services.AddScoped<IProductRepository>(sp => new CachingProductRepository(sp.GetRequiredService<SqlProductRepository>(), sp.GetRequiredService<IMemoryCache>()));`"
+      c: "`services.AddScoped<IProductRepository, SqlProductRepository>();` и затем `services.TryAddScoped<IProductRepository, CachingProductRepository>();`"
+      d: "`services.AddScoped<IProductRepository, SqlProductRepository>();` и затем `services.Decorate<IProductRepository, CachingProductRepository>();`"
+    optionExplanations:
+      a: "При нескольких регистрациях одного интерфейса для одиночной зависимости выбирается последняя, то есть `CachingProductRepository`. Его конструктору нужен `IProductRepository`, и контейнер снова выбирает тот же `CachingProductRepository`: получается циклическая зависимость, и разрешение сервиса завершается `InvalidOperationException`."
+      c: "Код компилируется: `TryAddScoped` объявлен в пространстве имён `Microsoft.Extensions.DependencyInjection.Extensions`, которое подключено. Но этот метод добавляет регистрацию, только если для типа сервиса ещё нет ни одной. `IProductRepository` уже зарегистрирован, поэтому вызов ничего не делает, и потребители получают `SqlProductRepository` без кэша."
+      d: "Метод `Decorate` для `IServiceCollection` - это расширение сторонней библиотеки Scrutor. Во встроенном контейнере такого метода нет, и без Scrutor код не скомпилируется."
+    answer: "Зарегистрировать `SqlProductRepository` как конкретный тип, а `IProductRepository` - через фабрику, которая получает `SqlProductRepository` из контейнера и оборачивает его в `CachingProductRepository`."
+    explanation: |
+      Встроенный контейнер .NET 10 не умеет оборачивать уже зарегистрированный сервис: метод `Decorate`
+      появляется только с Scrutor. Когда для одного интерфейса есть несколько регистраций, при внедрении
+      одиночной зависимости побеждает последняя, а конструктор декоратора просит тот же интерфейс, который он
+      сам и реализует. Поэтому внутренний объект нужно зарегистрировать под другим ключом, чаще всего под
+      конкретным типом `SqlProductRepository`, а интерфейс зарегистрировать фабрикой, которая собирает обёртку
+      вручную.
+
+      У этого подхода есть цена, которую стоит держать в голове:
+
+      - `SqlProductRepository` остаётся доступным напрямую, и класс, который запросит его по конкретному типу,
+        обойдёт кэш;
+      - время жизни декоратора не должно быть длиннее времени жизни внутреннего объекта, иначе scoped-репозиторий
+        с `DbContext` окажется захвачен singleton-декоратором;
+      - при добавлении новых зависимостей декоратора фабрику нужно править руками.
+
+      Начиная с .NET 8 внутренний объект можно зарегистрировать и как keyed-сервис
+      (`AddKeyedScoped<IProductRepository, SqlProductRepository>("inner")`) и получать его в фабрике через
+      `GetRequiredKeyedService<IProductRepository>("inner")`. Тогда внутренняя реализация не видна по
+      конкретному типу. Если декораторов много, команды обычно подключают Scrutor ради `Decorate`.
+    linkTitles:
+      - "Внедрение зависимостей в .NET"
+      - "Метод ServiceCollectionDescriptorExtensions.TryAddScoped"
+      - "Метод ServiceCollectionServiceExtensions.AddKeyedScoped"
+      - "Библиотека Scrutor (GitHub)"
+  en:
+    title: How do you register a decorator in the built-in .NET DI container without third-party libraries?
+    prompt: |
+      There is a `SqlProductRepository` and a caching decorator `CachingProductRepository` (code below).
+      `IMemoryCache` is already registered with `AddMemoryCache()`, and `AppDbContext` is registered too. All
+      required `using` directives are present, including `Microsoft.Extensions.DependencyInjection.Extensions`.
+      Which registration in the built-in `Microsoft.Extensions.DependencyInjection` container (.NET 10, no
+      Scrutor or other libraries) makes consumers of `IProductRepository` receive the decorator with a
+      `SqlProductRepository` inside it?
+    hint: How does the container choose an implementation when an interface has several registrations, and where does the decorator get its inner object from?
+    options:
+      a: "`services.AddScoped<IProductRepository, SqlProductRepository>();` followed by `services.AddScoped<IProductRepository, CachingProductRepository>();`"
+      b: "`services.AddScoped<SqlProductRepository>();` and `services.AddScoped<IProductRepository>(sp => new CachingProductRepository(sp.GetRequiredService<SqlProductRepository>(), sp.GetRequiredService<IMemoryCache>()));`"
+      c: "`services.AddScoped<IProductRepository, SqlProductRepository>();` followed by `services.TryAddScoped<IProductRepository, CachingProductRepository>();`"
+      d: "`services.AddScoped<IProductRepository, SqlProductRepository>();` followed by `services.Decorate<IProductRepository, CachingProductRepository>();`"
+    optionExplanations:
+      a: "With several registrations of one interface, a single dependency resolves to the last one, which is `CachingProductRepository`. Its constructor needs an `IProductRepository`, and the container picks the same `CachingProductRepository` again: this is a circular dependency, and resolving the service fails with `InvalidOperationException`."
+      c: "The code compiles: `TryAddScoped` is declared in the `Microsoft.Extensions.DependencyInjection.Extensions` namespace, which is imported. But the method adds the registration only if the service type has no registration yet. `IProductRepository` is already registered, so the call does nothing, and consumers get `SqlProductRepository` without the cache."
+      d: "The `Decorate` method on `IServiceCollection` is an extension from the third-party Scrutor library. The built-in container has no such method, and without Scrutor the code does not compile."
+    answer: "Register `SqlProductRepository` as a concrete type, and register `IProductRepository` with a factory that resolves `SqlProductRepository` from the container and wraps it in `CachingProductRepository`."
+    explanation: |
+      The built-in container in .NET 10 cannot wrap a service that is already registered: the `Decorate` method
+      comes only with Scrutor. When one interface has several registrations, a single injected dependency gets
+      the last one, and the decorator's constructor asks for the very interface it implements. So the inner
+      object has to be registered under a different key, most often its concrete type `SqlProductRepository`,
+      and the interface is registered with a factory that builds the wrapper by hand.
+
+      This approach has costs worth keeping in mind:
+
+      - `SqlProductRepository` stays resolvable directly, and a class that asks for the concrete type bypasses
+        the cache;
+      - the decorator's lifetime must not be longer than the inner object's lifetime, otherwise a scoped
+        repository holding a `DbContext` gets captured by a singleton decorator;
+      - when the decorator gains new dependencies, the factory has to be edited by hand.
+
+      Since .NET 8 the inner object can also be registered as a keyed service
+      (`AddKeyedScoped<IProductRepository, SqlProductRepository>("inner")`) and resolved in the factory with
+      `GetRequiredKeyedService<IProductRepository>("inner")`. Then the inner implementation is not exposed by its
+      concrete type. When there are many decorators, teams usually add Scrutor for its `Decorate` method.
+    linkTitles:
+      - "Dependency injection in .NET"
+      - "ServiceCollectionDescriptorExtensions.TryAddScoped method"
+      - "ServiceCollectionServiceExtensions.AddKeyedScoped method"
+      - "Scrutor library (GitHub)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"
+  noRunReason: The snippet depends on Microsoft.Extensions.DependencyInjection, Microsoft.Extensions.Caching.Memory and an EF Core DbContext, which are not part of the sandbox shared framework.

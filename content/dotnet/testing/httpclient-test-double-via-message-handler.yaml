@@ -1,0 +1,91 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RR38KRXMQ9FWZ4Q9YT
+slug: httpclient-test-double-via-message-handler
+stack: dotnet
+topic: testing
+level: middle
+type: single
+grading: auto
+tags: [httpclient, httpmessagehandler, test-doubles, unit-tests]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.net.http.httpmessagehandler
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.net.http.httpclient
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как подставить заранее подготовленные HTTP-ответы классу, который зависит от HttpClient?
+    prompt: |
+      Класс `WeatherClient` получает `HttpClient` через конструктор и вызывает у него `GetAsync`. В модульном
+      тесте нужно, чтобы он получал заранее подготовленный ответ (например, код `200` и тело в JSON) без
+      сетевого вызова. Какой способ работает?
+    hint: Какой объект внутри `HttpClient` на самом деле отправляет запрос и можно ли передать туда свой?
+    options:
+      a: "Написать тестовый класс, унаследованный от `HttpMessageHandler`, переопределить в нём `SendAsync` так, чтобы он возвращал подготовленный `HttpResponseMessage`, и передать в `WeatherClient` экземпляр `new HttpClient(handler)` с заданным `BaseAddress`."
+      b: "Создать в Moq мок `HttpClient` и настроить его метод `GetAsync` так, чтобы он возвращал подготовленный `HttpResponseMessage`."
+      c: "Унаследовать класс `FakeHttpClient` от `HttpClient`, объявить в нём метод `new GetAsync`, возвращающий подготовленный ответ, и передать экземпляр в `WeatherClient`."
+      d: "Создать `HttpClient` поверх `new HttpClientHandler()` и задать `BaseAddress` на `localhost`, чтобы запрос не покидал машину."
+    optionExplanations:
+      b: "`HttpClient` - это класс, а не интерфейс, и его метод `GetAsync` не виртуальный. Библиотеки вроде Moq подменяют только виртуальные и абстрактные члены, поэтому такую настройку применить нельзя: Moq отклоняет её с исключением."
+      c: "Модификатор `new` только скрывает метод, а не переопределяет его. `WeatherClient` хранит ссылку типа `HttpClient`, вызов привязывается к исходному `HttpClient.GetAsync` при компиляции, и запрос уходит в сеть через стандартный обработчик."
+      d: "`HttpClientHandler` отправляет настоящий запрос через сокет, и обращение к `localhost` - тоже сетевой вызов. Тест зависит от того, слушает ли кто-то порт, а подготовленного ответа так не получить."
+    answer: "Передать в класс настоящий `HttpClient`, созданный поверх тестового наследника `HttpMessageHandler`, чей переопределённый `SendAsync` возвращает подготовленный `HttpResponseMessage`."
+    explanation: |
+      `HttpClient` устроен как конвейер: сам он формирует запрос, а отправку поручает обработчику
+      `HttpMessageHandler`, который можно передать в конструктор `HttpClient(HttpMessageHandler)`. Все удобные
+      методы (`GetAsync`, `PostAsync`, `GetStringAsync` и другие) в итоге передают запрос в абстрактный метод
+      `SendAsync` обработчика. Это и есть точка расширения, предусмотренная дизайном.
+
+      Удобные методы `HttpClient` не виртуальные, поэтому подменить их мок-библиотекой или наследованием нельзя.
+      Зато тестовый обработчик - простой фейк: он возвращает заранее созданный `HttpResponseMessage`, может
+      запомнить полученный `HttpRequestMessage` для последующих проверок (метод, URL, заголовки) или сымитировать
+      сбой, выбросив `HttpRequestException`. Класс под тестом работает с настоящим `HttpClient` и о подмене не знает,
+      а сеть не задействована вовсе.
+    linkTitles:
+      - "Класс HttpMessageHandler"
+      - "Класс HttpClient"
+  en:
+    title: How do you give a class that depends on HttpClient canned HTTP responses in a unit test?
+    prompt: |
+      The `WeatherClient` class receives an `HttpClient` through its constructor and calls `GetAsync` on it. In a
+      unit test it must get a prepared response (for example, status `200` with a JSON body) without a network
+      call. Which approach works?
+    hint: Which object inside `HttpClient` actually sends the request, and can you pass in your own?
+    options:
+      a: "Write a test class derived from `HttpMessageHandler`, override its `SendAsync` to return the prepared `HttpResponseMessage`, and pass `WeatherClient` an instance of `new HttpClient(handler)` with `BaseAddress` set."
+      b: "Create a Moq mock of `HttpClient` and set up its `GetAsync` method to return the prepared `HttpResponseMessage`."
+      c: "Derive a `FakeHttpClient` class from `HttpClient`, declare a `new GetAsync` method in it that returns the prepared response, and pass an instance to `WeatherClient`."
+      d: "Create an `HttpClient` over `new HttpClientHandler()` and point `BaseAddress` at `localhost`, so the request never leaves the machine."
+    optionExplanations:
+      b: "`HttpClient` is a class, not an interface, and its `GetAsync` method is not virtual. Libraries such as Moq replace only virtual and abstract members, so this setup cannot be applied: Moq rejects it with an exception."
+      c: "The `new` modifier only hides the method, it does not override it. `WeatherClient` holds a reference of type `HttpClient`, the call binds to the original `HttpClient.GetAsync` at compile time, and the request goes to the network through the default handler."
+      d: "`HttpClientHandler` sends a real request through a socket, and a call to `localhost` is still a network call. The test depends on whether something listens on the port, and it cannot get a prepared response this way."
+    answer: "Pass the class a real `HttpClient` built over a test subclass of `HttpMessageHandler` whose overridden `SendAsync` returns the prepared `HttpResponseMessage`."
+    explanation: |
+      `HttpClient` is built as a pipeline: it composes the request and delegates sending to an
+      `HttpMessageHandler`, which you can pass to the `HttpClient(HttpMessageHandler)` constructor. All the
+      convenience methods (`GetAsync`, `PostAsync`, `GetStringAsync` and others) eventually hand the request to the
+      handler's abstract `SendAsync` method. That is the extension point the design provides.
+
+      The convenience methods of `HttpClient` are not virtual, so you cannot replace them with a mocking library or
+      with inheritance. A test handler, on the other hand, is a simple fake: it returns a prepared
+      `HttpResponseMessage`, can record the received `HttpRequestMessage` for later checks (method, URL, headers), or
+      simulate a failure by throwing `HttpRequestException`. The class under test works with a real `HttpClient` and
+      does not know about the substitution, and the network is not involved at all.
+    linkTitles:
+      - "HttpMessageHandler class"
+      - "HttpClient class"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

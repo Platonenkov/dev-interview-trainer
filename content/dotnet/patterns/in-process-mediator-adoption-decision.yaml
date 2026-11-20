@@ -1,0 +1,161 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQZBNXXRBSC0DA5VPE
+slug: in-process-mediator-adoption-decision
+stack: dotnet
+topic: patterns
+level: lead
+type: open
+grading: self
+tags: [mediator, cqrs, pipeline-behavior, design-patterns, architecture-decision]
+links:
+  - url: https://refactoring.guru/design-patterns/mediator
+    lang: en
+    kind: article
+  - url: https://refactoring.guru/ru/design-patterns/mediator
+    lang: ru
+    kind: article
+  - url: https://learn.microsoft.com/en-us/dotnet/architecture/microservices/microservice-ddd-cqrs-patterns/microservice-application-layer-implementation-web-api
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как техлиду решить, стоит ли пропускать все внутрипроцессные вызовы через медиатор?
+    prompt: |
+      Команда из восьми разработчиков сопровождает .NET-приложение, в котором контроллеры вызывают сервисы
+      приложения напрямую через интерфейсы из DI. Один из разработчиков предлагает перевести все внутрипроцессные
+      вызовы на медиатор в стиле MediatR: контроллер отправляет запрос (`Send(new CreateOrderCommand(...))`), его
+      обрабатывает отдельный класс-обработчик, а сквозную логику (валидацию, логирование, транзакции) берут на себя
+      pipeline behaviours.
+
+      Как вы как техлид примете это решение? Какие критерии и издержки учтёте и какие правила введёте, если
+      медиатор всё же примут?
+    hint: Какую конкретную проблему команды медиатор решает уже сегодня, и что платит каждый разработчик, когда читает код с `Send` вместо прямого вызова?
+    answer: |
+      **Что медиатор действительно даёт.**
+
+      - Единый конвейер на каждый запрос: валидация, логирование, авторизация, транзакция или аудит пишутся один
+        раз как behaviour (`IPipelineBehavior<TRequest, TResponse>` в MediatR) и применяются ко всем сценариям.
+      - Развязку отправителя и обработчика: вызывающий код знает только тип запроса.
+      - Единообразную форму сценариев (запрос и его обработчик), удобную для CQRS-стиля и вертикальных срезов.
+
+      **Что за это платит каждый, кто читает код.**
+
+      - Скрытый граф вызовов: переход к определению с `Send` ведёт в интерфейс медиатора (`IMediator` или
+        `ISender`), а не в обработчик. Обработчик ищут по имени типа запроса.
+      - Ошибки связывания уходят со времени компиляции во время выполнения: забытый обработчик обнаружится только
+        при вызове.
+      - Неявное поведение: behaviours оборачивают все запросы, их порядок задаётся регистрацией в DI и не виден из
+        кода сценария, стеки вызовов становятся длиннее.
+      - Соблазн отправлять запросы из обработчиков: вложенные цепочки, транзакции внутри транзакций, скрытые
+        зависимости между сценариями. Сам медиатор со временем рискует превратиться в God object.
+      - Сторонняя зависимость: обновления, ломающие изменения, условия лицензии и сопровождение - всё это теперь
+        ответственность команды.
+
+      **Как принять решение.**
+
+      1. Начать с проблемы, а не с паттерна: какие сквозные задачи сейчас дублируются и в скольких сценариях.
+      2. Проверить более простые альтернативы: middleware и фильтры ASP.NET Core на границе HTTP, декоратор на
+         интерфейсах сервисов приложения, прямые вызовы там, где сквозной логики нет.
+      3. Медиатор оправдан, если единый конвейер нужен многим сценариям (десятки команд с одинаковой валидацией,
+         транзакцией и аудитом) или нужна реальная развязка отправителей и обработчиков. Если сценариев немного, а
+         у каждого обработчика ровно один вызывающий, медиатор добавляет только косвенность.
+      4. Проверить идею пилотом на одном модуле, обсудить результат с командой и записать решение в ADR с
+         критериями пересмотра.
+
+      **Правила, если медиатор принят.**
+
+      - Запрос и обработчик лежат в одном файле или папке (вертикальный срез), чтобы навигация шла по имени.
+      - Обработчики не отправляют другие запросы через медиатор; общая логика выносится в обычные сервисы.
+      - Тест при сборке проверяет, что у каждого запроса есть обработчик; порядок behaviours задан в одном месте и
+        покрыт тестом.
+      - Обработчики - обычные классы без лишней зависимости от библиотеки, чтобы отказ от неё был механической
+        заменой, а не переписыванием.
+    explanation: |
+      Классический Mediator из GoF решает другую задачу: много компонентов хаотично ссылаются друг на друга, и
+      паттерн заставляет их общаться только через посредника. Во внутрипроцессном диспетчере запросов такого
+      клубка обычно нет: у контроллера один обработчик, и вызов через интерфейс из DI уже развязан. Поэтому
+      аргумент про развязку в типичном веб-приложении слабый, а реальная ценность - в едином конвейере.
+
+      Отсюда асимметрия: издержки косвенности платит каждый разработчик при каждом чтении и отладке кода, а
+      выгода появляется только там, где конвейер действительно нужен. Если сквозную логику уже покрывают
+      middleware, фильтры или пара декораторов, медиатор добавляет слой, но не убирает дублирование.
+
+      Для техлида это решение не про паттерн, а про то, как вся команда будет писать и читать код годами. Когда
+      обработчиков сотни, откатить решение дорого, поэтому его принимают явно, с критериями, пилотом и записью в
+      ADR, и сразу закладывают правила, которые сохраняют навигацию и обратимость.
+    linkTitles:
+      - "Mediator (Refactoring.Guru, английская версия)"
+      - "Посредник (Refactoring.Guru)"
+      - "Реализация уровня приложения микросервиса с помощью Web API"
+  en:
+    title: How does a tech lead decide whether to route all in-process calls through a mediator?
+    prompt: |
+      A team of eight developers maintains a .NET application in which controllers call application services
+      directly through interfaces from DI. One developer proposes moving every in-process call to a MediatR-style
+      mediator: the controller sends a request (`Send(new CreateOrderCommand(...))`), a separate handler class
+      processes it, and pipeline behaviours take care of cross-cutting logic (validation, logging, transactions).
+
+      As the tech lead, how do you make this decision? Which criteria and costs do you weigh, and which rules do
+      you introduce if the mediator is adopted after all?
+    hint: Which concrete problem of the team does the mediator solve today, and what does every developer pay when reading code with `Send` instead of a direct call?
+    answer: |
+      **What a mediator really gives.**
+
+      - A uniform per-request pipeline: validation, logging, authorization, transactions or auditing are written
+        once as a behaviour (`IPipelineBehavior<TRequest, TResponse>` in MediatR) and apply to every use case.
+      - Decoupling of sender and handler: the calling code knows only the request type.
+      - A uniform shape of use cases (a request and its handler), convenient for a CQRS style and vertical slices.
+
+      **What everyone who reads the code pays for it.**
+
+      - A hidden call graph: go-to-definition on `Send` leads to the mediator interface (`IMediator` or
+        `ISender`), not to the handler. You find the handler by searching for the request type name.
+      - Wiring errors move from compile time to run time: a forgotten handler shows up only when it is called.
+      - Implicit behaviour: behaviours wrap every request, their order is set by DI registration and is not
+        visible from the use case code, and call stacks get longer.
+      - The temptation to send requests from handlers: nested chains, transactions inside transactions, hidden
+        dependencies between use cases. Over time the mediator itself risks becoming a God object.
+      - A third-party dependency: upgrades, breaking changes, licence terms and maintenance are now the team's
+        responsibility.
+
+      **How to decide.**
+
+      1. Start from the problem, not the pattern: which cross-cutting concerns are duplicated today, and in how
+         many use cases.
+      2. Check simpler alternatives: ASP.NET Core middleware and filters at the HTTP boundary, a decorator on the
+         application service interfaces, direct calls where there is no cross-cutting logic.
+      3. A mediator is justified when many use cases need the uniform pipeline (dozens of commands with the same
+         validation, transaction and auditing) or when senders and handlers truly must be decoupled. With few use
+         cases and exactly one caller per handler, the mediator adds only indirection.
+      4. Try the idea as a pilot in one module, discuss the result with the team and record the decision in an
+         ADR with criteria for revisiting it.
+
+      **Rules if the mediator is adopted.**
+
+      - A request and its handler live in one file or folder (a vertical slice), so navigation works by name.
+      - Handlers do not send other requests through the mediator; shared logic goes into ordinary services.
+      - A test in the build checks that every request has a handler; the order of behaviours is defined in one
+        place and covered by a test.
+      - Handlers are ordinary classes with no extra dependency on the library, so dropping it is a mechanical
+        replacement, not a rewrite.
+    explanation: |
+      The classic GoF Mediator solves a different problem: many components refer to each other chaotically, and
+      the pattern forces them to communicate only through an intermediary. An in-process request dispatcher
+      usually has no such tangle: a controller has one handler, and a call through an interface from DI is
+      already decoupled. So in a typical web application the decoupling argument is weak, and the real value is
+      the uniform pipeline.
+
+      Hence the asymmetry: every developer pays the cost of indirection every time they read and debug the code,
+      while the benefit appears only where the pipeline is really needed. If middleware, filters or a couple of
+      decorators already cover the cross-cutting logic, a mediator adds a layer without removing duplication.
+
+      For a tech lead this decision is not about a pattern but about how the whole team will write and read code
+      for years. With hundreds of handlers, rolling the decision back is expensive, so it is made explicitly, with
+      criteria, a pilot and an ADR, and with rules from day one that keep navigation and reversibility.
+    linkTitles:
+      - "Mediator (Refactoring.Guru)"
+      - "Mediator (Refactoring.Guru, Russian version)"
+      - "Implement the microservice application layer using the Web API"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

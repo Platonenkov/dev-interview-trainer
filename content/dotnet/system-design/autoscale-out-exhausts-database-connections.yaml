@@ -1,0 +1,174 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQ2E7E9RD2PFEXAR7Y
+slug: autoscale-out-exhausts-database-connections
+stack: dotnet
+topic: system-design
+level: senior
+type: situation
+grading: self
+tags: [autoscaling, connection-pooling, database, scalability, load-shedding]
+links:
+  - url: https://learn.microsoft.com/en-us/azure/architecture/best-practices/auto-scaling
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/framework/data/adonet/sql-server-connection-pooling
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/performance/rate-limit
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Автомасштабирование подняло API с 4 до 30 экземпляров, а база данных упёрлась в лимит соединений: что пошло не так?"
+    prompt: |
+      ASP.NET Core API без состояния работает в нескольких экземплярах за балансировщиком и ходит в общую
+      реляционную базу данных. Правило автомасштабирования добавляет экземпляры, когда средняя загрузка CPU
+      выше 70%, максимум - 30 экземпляров. Во время всплеска трафика API вырос с 4 до 30 экземпляров. База
+      данных начала отказывать в новых соединениях, в логах API появились тайм-ауты ожидания соединения из
+      пула, а задержка 99-го перцентиля стала хуже, чем была на 4 экземплярах.
+      Что пошло не так и как вы исправите настройку масштабирования?
+    hint: |
+      Что общего у всех экземпляров API и что каждый новый экземпляр приносит с собой? И что на самом деле
+      измеряла метрика, по которой принималось решение о масштабировании?
+    answer: |
+      1. **Подтвердить механизм.** У каждого экземпляра свой пул соединений: SqlClient держит отдельный пул на
+         каждый процесс и каждую уникальную строку подключения, а `Max Pool Size` по умолчанию равен 100. Пул
+         живёт внутри процесса, и процессы между собой не договариваются. Четыре экземпляра могли открыть до
+         400 соединений, тридцать - до 3 000, намного больше, чем принимает база. Проверить метрики базы (число
+         сессий, CPU, ожидания ввода-вывода и блокировок) и логи приложения: запросы ждут свободное соединение
+         из пула до тайм-аута (в SqlClient по умолчанию 15 секунд) и падают, а база отказывает в новых
+         соединениях.
+      2. **Объяснить, почему стало хуже.** Число занятых соединений примерно равно частоте запросов к базе,
+         умноженной на их длительность (закон Литтла). Во время всплеска база уже была узким местом: запросы
+         замедлились, и каждое соединение удерживалось дольше. Новые экземпляры отправили в неё ещё больше
+         одновременных запросов: больше конкуренции за CPU, блокировки и память, ещё медленнее запросы, ещё
+         больше соединений, а сверху - повторы после тайм-аутов. CPU экземпляров API показывал симптом, и
+         масштабирование по нему добавляло нагрузку компоненту, который уже был перегружен.
+      3. **Задать бюджет соединений.** Определить, сколько одновременных соединений база обслуживает
+         эффективно. Обычно это заметно меньше жёсткого лимита: параллелизм сверх возможностей её CPU и
+         ввода-вывода не добавляет пропускной способности. Отложить резерв на администрирование, миграции,
+         фоновые задачи и другие сервисы. Остаток разделить на максимальное число экземпляров и явно задать
+         `Max Pool Size` в строке подключения. Пример: 600 полезных соединений, 100 в резерве, не больше 20
+         экземпляров - 25 соединений на экземпляр.
+      4. **Исправить правила автомасштабирования.** Верхнюю границу числа экземпляров выводить из бюджета, а
+         не выбирать наугад. Масштабироваться по метрике, которая отражает насыщение самого API, и признать,
+         что при упоре в базу новые экземпляры не помогут. Оставить запас между порогами добавления и удаления
+         экземпляров, чтобы правило не раскачивалось, и завести алерты на насыщение базы, а не только на CPU API.
+      5. **Защитить базу при перегрузке.** Ограничить параллелизм тяжёлых для базы эндпоинтов в приложении
+         (например, ограничителем параллелизма из middleware ограничения частоты запросов ASP.NET Core) и
+         быстро отклонять избыток с 503 или 429. Заголовок `Retry-After` в этом случае задаётся вручную:
+         ограничитель параллелизма сам не вычисляет, когда освободится разрешение. Сделать ожидание соединения
+         из пула коротким, а не 15 секунд, ограничить число повторов, использовать экспоненциальную задержку
+         со случайным разбросом и circuit breaker. Быстрый отказ лучше очереди, в которой все запросы доживают
+         до тайм-аута.
+      6. **Уменьшить работу на запрос.** Исправить медленные запросы и индексы, держать транзакции короткими,
+         открывать соединение как можно позже и освобождать как можно раньше (никогда не держать его во время
+         HTTP-вызова другого сервиса), проверить утечки соединений, кэшировать горячие чтения, перенести на
+         реплику чтения, которые терпят задержку, а несрочные записи - в очередь.
+      7. **Если соединений действительно нужно много**, поставить перед базой внешний пул соединений
+         (например, PgBouncer для PostgreSQL), который сводит много клиентских соединений к меньшему числу
+         серверных, или увеличить мощность самой базы. Затем проверить всё нагрузочным тестом на ожидаемом
+         пике и при максимальном числе экземпляров.
+    explanation: |
+      Слой без состояния легко масштабируется горизонтально, но все его экземпляры делят одну зависимость с
+      состоянием. Автомасштабирование не убирает узкое место, а переносит нагрузку на следующее. Каждый новый
+      экземпляр приносит собственный пул, поэтому давление на базу растёт вместе с числом экземпляров, а не с
+      объёмом полезной работы.
+
+      Пул соединений позволяет одному процессу переиспользовать физические соединения, но процессы между собой
+      не договариваются. Поэтому размер пула - это число на экземпляр, а суммарная нагрузка на базу равна
+      размеру пула, умноженному на число экземпляров и число сервисов.
+
+      Руководство Microsoft по автомасштабированию советует найти узкое место до добавления вычислительных
+      мощностей: база данных, брокер сообщений или внешний API могут ограничивать пропускную способность, даже
+      когда экземпляров больше. Там же сказано при тестировании масштабирования проверять, не перегружают ли
+      новые экземпляры зависимости. Автомасштабирование работает в пределах заданного диапазона числа
+      экземпляров; здесь верхняя граница этого диапазона - не ручка стоимости, а предохранитель для базы.
+
+      Метрика масштабирования должна отражать тот ресурс, который вы добавляете. Новые экземпляры API добавляют
+      CPU и память API, но не мощность базы. Если узкое место - база, правильная реакция на перегрузку - сброс
+      лишней нагрузки и уменьшение работы на запрос, а мощность базы планируется отдельно.
+
+      Компромисс: при меньшем пуле запросы раньше ждут или получают отказ, зато задержка принятых запросов
+      остаётся предсказуемой, а база сохраняет пропускную способность, вместо того чтобы захлёбываться
+      конкуренцией.
+    linkTitles:
+      - "Рекомендации по автомасштабированию"
+      - "Пулы соединений SQL Server (ADO.NET)"
+      - "Middleware ограничения частоты запросов в ASP.NET Core"
+  en:
+    title: "Autoscaling grew the API from 4 to 30 instances and the database hit its connection limit: what went wrong?"
+    prompt: |
+      A stateless ASP.NET Core API runs as several instances behind a load balancer and uses a shared
+      relational database. An autoscaling rule adds instances when average CPU is above 70%, with a maximum of
+      30 instances. During a traffic spike the API grew from 4 to 30 instances. The database started refusing
+      new connections, the API logs show timeouts while waiting for a connection from the pool, and the 99th
+      percentile latency became worse than it was with 4 instances.
+      What went wrong, and how do you fix the scaling setup?
+    hint: |
+      What do all API instances share, and what does every new instance bring with it? And what did the metric
+      that drove the scaling decision actually measure?
+    answer: |
+      1. **Confirm the mechanism.** Every instance has its own connection pool: SqlClient keeps a separate pool
+         per process and per unique connection string, and its default `Max Pool Size` is 100. The pool lives
+         inside the process, and processes do not coordinate with each other. Four instances could open up to
+         400 connections, thirty up to 3,000, far more than the database accepts. Check the database metrics
+         (number of sessions, CPU, I/O and lock waits) and the application logs: requests wait for a free pooled
+         connection until the timeout (15 seconds by default in SqlClient) and then fail, and the database
+         refuses new connections.
+      2. **Explain why it got worse.** Connections in use are roughly the query rate times the query duration
+         (Little's law). During the spike the database was already the bottleneck: queries slowed down and each
+         connection was held longer. New instances pushed even more concurrent queries into it: more contention
+         for CPU, locks and memory, slower queries, still more connections, and retries after timeouts on top.
+         API CPU measured a symptom, and scaling on it added load to the component that was already saturated.
+      3. **Set a connection budget.** Decide how many concurrent connections the database serves efficiently.
+         That is usually well below its hard limit, because concurrency beyond its CPU and I/O capacity adds no
+         throughput. Reserve a share for administration, migrations, background jobs and other services. Divide
+         the rest by the maximum instance count and set `Max Pool Size` explicitly in the connection string.
+         Example: 600 usable connections, 100 reserved, at most 20 instances gives 25 connections per instance.
+      4. **Fix the autoscaling rules.** Derive the upper bound of the instance count from the budget instead of
+         picking it arbitrarily. Scale on a metric that reflects the saturation of the API itself, and accept
+         that when the database is the limit, more instances cannot help. Keep a margin between the scale-out
+         and scale-in thresholds so the rule does not flap, and alert on database saturation, not only on API CPU.
+      5. **Protect the database under overload.** Limit the concurrency of database-heavy endpoints in the
+         application (for example with the concurrency limiter of the ASP.NET Core rate limiting middleware) and
+         reject the excess quickly with 503 or 429. The `Retry-After` header has to be set manually here: the
+         concurrency limiter cannot estimate when a permit becomes available. Keep the wait for a pooled
+         connection short instead of 15 seconds, limit retries, use exponential backoff with jitter and a
+         circuit breaker. Failing fast is better than a queue in which every request lives until it times out.
+      6. **Reduce the work per request.** Fix slow queries and indexes, keep transactions short, open the
+         connection as late and release it as early as possible (never hold it during an HTTP call to another
+         service), check for connection leaks, cache hot reads, move reads that tolerate lag to a replica, and
+         move non-urgent writes to a queue.
+      7. **If many connections are truly needed**, put an external connection pooler in front of the database
+         (for example PgBouncer for PostgreSQL), which maps many client connections onto fewer server
+         connections, or scale the database up. Then verify everything with a load test at the expected peak
+         and at the maximum instance count.
+    explanation: |
+      The stateless tier scales out easily, but all its instances share one stateful dependency. Autoscaling
+      does not remove a bottleneck; it pushes load onto the next one. Every new instance brings its own pool, so
+      the pressure on the database grows with the instance count, not with the amount of useful work.
+
+      A connection pool lets one process reuse physical connections, but processes do not coordinate with each
+      other. The pool size is therefore a per-instance number, and the total load on the database is the pool
+      size times the number of instances times the number of services.
+
+      Microsoft's autoscaling guidance says to identify the bottleneck before adding compute capacity: a
+      database, message broker or downstream API might limit throughput even when more compute instances are
+      available. It also says to check, when testing scaling, whether additional instances overload
+      dependencies. Autoscale works within a configured instance range; here the upper bound of that range is
+      not a cost knob but a safety limit for the database.
+
+      The scaling metric should reflect the resource you actually add. New API instances add API CPU and
+      memory, not database capacity. If the database is the bottleneck, the right reaction to overload is
+      shedding excess load and reducing the work per request, while database capacity is planned separately.
+
+      The trade-off: with a smaller pool, requests wait or get rejected earlier, but the latency of accepted
+      requests stays predictable and the database keeps its throughput instead of drowning in contention.
+    linkTitles:
+      - "Autoscaling guidance"
+      - "SQL Server connection pooling (ADO.NET)"
+      - "Rate limiting middleware in ASP.NET Core"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

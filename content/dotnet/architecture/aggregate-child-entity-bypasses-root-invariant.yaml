@@ -1,0 +1,192 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RKW929N0ME2DAVDANF
+slug: aggregate-child-entity-bypasses-root-invariant
+stack: dotnet
+topic: architecture
+level: middle
+type: find-bug
+grading: auto
+tags: [ddd, aggregates, invariants, encapsulation]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    var order = new Order(maxTotal: 1000m);
+    OrderLine line = order.AddLine("Keyboard", unitPrice: 100m, quantity: 5);
+    line.Quantity = 20;
+    Console.WriteLine(order.Total);
+
+    public class Order
+    {
+        private readonly List<OrderLine> _lines = new();
+        private readonly decimal _maxTotal;
+
+        public Order(decimal maxTotal) => _maxTotal = maxTotal;
+
+        public IReadOnlyList<OrderLine> Lines => _lines;
+        public decimal Total => _lines.Sum(l => l.UnitPrice * l.Quantity);
+
+        public OrderLine AddLine(string product, decimal unitPrice, int quantity)
+        {
+            if (Total + unitPrice * quantity > _maxTotal)
+                throw new InvalidOperationException("Order total limit exceeded.");
+            var line = new OrderLine(product, unitPrice, quantity);
+            _lines.Add(line);
+            return line;
+        }
+    }
+
+    public class OrderLine
+    {
+        public OrderLine(string product, decimal unitPrice, int quantity)
+        {
+            Product = product;
+            UnitPrice = unitPrice;
+            Quantity = quantity;
+        }
+
+        public string Product { get; }
+        public decimal UnitPrice { get; }
+        public int Quantity { get; set; }
+    }
+bugLineSets: [[37]]
+fixedSource: |
+  var order = new Order(maxTotal: 1000m);
+  OrderLine line = order.AddLine("Keyboard", unitPrice: 100m, quantity: 5);
+  try
+  {
+      order.ChangeQuantity(line, 20);
+  }
+  catch (InvalidOperationException)
+  {
+      Console.Write("rejected ");
+  }
+  Console.WriteLine(order.Total);
+
+  public class Order
+  {
+      private readonly List<OrderLine> _lines = new();
+      private readonly decimal _maxTotal;
+
+      public Order(decimal maxTotal) => _maxTotal = maxTotal;
+
+      public IReadOnlyList<OrderLine> Lines => _lines;
+      public decimal Total => _lines.Sum(l => l.UnitPrice * l.Quantity);
+
+      public OrderLine AddLine(string product, decimal unitPrice, int quantity)
+      {
+          if (Total + unitPrice * quantity > _maxTotal)
+              throw new InvalidOperationException("Order total limit exceeded.");
+          var line = new OrderLine(product, unitPrice, quantity);
+          _lines.Add(line);
+          return line;
+      }
+
+      public void ChangeQuantity(OrderLine line, int quantity)
+      {
+          if (!_lines.Contains(line))
+              throw new ArgumentException("The line does not belong to this order.");
+          decimal newTotal = Total + line.UnitPrice * (quantity - line.Quantity);
+          if (newTotal > _maxTotal)
+              throw new InvalidOperationException("Order total limit exceeded.");
+          line.Quantity = quantity;
+      }
+  }
+
+  public class OrderLine
+  {
+      public OrderLine(string product, decimal unitPrice, int quantity)
+      {
+          Product = product;
+          UnitPrice = unitPrice;
+          Quantity = quantity;
+      }
+
+      public string Product { get; }
+      public decimal UnitPrice { get; }
+      // In a real solution the domain model is a separate assembly,
+      // so only code inside it, such as Order, can change the quantity.
+      public int Quantity { get; internal set; }
+  }
+fixedExpect: { kind: output, value: "rejected 500" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/architecture/microservices/microservice-ddd-cqrs-patterns/net-core-microservice-domain-model
+    lang: en
+    kind: docs
+  - url: https://martinfowler.com/bliki/DDD_Aggregate.html
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Как изменение позиции заказа обходит лимит суммы в агрегате Order?
+    prompt: |
+      Агрегат `Order` не должен допускать сумму заказа больше лимита `maxTotal` (здесь 1000), и метод `AddLine`
+      проверяет это правило. Строки 1-4 - внешний код приложения: он добавляет позицию на 500, затем меняет её
+      количество, и программа выводит `2000`, то есть сумму выше лимита. Щёлкните по строке модели предметной
+      области (строки 6-38), которая позволяет обойти инвариант агрегата.
+    hint: Какие публичные члены классов модели позволяют изменить данные, минуя методы корня?
+    answer: |
+      Строка 37, `public int Quantity { get; set; }`: публичный сеттер позволяет изменить дочернюю сущность в
+      обход корня агрегата, и `Order` не получает шанса перепроверить лимит суммы.
+    explanation: |
+      Агрегат - граница согласованности, а его корень - единственная точка входа для изменений. Инвариант
+      «сумма не больше лимита» проверяет только корень, и только в тех методах, через которые идут изменения.
+      Здесь проверка есть в `AddLine`, но количество позиции можно поменять напрямую: `line.Quantity = 20`
+      меняет `OrderLine`, а `Order` об этом не узнаёт. Свойство `Total` просто пересчитывает позиции и
+      возвращает `100 * 20 = 2000`.
+
+      Строка 3 - лишь симптом: раз сеттер публичный, так может поступить любой код приложения, и инвариант
+      держится только на дисциплине вызывающих. Возврат позиции из `AddLine` и свойство `Lines` сами по себе не
+      ломают инвариант, пока через них можно только читать.
+
+      Исправление - закрыть изменение количества для внешнего кода и добавить метод корня
+      `Order.ChangeQuantity`, который вычисляет новую сумму, проверяет лимит и только затем меняет позицию. В
+      исправленной программе изменение отклоняется, и выводится `rejected 500`. Модификатор `internal set`
+      защищает позицию, только когда модель предметной области лежит в отдельной сборке; в однофайловом примере
+      внешний код находится в той же сборке, поэтому защита здесь условная. Настоящую гарантию дают отдельная
+      сборка модели или отсутствие у `Quantity` любого способа изменения, кроме методов корня.
+
+      Фаулер формулирует это правило прямо: ссылки извне агрегата должны вести только к его корню, и тогда
+      корень может обеспечить целостность агрегата целиком. В руководстве Microsoft по микросервисам `Order`
+      показан как корень агрегата заказа, а `OrderItem` - как его дочерняя сущность.
+    linkTitles:
+      - "Реализация модели предметной области микросервиса на .NET"
+      - "Агрегат в DDD (Martin Fowler)"
+  en:
+    title: How does changing an order line bypass the total limit of the Order aggregate?
+    prompt: |
+      The `Order` aggregate must not allow an order total above the `maxTotal` limit (1000 here), and the
+      `AddLine` method checks this rule. Lines 1-4 are external application code: it adds a line worth 500, then
+      changes its quantity, and the program prints `2000`, a total above the limit. Click the line of the domain
+      model (lines 6-38) that lets the aggregate invariant be bypassed.
+    hint: Which public members of the model classes let data change without going through the root's methods?
+    answer: |
+      Line 37, `public int Quantity { get; set; }`: the public setter lets code change a child entity without
+      going through the aggregate root, so `Order` never gets a chance to re-check the total limit.
+    explanation: |
+      An aggregate is a consistency boundary, and its root is the only entry point for changes. The invariant
+      "the total does not exceed the limit" is checked only by the root, and only in the methods that changes go
+      through. Here the check is in `AddLine`, but the line quantity can be changed directly: `line.Quantity = 20`
+      changes the `OrderLine`, and `Order` never learns about it. The `Total` property just recomputes the lines
+      and returns `100 * 20 = 2000`.
+
+      Line 3 is only the symptom: because the setter is public, any application code can do the same, and the
+      invariant relies on the discipline of every caller. Returning the line from `AddLine` and the `Lines`
+      property do not break the invariant by themselves as long as they only allow reading.
+
+      The fix is to close quantity changes to external code and add a root method `Order.ChangeQuantity` that
+      computes the new total, checks the limit and only then changes the line. In the fixed program the change is
+      rejected and it prints `rejected 500`. The `internal set` modifier protects the line only when the domain
+      model lives in its own assembly; in a single-file snippet the external code is in the same assembly, so the
+      protection here is nominal. The real guarantee comes from a separate domain model assembly or from
+      `Quantity` having no way to change other than the root's methods.
+
+      Fowler states the rule directly: references from outside the aggregate should only go to its root, so the
+      root can ensure the integrity of the aggregate as a whole. The Microsoft microservices guide shows `Order`
+      as the root of the order aggregate and `OrderItem` as its child entity.
+    linkTitles:
+      - "Implement a microservice domain model with .NET"
+      - "DDD Aggregate (Martin Fowler)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

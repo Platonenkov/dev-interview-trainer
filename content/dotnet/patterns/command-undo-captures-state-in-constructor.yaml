@@ -1,0 +1,138 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQHG65ND722FJY4G7B
+slug: command-undo-captures-state-in-constructor
+stack: dotnet
+topic: patterns
+level: middle
+type: find-bug
+grading: auto
+tags: [command, undo, gof, design-patterns]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    var editor = new Editor();
+    var bigger = new SetFontSizeCommand(editor, 16);
+    var huge = new SetFontSizeCommand(editor, 24);
+
+    bigger.Execute();
+    huge.Execute();
+    huge.Undo();
+    Console.WriteLine(editor.FontSize);
+
+    class Editor
+    {
+        public int FontSize { get; set; } = 12;
+    }
+
+    class SetFontSizeCommand
+    {
+        private readonly Editor _editor;
+        private readonly int _newSize;
+        private readonly int _previousSize;
+
+        public SetFontSizeCommand(Editor editor, int newSize)
+        {
+            _editor = editor;
+            _newSize = newSize;
+            _previousSize = editor.FontSize;
+        }
+
+        public void Execute() => _editor.FontSize = _newSize;
+
+        public void Undo() => _editor.FontSize = _previousSize;
+    }
+bugLineSets: [[25]]
+fixedSource: |
+  var editor = new Editor();
+  var bigger = new SetFontSizeCommand(editor, 16);
+  var huge = new SetFontSizeCommand(editor, 24);
+
+  bigger.Execute();
+  huge.Execute();
+  huge.Undo();
+  Console.WriteLine(editor.FontSize);
+
+  class Editor
+  {
+      public int FontSize { get; set; } = 12;
+  }
+
+  class SetFontSizeCommand
+  {
+      private readonly Editor _editor;
+      private readonly int _newSize;
+      private int _previousSize;
+
+      public SetFontSizeCommand(Editor editor, int newSize)
+      {
+          _editor = editor;
+          _newSize = newSize;
+      }
+
+      public void Execute()
+      {
+          _previousSize = _editor.FontSize;
+          _editor.FontSize = _newSize;
+      }
+
+      public void Undo() => _editor.FontSize = _previousSize;
+  }
+fixedExpect: { kind: output, value: "16" }
+links:
+  - url: https://refactoring.guru/design-patterns/command
+    lang: en
+    kind: article
+  - url: https://refactoring.guru/ru/design-patterns/command
+    lang: ru
+    kind: article
+locales:
+  ru:
+    title: Найдите строку, из-за которой отмена команды возвращает устаревший размер шрифта
+    prompt: |
+      Редактор начинает с размера шрифта `12`. Две команды `SetFontSizeCommand` создаются заранее, а затем
+      выполняются по очереди: сначала размер `16`, потом `24`. После отмены последней команды размер должен
+      вернуться к `16`, но программа выводит `12`.
+      Щёлкните по строке с дефектом.
+    hint: Какое состояние редактора возвращает `Undo` и когда это значение было прочитано?
+    answer: "Строка 25, `_previousSize = editor.FontSize;` в конструкторе: предыдущее значение запоминается при создании команды, а не при выполнении."
+    explanation: |
+      Обе команды создаются, пока размер шрифта ещё `12`, поэтому конструктор записывает `12` в `_previousSize`
+      у каждой из них. Затем `bigger.Execute()` ставит `16`, `huge.Execute()` ставит `24`, а `huge.Undo()`
+      восстанавливает то, что команда запомнила при создании, то есть `12`. Состояние, которое было
+      непосредственно перед выполнением `huge` (`16`), потеряно.
+
+      В паттерне Command с отменой команда должна сохранять состояние для отката в момент `Execute`, прямо перед
+      изменением получателя. Между созданием и выполнением команды может пройти сколько угодно времени:
+      команды кладут в очередь, собирают в макросы, выполняют повторно после `Redo`. Поэтому в исправлении
+      строка 25 удалена, а `Execute` сначала читает `_editor.FontSize` в `_previousSize` и только потом
+      устанавливает новое значение. Поле `_previousSize` перестаёт быть `readonly`, и программа выводит `16`.
+    linkTitles:
+      - "Command (Refactoring.Guru, английская версия)"
+      - "Команда (Refactoring.Guru)"
+  en:
+    title: Find the line that makes undoing a command restore a stale font size
+    prompt: |
+      The editor starts with font size `12`. Two `SetFontSizeCommand` objects are created up front and then
+      executed in turn: first size `16`, then `24`. After the last command is undone the size should go back
+      to `16`, but the program prints `12`.
+      Click the line that contains the defect.
+    hint: What state of the editor does `Undo` bring back, and when was that value read?
+    answer: "Line 25, `_previousSize = editor.FontSize;` in the constructor: the previous value is captured when the command is created, not when it is executed."
+    explanation: |
+      Both commands are created while the font size is still `12`, so the constructor stores `12` in
+      `_previousSize` of each of them. Then `bigger.Execute()` sets `16`, `huge.Execute()` sets `24`, and
+      `huge.Undo()` restores what the command captured at creation time, which is `12`. The state right before
+      `huge` ran (`16`) is lost.
+
+      In the Command pattern with undo, a command must save the state needed for rollback in `Execute`, right
+      before it changes the receiver. Any amount of time can pass between creating and executing a command:
+      commands are queued, grouped into macros, or executed again after `Redo`. So the fix removes line 25,
+      and `Execute` first reads `_editor.FontSize` into `_previousSize` and only then sets the new value. The
+      `_previousSize` field is no longer `readonly`, and the program prints `16`.
+    linkTitles:
+      - "Command (Refactoring.Guru)"
+      - "Command (Refactoring.Guru, Russian version)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

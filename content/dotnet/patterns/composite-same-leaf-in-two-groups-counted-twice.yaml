@@ -1,0 +1,146 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQCANQGNBSHQ8JMEHB
+slug: composite-same-leaf-in-two-groups-counted-twice
+stack: dotnet
+topic: patterns
+level: middle
+type: output
+grading: auto
+tags: [composite, gof, object-graph]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    var cable = new Item(10);
+    var mouse = new Item(25);
+    var charger = new Item(15);
+
+    var office = new Group();
+    office.Add(cable);
+    office.Add(mouse);
+
+    var travel = new Group();
+    travel.Add(cable);
+    travel.Add(charger);
+
+    var order = new Group();
+    order.Add(office);
+    order.Add(travel);
+
+    Console.Write(order.GetPrice());
+
+    abstract class Component
+    {
+        public abstract int GetPrice();
+    }
+
+    class Item : Component
+    {
+        private readonly int _price;
+        public Item(int price) => _price = price;
+        public override int GetPrice() => _price;
+    }
+
+    class Group : Component
+    {
+        private readonly List<Component> _children = new();
+        public void Add(Component child) => _children.Add(child);
+        public override int GetPrice() => _children.Sum(child => child.GetPrice());
+    }
+expect:
+  kind: output
+  value: "60"
+acceptedOutputs: ["60"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "60" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "50" }
+  - id: c
+    correct: false
+    expect: { kind: exception, value: System.InvalidOperationException }
+  - id: d
+    correct: false
+    expect: { kind: compile-error }
+links:
+  - url: https://refactoring.guru/design-patterns/composite
+    lang: en
+    kind: article
+  - url: https://refactoring.guru/ru/design-patterns/composite
+    lang: ru
+    kind: article
+locales:
+  ru:
+    title: Что выведет расчёт цены в Composite, если один и тот же товар добавлен в две группы?
+    prompt: |
+      Заказ собран по паттерну Composite: группы `office` и `travel` входят в заказ `order`, а цена группы
+      считается как сумма цен её детей. Один и тот же объект `cable` добавлен в обе группы.
+      Что выведет эта программа в консоль?
+    hint: Что хранит список `_children` - копию товара или ссылку на него, и проверяет ли кто-нибудь, что узел уже учтён?
+    options:
+      a: "60"
+      b: "50"
+      c: Исключение `InvalidOperationException`
+      d: Ошибка компиляции
+    optionExplanations:
+      b: "Так было бы, если бы обход пропускал уже посещённые узлы или если бы второй `Add` переносил `cable` из `office` в `travel`. Но `List<T>.Add` просто добавляет ссылку и ничего не удаляет из других списков, а `Sum` не запоминает, какие объекты уже сложены."
+      c: "В `Group` нет никакой проверки родителя: `List<T>.Add` принимает одну и ту же ссылку сколько угодно раз. Запрет на второго родителя есть в некоторых готовых деревьях, но в своём Composite его нужно написать самому."
+      d: "Код корректен. Типы объявлены после инструкций верхнего уровня, `System.Linq` подключён неявными using, а у `Sum` есть перегрузка с селектором `Func<TSource, int>`."
+    answer: "60"
+    explanation: |
+      `Group` хранит в `_children` ссылки на дочерние узлы, а `GetPrice` рекурсивно складывает цены детей.
+      `office.GetPrice()` даёт 10 + 25 = 35, `travel.GetPrice()` - 10 + 15 = 25, а `order.GetPrice()` - 35 + 25 = 60.
+      Объект `cable` один, но на него ссылаются два списка, и обход каждой группы учитывает его заново.
+
+      Composite предполагает дерево, где у каждого узла один родитель. Если один объект добавить в две ветки,
+      структура перестаёт быть деревом, и любой рекурсивный агрегат (сумма, количество, вес) посчитает общий
+      узел столько раз, сколько у него родителей. Вдобавок узел становится общим изменяемым состоянием:
+      изменение цены `cable` сразу отразится в обеих группах.
+
+      Что делать, зависит от смысла данных. Если это два разных кабеля, нужны два объекта или явное поле
+      количества. Если узел должен иметь одного родителя, храните ссылку на родителя и выбрасывайте исключение
+      в `Add`. Если общие узлы допустимы, но считать их нужно один раз, обходите граф с множеством посещённых
+      узлов, например `HashSet<Component>` с `ReferenceEqualityComparer.Instance`.
+    linkTitles:
+      - "Composite (Refactoring.Guru, английская версия)"
+      - "Компоновщик (Refactoring.Guru)"
+  en:
+    title: What does a Composite price calculation print when the same item is added to two groups?
+    prompt: |
+      An order is built with the Composite pattern: the groups `office` and `travel` belong to the order `order`,
+      and the price of a group is the sum of the prices of its children. The same `cable` object is added to both
+      groups. What does this program print to the console?
+    hint: What does the `_children` list hold - a copy of the item or a reference to it, and does anything check whether a node has already been counted?
+    options:
+      a: "60"
+      b: "50"
+      c: "`InvalidOperationException`"
+      d: Compile error
+    optionExplanations:
+      b: "That would happen if the traversal skipped visited nodes, or if the second `Add` moved `cable` from `office` to `travel`. But `List<T>.Add` only appends a reference and removes nothing from other lists, and `Sum` does not remember which objects it has already added."
+      c: "`Group` has no parent check at all: `List<T>.Add` accepts the same reference any number of times. Some ready-made trees forbid a second parent, but in your own Composite you have to write that check yourself."
+      d: "The code is valid. The types are declared after the top-level statements, `System.Linq` comes from implicit usings, and `Sum` has an overload with a `Func<TSource, int>` selector."
+    answer: "60"
+    explanation: |
+      `Group` keeps references to its child nodes in `_children`, and `GetPrice` sums the children's prices
+      recursively. `office.GetPrice()` gives 10 + 25 = 35, `travel.GetPrice()` gives 10 + 15 = 25, and
+      `order.GetPrice()` gives 35 + 25 = 60. There is only one `cable` object, but two lists refer to it, and the
+      traversal of each group counts it again.
+
+      Composite assumes a tree in which every node has one parent. If one object is added to two branches, the
+      structure is no longer a tree, and every recursive aggregate (sum, count, weight) counts the shared node
+      once per parent. The node also becomes shared mutable state: changing the price of `cable` shows up in both
+      groups at once.
+
+      The fix depends on what the data means. If these are two different cables, you need two objects or an
+      explicit quantity field. If a node must have one parent, store a parent reference and throw in `Add`. If
+      shared nodes are allowed but must be counted once, traverse the graph with a set of visited nodes, for
+      example a `HashSet<Component>` with `ReferenceEqualityComparer.Instance`.
+    linkTitles:
+      - "Composite (Refactoring.Guru)"
+      - "Composite (Refactoring.Guru, Russian version)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

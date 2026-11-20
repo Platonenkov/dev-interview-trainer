@@ -1,0 +1,176 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNNJQWG3DT4QG5T8BT
+slug: saga-compensates-steps-that-never-ran
+stack: dotnet
+topic: distributed
+level: middle
+type: find-bug
+grading: auto
+tags: [saga, compensating-transaction, consistency]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    int stock = 10;
+    int balance = 500;
+    int shipments = 0;
+
+    var steps = new List<Step>
+    {
+        new Step("ReserveStock", () => stock -= 1, () => stock += 1),
+        new Step("ChargePayment", () => Charge(600), () => balance += 600),
+        new Step("CreateShipment", () => shipments += 1, () => shipments -= 1),
+    };
+    var completed = new List<Step>();
+
+    try
+    {
+        foreach (var step in steps)
+        {
+            step.Execute();
+            completed.Add(step);
+        }
+    }
+    catch (InvalidOperationException)
+    {
+        // Compensate in reverse order.
+        foreach (var step in Enumerable.Reverse(steps))
+        {
+            step.Compensate();
+        }
+    }
+
+    Console.WriteLine($"Stock: {stock}, Balance: {balance}, Shipments: {shipments}");
+
+    void Charge(int amount)
+    {
+        if (balance < amount)
+            throw new InvalidOperationException("Insufficient funds");
+        balance -= amount;
+    }
+
+    record Step(string Name, Action Execute, Action Compensate);
+bugLineSets: [[24]]
+fixedSource: |
+  int stock = 10;
+  int balance = 500;
+  int shipments = 0;
+
+  var steps = new List<Step>
+  {
+      new Step("ReserveStock", () => stock -= 1, () => stock += 1),
+      new Step("ChargePayment", () => Charge(600), () => balance += 600),
+      new Step("CreateShipment", () => shipments += 1, () => shipments -= 1),
+  };
+  var completed = new List<Step>();
+
+  try
+  {
+      foreach (var step in steps)
+      {
+          step.Execute();
+          completed.Add(step);
+      }
+  }
+  catch (InvalidOperationException)
+  {
+      // Compensate only the steps that committed, in reverse order.
+      foreach (var step in Enumerable.Reverse(completed))
+      {
+          step.Compensate();
+      }
+  }
+
+  Console.WriteLine($"Stock: {stock}, Balance: {balance}, Shipments: {shipments}");
+
+  void Charge(int amount)
+  {
+      if (balance < amount)
+          throw new InvalidOperationException("Insufficient funds");
+      balance -= amount;
+  }
+
+  record Step(string Name, Action Execute, Action Compensate);
+fixedExpect: { kind: output, value: "Stock: 10, Balance: 500, Shipments: 0" }
+links:
+  - url: https://learn.microsoft.com/en-us/azure/architecture/patterns/compensating-transaction
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/azure/architecture/patterns/saga
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строку, из-за которой сага компенсирует шаги, которые не выполнялись
+    prompt: |
+      Код моделирует оркестрированную сагу оформления заказа из трёх шагов: резерв товара на складе, списание
+      оплаты и создание отправки. Каждый шаг - отдельная локальная транзакция со своим компенсирующим действием.
+
+      На счёте покупателя 500, а заказ стоит 600, поэтому списание оплаты падает с `InvalidOperationException`, и
+      сага должна отменить то, что уже успела сделать. Ожидается вывод `Stock: 10, Balance: 500, Shipments: 0`,
+      но программа выводит:
+
+      ```text
+      Stock: 10, Balance: 1100, Shipments: -1
+      ```
+
+      Щёлкните по строке с дефектом.
+    hint: Какие шаги на самом деле успели изменить состояние к моменту исключения?
+    answer: Строка 24, цикл компенсации перебирает все шаги `steps`, а не только выполненные шаги из `completed`.
+    explanation: |
+      Сага заменяет распределённую транзакцию цепочкой локальных транзакций. Если шаг падает, компенсировать
+      нужно только те шаги, чьи локальные транзакции успели зафиксироваться, обычно в обратном порядке. Упавший
+      шаг ничего не зафиксировал, а шаги после него вообще не начинались, поэтому отменять у них нечего.
+
+      Здесь успел выполниться только `ReserveStock`, и именно для этого в коде ведётся список `completed`. Но
+      цикл в блоке `catch` идёт по `steps`. В результате `CreateShipment` отменяет отправку, которой не было
+      (`Shipments: -1`), `ChargePayment` возвращает покупателю 600, которые никто не списывал (баланс 1100), и
+      только отмена резерва корректна, поэтому остаток на складе снова 10. Исправление - перебирать
+      `Enumerable.Reverse(completed)`, тогда программа выводит `Stock: 10, Balance: 500, Shipments: 0`.
+
+      В реальной системе список выполненных шагов хранят не в памяти, а в журнале саги, который оркестратор
+      сохраняет в базе: после падения процесса он должен знать, какие шаги зафиксированы. Компенсирующие
+      действия делают идемпотентными, потому что после сбоя их тоже могут повторить. И компенсация - это не
+      откат, а новая бизнес-операция: возврат денег остаётся в истории операций клиента.
+    linkTitles:
+      - "Паттерн Compensating Transaction"
+      - "Паттерн Saga"
+  en:
+    title: Find the line that makes a saga compensate steps that never ran
+    prompt: |
+      The code simulates an orchestrated checkout saga with three steps: reserve stock in the warehouse, charge
+      the payment and create a shipment. Each step is a separate local transaction with its own compensating
+      action.
+
+      The customer has 500 on the account and the order costs 600, so charging the payment fails with
+      `InvalidOperationException`, and the saga must undo what it has already done. The expected output is
+      `Stock: 10, Balance: 500, Shipments: 0`, but the program prints:
+
+      ```text
+      Stock: 10, Balance: 1100, Shipments: -1
+      ```
+
+      Click the line that contains the defect.
+    hint: Which steps had actually changed any state by the time the exception was thrown?
+    answer: Line 24, the compensation loop iterates over all `steps` instead of only the completed steps in `completed`.
+    explanation: |
+      A saga replaces a distributed transaction with a chain of local transactions. When a step fails, only the
+      steps whose local transactions have committed must be compensated, usually in reverse order. The failed
+      step committed nothing, and the steps after it never started, so there is nothing to undo for them.
+
+      Here only `ReserveStock` completed, and that is exactly why the code keeps the `completed` list. But the
+      loop in the `catch` block walks `steps`. As a result `CreateShipment` cancels a shipment that never existed
+      (`Shipments: -1`), `ChargePayment` refunds 600 that were never charged (a balance of 1100), and only the
+      stock release is correct, so the stock is back to 10. The fix is to iterate
+      `Enumerable.Reverse(completed)`, and the program then prints `Stock: 10, Balance: 500, Shipments: 0`.
+
+      In a real system the list of completed steps is not kept in memory but in a saga log that the orchestrator
+      persists in a database: after a process crash it must know which steps committed. Compensating actions are
+      made idempotent, because they can also be retried after a failure. And a compensation is not a rollback but
+      a new business operation: the refund stays in the customer's transaction history.
+    linkTitles:
+      - "Compensating Transaction pattern"
+      - "Saga pattern"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

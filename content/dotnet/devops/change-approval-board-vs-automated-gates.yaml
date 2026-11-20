@@ -1,0 +1,158 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RN666EPTZ5YYPW61W3
+slug: change-approval-board-vs-automated-gates
+stack: dotnet
+topic: devops
+level: lead
+type: open
+grading: self
+tags: [ci-cd, change-approval, code-review, dora-metrics, compliance]
+links:
+  - url: https://dora.dev/capabilities/streamlining-change-approval/
+    lang: en
+    kind: article
+  - url: https://martinfowler.com/bliki/ContinuousDelivery.html
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: "Руководство требует утверждать каждый релиз на еженедельном совете по изменениям: что вы предложите взамен?"
+    prompt: |
+      После недавнего инцидента руководство хочет, чтобы каждое развёртывание .NET-сервисов в production
+      утверждалось на еженедельном заседании совета по изменениям (change advisory board, CAB).
+
+      Как техлид, какими доводами вы обоснуете другую модель утверждения изменений, что предложите взамен
+      и как внедрите её так, чтобы руководство сохранило нужный ему контроль?
+    hint: "Сколько знает совет о конкретном изменении по сравнению с ревьюером из команды? И что станет с размером релизов, если выпускать их можно только раз в неделю?"
+    answer: |
+      1. **Начать с цели, а не с механизма.** Руководству нужны меньше неудачных изменений, понятная
+         ответственность и аудиторский след. Иногда к этому добавляется регуляторное требование разделения
+         обязанностей: изменение утверждает не его автор. С этими целями стоит согласиться и договориться, как их
+         измерять: доля неудачных изменений, время восстановления, время от коммита до production и частота
+         развёртываний. Тогда спор идёт о том, какой механизм лучше достигает целей, а не о доверии к команде.
+      2. **Доводы против еженедельного CAB.**
+         - Исследования DORA: тяжёлое утверждение людьми вне команды (CAB или руководителем) ухудшает
+           показатели поставки, и не найдено свидетельств, что оно снижает долю неудачных изменений. Такое
+           утверждение замедляет поставку и ведёт к тому, что выпускаются более крупные партии изменений и реже,
+           поэтому каждый выпуск сильнее влияет на production и рискованнее.
+         - Еженедельное окно копит изменения: в релиз попадает неделя работы, и причину сбоя труднее найти.
+         - Совет видит описание изменения, а не код. Люди, далёкие от изменения, могут не понимать его
+           последствий, а когда на заседании десятки пунктов, утверждение превращается в формальность.
+         - Исправления тоже ждут совета или идут через аварийный путь в обход него. В обоих случаях страдает
+           время восстановления.
+      3. **Предложение: контроль встроен в процесс поставки.**
+         - Рецензирование каждого изменения в pull request: защищённая основная ветка и хотя бы одно одобрение
+           не от автора. Это и есть разделение обязанностей, но на уровне, где проверяющий понимает изменение.
+         - Автоматические проверки в конвейере развёртывания: сборка, тесты, статический анализ, проверка
+           зависимостей на уязвимости, развёртывание в предрелизное окружение со smoke-тестами. Один артефакт
+           продвигается по окружениям. Упавшая проверка останавливает выпуск, и молча пропустить её нельзя.
+         - Безопасная выкатка и откат: canary или поэтапная выкатка с проверкой здоровья, feature flags,
+           отрепетированный откат, мониторинг, который быстро показывает плохое изменение.
+         - Аудиторский след собирается автоматически: для каждого развёртывания видно, кто написал и кто одобрил
+           изменение, какой запуск конвейера и какая версия артефакта ушла в какое окружение, с какой задачей
+           это связано. Аудиторы получают данные из инструментов, а не из протоколов заседаний.
+         - Уровни риска: обычные изменения проходят только через конвейер. Редкие изменения с высоким риском
+           (разрушающие миграции базы, изменения общей инфраструктуры или настроек безопасности) дополнительно
+           смотрят профильные специалисты, как только изменение готово, а не по недельному расписанию.
+         - Один путь для всех изменений: обычный процесс достаточно быстрый и надёжный, чтобы через него же
+           выпускать и срочные исправления.
+      4. **Другая роль совета.** Совет перестаёт утверждать отдельные изменения и становится стратегическим:
+         координирует и оповещает команды о значимых изменениях, помогает улучшать процесс поставки (тренды
+         инцидентов и неудачных изменений, правила проверок в конвейере, выборочный аудит развёртываний) и
+         участвует в бизнес-решениях, где нужен компромисс между скоростью выхода на рынок и риском.
+      5. **Внедрять как эксперимент.** Пилот на одном-двух сервисах, четыре метрики до и после, остальные сервисы
+         на время пилота остаются под CAB, а решение руководство принимает по данным. Предусловия стоит назвать
+         честно: если тестов и мониторинга мало, первые вложения идут туда, иначе автоматические проверки дают
+         лишь видимость контроля.
+    explanation: |
+      Тяжёлое внешнее утверждение выглядит как контроль, но работает далеко от изменения. У утверждающего меньше
+      всего контекста, решение приходит поздно, а сама задержка делает изменения крупнее и рискованнее. DORA
+      описывает именно это: такое утверждение ухудшает показатели поставки, и не найдено свидетельств, что оно
+      снижает долю неудачных изменений. Вместо него DORA советует рецензирование коллегами для разделения
+      обязанностей, с одобрениями в платформе разработки, а также непрерывное тестирование, непрерывную
+      интеграцию и мониторинг, чтобы быстро находить и исправлять плохие изменения.
+
+      Предложенная модель не убирает контроль, а переносит его: раньше (проверка до слияния), к людям, которые
+      понимают изменение, и в автоматизацию, которая срабатывает на каждом изменении и о которой нельзя забыть.
+      На этом же держится непрерывная поставка: конвейер поддерживает каждое изменение в состоянии, готовом к
+      выпуску, а мелкие изменения легче выпускать и проще исправлять.
+
+      Задача техлида здесь не столько техническая, сколько переговорная: принять цели руководства, предложить
+      измеримые критерии, обратимый пилот и осмысленную роль для совета вместо борьбы с ним. Слабый ответ - просто
+      «CAB - это плохо, уберём его» без аудиторского следа, уровней риска и плана перехода.
+    linkTitles:
+      - "DORA: Streamlining change approval"
+      - "Мартин Фаулер: Continuous Delivery"
+  en:
+    title: "Management wants a weekly change advisory board to approve every release: what do you propose instead?"
+    prompt: |
+      After a recent incident, management wants every production deployment of your .NET services to be
+      approved at a weekly change advisory board (CAB) meeting.
+
+      As tech lead, how do you argue for a different change approval model, what do you propose instead, and
+      how do you introduce it so that management keeps the control it needs?
+    hint: "How much does the board know about a specific change compared with a reviewer from the team? And what happens to the size of releases if they can go out only once a week?"
+    answer: |
+      1. **Start from the goal, not the mechanism.** Management wants fewer failed changes, clear accountability
+         and an audit trail. Sometimes a regulatory requirement for segregation of duties is added: a change is
+         approved by someone other than its author. Agree with these goals and on how to measure them: change
+         failure rate, time to restore service, lead time for changes and deployment frequency. Then the
+         discussion is about which mechanism reaches the goals better, not about trust in the team.
+      2. **Arguments against a weekly CAB.**
+         - DORA research: heavyweight approval by people outside the team (a CAB or a senior manager) has a
+           negative impact on software delivery performance, and no evidence was found that it lowers the
+           change fail rate. Such approval slows delivery and leads to releasing larger batches less often, so
+           each release has a higher impact on production and is riskier.
+         - A weekly window accumulates changes: a release carries a week of work, and the cause of a failure is
+           harder to find.
+         - The board sees a description of the change, not the code. People far removed from a change may not
+           understand its implications, and with dozens of items per meeting approval turns into a formality.
+         - Fixes also wait for the board, or go through an emergency path that bypasses it. Either way time to
+           restore suffers.
+      3. **The proposal: control built into the delivery process.**
+         - Review of every change in a pull request: a protected main branch and at least one approval from
+           someone other than the author. This is segregation of duties, at the level where the reviewer
+           understands the change.
+         - Automated gates in the deployment pipeline: build, tests, static analysis, dependency vulnerability
+           scanning, deployment to a pre-production environment with smoke tests. One artifact is promoted through
+           the environments. A failed gate stops the release, and nobody can skip it silently.
+         - Safe rollout and rollback: canary or progressive rollout with health checks, feature flags, a
+           rehearsed rollback, and monitoring that shows a bad change quickly.
+         - An audit trail produced automatically: for each deployment you can see who wrote and who approved the
+           change, which pipeline run and which artifact version went to which environment, and the linked work
+           item. Auditors get the data from the tools instead of meeting minutes.
+         - Risk tiers: routine changes go through the pipeline only. Rare high-risk changes (destructive database
+           migrations, changes to shared infrastructure or security settings) also get a review by the relevant
+           experts as soon as the change is ready, not on a weekly schedule.
+         - One path for every change: the regular process is fast and reliable enough to ship urgent fixes
+           through it too.
+      4. **A different role for the board.** The board stops approving individual changes and becomes strategic:
+         it coordinates and notifies teams about significant changes, helps improve the delivery process (trends
+         of incidents and failed changes, the gate rules in the pipeline, sample audits of deployments), and
+         weighs in on business decisions that need a trade-off between time to market and risk.
+      5. **Introduce it as an experiment.** A pilot on one or two services, the four metrics before and after, the
+         other services stay under the CAB during the pilot, and management decides by the data. Name the
+         preconditions honestly: if tests and monitoring are weak, the first investment goes there, otherwise
+         automated gates are only an appearance of control.
+    explanation: |
+      A heavyweight external approval looks like control, but it acts far from the change. The approver has the
+      least context, the decision arrives late, and the delay itself makes changes larger and riskier. DORA
+      describes exactly this: such approval has a negative impact on delivery performance, and no evidence was
+      found that it lowers the change fail rate. Instead DORA recommends peer review to meet segregation of
+      duties, with approvals captured in the development platform, plus continuous testing, continuous
+      integration and monitoring to detect and correct bad changes quickly.
+
+      The proposed model does not remove control, it moves it: earlier (review before merge), to the people who
+      understand the change, and into automation that runs on every change and cannot be forgotten. Continuous
+      delivery rests on the same idea: the pipeline keeps every change in a releasable state, and small changes
+      are easier to release and easier to fix.
+
+      The lead's task here is less technical than persuasive: accept management's goals, offer measurable
+      criteria, a reversible pilot and a meaningful role for the board instead of fighting it. A weak answer is
+      just "the CAB is bad, remove it" without an audit trail, risk tiers and a transition plan.
+    linkTitles:
+      - "DORA: Streamlining change approval"
+      - "Martin Fowler: Continuous Delivery"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

@@ -1,0 +1,104 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RMWEJ29JX0EGDRCTDZ
+slug: aspnet-app-on-runtime-image-fails-to-start
+stack: dotnet
+topic: cloud-containers
+level: junior
+type: single
+grading: auto
+tags: [docker, containers, base-images, aspnetcore]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/core/docker/container-images
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/docker/building-net-docker-images
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какой базовый образ нужен приложению ASP.NET Core, которое не запускается на образе runtime?
+    prompt: |
+      Приложение ASP.NET Core на `net10.0` публикуется как зависимое от платформы (framework-dependent).
+      Последний этап Dockerfile построен на образе `mcr.microsoft.com/dotnet/runtime:10.0`. Образ собирается,
+      но контейнер сразу завершается: хост .NET сообщает, что не найдена платформа `Microsoft.AspNetCore.App`.
+
+      Какой официальный образ нужно взять для последнего этапа, чтобы приложение запускалось, а в поставляемый
+      образ не попадало ничего лишнего?
+    hint: "Сравните, что лежит в каждом образе: только системные зависимости, среда выполнения .NET, дополнительные общие платформы или инструменты сборки."
+    options:
+      a: "`mcr.microsoft.com/dotnet/runtime-deps:10.0`"
+      b: "`mcr.microsoft.com/dotnet/aspnet:10.0`"
+      c: "`mcr.microsoft.com/dotnet/sdk:10.0`"
+      d: "Оставить `runtime:10.0` и задать переменную окружения `ASPNETCORE_HTTP_PORTS=8080`"
+    optionExplanations:
+      a: "Образ `runtime-deps` содержит только системные зависимости, которые нужны .NET, но не саму среду выполнения. Он подходит для автономных (self-contained) приложений и приложений native AOT, которые несут среду выполнения с собой. Зависимому от платформы приложению в нём не на чем запускаться."
+      c: "В образе SDK есть среда выполнения ASP.NET Core, поэтому приложение в нём запустится, но этот образ предназначен для сборки: в нём компилятор, MSBuild и NuGet. Он в несколько раз больше, и у него больше поверхность атаки, поэтому его используют на этапе сборки, а не на последнем этапе."
+      d: "Порт тут ни при чём: приложение завершается ещё до того, как Kestrel начинает слушать, потому что в образе `runtime` нет общей платформы `Microsoft.AspNetCore.App`."
+    answer: "`mcr.microsoft.com/dotnet/aspnet:10.0`"
+    explanation: |
+      Официальные образы .NET устроены слоями, и каждый следующий добавляет к предыдущему своё:
+
+      - `runtime-deps` - только системные библиотеки, которые нужны .NET; для автономных приложений и native AOT;
+      - `runtime` - плюс среда выполнения .NET (`Microsoft.NETCore.App`); для консольных приложений и служб;
+      - `aspnet` - плюс общая платформа ASP.NET Core (`Microsoft.AspNetCore.App`); для веб-приложений;
+      - `sdk` - плюс инструменты сборки; для этапа сборки.
+
+      Приложение, зависящее от платформы, не содержит библиотек ASP.NET Core: в его файле `runtimeconfig.json`
+      указано, что при запуске нужна платформа `Microsoft.AspNetCore.App`. Хост .NET ищет её среди установленных
+      платформ, в образе `runtime` её нет, и процесс завершается с ошибкой. Образ `aspnet` содержит обе платформы и
+      ничего лишнего, поэтому именно он нужен на последнем этапе.
+
+      Тег образа должен соответствовать целевой платформе приложения: для `net10.0` (.NET 10) это `aspnet:10.0`.
+    linkTitles:
+      - "Контейнерные образы .NET"
+      - "Запуск приложения ASP.NET Core в контейнерах Docker"
+  en:
+    title: Which base image does an ASP.NET Core app need when it fails to start on the runtime image?
+    prompt: |
+      An ASP.NET Core app targeting `net10.0` is published as framework-dependent. The last stage of the Dockerfile
+      is based on `mcr.microsoft.com/dotnet/runtime:10.0`. The image builds, but the container exits at once: the
+      .NET host reports that the framework `Microsoft.AspNetCore.App` was not found.
+
+      Which official image should the last stage use so that the app starts and nothing unnecessary ends up in the
+      shipped image?
+    hint: "Compare what each image contains: only system dependencies, the .NET runtime, additional shared frameworks, or build tools."
+    options:
+      a: "`mcr.microsoft.com/dotnet/runtime-deps:10.0`"
+      b: "`mcr.microsoft.com/dotnet/aspnet:10.0`"
+      c: "`mcr.microsoft.com/dotnet/sdk:10.0`"
+      d: "Keep `runtime:10.0` and set the environment variable `ASPNETCORE_HTTP_PORTS=8080`"
+    optionExplanations:
+      a: "The `runtime-deps` image contains only the system dependencies that .NET needs, not the runtime itself. It fits self-contained and native AOT apps that carry the runtime with them. A framework-dependent app has nothing to run on there."
+      c: "The SDK image does include the ASP.NET Core runtime, so the app would start, but this image is meant for building: it carries the compiler, MSBuild and NuGet. It is several times larger and has a larger attack surface, so it belongs in the build stage, not the last stage."
+      d: "The port is not the problem: the app exits before Kestrel starts listening, because the `runtime` image has no `Microsoft.AspNetCore.App` shared framework."
+    answer: "`mcr.microsoft.com/dotnet/aspnet:10.0`"
+    explanation: |
+      The official .NET images are layered, and each one adds something to the previous one:
+
+      - `runtime-deps` - only the system libraries that .NET needs; for self-contained and native AOT apps;
+      - `runtime` - plus the .NET runtime (`Microsoft.NETCore.App`); for console apps and services;
+      - `aspnet` - plus the ASP.NET Core shared framework (`Microsoft.AspNetCore.App`); for web apps;
+      - `sdk` - plus the build tools; for the build stage.
+
+      A framework-dependent app does not contain the ASP.NET Core libraries: its `runtimeconfig.json` states that
+      it needs the `Microsoft.AspNetCore.App` framework at startup. The .NET host looks for it among the installed
+      frameworks, the `runtime` image does not have it, and the process exits with an error. The `aspnet` image
+      contains both frameworks and nothing extra, so it is the right image for the last stage.
+
+      The image tag must match the target framework of the app: for `net10.0` (.NET 10) that is `aspnet:10.0`.
+    linkTitles:
+      - ".NET container images"
+      - "Run an ASP.NET Core app in Docker containers"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

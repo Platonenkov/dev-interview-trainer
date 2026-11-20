@@ -1,0 +1,121 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RMTS1D3Z9TQ0AZ73KQ
+slug: liveness-readiness-startup-probe-failure-effects
+stack: dotnet
+topic: cloud-containers
+level: middle
+type: open
+grading: self
+tags: [kubernetes, probes, health-checks, containers]
+links:
+  - url: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
+    lang: en
+    kind: docs
+  - url: https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/
+    lang: en
+    kind: docs
+  - url: https://kubernetes.io/docs/concepts/workloads/controllers/deployment/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/health-checks
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что делает Kubernetes, когда не проходит liveness-, readiness- или startup-проверка контейнера?
+    prompt: |
+      API на ASP.NET Core развёрнут в Kubernetes через Deployment. У контейнера настроены три проверки:
+      `livenessProbe`, `readinessProbe` и `startupProbe`.
+
+      Что происходит с контейнером, подом и входящим трафиком, когда не проходит каждая из этих проверок?
+      Какие эндпоинты здоровья из этого следует сделать в приложении?
+    hint: Что Kubernetes должен делать с контейнером, процесс которого жив, но пока не может обслуживать запросы, и с контейнером, процесс которого завис?
+    answer: |
+      - **Readiness.** После `failureThreshold` неудачных проверок подряд kubelet помечает контейнер как неготовый,
+        условие пода `Ready` становится `False`, и IP пода убирается из конечных точек всех Service, которые
+        выбирают этот под. Контейнер **не перезапускается**: процесс продолжает работать, проверка выполняется всё
+        время жизни контейнера, и как только она снова проходит, под возвращается в балансировку. При rolling update
+        Deployment считает доступными только готовые поды, поэтому выкатка ждёт, пока новые поды станут готовыми,
+        и только потом продолжает заменять старые (в пределах `maxUnavailable` и `maxSurge`).
+      - **Liveness.** После `failureThreshold` неудач подряд kubelet убивает контейнер, и дальше действует
+        `restartPolicy` пода (у подов Deployment это `Always`), то есть контейнер перезапускается. Пересоздаётся
+        только контейнер, а не под. Растёт счётчик перезапусков, а при повторяющихся падениях задержка между
+        перезапусками увеличивается, и под показывает `CrashLoopBackOff`.
+      - **Startup.** Пока startup-проверка не прошла, kubelet не запускает liveness- и readiness-проверки. После
+        первого успеха она больше не выполняется, и работу продолжают две другие. Если она не прошла за отведённое
+        окно (примерно `failureThreshold * periodSeconds`), kubelet убивает контейнер, и дальше действует
+        `restartPolicy` пода, как после неудачной liveness-проверки.
+
+      Для приложения .NET из этого следуют разные эндпоинты: liveness проверяет только то, что сам процесс
+      отвечает, а readiness - что сервис может обслуживать запросы прямо сейчас (например, прогрет кэш и доступны
+      зависимости). В ASP.NET Core это делают двумя вызовами `MapHealthChecks` с разными наборами проверок,
+      отобранными через теги и `HealthCheckOptions.Predicate`.
+    explanation: |
+      Три проверки отвечают на разные вопросы, поэтому и реакция на их неудачу разная. Readiness описывает
+      временное состояние: под может перестать принимать трафик и вернуться без всякого вмешательства, поэтому
+      Kubernetes только меняет маршрутизацию. Liveness говорит, что процесс завис и сам не восстановится,
+      поэтому единственное действие - перезапуск контейнера. Startup-проверка нужна медленно стартующим
+      приложениям: она даёт отдельное, длинное окно на запуск, не заставляя увеличивать задержку и порог
+      liveness-проверки, которая потом должна быстро замечать зависание.
+
+      Типичные ошибки: одна и та же проверка для liveness и readiness, из-за которой кратковременная проблема
+      с зависимостью превращается в перезапуски всех подов; слишком строгая liveness-проверка без startup-проверки,
+      из-за которой контейнер убивают раньше, чем приложение успевает стартовать, и он уходит в цикл перезапусков.
+      Если readiness-проверка не настроена, Kubernetes считает контейнер готовым сразу после его запуска,
+      и трафик может прийти до того, как веб-сервер приложения начнёт принимать соединения.
+    linkTitles:
+      - "Настройка liveness-, readiness- и startup-проверок (документация Kubernetes)"
+      - "Жизненный цикл пода (документация Kubernetes)"
+      - "Deployment (документация Kubernetes)"
+      - "Проверки работоспособности в ASP.NET Core"
+  en:
+    title: What does Kubernetes do when a liveness, readiness or startup probe of a container fails?
+    prompt: |
+      An ASP.NET Core API runs in Kubernetes through a Deployment. Its container has three probes configured:
+      `livenessProbe`, `readinessProbe` and `startupProbe`.
+
+      What happens to the container, the Pod and incoming traffic when each of these probes fails? Which health
+      endpoints should the app expose as a result?
+    hint: What should Kubernetes do with a container whose process is alive but cannot serve requests yet, and with one whose process is stuck?
+    answer: |
+      - **Readiness.** After `failureThreshold` consecutive failures the kubelet marks the container as not ready,
+        the Pod's `Ready` condition becomes `False`, and the Pod IP is removed from the endpoints of every Service
+        that selects the Pod. The container is **not restarted**: the process keeps running, the probe keeps
+        running for the whole life of the container, and once it passes again the Pod is put back into load
+        balancing. During a rolling update the Deployment counts only ready Pods as available, so the rollout
+        waits for new Pods to become ready before it continues replacing old ones (within `maxUnavailable` and
+        `maxSurge`).
+      - **Liveness.** After `failureThreshold` consecutive failures the kubelet kills the container, and the
+        Pod's `restartPolicy` applies (for Deployment Pods it is `Always`), so the container is restarted. Only the
+        container is recreated, not the Pod. The restart count grows, and with repeated failures the delay between
+        restarts increases and the Pod shows `CrashLoopBackOff`.
+      - **Startup.** Until the startup probe succeeds, the kubelet does not run the liveness and readiness probes.
+        After its first success it is not run again, and the other two take over. If it does not succeed within
+        its window (roughly `failureThreshold * periodSeconds`), the kubelet kills the container and the Pod's
+        `restartPolicy` applies, just as after a failed liveness probe.
+
+      For a .NET app this means separate endpoints: liveness checks only that the process itself responds, and
+      readiness checks that the service can handle requests right now (for example, the cache is warm and
+      dependencies are reachable). In ASP.NET Core this is done with two `MapHealthChecks` calls that run different
+      sets of checks, selected by tags and `HealthCheckOptions.Predicate`.
+    explanation: |
+      The three probes answer different questions, so the reaction to their failure differs. Readiness describes
+      a temporary state: a Pod can stop taking traffic and come back without any intervention, so Kubernetes
+      only changes routing. Liveness says that the process is stuck and will not recover by itself, so the only
+      action is to restart the container. The startup probe exists for slow-starting apps: it gives a separate,
+      long window for startup without forcing a long delay and threshold on the liveness probe, which should
+      later detect a hang quickly.
+
+      Typical mistakes: one probe used for both liveness and readiness, which turns a short dependency problem
+      into restarts of every Pod; a strict liveness probe without a startup probe, which kills the container
+      before the app finishes starting and sends it into a restart loop. If no readiness probe is configured,
+      Kubernetes treats the container as ready as soon as it starts, and traffic can arrive before the app's
+      web server accepts connections.
+    linkTitles:
+      - "Configure Liveness, Readiness and Startup Probes (Kubernetes docs)"
+      - "Pod Lifecycle (Kubernetes docs)"
+      - "Deployments (Kubernetes docs)"
+      - "Health checks in ASP.NET Core"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

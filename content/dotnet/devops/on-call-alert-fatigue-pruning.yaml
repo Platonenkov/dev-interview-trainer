@@ -1,0 +1,146 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNZ86QER9ECP2117Z4
+slug: on-call-alert-fatigue-pruning
+stack: dotnet
+topic: devops
+level: lead
+type: situation
+grading: self
+tags: [alerting, on-call, alert-fatigue, monitoring, observability]
+links:
+  - url: https://sre.google/sre-book/monitoring-distributed-systems/
+    lang: en
+    kind: book
+  - url: https://sre.google/sre-book/being-on-call/
+    lang: en
+    kind: book
+locales:
+  ru:
+    title: "Дежурный получает около 200 алертов в неделю и пропустил реальный сбой: что вы сделаете как техлид?"
+    prompt: |
+      Дежурный инженер вашей команды получает около 200 алертов в неделю. Большинство из них давно никто не
+      разбирает: их подтверждают и закрывают не глядя. На прошлой неделе в этом потоке потерялся алерт о
+      реальном сбое, и о проблеме первыми сообщили пользователи. Вы техлид.
+
+      Что вы сделаете сразу и что потом, чтобы дежурства снова работали? Как вы внедрите изменения в команде?
+    hint: "Каким должен быть алерт, чтобы разбудить человека в 3 часа ночи было оправданно? И что будет с потоком алертов через полгода, если ничего не менять в процессе?"
+    answer: |
+      1. **Сначала разобрать пропущенный сбой.** Провести безобвинительный разбор (blameless postmortem): сработал ли
+         алерт и потерялся среди других, был заглушён или ушёл не туда, или на этот симптом алерта не было вовсе.
+         Сразу добавить алерт на симптом этого сбоя (доля ошибок или задержка затронутого пользовательского
+         сценария, синтетическая проверка), чтобы дыра не оставалась открытой, пока идёт чистка.
+      2. **Собрать данные, прежде чем резать.** Выгрузить историю алертов за последние 4-8 недель. По каждому
+         правилу: сколько раз сработало, сделал ли кто-то что-то в ответ, через сколько подтвердили, дублирует ли
+         оно другой алерт, закрывается ли само (flapping). Обычно основную часть шума дают несколько правил.
+      3. **Провести ревью алертов вместе с владельцами сервисов.** Правило остаётся пейджем, только если оно
+         сообщает о срочном, требует действий человека и пользователи страдают сейчас или пострадают скоро
+         (например, диск заполнится через несколько часов). Остальные правила получают одно из решений:
+         - **удалить** - на него никто не реагирует, оно дублирует другой алерт или всегда проходит само;
+         - **понизить до тикета или дашборда** - проблема реальная, но может подождать до рабочего времени, или это
+           сигнал о причине вроде CPU на 80% или одного перезапущенного пода;
+         - **исправить** - сигнал верный, но порог неудачный, окно слишком короткое, нет группировки и дедупликации;
+         - **автоматизировать** - реакция всегда состоит из одних и тех же шагов, их должен выполнять скрипт, а не
+           человек.
+
+         У каждого оставшегося пейджа есть владелец и runbook с порядком действий.
+      4. **Будить по симптомам, диагностировать по причинам.** Пейджи строятся на том, что видят пользователи:
+         доля ошибок, задержка, доступность ключевых сценариев, лучше всего относительно целевого уровня
+         обслуживания (SLO). Метрики причин (CPU, длина очереди, GC) остаются на дашбордах и помогают найти причину
+         после пейджа по симптому.
+      5. **Сделать качество алертов регулярным процессом.**
+         - на каждой передаче дежурства разбирать все пейджи: был ли пейдж полезен и что нужно поменять;
+         - правила алертов хранятся в репозитории и меняются через запросы на слияние с code review; новый пейдж
+           требует владельца, runbook и обоснования;
+         - отслеживать число пейджей за смену, долю пейджей, потребовавших действий, и число инцидентов, о которых
+           первыми сообщили пользователи, а не алерты;
+         - изменения алертов входят в план действий по итогам каждого разбора инцидента.
+      6. **Управлять риском и командой.** Главное возражение - страх удалить тот самый важный алерт. Поэтому сначала
+         понижать до тикета и наблюдать пару недель, а все правила держать в системе контроля версий, чтобы любое
+         изменение можно было откатить. Выделить время на чистку как плановую работу, а не за счёт дежурства, и
+         договориться с руководством о целевой нагрузке на смену.
+    explanation: |
+      Усталость от алертов чаще всего возникает из-за алертов, которые срабатывают без необходимости, не требуют
+      действий, дублируют друг друга или построены на причинах, а не на симптомах. Срочно реагировать человек может
+      лишь несколько раз в день. Если большинство пейджей - шум, игнорировать их становится разумной привычкой, и
+      реальный пейдж игнорируется вместе с остальными. Поэтому рост числа алертов не улучшает обнаружение сбоев, а
+      ухудшает его. В книге Google SRE это сформулировано так: каждый пейдж должен быть срочным, требовать действий
+      и размышления, а если реакция на алерт механическая, её нужно автоматизировать.
+
+      Алерты по причинам одновременно шумные и неполные. Высокий CPU часто никак не задевает пользователей, а
+      сбой с непредусмотренной причиной не вызовет ни одного алерта по причинам. Алерт на симптом в
+      пользовательском сценарии ловит сбой независимо от того, что его вызвало.
+
+      На уровне лида разовая чистка - простая часть. Без владельцев, ревью новых правил и регулярного разбора
+      того, что будило дежурного, шум вернётся через несколько месяцев. Книга SRE также рассматривает нагрузку на
+      дежурного как ограничение, которое нужно соблюдать: если за смену случается больше инцидентов, чем можно
+      качественно разобрать, это проблема, которую надо исправлять, а не терпеть.
+    linkTitles:
+      - "Google SRE Book: Monitoring Distributed Systems"
+      - "Google SRE Book: Being On-Call"
+  en:
+    title: "The on-call engineer gets about 200 alerts a week and missed a real outage: what do you do as tech lead?"
+    prompt: |
+      The on-call engineer of your team receives about 200 alerts a week. Most of them have not been looked at for a
+      long time: people acknowledge and close them without reading. Last week the alert for a real outage got lost in
+      this stream, and users reported the problem first. You are the tech lead.
+
+      What do you do right away and what afterwards to make on-call work again? How do you roll the changes out in
+      the team?
+    hint: "What must be true of an alert to justify waking someone up at 3 a.m.? And what happens to the alert stream in six months if nothing in the process changes?"
+    answer: |
+      1. **Review the missed outage first.** Run a blameless postmortem: did an alert fire and get lost among others,
+         was it muted or routed to the wrong place, or was there no alert for this symptom at all? Add an alert on
+         the symptom of this failure right away (error rate or latency of the affected user flow, a synthetic check),
+         so the gap does not stay open while the cleanup is under way.
+      2. **Collect data before cutting.** Export the alert history for the last 4-8 weeks. For each rule: how many
+         times it fired, whether anyone did anything in response, how long until it was acknowledged, whether it
+         duplicates another alert, whether it resolves by itself (flapping). Usually a few rules produce most of the
+         noise.
+      3. **Run an alert review with the service owners.** A rule stays a page only if it signals something urgent,
+         requires a human action, and users are affected now or will be soon (for example, a disk that fills up in a
+         few hours). Every other rule gets one of these outcomes:
+         - **delete** - nobody acts on it, it duplicates another alert, or it always resolves by itself;
+         - **downgrade to a ticket or a dashboard** - the problem is real but can wait until working hours, or it is
+           a cause signal such as CPU at 80% or one restarted pod;
+         - **fix** - the signal is right, but the threshold is poor, the window is too short, there is no grouping
+           or deduplication;
+         - **automate** - the response always consists of the same steps, so a script should do them instead of a
+           person.
+
+         Every remaining page has an owner and a runbook with the steps to take.
+      4. **Page on symptoms, diagnose with causes.** Pages are built on what users see: error rate, latency,
+         availability of key flows, ideally against a service level objective (SLO). Cause metrics (CPU, queue
+         length, GC) stay on dashboards and help find the reason after a symptom page.
+      5. **Make alert quality a recurring process.**
+         - at every on-call handover, review every page: was it useful and what needs to change;
+         - alert rules live in the repository and change through pull requests with code review; a new page needs
+           an owner, a runbook and a justification;
+         - track pages per shift, the share of pages that required action, and the number of incidents first
+           reported by users rather than by alerts;
+         - alert changes are part of the follow-up actions of every incident review.
+      6. **Manage the risk and the team.** The main objection is the fear of deleting the one important alert. So
+         downgrade to a ticket first and watch for a couple of weeks, and keep all rules in version control so any
+         change can be reverted. Get time for the cleanup as planned work rather than out of on-call time, and agree
+         on a target load per shift with management.
+    explanation: |
+      Alert fatigue most often comes from alerts that fire without need, require no action, duplicate each other,
+      or are built on causes instead of symptoms. A person can react with urgency only a few times a day. When most
+      pages are noise, ignoring them becomes a sensible habit, and a real page is ignored along with the rest. So
+      more alerts do not improve outage detection; they make it worse. The Google SRE book puts it this way: every
+      page should be urgent, require action and thought, and if the response to an alert is rote, it should be
+      automated.
+
+      Cause-based alerts are both noisy and incomplete. High CPU often does not affect users at all, while a
+      failure with an unforeseen cause triggers no cause alert. An alert on the symptom of a user flow catches the
+      failure whatever caused it.
+
+      At lead level the one-off cleanup is the easy part. Without owners, review of new rules and a regular look at
+      what paged the on-call engineer, the noise comes back within a few months. The SRE book also treats on-call
+      load as a limit to keep: if a shift has more incidents than people can handle properly, that is a problem to
+      fix, not something to tolerate.
+    linkTitles:
+      - "Google SRE Book: Monitoring Distributed Systems"
+      - "Google SRE Book: Being On-Call"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

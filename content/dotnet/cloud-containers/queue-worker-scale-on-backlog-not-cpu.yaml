@@ -1,0 +1,131 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RMRVWBDZSEK9N48WQH
+slug: queue-worker-scale-on-backlog-not-cpu
+stack: dotnet
+topic: cloud-containers
+level: senior
+type: open
+grading: self
+tags: [autoscaling, keda, azure-container-apps, queues, background-worker]
+links:
+  - url: https://learn.microsoft.com/en-us/azure/container-apps/scale-app
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/azure/aks/keda-about
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как автоматически масштабировать .NET-обработчик очереди в контейнерах и почему масштабирование по CPU здесь не подходит?
+    prompt: |
+      Сервис на .NET (`BackgroundService`) читает сообщения из очереди (Azure Service Bus, RabbitMQ или Kafka) и для
+      каждого сообщения обращается к базе данных и внешнему HTTP API. Сервис работает в контейнерах, и для него
+      настроено автомасштабирование по загрузке CPU с целью 70%. В часы пик очередь растёт до сотен тысяч сообщений,
+      а число реплик не меняется.
+
+      Почему так происходит, на какой метрике стоит масштабировать такой обработчик и что ещё нужно предусмотреть
+      при настройке масштабирования?
+    hint: Что делает процесс, пока ждёт базу и API, и что прямо показывает отставание?
+    answer: |
+      - **Почему CPU не работает.** Обработчик почти всё время ждёт ввода-вывода: брокер, база, HTTP. Загрузка CPU
+        остаётся низкой, даже когда очередь растёт, поэтому правило по CPU не добавляет реплик. И наоборот, CPU может
+        вырасти из-за сериализации или сборки мусора без всякого отставания. CPU - косвенный признак нагрузки,
+        а для потребителя очереди прямой сигнал - объём ожидающей работы.
+      - **Масштабировать по отставанию.** Метрика - длина очереди, отставание (lag) группы потребителей в Kafka или
+        возраст самого старого сообщения. Инструменты - событийное масштабирование: KEDA (в AKS есть надстройка KEDA)
+        со `ScaledObject` и скейлером нужного брокера или правила масштабирования Azure Container Apps, которые
+        построены на тех же скейлерах KEDA. Задаётся целевое число сообщений на одну реплику, а также минимум
+        и максимум реплик. KEDA умеет масштабировать до нуля, чего обычный HPA по CPU по умолчанию не делает.
+      - **Цель на реплику считать из пропускной способности.** Если одна реплика обрабатывает N сообщений в секунду,
+        а очередь нужно разбирать не дольше T секунд, цель на реплику порядка N x T.
+      - **Ограничить максимум возможностями зависимостей.** Каждая реплика открывает соединения с базой и вызывает
+        внешний API: максимум реплик определяется пулом соединений базы, лимитами запросов API и, для Kafka, числом
+        партиций (лишние потребители в группе простаивают). Иначе при деградации базы очередь растёт, скейлер
+        добавляет реплики, и они добивают ту же базу.
+      - **Безопасно уменьшать число реплик.** При сжатии контейнер получает SIGTERM: обработчик должен реагировать
+        на `stoppingToken`, дорабатывать или возвращать текущее сообщение, а `HostOptions.ShutdownTimeout` и период
+        завершения контейнера должны покрывать время обработки. Доставка "как минимум один раз" требует
+        идемпотентных обработчиков.
+      - **Понимать, что гасит колебания.** Период охлаждения (cooldown) в KEDA и Container Apps действует только
+        при переходе с последней реплики в ноль. От колебаний между N и N-1 репликами в KEDA защищает окно
+        стабилизации HPA при уменьшении (scaleDown stabilizationWindow), которое настраивается в
+        `advanced.horizontalPodAutoscalerConfig` у `ScaledObject`; в Container Apps уменьшением числа реплик
+        управляет платформа.
+      - **Учитывать холодный старт.** Масштабирование до нуля экономит ресурсы, но первое сообщение после простоя
+        ждёт запуска контейнера; если задержка важна, минимум ставят 1.
+    explanation: |
+      Метрика масштабирования должна измерять то, что вы хотите ограничить. Для обработчика очереди это время
+      ожидания работы: сколько сообщений лежит и как давно. Загрузка CPU связана с этим только тогда, когда
+      обработка упирается в процессор. Для типичного .NET-обработчика, который вызывает базу и сервисы через
+      `async`-код, потоки не заняты во время ожидания, поэтому CPU низкий, а отставание растёт без ограничений.
+
+      KEDA решает это так: скейлер опрашивает брокер, KEDA сама переводит развёртывание из нуля в одну реплику и
+      обратно, а масштабирование от одной реплики и выше отдаёт HPA, которому передаёт отставание как внешнюю метрику.
+      Поэтому на одно развёртывание нельзя навешивать и `ScaledObject`, и отдельный HPA: они будут конкурировать.
+      В Azure Container Apps это встроено: правило масштабирования описывает источник событий и порог, платформа
+      делает остальное.
+
+      Масштабирование по отставанию усиливает обратную связь с зависимостями: если база замедлилась, отставание
+      растёт именно из-за неё, и добавление реплик только увеличивает нагрузку на узкое место. Поэтому верхняя
+      граница реплик - не формальность, а защита зависимостей, и её выбирают прежде всего из их ёмкости, а уже
+      затем из бюджета.
+    linkTitles:
+      - "Масштабирование в Azure Container Apps"
+      - "Автомасштабирование на основе событий в Kubernetes (KEDA) в AKS"
+  en:
+    title: How should a .NET queue worker in containers be autoscaled, and why does CPU-based scaling fit it poorly?
+    prompt: |
+      A .NET service (`BackgroundService`) reads messages from a queue (Azure Service Bus, RabbitMQ or Kafka) and for
+      every message calls a database and an external HTTP API. The service runs in containers, and autoscaling is
+      configured on CPU utilization with a 70% target. At peak hours the queue grows to hundreds of thousands of
+      messages, yet the replica count does not change.
+
+      Why does this happen, which metric should such a worker scale on, and what else must the scaling setup cover?
+    hint: What is the process doing while it waits on the database and the API, and what directly shows that work is falling behind?
+    answer: |
+      - **Why CPU does not work.** The worker spends almost all its time waiting on I/O: the broker, the database,
+        HTTP. CPU stays low even while the queue grows, so a CPU rule adds no replicas. Conversely, CPU can rise from
+        serialization or garbage collection with no backlog at all. CPU is an indirect sign of load; for a queue
+        consumer the direct signal is the amount of waiting work.
+      - **Scale on the backlog.** The metric is queue length, consumer group lag in Kafka or the age of the oldest
+        message. The tools are event-driven scaling: KEDA (AKS has a KEDA add-on) with a `ScaledObject` and the scaler
+        for your broker, or Azure Container Apps scale rules, which are built on the same KEDA scalers. You set a
+        target number of messages per replica plus minimum and maximum replicas. KEDA can scale to zero, which a plain
+        CPU-based HPA does not do by default.
+      - **Derive the per-replica target from throughput.** If one replica handles N messages per second and the
+        queue must drain within T seconds, the per-replica target is about N x T.
+      - **Cap the maximum by what dependencies can absorb.** Every replica opens database connections and calls the
+        external API, so the replica cap follows from the database connection limit, the API rate limits and, for
+        Kafka, the partition count (extra consumers in a group sit idle). Otherwise, when the database degrades, the
+        queue grows, the scaler adds replicas, and they finish off the same database.
+      - **Scale in safely.** On scale-in the container gets SIGTERM: the worker must honour `stoppingToken`, finish or
+        release the current message, and `HostOptions.ShutdownTimeout` plus the container termination grace period
+        must cover the processing time. At-least-once delivery requires idempotent handlers.
+      - **Know what damps flapping.** The cooldown period in KEDA and Container Apps applies only when scaling from
+        the last replica to zero. In KEDA, flapping between N and N-1 replicas is damped by the HPA scale-down
+        stabilization window (scaleDown stabilizationWindow), configured in `advanced.horizontalPodAutoscalerConfig`
+        of the `ScaledObject`; in Container Apps the platform manages scale-in itself.
+      - **Account for cold start.** Scaling to zero saves resources, but the first message after an idle period waits
+        for a container to start; if latency matters, keep the minimum at 1.
+    explanation: |
+      A scaling metric should measure the thing you want to bound. For a queue worker that is how long work waits:
+      how many messages are queued and for how long. CPU utilization tracks this only when processing is CPU-bound.
+      A typical .NET worker calls the database and services through `async` code, so no thread is busy while it
+      waits, CPU stays low, and the backlog grows without limit.
+
+      KEDA handles this as follows: the scaler polls the broker, KEDA itself moves the workload between zero and one
+      replica, and scaling from one replica upward is delegated to an HPA that receives the backlog as an external
+      metric. That is why one workload must not have both a `ScaledObject` and a separate HPA: they compete.
+      Azure Container Apps builds this in: a scale rule names the event source and the threshold, and the platform
+      does the rest.
+
+      Backlog-based scaling amplifies feedback from dependencies: if the database slows down, the backlog grows
+      because of it, and adding replicas only adds load to the bottleneck. That is why the replica cap is not a
+      formality but protection for the dependencies, and it is chosen first from their capacity, and only then from
+      the budget.
+    linkTitles:
+      - "Scaling in Azure Container Apps"
+      - "Kubernetes Event-Driven Autoscaling (KEDA) in AKS"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

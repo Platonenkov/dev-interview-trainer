@@ -1,0 +1,118 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RMN8XRHS406DCHKERX
+slug: base-image-patching-policy
+stack: dotnet
+topic: cloud-containers
+level: lead
+type: open
+grading: self
+tags: [docker, base-images, security-patching, digest-pinning, ci-cd]
+links:
+  - url: https://github.com/dotnet/dotnet-docker/blob/main/documentation/supported-tags.md
+    lang: en
+    kind: docs
+  - url: https://docs.docker.com/build/building/best-practices/
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какую политику тегов и пересборки базовых образов .NET задать команде?
+    prompt: |
+      Сервисы команды собираются на официальных образах `mcr.microsoft.com/dotnet/sdk` и
+      `mcr.microsoft.com/dotnet/aspnet`. Одни Dockerfile ссылаются на `aspnet:10.0`, другие на `latest`, а
+      образы пересобираются только тогда, когда кто-то меняет код сервиса. Недавно сканер нашёл в production
+      образ с уязвимостью, исправленной в базовом образе несколько месяцев назад, а в другой раз обычная
+      пересборка без изменений в коде принесла новую версию среды выполнения и сломала тест.
+
+      Какую политику по тегам базовых образов и их пересборке вы как лид зададите, чтобы production получал
+      исправления безопасности, но без неожиданных изменений?
+    hint: "Чем ссылка на образ по тегу отличается от ссылки по дайджесту, и кто в команде узнаёт, что вышел исправленный базовый образ?"
+    answer: |
+      - **Понимать, что означает каждая ссылка.** `aspnet:10.0` - плавающий тег: он переезжает на каждый новый
+        патч .NET и на каждую пересборку образа с исправлениями ОС. Тег с полной версией, например `10.0.1`,
+        фиксирует патч .NET, но образ под ним тоже может быть перевыпущен с исправлениями ОС. Неизменным всегда
+        остаётся только дайджест (`@sha256:...`): он указывает на одно и то же содержимое.
+      - **Закреплять версию в репозитории.** Dockerfile ссылается на базовый образ по дайджесту, а тег оставляется
+        рядом для читаемости: `aspnet:10.0-noble@sha256:...`. То же для образа SDK на этапе сборки. Вариант ОС
+        указан в теге явно, `latest` запрещён. Сборка воспроизводима, а откат - это возврат к предыдущему
+        дайджесту образа приложения.
+      - **Автоматизировать обновления.** Бот обновления зависимостей (например, Renovate или Dependabot) следит за
+        реестром и открывает pull request, когда под тегом появляется новый дайджест. CI собирает образ, гоняет
+        модульные и интеграционные тесты, сканирует образ на уязвимости и выкатывает его на тестовый стенд.
+        Изменение базового образа проходит тот же путь, что и изменение кода.
+      - **Пересобирать по расписанию.** Даже без изменений кода образы пересобираются и выкатываются регулярно
+        (например, раз в неделю) и после каждого сервисного выпуска .NET, потому что запущенный контейнер сам не
+        обновляется. Сканирование образов, которые сейчас работают в окружениях, ловит то, что пропустили.
+      - **Задать правила и ответственных.** Сроки по критичности (например, критическую уязвимость в базовом образе
+        закрыть за несколько дней), владелец, который разбирает PR с обновлениями, процедура отката и учёт того,
+        какой дайджест работает в каждом окружении.
+    explanation: |
+      Обе проблемы из условия - следствие одного выбора. Плавающий тег приносит исправления, но только при
+      пересборке, а пересборка случается от случая к случаю. При этом сборка сегодня и завтра даёт разные образы:
+      framework-dependent приложение запускается на той среде выполнения, которая лежит в образе, поэтому новый
+      патч .NET меняет поведение без единого коммита, а «откат» на тот же тег может собрать уже другое содержимое.
+
+      Закрепление по дайджесту без автоматизации - обратная крайность и худший вариант: образы замерзают и копят
+      уязвимости, потому что о новых версиях никто не узнаёт. Поэтому политика состоит из двух частей:
+      закрепление даёт детерминизм, а автоматические PR и плановые пересборки дают свежесть. Неожиданное
+      изменение превращается в обычный проверенный pull request с понятной историей.
+
+      Решение лида здесь - про цену и риск. Поток PR с обновлениями создаёт шум, поэтому обновления базовых
+      образов группируют по сервисам и разрешают автоматическое слияние патчей, если CI зелёный, а переход на
+      новую мажорную версию .NET или другую ОС остаётся отдельной запланированной задачей. Ссылку по дайджесту
+      и регулярную пересборку рекомендует и документация Docker.
+    linkTitles:
+      - "Поддерживаемые теги образов .NET (dotnet/dotnet-docker)"
+      - "Docker: лучшие практики сборки образов"
+  en:
+    title: What tag and rebuild policy should a team set for .NET base images?
+    prompt: |
+      The team's services are built on the official `mcr.microsoft.com/dotnet/sdk` and
+      `mcr.microsoft.com/dotnet/aspnet` images. Some Dockerfiles reference `aspnet:10.0`, others `latest`, and
+      images are rebuilt only when someone changes the service code. Recently a scanner found an image in
+      production with a vulnerability that had been fixed in the base image months before, and another time a
+      plain rebuild with no code changes brought a new runtime version and broke a test.
+
+      As the lead, what policy for base image tags and rebuilds do you set so that production gets security
+      patches without surprise changes?
+    hint: "How does referencing an image by tag differ from referencing it by digest, and who on the team learns that a patched base image has shipped?"
+    answer: |
+      - **Know what each reference means.** `aspnet:10.0` is a floating tag: it moves to every new .NET patch
+        and to every rebuild of the image with OS fixes. A full version tag such as `10.0.1` fixes the .NET
+        patch, but the image behind it can also be republished with OS fixes. Only a digest (`@sha256:...`)
+        always stays the same: it points to the same content.
+      - **Pin in the repository.** The Dockerfile references the base image by digest and keeps the tag next to
+        it for readability: `aspnet:10.0-noble@sha256:...`. The same goes for the SDK image in the build stage.
+        The OS variant is explicit in the tag, and `latest` is forbidden. The build is reproducible, and a
+        rollback is a return to the previous digest of the app image.
+      - **Automate updates.** A dependency update bot (for example Renovate or Dependabot) watches the registry
+        and opens a pull request when a new digest appears under the tag. CI builds the image, runs unit and
+        integration tests, scans the image for vulnerabilities and deploys it to a test environment. A base
+        image change goes through the same path as a code change.
+      - **Rebuild on a schedule.** Even with no code changes, images are rebuilt and redeployed regularly (for
+        example weekly) and after every .NET servicing release, because a running container never patches
+        itself. Scanning the images that currently run in each environment catches what was missed.
+      - **Set rules and owners.** Deadlines by severity (for example, close a critical vulnerability in the base
+        image within a few days), an owner who handles the update PRs, a rollback procedure, and a record of
+        which digest runs in each environment.
+    explanation: |
+      Both problems in the scenario come from one choice. A floating tag brings fixes, but only on a rebuild, and
+      rebuilds happen at random. At the same time a build today and a build tomorrow give different images: a
+      framework-dependent app runs on whatever runtime the image contains, so a new .NET patch changes behaviour
+      without a single commit, and a "rollback" to the same tag may build different content.
+
+      Pinning by digest without automation is the opposite extreme and the worst option: images freeze and
+      accumulate vulnerabilities because nobody learns about new versions. So the policy has two parts: pinning
+      gives determinism, and automated PRs plus scheduled rebuilds give freshness. A surprise change becomes an
+      ordinary reviewed pull request with a clear history.
+
+      The lead's decision here is about cost and risk. A stream of update PRs creates noise, so base image
+      updates are grouped per service and patch updates may merge automatically when CI is green, while a move to
+      a new major .NET version or another OS stays a separate planned task. The Docker documentation also
+      recommends referencing base images by digest and rebuilding images regularly.
+    linkTitles:
+      - "Supported tags for .NET images (dotnet/dotnet-docker)"
+      - "Docker: building best practices"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

@@ -1,0 +1,121 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RM7SPZSB2CGVAA10J6
+slug: dockerfile-nuget-token-in-build-arg
+stack: dotnet
+topic: cloud-containers
+level: middle
+type: find-bug
+grading: auto
+tags: [docker, dockerfile, secrets, nuget, buildkit]
+code:
+  language: dockerfile
+  harness: none
+  source: |
+    FROM mcr.microsoft.com/dotnet/sdk:10.0
+    ARG NUGET_TOKEN
+    ENV NUGET_TOKEN=$NUGET_TOKEN
+    WORKDIR /src
+    COPY nuget.config ./
+    COPY IntegrationTests/IntegrationTests.csproj IntegrationTests/
+    RUN dotnet restore IntegrationTests/IntegrationTests.csproj
+    COPY . .
+    RUN dotnet build IntegrationTests/IntegrationTests.csproj -c Release --no-restore
+    ENTRYPOINT ["dotnet", "test", "IntegrationTests/IntegrationTests.csproj", "-c", "Release", "--no-build"]
+bugLineSets: [[3], [2, 3]]
+links:
+  - url: https://docs.docker.com/build/building/secrets/
+    lang: en
+    kind: docs
+  - url: https://docs.docker.com/reference/dockerfile/
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какая строка Dockerfile оставляет токен приватного фида NuGet в опубликованном образе?
+    prompt: |
+      Этот образ запускает интеграционные тесты в CI, поэтому он намеренно построен на образе SDK. Его публикуют во
+      внутренний реестр, откуда его забирают другие команды. Пакеты восстанавливаются из приватного фида NuGet:
+      `nuget.config` в репозитории содержит не сам токен, а ссылку на переменную окружения
+      `ClearTextPassword="%NUGET_TOKEN%"`. CI собирает образ командой
+      `docker build --build-arg NUGET_TOKEN=<token> .`.
+
+      Сканер безопасности реестра нашёл действующий токен фида в опубликованном образе. Щёлкните по строке, из-за
+      которой токен попал в образ.
+    hint: Какие сведения, кроме файловых слоёв, хранятся в образе и видны через `docker inspect`?
+    answer: |
+      Строка 3, `ENV NUGET_TOKEN=$NUGET_TOKEN`. Вместе с ней можно отметить и строку 2 с `ARG NUGET_TOKEN`.
+    explanation: |
+      Инструкция `ENV` записывает переменную в конфигурацию образа. Справочник Dockerfile говорит, что переменные,
+      заданные через `ENV`, сохраняются в контейнере, запущенном из итогового образа, и их значения видны через
+      `docker inspect`. Значит, токен уходит в реестр вместе с образом и оказывается в окружении каждого контейнера.
+      Сам `nuget.config` безопасен, потому что хранит только ссылку `%NUGET_TOKEN%`, но переменная, на которую он
+      ссылается, теперь живёт в образе.
+
+      Строка 2 сама по себе не кладёт токен в `Config.Env`: в отличие от `ENV`, `ARG` не становится переменной
+      окружения итогового образа. Но и это не способ передавать секреты: документация Docker о секретах сборки прямо
+      говорит, что аргументы сборки и переменные окружения для этого не подходят, потому что сохраняются в итоговом
+      образе; значения аргументов, которые использовали инструкции `RUN`, записываются в историю образа. Поэтому
+      строку 2 можно отметить вместе со строкой 3, но ответ только со строкой 2 пропускает главную утечку.
+
+      Исправление - убрать строки 2 и 3 и передать токен как секрет BuildKit только в тот шаг, которому он нужен:
+      `RUN --mount=type=secret,id=nuget_token,env=NUGET_TOKEN dotnet restore IntegrationTests/IntegrationTests.csproj`,
+      а собирать командой `docker build --secret id=nuget_token,env=NUGET_TOKEN .`. Опция `env=` в `--mount` требует
+      синтаксиса Dockerfile 1.10 или новее; на более старом можно читать секрет из файла по умолчанию:
+      `RUN --mount=type=secret,id=nuget_token NUGET_TOKEN=$(cat /run/secrets/nuget_token) dotnet restore ...`.
+      Секрет доступен только на время этой инструкции `RUN`, и его значение не записывается ни в слои, ни в
+      конфигурацию образа. Последующим `dotnet build --no-restore` и `dotnet test --no-build` фид уже не нужен.
+
+      Уже утёкший токен нужно отозвать и выпустить новый: любой, кто скачал образ, может его прочитать, а удаление
+      тега из реестра не удаляет копии. В многоэтапной сборке последний этап, построенный на другом базовом образе,
+      не наследует `ENV` этапа сборки, но токен остаётся в метаданных и кэше этапа сборки на машине CI, поэтому и там
+      правильный инструмент - монтирование секрета.
+    linkTitles:
+      - "Docker: секреты сборки"
+      - "Справочник по Dockerfile"
+  en:
+    title: Which Dockerfile line leaves the private NuGet feed token in the published image?
+    prompt: |
+      This image runs integration tests in CI, so it is based on the SDK image on purpose. It is pushed to an internal
+      registry, where other teams pull it. Packages are restored from a private NuGet feed: the `nuget.config` in the
+      repository does not hold the token itself but refers to an environment variable,
+      `ClearTextPassword="%NUGET_TOKEN%"`. CI builds the image with
+      `docker build --build-arg NUGET_TOKEN=<token> .`.
+
+      The registry security scanner found a valid feed token in the published image. Click the line that put the
+      token into the image.
+    hint: What information, apart from the file system layers, is stored in an image and shown by `docker inspect`?
+    answer: |
+      Line 3, `ENV NUGET_TOKEN=$NUGET_TOKEN`. Line 2 with `ARG NUGET_TOKEN` may be selected together with it.
+    explanation: |
+      The `ENV` instruction writes the variable into the image configuration. The Dockerfile reference says that
+      variables set with `ENV` persist when a container is run from the resulting image, and their values are shown by
+      `docker inspect`. So the token travels to the registry with the image and is in the environment of every
+      container. The `nuget.config` itself is safe because it holds only the `%NUGET_TOKEN%` reference, but the
+      variable it refers to now lives in the image.
+
+      Line 2 on its own does not put the token into `Config.Env`: unlike `ENV`, `ARG` does not become an environment
+      variable of the final image. It is still not a way to pass secrets: the Docker build secrets documentation states
+      that build arguments and environment variables are inappropriate for secrets because they persist in the final
+      image; the values of build arguments used by `RUN` instructions are recorded in the image history. That is why
+      line 2 may be selected together with line 3, but an answer with line 2 alone misses the main leak.
+
+      The fix is to remove lines 2 and 3 and pass the token as a BuildKit secret only to the step that needs it:
+      `RUN --mount=type=secret,id=nuget_token,env=NUGET_TOKEN dotnet restore IntegrationTests/IntegrationTests.csproj`,
+      built with `docker build --secret id=nuget_token,env=NUGET_TOKEN .`. The `env=` option of `--mount` needs
+      Dockerfile syntax 1.10 or later; on older syntax read the secret from its default file:
+      `RUN --mount=type=secret,id=nuget_token NUGET_TOKEN=$(cat /run/secrets/nuget_token) dotnet restore ...`.
+      The secret is available only for the duration of that `RUN` instruction, and its value is written neither to the
+      layers nor to the image configuration. The later `dotnet build --no-restore` and `dotnet test --no-build` no
+      longer need the feed.
+
+      The token that has already leaked must be revoked and replaced: anyone who pulled the image can read it, and
+      deleting the tag from the registry does not delete the copies. In a multi-stage build a last stage based on a
+      different base image does not inherit the `ENV` of the build stage, but the token still stays in the metadata and
+      cache of the build stage on the CI machine, so a secret mount is the right tool there as well.
+    linkTitles:
+      - "Docker build secrets"
+      - "Dockerfile reference"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  noRunReason: The snippet is a Dockerfile, not C#. The sandbox only builds and runs C# snippets, and the defect is about what Docker stores in image metadata and history.

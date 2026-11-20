@@ -1,0 +1,108 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RM1AK226TN9S44K8QD
+slug: lambda-reuse-clients-across-invocations
+stack: dotnet
+topic: cloud-containers
+level: middle
+type: single
+grading: auto
+tags: [aws-lambda, serverless, httpclient, cold-start]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://docs.aws.amazon.com/lambda/latest/dg/best-practices.html
+    lang: en
+    kind: docs
+  - url: https://docs.aws.amazon.com/lambda/latest/dg/csharp-handler.html
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Где функция AWS Lambda на .NET должна создавать HttpClient и клиент базы данных?
+    prompt: |
+      Функция AWS Lambda на .NET вызывает внешний HTTP API через `HttpClient` и читает данные через клиент
+      Amazon DynamoDB (`AmazonDynamoDBClient`). При ровной нагрузке большинство вызовов тёплые, но каждый из них
+      всё равно тратит время на создание клиентов и установку соединений.
+
+      Где нужно создавать эти клиенты, чтобы тёплые вызовы использовали их повторно?
+    hint: Что именно сохраняется между двумя тёплыми вызовами, которые обработала одна и та же среда выполнения?
+    options:
+      a: "Внутри метода-обработчика, чтобы каждый вызов получал свежие клиенты"
+      b: "Вне метода-обработчика: в статическом поле или в конструкторе класса функции"
+      c: "Внутри метода-обработчика в блоке `using`, чтобы клиенты освобождались после каждого вызова"
+      d: "В слое Lambda (layer), чтобы один экземпляр клиента разделяли все функции и среды выполнения"
+    optionExplanations:
+      a: "Объекты, созданные в обработчике, создаются заново при каждом вызове, в том числе тёплом: создание клиента, установка соединения и TLS-рукопожатие оплачиваются каждый раз."
+      c: "`using` лишь добавляет освобождение в конце вызова, а клиент по-прежнему создаётся при каждом вызове. Для `HttpClient` это ещё и закрытие соединений, так что следующий вызов открывает их заново."
+      d: "Слой - это архив с кодом или зависимостями, который распаковывается в среду выполнения. Он разделяет файлы, а не объекты в памяти: каждая среда выполнения - отдельный процесс со своими экземплярами."
+    answer: "Вне метода-обработчика: в статическом поле или в конструкторе класса функции."
+    explanation: |
+      Lambda выполняет функцию в среде выполнения (execution environment). При холодном старте среда проходит фазу
+      инициализации: среда исполнения загружает сборку, выполняет статические инициализаторы и создаёт экземпляр
+      класса функции, то есть его конструктор выполняется один раз. Дальше та же среда обрабатывает вызовы по одному,
+      вызывая метод-обработчик у того же экземпляра, а между вызовами может быть заморожена и затем разморожена.
+      Статические поля и поля экземпляра функции переживают тёплые вызовы, локальные переменные обработчика - нет.
+      Поэтому клиент, его пул соединений и установленные TLS-соединения оплачиваются один раз на среду, во время
+      инициализации. AWS прямо называет это рекомендуемой практикой.
+
+      Оговорки:
+
+      - Каждая среда выполнения - отдельный процесс. Когда Lambda масштабируется, каждая среда создаёт свои клиенты
+        и соединения. Для реляционной базы это может упереться в лимит соединений, тут помогает пул вроде RDS Proxy.
+      - Среда может долго простаивать замороженной, а сервер за это время может закрыть простаивающие соединения.
+        Клиент должен уметь переподключиться: пул соединений `HttpClient` и повторные попытки AWS SDK это делают.
+      - Выносить туда стоит только переиспользуемые объекты, не зависящие от запроса. Данные запроса в статическом
+        поле утекут в следующий вызов.
+    linkTitles:
+      - "Рекомендации по работе с функциями AWS Lambda"
+      - "Определение обработчика функции Lambda на C#"
+  en:
+    title: Where should a .NET AWS Lambda function create its HttpClient and database client?
+    prompt: |
+      A .NET AWS Lambda function calls an external HTTP API through `HttpClient` and reads data through an
+      Amazon DynamoDB client (`AmazonDynamoDBClient`). Under steady load most invocations are warm, but each of
+      them still spends time creating the clients and setting up connections.
+
+      Where should these clients be created so that warm invocations reuse them?
+    hint: What exactly survives between two warm invocations handled by the same execution environment?
+    options:
+      a: "Inside the handler method, so that every invocation gets fresh clients"
+      b: "Outside the handler method: in a static field or in the constructor of the function class"
+      c: "Inside the handler method in a `using` block, so that the clients are disposed after each call"
+      d: "In a Lambda layer, so that all functions and execution environments share one client instance"
+    optionExplanations:
+      a: "Objects created in the handler are created again on every invocation, warm ones included: building the client, opening the connection and the TLS handshake are paid every time."
+      c: "`using` only adds disposal at the end of the call; the client is still created on every invocation. For `HttpClient` it also closes the connections, so the next call opens them again."
+      d: "A layer is an archive with code or dependencies that is extracted into the execution environment. It shares files, not objects in memory: every execution environment is a separate process with its own instances."
+    answer: "Outside the handler method: in a static field or in the constructor of the function class."
+    explanation: |
+      Lambda runs a function inside an execution environment. On a cold start the environment goes through the
+      initialization phase: the runtime loads the assembly, runs static initializers and creates the instance of the
+      function class, so its constructor runs once. After that the same environment handles invocations one at a
+      time, calling the handler method on the same instance, and between invocations it can be frozen and later
+      thawed. Static fields and fields of the function instance survive warm invocations; local variables of the
+      handler do not. So the client, its connection pool and the established TLS connections are paid for once per
+      environment, during initialization. AWS lists this as a best practice.
+
+      Caveats:
+
+      - Every execution environment is a separate process. When Lambda scales out, each environment creates its own
+        clients and connections. For a relational database this can hit the connection limit, and a pooler such as
+        RDS Proxy helps.
+      - An environment can stay frozen for a long time, and the server may close idle connections meanwhile. The
+        client must be able to reconnect: `HttpClient` connection pooling and AWS SDK retries handle this.
+      - Move only reusable, request-independent objects there. Request data in a static field leaks into the next
+        invocation.
+    linkTitles:
+      - "Best practices for working with AWS Lambda functions"
+      - "Define Lambda function handler in C#"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

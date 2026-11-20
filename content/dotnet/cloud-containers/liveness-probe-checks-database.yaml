@@ -1,0 +1,128 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RM4MWM8WY48910KTYT
+slug: liveness-probe-checks-database
+stack: dotnet
+topic: cloud-containers
+level: senior
+type: find-bug
+grading: auto
+tags: [kubernetes, health-checks, liveness-probe, readiness-probe]
+code:
+  language: yaml
+  harness: none
+  source: |
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: orders-api
+    spec:
+      replicas: 3
+      selector:
+        matchLabels:
+          app: orders-api
+      template:
+        metadata:
+          labels:
+            app: orders-api
+        spec:
+          containers:
+            - name: orders-api
+              image: registry.example.com/orders-api:1.4.2
+              ports:
+                - containerPort: 8080
+              readinessProbe:
+                httpGet:
+                  path: /healthz/ready
+                  port: 8080
+                periodSeconds: 5
+                failureThreshold: 3
+              livenessProbe:
+                httpGet:
+                  path: /healthz
+                  port: 8080
+                periodSeconds: 10
+                failureThreshold: 3
+bugLineSets: [[28]]
+links:
+  - url: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/health-checks
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какая строка манифеста перезапускает все поды .NET API во время сбоя базы данных?
+    prompt: |
+      API на ASP.NET Core регистрирует проверку базы данных `AddDbContextCheck<OrdersDbContext>()` с тегом `ready`
+      и публикует три конечные точки проверки работоспособности:
+
+      - `/healthz` - `MapHealthChecks` без параметров, выполняет все зарегистрированные проверки;
+      - `/healthz/live` - `Predicate = _ => false`, не выполняет ни одной проверки и отвечает `200`, пока процесс обрабатывает запросы;
+      - `/healthz/ready` - `Predicate = check => check.Tags.Contains("ready")`, проверяет базу данных.
+
+      Во время двухминутного сбоя базы данных контейнеры во всех трёх подах перезапускались снова и снова, хотя
+      сами процессы были исправны. Щёлкните по строке манифеста, из-за которой это происходит.
+    hint: Какую конечную точку вызывает каждая проба и какие проверки выполняет эта конечная точка?
+    answer: "Строка 28: liveness-проба вызывает `/healthz`, а эта конечная точка выполняет все проверки, включая проверку базы данных."
+    explanation: |
+      Liveness-проба обращается к `/healthz`, где выполняются все зарегистрированные проверки, в том числе проверка
+      базы данных. Пока база недоступна, проверка возвращает `Unhealthy`, конечная точка отвечает
+      `503 Service Unavailable`, и после трёх неудачных попыток подряд (`failureThreshold: 3` при `periodSeconds: 10`,
+      примерно 30 секунд) kubelet завершает и перезапускает контейнер. База общая для всех реплик, поэтому это
+      происходит во всех подах одновременно. Перезапущенный процесс снова не проходит ту же проверку, и цикл
+      повторяется с растущей задержкой между перезапусками, пока база не вернётся.
+
+      Перезапуск здесь ничего не лечит: процесс исправен, а базу перезапуск контейнера не починит. Он только обрывает
+      запросы в обработке, сбрасывает прогретые кэши и пулы соединений, а после восстановления базы все поды
+      стартуют одновременно, сервис возвращается дольше, и база получает всплеск подключений.
+
+      Исправление - строка 28 должна быть `path: /healthz/live`. Liveness отвечает только на вопрос «завис ли этот
+      процесс и нужен ли ему перезапуск», а внешние зависимости проверяет readiness. Неудачная readiness-проба
+      убирает под из конечных точек Service без перезапуска, и он возвращается в балансировку, как только база
+      снова доступна. Учтите компромисс: если readiness проверяет общую зависимость, при её сбое у Service не
+      остаётся ни одного готового пода, поэтому некоторые команды оставляют в readiness только состояние самого
+      экземпляра и отдают ошибки из приложения.
+    linkTitles:
+      - "Настройка проб liveness, readiness и startup (документация Kubernetes)"
+      - "Проверки работоспособности в ASP.NET Core"
+  en:
+    title: Which manifest line restarts every Pod of a .NET API during a database outage?
+    prompt: |
+      An ASP.NET Core API registers a database check `AddDbContextCheck<OrdersDbContext>()` with the tag `ready`
+      and exposes three health check endpoints:
+
+      - `/healthz` - `MapHealthChecks` with no options, runs every registered check;
+      - `/healthz/live` - `Predicate = _ => false`, runs no checks and answers `200` while the process serves requests;
+      - `/healthz/ready` - `Predicate = check => check.Tags.Contains("ready")`, checks the database.
+
+      During a two-minute database outage the containers in all three Pods restarted again and again, although the
+      processes themselves were fine. Click the manifest line that causes this.
+    hint: Which endpoint does each probe call, and which checks does that endpoint run?
+    answer: "Line 28: the liveness probe calls `/healthz`, and that endpoint runs every check, including the database check."
+    explanation: |
+      The liveness probe calls `/healthz`, which runs every registered check, including the database check. While
+      the database is unavailable the check reports `Unhealthy`, the endpoint answers `503 Service Unavailable`, and
+      after three consecutive failures (`failureThreshold: 3` with `periodSeconds: 10`, roughly 30 seconds) the
+      kubelet kills and restarts the container. The database is shared by all replicas, so this happens in every Pod
+      at once. The restarted process fails the same check again, and the loop repeats with a growing delay between
+      restarts until the database is back.
+
+      The restart fixes nothing: the process is healthy, and restarting a container cannot repair the database. It
+      only drops in-flight requests, throws away warm caches and connection pools, and when the database recovers
+      every Pod starts at the same time, so the service takes longer to come back and the database gets a burst of
+      connections.
+
+      The fix is `path: /healthz/live` on line 28. Liveness answers only "is this process stuck and does it need a
+      restart", while external dependencies belong to readiness. A failed readiness probe removes the Pod from the
+      Service endpoints without restarting it, and the Pod returns to load balancing as soon as the database is
+      available again. Note the trade-off: if readiness checks a shared dependency, its failure leaves the Service
+      with no ready Pods at all, so some teams keep only the instance's own state in readiness and return errors
+      from the app instead.
+    linkTitles:
+      - "Configure Liveness, Readiness and Startup Probes (Kubernetes docs)"
+      - "Health checks in ASP.NET Core"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  noRunReason: The snippet is a Kubernetes manifest, not C#. The defect shows only when the kubelet runs probes against Pods in a cluster, which the sandbox cannot provide.

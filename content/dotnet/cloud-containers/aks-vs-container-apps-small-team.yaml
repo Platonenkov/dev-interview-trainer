@@ -1,0 +1,160 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RMYM2W9G9CSCZV786W
+slug: aks-vs-container-apps-small-team
+stack: dotnet
+topic: cloud-containers
+level: lead
+type: situation
+grading: self
+tags: [azure, aks, azure-container-apps, app-service, hosting, architecture-decision]
+links:
+  - url: https://learn.microsoft.com/en-us/azure/container-apps/compare-options
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/azure/architecture/guide/technology-choices/compute-decision-tree
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/azure/aks/supported-kubernetes-versions
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Команда из шести человек хочет перенести пять .NET-сервисов в AKS, потому что Kubernetes - стандарт: как выбрать хостинг?"
+    prompt: |
+      Вы лидер команды из шести разработчиков. Платформенного инженера или отдельного DevOps-инженера нет.
+      Команда сопровождает пять сервисов на .NET: публичный API на ASP.NET Core, два внутренних HTTP-сервиса,
+      обработчик очереди и ночную задачу. Сейчас они работают на виртуальных машинах Azure и разворачиваются
+      вручную.
+
+      Команда хочет перенести все пять сервисов в Azure Kubernetes Service (AKS), потому что «Kubernetes - это
+      отраслевой стандарт» и «так проще нанимать людей». Как вы примете решение о хостинге и что предложите?
+    hint: Отделите то, что действительно нужно пяти сервисам, от причин хотеть конкретную платформу. Кто будет отвечать за платформу после переезда?
+    answer: |
+      1. **Начать с требований, а не с платформы.** Записать, что реально нужно сервисам: входящий HTTP-трафик
+         и TLS, масштабирование (в том числе обработчика очереди по длине очереди и запуск ночной задачи),
+         сетевая изоляция и приватный доступ к базе, развёртывание без простоя, наблюдаемость, требования
+         регуляторов, бюджет. Отдельно записать нетехнические мотивы: изучить Kubernetes, найм, переносимость.
+      2. **Оценить эксплуатационную нагрузку AKS Standard.** Плоскостью управления занимается Azure, но в режиме
+         Standard кластер находится в подписке команды, и на ней остаются: регулярные обновления минорных версий
+         Kubernetes, обновления образов узлов и ОС, размеры пулов узлов, проектирование сети (CNI, адресное
+         пространство, ingress-контроллер, сертификаты), RBAC, удостоверения рабочих нагрузок и секреты, сетевые
+         политики, мониторинг кластера, манифесты или Helm-чарты для каждого сервиса и дежурства по инцидентам
+         кластера. AKS поддерживает ограниченное окно версий: отставший кластер теряет поддержку, а после
+         льготного периода AKS обновляет его сам, по одной минорной версии за раз. Если сервисы используют
+         удалённые в новой версии API, такое незапланированное обновление может их сломать. Назвать, кто из шести
+         человек будет этим заниматься, какую долю времени, и что будет, когда этот человек в отпуске.
+      3. **Сравнить с более управляемыми вариантами.** Azure Container Apps запускает контейнеры на
+         инфраструктуре на базе Kubernetes, но скрывает кластер: встроенный ingress, ревизии с разделением
+         трафика, правила масштабирования на базе KEDA, включая масштабирование до нуля, задания (jobs) для ночной
+         задачи, управляемые удостоверения. App Service подходит для обычных HTTP-сервисов и даёт слоты
+         развёртывания. AKS Automatic - промежуточный вариант: Azure заранее настраивает и берёт на себя типовые
+         эксплуатационные задачи, такие как управление узлами, масштабирование, настройки безопасности по
+         умолчанию и обновления. Это заметно снижает нагрузку, но команда всё равно работает с API Kubernetes:
+         манифесты или Helm-чарты, объекты Service и ingress, RBAC, диагностика подов, совместимость манифестов
+         при смене версий. Поэтому Automatic оценивают против Container Apps по тем же требованиям. Container Apps
+         и App Service закрывают перечисленные требования с наименьшей эксплуатационной работой. AKS (Standard или
+         Automatic) оправдан конкретной потребностью: прямой доступ к API Kubernetes, собственные операторы и
+         определения ресурсов (`CustomResourceDefinition`), определённый service mesh или ingress, особые
+         конфигурации узлов, либо платформенная команда, которая обслуживает много команд.
+      4. **Принять решение и зафиксировать его.** Вероятная рекомендация: Container Apps (или App Service для
+         HTTP-сервисов) сейчас. Записать ADR с критериями, отклонёнными вариантами (включая AKS Standard и AKS
+         Automatic) и явными условиями пересмотра: появилось требование, которому нужен API Kubernetes, команда
+         выросла, появился платформенный инженер.
+      5. **Оставить путь к переезду открытым.** OCI-образы, конфигурация через переменные окружения и хранилище
+         секретов, эндпоинты проверки работоспособности, OpenTelemetry, инфраструктура как код. Тогда переход
+         в AKS позже - это перенос описаний развёртывания, а не переписывание сервисов.
+      6. **Ответить на мотивацию команды.** Начать с пилота на одном сервисе и измерить время развёртывания
+         и число инцидентов. Изучение Kubernetes вынести в учебный кластер или обучение, а не в production пяти
+         сервисов, которым некому заниматься.
+    explanation: |
+      Вопрос проверяет, принимает ли лидер решение по полной стоимости владения, а не по популярности
+      технологии. С AKS Standard управляемая плоскость управления - ещё не управляемая платформа: для команды из
+      шести человек обновления, сеть и безопасность кластера - это постоянная работа, которая конкурирует с
+      продуктовыми задачами. Кластер, который никто не обновляет, теряет поддержку, становится риском
+      безопасности, а затем получает обновление от платформы в момент, который выбрала не команда.
+
+      AKS Automatic снимает большую часть работы с узлами и обновлениями, но не сложность самого Kubernetes:
+      модель API, манифесты и диагностику команде всё равно нужно знать. Container Apps и App Service
+      перекладывают на Azure ещё больше работы в обмен на меньший контроль. Такой обмен выгоден, пока команде не
+      нужно то, что даёт только API Kubernetes. Сравнение вариантов от Microsoft говорит о том же: если нужен
+      прямой доступ к API и плоскости управления Kubernetes, выбирают AKS, иначе Container Apps даёт полностью
+      управляемую среду для микросервисов, и многие команды начинают именно с неё.
+
+      Решение к тому же обратимо с небольшими затратами, если сервисы собраны как переносимые контейнеры, поэтому
+      платить за Kubernetes сегодня «на всякий случай» не нужно. Сильный ответ не отмахивается от желания
+      команды: он превращает «отраслевой стандарт» в проверяемые критерии и условия, при которых решение
+      пересматривают.
+    linkTitles:
+      - "Сравнение Container Apps с другими вариантами контейнеров в Azure"
+      - "Выбор вычислительной службы Azure"
+      - "Поддерживаемые версии Kubernetes в AKS"
+  en:
+    title: "A team of six wants to move five .NET services to AKS because Kubernetes is the standard: how do you choose the hosting?"
+    prompt: |
+      You lead a team of six developers. There is no platform engineer and no dedicated DevOps engineer.
+      The team runs five .NET services: a public ASP.NET Core API, two internal HTTP services, a queue worker
+      and a nightly job. Today they run on Azure virtual machines and are deployed by hand.
+
+      The team wants to move all five services to Azure Kubernetes Service (AKS), because "Kubernetes is the
+      industry standard" and "it makes hiring easier". How do you make the hosting decision, and what do you propose?
+    hint: Separate what the five services actually need from the reasons to want a specific platform. Who will own the platform after the move?
+    answer: |
+      1. **Start from requirements, not from the platform.** Write down what the services really need: HTTP
+         ingress and TLS, scaling (including the queue worker scaling on queue length and running the nightly
+         job), network isolation and private access to the database, zero-downtime deployment, observability,
+         compliance, budget. Record the non-technical motives separately: learning Kubernetes, hiring, portability.
+      2. **Price the operational ownership of AKS Standard.** Azure manages the control plane, but with Standard
+         the cluster lives in the team's subscription and the team owns: regular Kubernetes minor version
+         upgrades, node image and OS updates, node pool sizing, network design (CNI, address space, ingress
+         controller, certificates), RBAC, workload identity and secrets, network policies, cluster monitoring,
+         manifests or Helm charts for every service, and on-call for cluster incidents. AKS supports a limited
+         window of versions: a cluster that falls behind loses support, and after the grace period AKS upgrades it
+         itself, one minor version at a time. If the services use APIs removed in the newer version, such an
+         unplanned upgrade can break them. Name who of the six does this, for what share of their time, and what
+         happens when that person is on vacation.
+      3. **Compare with the more managed options.** Azure Container Apps runs containers on Kubernetes-based
+         infrastructure but hides the cluster: built-in ingress, revisions with traffic splitting, KEDA-based
+         scale rules including scale to zero, jobs for the nightly task, managed identities. App Service fits
+         plain HTTP services and offers deployment slots. AKS Automatic is the middle option: Azure preconfigures
+         and manages common operational tasks such as node management, scaling, security defaults and upgrades.
+         That cuts the load noticeably, but the team still works with the Kubernetes API: manifests or Helm
+         charts, Service and ingress objects, RBAC, Pod diagnostics, manifest compatibility across version
+         changes. So Automatic is evaluated against Container Apps on the same requirements. Container Apps and
+         App Service cover the listed requirements with the least operational work. AKS (Standard or Automatic)
+         is justified by a concrete need: direct access to the Kubernetes API, custom operators and custom
+         resource definitions (`CustomResourceDefinition`), a specific service mesh or ingress, special node
+         configurations, or a platform team that serves many teams.
+      4. **Decide and record it.** The likely recommendation: Container Apps (or App Service for the HTTP
+         services) now. Write an ADR with the criteria, the rejected options (including AKS Standard and AKS
+         Automatic) and explicit triggers to revisit: a requirement that needs the Kubernetes API, team growth,
+         a dedicated platform engineer.
+      5. **Keep the way out open.** OCI images, configuration through environment variables and a secret store,
+         health endpoints, OpenTelemetry, infrastructure as code. Then moving to AKS later means porting the
+         deployment definitions, not rewriting the services.
+      6. **Address the team's motivation.** Start with a pilot on one service and measure deployment time and
+         incident count. Learning Kubernetes goes into a sandbox cluster or training, not into the production of
+         five services that nobody is available to run.
+    explanation: |
+      The question checks whether a lead decides by total cost of ownership rather than by the popularity of a
+      technology. With AKS Standard a managed control plane is not a managed platform: for a team of six, the
+      upgrades, networking and security of a cluster are recurring work that competes with product work. A
+      cluster that nobody upgrades loses support, becomes a security risk, and then gets upgraded by the platform
+      at a moment the team did not choose.
+
+      AKS Automatic takes over most of the node and upgrade work, but not the complexity of Kubernetes itself:
+      the team still needs to know the API model, manifests and diagnostics. Container Apps and App Service move
+      even more of the work to Azure in exchange for less control. The trade pays off as long as the team does
+      not need what only the Kubernetes API provides. Microsoft's own comparison says the same: if you need
+      direct access to the Kubernetes API and control plane, choose AKS; otherwise Container Apps provides a fully
+      managed experience for microservices, and many teams start with it.
+
+      The decision is also cheap to reverse if the services are built as portable containers, so there is no
+      need to pay for Kubernetes today "just in case". A strong answer does not dismiss the team's wish: it turns
+      "industry standard" into checkable criteria and conditions under which the decision is revisited.
+    linkTitles:
+      - "Comparing Container Apps with other Azure container options"
+      - "Choose an Azure compute service"
+      - "Supported Kubernetes versions in AKS"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

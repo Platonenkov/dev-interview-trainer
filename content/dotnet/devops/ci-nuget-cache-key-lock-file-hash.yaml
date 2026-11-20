@@ -1,0 +1,105 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNK2MBGE10XMNAGBNH
+slug: ci-nuget-cache-key-lock-file-hash
+stack: dotnet
+topic: devops
+level: middle
+type: single
+grading: auto
+tags: [ci-cd, nuget, caching, github-actions, lock-file]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://github.com/actions/setup-dotnet
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/nuget/consume-packages/package-references-in-project-files
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какой ключ кэша выбрать для папки пакетов NuGet в конвейере CI?
+    prompt: |
+      Конвейер CI на GitHub Actions собирает решение на .NET 10 и кэширует глобальную папку пакетов NuGet
+      (`~/.nuget/packages`) через `actions/cache`, чтобы не скачивать пакеты при каждом запуске. Во всех
+      проектах включено свойство `RestorePackagesWithLockFile`, и файлы `packages.lock.json` хранятся в репозитории.
+
+      Какой ключ кэша выбрать, чтобы кэш переиспользовался между запусками, но никогда не отдавал устаревший
+      набор зависимостей?
+    hint: Когда содержимое папки пакетов действительно должно измениться, и какой файл в репозитории меняется ровно в этот момент?
+    options:
+      a: "`nuget-${{ runner.os }}-${{ github.sha }}`"
+      b: "`nuget-${{ runner.os }}-${{ hashFiles('**/packages.lock.json') }}`"
+      c: "`nuget-cache`"
+      d: "`nuget-${{ runner.os }}-${{ github.ref_name }}`"
+    optionExplanations:
+      a: "SHA коммита уникален, поэтому точного совпадения ключа не бывает: каждый запуск начинается с промаха (в лучшем случае с частичного восстановления по `restore-keys`) и сохраняет новую запись, засоряя хранилище кэша, хотя зависимости меняются редко."
+      c: "Постоянный ключ не меняется при обновлении пакетов. Запись сохраняется один раз и при точном совпадении ключа больше не перезаписывается, поэтому кэш навсегда хранит набор пакетов первого запуска, а новые версии скачиваются заново в каждом запуске."
+      d: "Имя ветки не связано с зависимостями: после обновления пакета в той же ветке ключ остаётся прежним и кэш отдаёт старый набор, а каждая новая ветка начинает с промаха."
+    answer: "`nuget-${{ runner.os }}-${{ hashFiles('**/packages.lock.json') }}`: ключ меняется ровно тогда, когда меняются зависимости."
+    explanation: |
+      Кэш работает хорошо, когда его ключ меняется ровно тогда, когда должно измениться содержимое. Содержимое
+      папки пакетов определяется графом зависимостей, а его полностью описывают файлы `packages.lock.json`: в них
+      записаны точные версии всех прямых и транзитивных пакетов и хеши их содержимого. `hashFiles('**/packages.lock.json')`
+      вычисляет один хеш по всем таким файлам. Коммиты, которые не трогают зависимости, получают точное попадание
+      в кэш, а любое обновление пакета даёт новый ключ и свежую запись.
+
+      Хешировать только файлы `*.csproj` хуже: при плавающих версиях (`1.*`) или централизованном управлении
+      версиями граф может измениться без изменения проектных файлов. Чтобы файл блокировки гарантированно
+      соответствовал проектам, в CI запускают `dotnet restore --locked-mode`: восстановление завершится ошибкой,
+      если файл блокировки устарел. Часть `runner.os` не даёт смешивать кэши разных операционных систем.
+
+      Действие `actions/setup-dotnet` с параметром `cache: true` строит ключ по тому же принципу: оно ищет файлы
+      `packages.lock.json` (путь можно задать через `cache-dependency-path`) и включает их хеш в ключ кэша.
+    linkTitles:
+      - "Действие actions/setup-dotnet"
+      - "PackageReference в проектных файлах: блокировка зависимостей"
+  en:
+    title: Which cache key should a CI pipeline use for the NuGet packages folder?
+    prompt: |
+      A GitHub Actions CI pipeline builds a .NET 10 solution and caches the global NuGet packages folder
+      (`~/.nuget/packages`) with `actions/cache`, so that packages are not downloaded on every run. All projects
+      set the `RestorePackagesWithLockFile` property, and the `packages.lock.json` files are committed.
+
+      Which cache key should you use so that the cache is reused between runs but never serves an outdated set
+      of dependencies?
+    hint: When must the contents of the packages folder actually change, and which file in the repository changes at exactly that moment?
+    options:
+      a: "`nuget-${{ runner.os }}-${{ github.sha }}`"
+      b: "`nuget-${{ runner.os }}-${{ hashFiles('**/packages.lock.json') }}`"
+      c: "`nuget-cache`"
+      d: "`nuget-${{ runner.os }}-${{ github.ref_name }}`"
+    optionExplanations:
+      a: "The commit SHA is unique, so there is never an exact key match: every run starts with a miss (at best a partial restore through `restore-keys`) and saves a new entry, filling the cache storage, even though dependencies rarely change."
+      c: "A constant key does not change when packages are updated. The entry is saved once and is not overwritten on an exact key match, so the cache keeps the package set of the first run forever and new versions are downloaded again on every run."
+      d: "The branch name has nothing to do with dependencies: after a package update in the same branch the key stays the same and the cache serves the old set, while every new branch starts with a miss."
+    answer: "`nuget-${{ runner.os }}-${{ hashFiles('**/packages.lock.json') }}`: the key changes exactly when the dependencies change."
+    explanation: |
+      A cache works well when its key changes exactly when its contents must change. The contents of the packages
+      folder are determined by the dependency graph, and the `packages.lock.json` files describe it completely: they
+      record the exact versions of all direct and transitive packages and the hashes of their contents.
+      `hashFiles('**/packages.lock.json')` computes one hash over all these files. Commits that do not touch
+      dependencies get an exact cache hit, and any package update produces a new key and a fresh entry.
+
+      Hashing only the `*.csproj` files is weaker: with floating versions (`1.*`) or central package management the
+      graph can change without any change to the project files. To make sure the lock file matches the projects, CI
+      runs `dotnet restore --locked-mode`: restore fails if the lock file is out of date. The `runner.os` part keeps
+      caches of different operating systems apart.
+
+      The `actions/setup-dotnet` action with `cache: true` builds its key on the same principle: it looks for
+      `packages.lock.json` files (the path can be set with `cache-dependency-path`) and puts their hash into the
+      cache key.
+    linkTitles:
+      - "The actions/setup-dotnet action"
+      - "PackageReference in project files: locking dependencies"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

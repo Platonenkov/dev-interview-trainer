@@ -1,0 +1,114 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNJ9TCYYM310EPEPEW
+slug: timespan-milliseconds-caps-recorded-latency
+stack: dotnet
+topic: devops
+level: middle
+type: find-bug
+grading: auto
+tags: [metrics, histogram, timespan, latency]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    using System.Diagnostics.Metrics;
+
+    using Meter meter = new("Shop.Api");
+    Histogram<double> requestDuration = meter.CreateHistogram<double>("shop.request.duration"); // milliseconds
+
+    using MeterListener listener = new();
+    listener.InstrumentPublished = (instrument, meterListener) =>
+    {
+        if (instrument.Meter.Name == "Shop.Api")
+            meterListener.EnableMeasurementEvents(instrument);
+    };
+    listener.SetMeasurementEventCallback<double>((instrument, value, tags, state) => Console.WriteLine(value));
+    listener.Start();
+
+    void OnRequestCompleted(TimeSpan elapsed)
+    {
+        requestDuration.Record(elapsed.Milliseconds);
+    }
+
+    OnRequestCompleted(TimeSpan.FromSeconds(2.5));
+bugLineSets: [[17]]
+fixedSource: |
+  using System.Diagnostics.Metrics;
+
+  using Meter meter = new("Shop.Api");
+  Histogram<double> requestDuration = meter.CreateHistogram<double>("shop.request.duration"); // milliseconds
+
+  using MeterListener listener = new();
+  listener.InstrumentPublished = (instrument, meterListener) =>
+  {
+      if (instrument.Meter.Name == "Shop.Api")
+          meterListener.EnableMeasurementEvents(instrument);
+  };
+  listener.SetMeasurementEventCallback<double>((instrument, value, tags, state) => Console.WriteLine(value));
+  listener.Start();
+
+  void OnRequestCompleted(TimeSpan elapsed)
+  {
+      requestDuration.Record(elapsed.TotalMilliseconds);
+  }
+
+  OnRequestCompleted(TimeSpan.FromSeconds(2.5));
+fixedExpect: { kind: output, value: "2500" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.timespan.milliseconds
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.timespan.totalmilliseconds
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему гистограмма длительности запросов никогда не показывает больше секунды?
+    prompt: |
+      Метод `OnRequestCompleted` записывает длительность обработанного запроса в гистограмму в миллисекундах.
+      `MeterListener` в примере заменяет экспортёр метрик: он получает каждое измерение и печатает его.
+
+      Для запроса длиной 2,5 секунды программа выводит `500` вместо `2500`, а на дашборде p99 никогда не
+      превышает одной секунды, хотя пользователи жалуются на медленные ответы. Щёлкните по строке с дефектом.
+    hint: Какой диапазон значений может вернуть свойство, через которое программа превращает `TimeSpan` в число?
+    answer: Строка 17, `requestDuration.Record(elapsed.Milliseconds)`, - записывается только миллисекундная составляющая интервала, а не вся длительность.
+    explanation: |
+      Свойства `Days`, `Hours`, `Minutes`, `Seconds` и `Milliseconds` у `TimeSpan` возвращают отдельные
+      составляющие интервала, как поля на циферблате часов. `Milliseconds` лежит в диапазоне от -999 до 999. Для
+      2,5 секунды `Seconds` равно 2, а `Milliseconds` - 500: целые секунды в него не входят. Поэтому любой запрос
+      дольше секунды попадает в гистограмму со значением меньше 1000, и перцентили выглядят нормально именно тогда,
+      когда запросы медленные. На быстрых запросах значения совпадают, поэтому тесты с короткими задержками ошибку
+      не ловят.
+
+      Полную длительность возвращают свойства `Total*`: `TotalMilliseconds` - число миллисекунд типа `double` с
+      дробной частью, здесь `2500`. Если метрика следует семантическим соглашениям OpenTelemetry, длительность
+      записывают в секундах через `TotalSeconds` и указывают единицу `s` при создании инструмента.
+    linkTitles:
+      - "Свойство TimeSpan.Milliseconds"
+      - "Свойство TimeSpan.TotalMilliseconds"
+  en:
+    title: Why does the request duration histogram never show more than one second?
+    prompt: |
+      The `OnRequestCompleted` method records the duration of a processed request into a histogram in milliseconds.
+      The `MeterListener` in the sample stands in for a metrics exporter: it receives every measurement and prints it.
+
+      For a request that takes 2.5 seconds the program prints `500` instead of `2500`, and on the dashboard p99 never
+      goes above one second, although users complain about slow responses. Click the line that contains the defect.
+    hint: Which range of values can the property that turns the `TimeSpan` into a number return?
+    answer: Line 17, `requestDuration.Record(elapsed.Milliseconds)`, records only the millisecond component of the interval, not the whole duration.
+    explanation: |
+      The `Days`, `Hours`, `Minutes`, `Seconds` and `Milliseconds` properties of `TimeSpan` return separate
+      components of the interval, like the fields on a clock face. `Milliseconds` ranges from -999 to 999. For
+      2.5 seconds `Seconds` is 2 and `Milliseconds` is 500: the whole seconds are not included. So every request
+      longer than a second lands in the histogram with a value below 1000, and the percentiles look healthy exactly
+      when requests are slow. For fast requests the values match, so tests with short delays do not catch the bug.
+
+      The `Total*` properties return the whole duration: `TotalMilliseconds` is the number of milliseconds as a
+      `double` with a fractional part, here `2500`. If the metric follows the OpenTelemetry semantic conventions,
+      record the duration in seconds with `TotalSeconds` and set the unit `s` when you create the instrument.
+    linkTitles:
+      - "TimeSpan.Milliseconds property"
+      - "TimeSpan.TotalMilliseconds property"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

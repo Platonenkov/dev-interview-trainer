@@ -1,0 +1,108 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RM58PR48929MRVRH68
+slug: gc-heap-hard-limit-container-default
+stack: dotnet
+topic: cloud-containers
+level: senior
+type: single
+grading: auto
+tags: [gc, containers, memory-limit, gc-heap-hard-limit]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/core/runtime-config/garbage-collector
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/whats-new/dotnet-core-3-0
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какой лимит управляемой кучи получает .NET-приложение в контейнере с ограничением памяти?
+    prompt: |
+      Сервис на .NET 10 запущен в контейнере с ограничением памяти 1 GiB (`resources.limits.memory: 1Gi` в Kubernetes).
+      Ни `System.GC.HeapHardLimit`, ни `System.GC.HeapHardLimitPercent`, ни переменные окружения
+      `DOTNET_GCHeapHardLimit` и `DOTNET_GCHeapHardLimitPercent` не заданы.
+
+      Какой жёсткий лимит управляемой кучи (GC heap hard limit) среда выполнения установит по умолчанию?
+    hint: Что ещё, кроме объектов в управляемой куче, расходует память процесса в рамках того же ограничения контейнера?
+    options:
+      a: "Никакого: сборщик мусора ориентируется на физическую память узла, а при превышении ограничения контейнер завершается по OOM."
+      b: "Большее из двух значений: 20 MB или 75% ограничения памяти контейнера, то есть 768 MiB."
+      c: "100% ограничения памяти контейнера: управляемая куча может занять всю доступную контейнеру память."
+      d: "Фиксированные 256 MB независимо от ограничения контейнера, пока не задан `DOTNET_GCHeapHardLimit`."
+    optionExplanations:
+      a: "Начиная с .NET Core 3.0 среда выполнения читает ограничение памяти контейнера и вычисляет лимит кучи из него, а не из памяти узла."
+      c: "Память процесса - это не только управляемая куча: код JIT, стеки потоков и нативные аллокации тоже входят в ограничение контейнера. Поэтому по умолчанию куче достаётся только часть ограничения."
+      d: "Фиксированного значения по умолчанию нет: лимит вычисляется из ограничения памяти контейнера. 20 MB - это только нижняя граница для очень маленьких ограничений."
+    answer: "Большее из 20 MB и 75% ограничения памяти контейнера; для 1 GiB это 768 MiB."
+    explanation: |
+      Начиная с .NET Core 3.0 среда выполнения определяет ограничение памяти контейнера (через cgroups) и, если лимит
+      кучи не задан явно, устанавливает жёсткий лимит управляемой кучи равным большему из 20 MB и 75% этого
+      ограничения. Поведение сохраняется и в .NET 10. Для ограничения 1 GiB получается 768 MiB.
+
+      Оставшиеся 25% нужны всему, что не является управляемой кучей, но учитывается в том же ограничении контейнера:
+      коду JIT, метаданным типов, стекам потоков, нативным аллокациям самой среды выполнения и библиотек. Если бы
+      куче доставалось 100%, процесс упирался бы в ограничение контейнера, и его завершал бы OOM killer без
+      управляемой диагностики.
+
+      Когда куча приближается к жёсткому лимиту, сборщик мусора работает агрессивнее, а если уложиться в лимит не
+      удаётся, выделение памяти завершается `OutOfMemoryException` внутри процесса.
+
+      Лимит можно задать явно: `System.GC.HeapHardLimit` (в байтах) или `System.GC.HeapHardLimitPercent` в
+      `runtimeconfig.json`, либо переменными окружения `DOTNET_GCHeapHardLimit` и `DOTNET_GCHeapHardLimitPercent`,
+      значения которых записываются в шестнадцатеричном виде. Если приложение активно использует нативную память,
+      процент стоит уменьшить, если почти вся память управляемая, его можно поднять.
+    linkTitles:
+      - "Параметры конфигурации сборщика мусора"
+      - "Что нового в .NET Core 3.0"
+  en:
+    title: What GC heap limit does a .NET app get in a container with a memory limit?
+    prompt: |
+      A .NET 10 service runs in a container with a 1 GiB memory limit (`resources.limits.memory: 1Gi` in Kubernetes).
+      Neither `System.GC.HeapHardLimit` nor `System.GC.HeapHardLimitPercent` is set, and neither are the
+      environment variables `DOTNET_GCHeapHardLimit` and `DOTNET_GCHeapHardLimitPercent`.
+
+      What GC heap hard limit does the runtime set by default?
+    hint: Besides objects on the managed heap, what else uses process memory within the same container limit?
+    options:
+      a: "None: the garbage collector sizes itself from the node's physical memory, and the container is OOM-killed when it exceeds its limit."
+      b: "The larger of two values: 20 MB or 75% of the container memory limit, which is 768 MiB."
+      c: "100% of the container memory limit: the managed heap may take all the memory available to the container."
+      d: "A fixed 256 MB regardless of the container limit, until `DOTNET_GCHeapHardLimit` is set."
+    optionExplanations:
+      a: "Since .NET Core 3.0 the runtime reads the container memory limit and derives the heap limit from it, not from the node's memory."
+      c: "Process memory is not only the managed heap: JIT code, thread stacks and native allocations also count against the container limit. That is why the heap gets only part of the limit by default."
+      d: "There is no fixed default value: the limit is computed from the container memory limit. 20 MB is only the lower bound for very small limits."
+    answer: "The larger of 20 MB and 75% of the container memory limit; for 1 GiB that is 768 MiB."
+    explanation: |
+      Since .NET Core 3.0 the runtime detects the container memory limit (through cgroups) and, if no heap limit is
+      configured, sets the GC heap hard limit to the larger of 20 MB and 75% of that limit. The behavior still holds
+      in .NET 10. For a 1 GiB limit that gives 768 MiB.
+
+      The remaining 25% is for everything that is not the managed heap but still counts against the same container
+      limit: JIT code, type metadata, thread stacks, native allocations of the runtime itself and of libraries. If the
+      heap got 100%, the process would hit the container limit and the OOM killer would end it with no managed
+      diagnostics.
+
+      As the heap approaches the hard limit, the garbage collector works more aggressively, and if it cannot stay
+      within the limit, the allocation fails with an `OutOfMemoryException` inside the process.
+
+      You can set the limit explicitly: `System.GC.HeapHardLimit` (in bytes) or `System.GC.HeapHardLimitPercent` in
+      `runtimeconfig.json`, or the environment variables `DOTNET_GCHeapHardLimit` and `DOTNET_GCHeapHardLimitPercent`,
+      whose values are written in hexadecimal. If the app uses a lot of native memory, lower the percentage; if
+      almost all of its memory is managed, you can raise it.
+    linkTitles:
+      - "Runtime configuration options for garbage collection"
+      - "What's new in .NET Core 3.0"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

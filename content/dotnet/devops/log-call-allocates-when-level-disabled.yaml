@@ -1,0 +1,112 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNX9Y4QYP5FCWDGXW4
+slug: log-call-allocates-when-level-disabled
+stack: dotnet
+topic: devops
+level: senior
+type: single
+grading: auto
+tags: [logging, performance, loggermessage, boxing]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/core/extensions/high-performance-logging
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/extensions/logger-message-generator
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему вызов LogDebug выделяет память, даже когда уровень Debug выключен?
+    prompt: |
+      В сервисе на .NET 10 горячий путь обрабатывает десятки тысяч элементов в секунду и для каждого вызывает
+      `_logger.LogDebug("Item {Id} at {Price}", id, price)`, где `id` имеет тип `int`, а `price` - `decimal`.
+      В production минимальный уровень логирования - `Information`, поэтому записи `Debug` никуда не попадают.
+      Тем не менее профилировщик памяти показывает в этом месте аллокации `object[]`, `Int32` и `Decimal`.
+      Какое утверждение верно объясняет причину и способ её устранить?
+    hint: Посмотрите на сигнатуру `LogDebug` - какие типы у её параметров и что компилятор должен сделать с аргументами ещё до входа в метод?
+    options:
+      a: 'Логгер подставляет `id` и `price` в шаблон и строит строку сообщения до проверки уровня, а затем отбрасывает её. Интерполяция `$"Item {id} at {price}"` избавит от разбора шаблона.'
+      b: 'Массив `params object?[]` и упакованные `int` и `decimal` создаются в месте вызова до проверки уровня. Их убирает метод с `[LoggerMessage]` или проверка `IsEnabled` перед вызовом.'
+      c: 'Литерал шаблона `"Item {Id} at {Price}"` заново выделяется при каждом вызове, ещё до проверки уровня. Вынос шаблона в поле `const string` уберёт эту аллокацию.'
+      d: 'Аргументы вычисляются только потому, что категория ещё включена для какого-то уровня. Если задать для неё уровень `None`, логгер пропустит вызов вместе с аргументами.'
+    optionExplanations:
+      a: 'Когда уровень выключен, строка сообщения не строится: логгер проверяет уровень до вызова форматтера. Интерполяция, наоборот, строит строку при каждом вызове, ещё до входа в `LogDebug`, и к тому же лишает запись структурированных свойств `Id` и `Price`.'
+      c: 'Строковый литерал - это один интернированный экземпляр, он не выделяется заново при каждом вызове. `const` ничего не меняет во время выполнения: массив и упакованные значения по-прежнему создаются.'
+      d: 'Массив `params` и упаковку выполняет вызывающий код до входа в `LogDebug`, независимо от настроек. Фильтр уровня, в том числе `None`, работает внутри логгера во время выполнения и их не убирает. Это не `[Conditional]`: вызов из скомпилированного кода никуда не исчезает.'
+    answer: 'Методы `LoggerExtensions` принимают `params object?[]`, поэтому массив и упакованные `int` и `decimal` создаются в месте вызова до проверки уровня. Затраты убирает метод, сгенерированный через `[LoggerMessage]`, или проверка `IsEnabled` перед вызовом.'
+    explanation: |
+      Метод расширения `LoggerExtensions.LogDebug(this ILogger logger, string? message, params object?[] args)`
+      получает аргументы как `params object?[]`. Компилятор превращает вызов в создание массива из двух элементов,
+      а `int` и `decimal` - типы значений, поэтому каждый из них упаковывается в отдельный объект в куче. Всё это
+      происходит в месте вызова, ещё до того как управление попадёт в логгер. Логгер затем видит, что `Debug`
+      выключен, и сообщение не форматирует, но массив и две упаковки уже созданы. На горячем пути это три лишних
+      объекта на каждый элемент и постоянная нагрузка на сборщик мусора в поколении 0.
+
+      Как убрать затраты:
+
+      - Метод с атрибутом `[LoggerMessage(Level = LogLevel.Debug, Message = "Item {Id} at {Price}")]` и строго
+        типизированными параметрами `int id, decimal price`. Генератор исходного кода (появился в .NET 6, в .NET 10
+        работает так же) создаёт тело, которое сначала проверяет `logger.IsEnabled(LogLevel.Debug)`, а значения
+        передаёт без массива `params`, поэтому при выключенном уровне вызов ничего не выделяет. Шаблон разбирается
+        один раз, когда сообщение определяется, а не при каждом вызове, а соответствие заполнителей параметрам
+        метода генератор проверяет во время компиляции. Прежний ручной способ получить тот же эффект -
+        `LoggerMessage.Define`, и сгенерированный код использует его внутри.
+      - Явная проверка `if (_logger.IsEnabled(LogLevel.Debug))` перед вызовом: массив и упаковка выполняются только
+        внутри условия. Это быстрое точечное исправление, но его легко забыть, и уровень приходится дублировать.
+    linkTitles:
+      - "Высокопроизводительное логирование в .NET"
+      - "Генерация кода логирования во время компиляции"
+  en:
+    title: Why does a LogDebug call allocate even when the Debug level is disabled?
+    prompt: |
+      In a .NET 10 service a hot path processes tens of thousands of items per second and calls
+      `_logger.LogDebug("Item {Id} at {Price}", id, price)` for each one, where `id` is an `int` and `price` is a
+      `decimal`. In production the minimum log level is `Information`, so `Debug` entries go nowhere. Still, a memory
+      profiler shows allocations of `object[]`, `Int32` and `Decimal` at this call. Which statement correctly
+      explains the cause and how to remove it?
+    hint: Look at the signature of `LogDebug` - what are the types of its parameters, and what must the compiler do with the arguments before the method is even entered?
+    options:
+      a: 'The logger fills the template with `id` and `price` and builds the message string before the level check, then discards it. Interpolation `$"Item {id} at {price}"` avoids the template parsing.'
+      b: 'The `params object?[]` array and the boxed `int` and `decimal` are created at the call site before the level check. A `[LoggerMessage]` method or an `IsEnabled` check before the call removes them.'
+      c: 'The template literal `"Item {Id} at {Price}"` is allocated anew on every call, before the level check. Moving it into a `const string` field removes this allocation.'
+      d: 'The arguments are evaluated only because the category is still enabled for some level. Setting its level to `None` makes the logger skip the call together with its arguments.'
+    optionExplanations:
+      a: 'When the level is disabled, no message string is built: the logger checks the level before it calls the formatter. Interpolation does the opposite: it builds the string on every call, before `LogDebug` is entered, and also loses the structured properties `Id` and `Price`.'
+      c: 'A string literal is a single interned instance and is not allocated on every call. `const` changes nothing at run time: the array and the boxed values are still created.'
+      d: 'The `params` array and the boxing are done by the calling code before `LogDebug` is entered, whatever the configuration says. The level filter, `None` included, runs inside the logger at run time and does not remove them. This is not `[Conditional]`: the call stays in the compiled code.'
+    answer: 'The `LoggerExtensions` methods take `params object?[]`, so the array and the boxed `int` and `decimal` are created at the call site before the level check. A method generated with `[LoggerMessage]`, or an `IsEnabled` check before the call, removes the cost.'
+    explanation: |
+      The extension method `LoggerExtensions.LogDebug(this ILogger logger, string? message, params object?[] args)`
+      receives its arguments as `params object?[]`. The compiler turns the call into the creation of a two-element
+      array, and since `int` and `decimal` are value types, each one is boxed into a separate heap object. All of
+      this happens at the call site, before control reaches the logger. The logger then sees that `Debug` is
+      disabled and does not format the message, but the array and the two boxes already exist. On a hot path that
+      is three extra objects per item and constant pressure on generation 0 of the garbage collector.
+
+      How to remove the cost:
+
+      - A method with the attribute `[LoggerMessage(Level = LogLevel.Debug, Message = "Item {Id} at {Price}")]` and
+        strongly typed parameters `int id, decimal price`. The source generator (introduced in .NET 6, works the
+        same way in .NET 10) produces a body that first checks `logger.IsEnabled(LogLevel.Debug)` and passes the
+        values without a `params` array, so with the level disabled the call allocates nothing. The template is
+        parsed once when the message is defined, not on every call, and the generator checks the placeholders
+        against the method parameters at compile time. The older manual way to get the same effect is
+        `LoggerMessage.Define`, which the generated code uses internally.
+      - An explicit `if (_logger.IsEnabled(LogLevel.Debug))` check before the call: the array and the boxing happen
+        only inside the condition. It is a quick local fix, but it is easy to forget and repeats the level.
+    linkTitles:
+      - "High-performance logging in .NET"
+      - "Compile-time logging source generation"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

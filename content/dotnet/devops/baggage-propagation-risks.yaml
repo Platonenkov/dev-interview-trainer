@@ -1,0 +1,106 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RN9X3P3WVGZHVAMDJS
+slug: baggage-propagation-risks
+stack: dotnet
+topic: devops
+level: senior
+type: multi
+grading: auto
+tags: [tracing, baggage, opentelemetry, security]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: true
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+links:
+  - url: https://opentelemetry.io/docs/concepts/signals/baggage/
+    lang: en
+    kind: docs
+  - url: https://www.w3.org/TR/baggage/
+    lang: en
+    kind: spec
+locales:
+  ru:
+    title: Какие утверждения о W3C Baggage в OpenTelemetry верны и чем опасен baggage?
+    prompt: |
+      Сервисы на .NET инструментированы OpenTelemetry. Вызывающий сервис помещает в baggage пары ключ-значение
+      (формат W3C Baggage), чтобы они дошли до сервисов ниже по цепочке вызовов. Выберите все верные утверждения.
+    hint: Baggage - это ещё один HTTP-заголовок. Кто его читает, кто может его выставить и попадает ли он сам по себе куда-то, кроме исходящих запросов?
+    options:
+      a: 'Baggage передаётся в HTTP-заголовке `baggage` как обычный текст: пропагатор не шифрует и не подписывает значения, и их видит каждый сервис, до которого доходит запрос, включая сторонние API, которые вызываются через инструментированный `HttpClient`.'
+      b: 'Записи baggage не попадают в атрибуты спанов, метрики и логи автоматически: чтобы увидеть их в трассировке, нужные ключи надо явно скопировать, например в процессоре спанов.'
+      c: 'Спецификация W3C Baggage требует передавать все элементы, только пока их не больше 64 и размер заголовка не больше 8192 байт. При превышении участник вправе отбросить элементы, поэтому baggage не подходит для больших данных.'
+      d: 'В baggage можно класть токен доступа или email пользователя: эти значения видят только сервисы той же трассировки и бэкенд трассировки.'
+      e: 'Сервис ниже по цепочке может доверять значению вроде `tenant.id=42` из baggage при проверке прав, потому что этот заголовок выставляет только инструментированный вызывающий сервис.'
+    optionExplanations:
+      d: 'Baggage уходит во все исходящие запросы, в том числе к сторонним API, и может оседать в логах прокси и шлюзов. Секретам и персональным данным в нём не место.'
+      e: 'Заголовок `baggage` может прислать любой клиент, и сервис не может отличить подделку: подписи нет. Решения о доступе нужно принимать по проверенным данным, например по утверждениям токена, а входящий baggage от внешних клиентов на границе системы лучше отбрасывать.'
+    answer: Верны утверждения a, b и c.
+    explanation: |
+      Baggage - отдельное хранилище пар ключ-значение, которое распространяется вместе с контекстом трассировки, но
+      не является его частью. При исходящем вызове пропагатор записывает содержимое в заголовок `baggage`, а
+      принимающая сторона извлекает его и делает доступным коду. Инструментирование HTTP-клиента не разбирает, куда
+      идёт запрос, поэтому значения получают и внутренние сервисы, и внешние API, а прокси, которые пишут заголовки в
+      логи, сохраняют их. Пропагатор ничего не шифрует и не подписывает.
+
+      Отсюда правила:
+
+      - никаких секретов, токенов и персональных данных в baggage;
+      - значениям из baggage нельзя доверять при авторизации: заголовок подделывается так же легко, как любой другой;
+      - на границе системы входящий baggage от внешних клиентов стоит отбрасывать или фильтровать.
+
+      Baggage не связан с атрибутами спанов, метрик и логов: если значение нужно видеть в бэкенде, его копируют явно,
+      и только выбранные ключи. Спецификация W3C гарантирует передачу всех элементов, пока их не больше 64 и
+      заголовок не больше 8192 байт, а сверх этого элементы могут отбрасываться. К тому же каждый байт baggage
+      добавляется к каждому запросу. Подходящее содержимое - короткие несекретные идентификаторы для корреляции,
+      например арендатор или вариант эксперимента.
+    linkTitles:
+      - "OpenTelemetry: Baggage"
+      - "Спецификация W3C Baggage"
+  en:
+    title: Which statements about W3C Baggage in OpenTelemetry are true, and what makes baggage risky?
+    prompt: |
+      .NET services are instrumented with OpenTelemetry. A calling service puts key-value pairs into baggage
+      (the W3C Baggage format) so that they reach the services further down the call chain. Select all true
+      statements.
+    hint: Baggage is just another HTTP header. Who reads it, who can set it, and does it end up anywhere other than outgoing requests on its own?
+    options:
+      a: 'Baggage travels in the `baggage` HTTP header as plain text: the propagator neither encrypts nor signs the values, and every service the request reaches can read them, including third-party APIs called through an instrumented `HttpClient`.'
+      b: 'Baggage entries are not added to span attributes, metrics or logs automatically: to see them in a trace, the needed keys must be copied explicitly, for example in a span processor.'
+      c: 'The W3C Baggage specification requires all entries to be propagated only while there are at most 64 of them and the header is at most 8192 bytes. Beyond either limit a participant may drop entries, so baggage is no place for large data.'
+      d: 'You can put an access token or the user email into baggage: only the services of the same trace and the tracing backend see these values.'
+      e: 'A downstream service can trust a value such as `tenant.id=42` from baggage in an authorization check, because only the instrumented calling service sets this header.'
+    optionExplanations:
+      d: 'Baggage goes out with every outgoing request, including calls to third-party APIs, and can end up in the logs of proxies and gateways. Secrets and personal data do not belong in it.'
+      e: 'Any client can send a `baggage` header, and the service cannot tell a forged one apart because there is no signature. Access decisions must rest on verified data, such as token claims, and incoming baggage from external clients is best dropped at the edge of the system.'
+    answer: Statements a, b and c are true.
+    explanation: |
+      Baggage is a separate key-value store that propagates together with the trace context but is not part of
+      it. On an outgoing call the propagator writes its content into the `baggage` header, and the receiving side
+      extracts it and makes it available to code. HTTP client instrumentation does not care where the request goes,
+      so internal services and external APIs receive the values alike, and proxies that log headers keep them. The
+      propagator encrypts and signs nothing.
+
+      Hence the rules:
+
+      - no secrets, tokens or personal data in baggage;
+      - never trust baggage values for authorization: the header is as easy to forge as any other;
+      - at the edge of the system, drop or filter incoming baggage from external clients.
+
+      Baggage is not tied to span attributes, metrics or logs: if a value must be visible in the backend, it is
+      copied explicitly, and only for chosen keys. The W3C specification guarantees that all entries propagate while
+      there are at most 64 of them and the header is at most 8192 bytes, and beyond that entries may be dropped.
+      Every byte of baggage is also added to every request. Good content is short, non-secret correlation ids, such
+      as a tenant or an experiment variant.
+    linkTitles:
+      - "OpenTelemetry: Baggage"
+      - "W3C Baggage specification"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

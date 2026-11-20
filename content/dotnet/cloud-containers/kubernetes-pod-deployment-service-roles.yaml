@@ -1,0 +1,118 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RMJR6B8JCRKTGTFMSR
+slug: kubernetes-pod-deployment-service-roles
+stack: dotnet
+topic: cloud-containers
+level: junior
+type: open
+grading: self
+tags: [kubernetes, pod, deployment, service]
+links:
+  - url: https://kubernetes.io/docs/concepts/workloads/pods/
+    lang: en
+    kind: docs
+  - url: https://kubernetes.io/docs/concepts/workloads/controllers/deployment/
+    lang: en
+    kind: docs
+  - url: https://kubernetes.io/docs/concepts/services-networking/service/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/compatibility/containers/8.0/aspnet-port
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что делают Pod, Deployment и Service, когда .NET API работает в Kubernetes?
+    prompt: |
+      API на ASP.NET Core упаковано в контейнерный образ и развёрнуто в Kubernetes в трёх репликах. В манифестах
+      описаны объекты `Deployment` и `Service`, а `kubectl get pods` показывает три работающих Pod.
+
+      За что отвечает каждый из этих объектов - Pod, Deployment и Service? Почему клиенты обращаются к сервису,
+      а не напрямую к IP-адресам Pod?
+    hint: Что происходит с IP-адресом Pod, когда этот Pod удаляют и заменяют новым, например при выкатке или после отказа узла?
+    answer: |
+      - **Pod** - минимальная единица развёртывания. Это один или несколько контейнеров (обычно один контейнер
+        с API), которые запускаются на одном узле, делят сетевое пространство (один IP-адрес и набор портов) и
+        могут делить тома. Упавший контейнер kubelet перезапускает внутри того же Pod, и IP-адрес при этом не
+        меняется. Но сам Pod эфемерен: удалённый, вытесненный или потерянный вместе с узлом Pod не восстанавливают,
+        а заменяют новым, и у замены другой IP-адрес. Поэтому Pod обычно не создают вручную.
+      - **Deployment** - контроллер, которому описывают желаемое состояние: шаблон Pod (образ, переменные
+        окружения, порты, проверки) и число реплик. Через ReplicaSet он поддерживает это число: если Pod или
+        узел пропал, создаётся замена. При изменении шаблона, например тега образа, Deployment выкатывает версию
+        постепенно (стратегия по умолчанию - `RollingUpdate`) и позволяет откатиться на предыдущую ревизию
+        (`kubectl rollout undo`).
+      - **Service** - стабильное имя и виртуальный IP-адрес (по умолчанию тип `ClusterIP`) перед группой Pod,
+        которую он выбирает по меткам (`selector`). Запросы на `port` сервиса распределяются между подходящими Pod
+        и направляются на их `targetPort`. Клиентам не нужно знать IP-адреса Pod, которые меняются всякий раз,
+        когда Pod заменяют (выкатка, вытеснение, потеря узла).
+    explanation: |
+      Три объекта разделяют три вопроса. Pod отвечает на вопрос «что и как запустить», Deployment - «сколько
+      копий и какой версии должно работать», Service - «как до них достучаться». Kubernetes постоянно приводит
+      кластер к описанному состоянию, поэтому отдельные Pod появляются и исчезают, а адрес сервиса остаётся
+      прежним: Kubernetes сам обновляет список конечных точек сервиса, когда меняется набор Pod.
+
+      Типичные ошибки:
+
+      - Pod создан напрямую, без Deployment: после вытеснения или потери узла его никто не пересоздаст.
+      - Метки в `selector` сервиса не совпадают с метками шаблона Pod: у сервиса нет конечных точек, и запросы
+        никуда не доходят.
+      - `targetPort` не совпадает с портом, который слушает Kestrel. В официальных образах ASP.NET Core начиная
+        с .NET 8 это порт 8080, а не 80.
+
+      Сервис типа `ClusterIP` доступен только внутри кластера. Чтобы открыть API наружу, используют сервис типа
+      `LoadBalancer` или Ingress и Gateway API поверх обычного сервиса.
+    linkTitles:
+      - "Kubernetes: Pods"
+      - "Kubernetes: Deployments"
+      - "Kubernetes: Service"
+      - "Порт ASP.NET Core по умолчанию в образах .NET 8 изменён с 80 на 8080"
+  en:
+    title: What do a Pod, a Deployment and a Service do when a .NET API runs in Kubernetes?
+    prompt: |
+      An ASP.NET Core API is packaged as a container image and deployed to Kubernetes with three replicas. The
+      manifests describe a `Deployment` and a `Service` object, and `kubectl get pods` shows three running Pods.
+
+      What is each of these objects - Pod, Deployment and Service - responsible for? Why do clients call the
+      Service instead of the IP addresses of the Pods?
+    hint: What happens to the IP address of a Pod when it is deleted and replaced, for example during a rollout or after a node failure?
+    answer: |
+      - **Pod** is the smallest deployable unit. It is one or more containers (usually one container with the
+        API) that run on the same node, share a network namespace (one IP address and one set of ports) and can
+        share volumes. A crashed container is restarted by the kubelet inside the same Pod, and the IP address
+        does not change. But the Pod itself is ephemeral: a deleted, evicted or lost-with-its-node Pod is not
+        repaired but replaced by a new one, and the replacement has a different IP address. That is why Pods are
+        usually not created by hand.
+      - **Deployment** is a controller that you give a desired state: a Pod template (image, environment
+        variables, ports, probes) and a number of replicas. Through a ReplicaSet it keeps that number: if a Pod
+        or a node disappears, a replacement is created. When the template changes, for example the image tag, the
+        Deployment rolls the version out gradually (the default strategy is `RollingUpdate`) and lets you roll
+        back to the previous revision (`kubectl rollout undo`).
+      - **Service** is a stable name and a virtual IP address (type `ClusterIP` by default) in front of a group of
+        Pods that it selects by labels (`selector`). Requests to the Service `port` are spread across the matching
+        Pods and sent to their `targetPort`. Clients do not need the IP addresses of the Pods, which change whenever
+        a Pod is replaced (rollout, eviction, node loss).
+    explanation: |
+      The three objects split three concerns. The Pod answers "what to run and how", the Deployment answers "how
+      many copies of which version must run", and the Service answers "how to reach them". Kubernetes keeps
+      driving the cluster towards the described state, so individual Pods come and go while the Service address
+      stays the same: Kubernetes updates the endpoints of the Service itself whenever the set of Pods changes.
+
+      Common mistakes:
+
+      - A Pod is created directly, without a Deployment: after an eviction or a lost node nobody recreates it.
+      - The labels in the Service `selector` do not match the labels of the Pod template: the Service has no
+        endpoints and requests go nowhere.
+      - `targetPort` does not match the port Kestrel listens on. In the official ASP.NET Core images starting
+        with .NET 8 that port is 8080, not 80.
+
+      A Service of type `ClusterIP` is reachable only inside the cluster. To expose the API outside, use a
+      Service of type `LoadBalancer`, or Ingress and the Gateway API on top of a regular Service.
+    linkTitles:
+      - "Kubernetes: Pods"
+      - "Kubernetes: Deployments"
+      - "Kubernetes: Service"
+      - "Default ASP.NET Core port changed from 80 to 8080 in .NET 8 images"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "8"

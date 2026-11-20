@@ -1,0 +1,132 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RM5Y035MM0V5BGF0QB
+slug: hpa-cpu-utilization-needs-requests
+stack: dotnet
+topic: cloud-containers
+level: senior
+type: single
+grading: auto
+tags: [kubernetes, hpa, autoscaling, resource-requests]
+code:
+  language: yaml
+  harness: none
+  source: |
+    apiVersion: autoscaling/v2
+    kind: HorizontalPodAutoscaler
+    metadata:
+      name: orders-api
+    spec:
+      scaleTargetRef:
+        apiVersion: apps/v1
+        kind: Deployment
+        name: orders-api
+      minReplicas: 2
+      maxReplicas: 10
+      metrics:
+        - type: Resource
+          resource:
+            name: cpu
+            target:
+              type: Utilization
+              averageUtilization: 70
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/
+    lang: en
+    kind: docs
+  - url: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему HPA с целью 70% загрузки CPU не масштабирует Deployment без CPU requests?
+    prompt: |
+      Для Deployment с API на ASP.NET Core настроен HorizontalPodAutoscaler (манифест ниже). В контейнерах
+      Deployment нет секции `resources`, а в пространстве имён нет `LimitRange`, который подставил бы значения по
+      умолчанию. metrics-server работает: `kubectl top pods` показывает потребление CPU. Под нагрузкой каждый под
+      потребляет почти целое ядро, но число реплик так и остаётся равным 2.
+
+      Почему HPA не масштабирует Deployment?
+    hint: От какой величины HPA отсчитывает эти 70%?
+    options:
+      a: "HPA считает загрузку относительно CPU, доступного на узле, а на большом узле потребление в одно ядро не дотягивает до 70%."
+      b: "Загрузка считается в процентах от CPU requests контейнеров. Без requests она не определена, и HPA ничего не делает по этой метрике."
+      c: "Загрузка считается в процентах от CPU limits. Без лимита под может занять весь узел, поэтому процент никогда не доходит до 70."
+      d: "Цель типа `Utilization` работает только с пользовательскими метриками через адаптер, а для встроенной метрики CPU нужен тип `AverageValue`."
+    optionExplanations:
+      a: "Ёмкость узла в формулу HPA не входит. Загрузка - это отношение потребления к CPU requests контейнеров пода."
+      c: "Лимиты в расчёте `Utilization` не участвуют, делителем служит request. С заданными requests и без лимитов HPA работает."
+      d: "`Utilization` - обычный тип цели для встроенных ресурсных метрик CPU и памяти, адаптер для него не нужен. Адаптер нужен для пользовательских и внешних метрик."
+    answer: |
+      Загрузка считается в процентах от CPU requests контейнеров. Без requests она не определена, и HPA ничего не
+      делает по этой метрике.
+    explanation: |
+      Для ресурсных метрик контроллер HPA берёт потребление CPU каждого пода из API ресурсных метрик и, если задана
+      цель `Utilization`, делит его на CPU requests контейнеров этого пода. Если хотя бы у одного контейнера пода
+      request не задан, загрузка пода не определена, и HPA не предпринимает действий по этой метрике. Ошибку расчёта
+      видно в условиях и событиях HPA в `kubectl describe hpa`. При этом `kubectl top` работает, потому что показывает
+      абсолютное потребление, а не процент.
+
+      Исправление - задать `resources.requests.cpu` для каждого контейнера пода, включая sidecar-контейнеры, по
+      измеренному типичному потреблению, например `500m`. Requests нужны и планировщику для размещения подов, а
+      загрузка относительно request может превышать 100%, потому что request - гарантия, а не потолок. Если задан
+      только limit, Kubernetes копирует его в request, и HPA считает загрузку от этого значения.
+
+      Альтернатива - цель `AverageValue` в абсолютных единицах, например `700m`: тогда HPA сравнивает сырые значения и
+      requests для расчёта не нужны. Но поды без requests и limits получают класс QoS `BestEffort` и первыми
+      вытесняются при нехватке ресурсов на узле, поэтому requests стоит задать в любом случае.
+    linkTitles:
+      - "Horizontal Pod Autoscaling (документация Kubernetes)"
+      - "Управление ресурсами подов и контейнеров (документация Kubernetes)"
+  en:
+    title: Why does an HPA with a 70% CPU utilization target not scale a Deployment without CPU requests?
+    prompt: |
+      A HorizontalPodAutoscaler is configured for a Deployment running an ASP.NET Core API (manifest below). The
+      Deployment's containers have no `resources` section, and the namespace has no `LimitRange` that would apply
+      defaults. metrics-server works: `kubectl top pods` shows CPU usage. Under load each Pod uses almost a whole
+      core, but the replica count stays at 2.
+
+      Why does the HPA not scale the Deployment?
+    hint: What value are those 70% taken of?
+    options:
+      a: "The HPA computes utilization relative to the node's available CPU, and on a large node one core of usage stays below 70%."
+      b: "Utilization is computed as a percentage of the containers' CPU requests. Without requests it is undefined, and the HPA takes no action for that metric."
+      c: "Utilization is computed as a percentage of the CPU limits. Without a limit the Pod can use the whole node, so the percentage never reaches 70."
+      d: "A `Utilization` target works only with custom metrics through an adapter, and the built-in CPU metric needs the `AverageValue` type."
+    optionExplanations:
+      a: "Node capacity is not part of the HPA formula. Utilization is usage divided by the CPU requests of the Pod's containers."
+      c: "Limits do not take part in the `Utilization` calculation; the divisor is the request. With requests set and no limits the HPA works."
+      d: "`Utilization` is the usual target type for the built-in CPU and memory resource metrics and needs no adapter. Adapters are needed for custom and external metrics."
+    answer: |
+      Utilization is computed as a percentage of the containers' CPU requests. Without requests it is undefined, and
+      the HPA takes no action for that metric.
+    explanation: |
+      For resource metrics the HPA controller reads the CPU usage of each Pod from the resource metrics API and, when
+      a `Utilization` target is set, divides it by the CPU requests of that Pod's containers. If any container in the
+      Pod has no request, the Pod's utilization is undefined and the HPA takes no action for that metric. The failure
+      shows up in the HPA conditions and events in `kubectl describe hpa`. `kubectl top` still works because it shows
+      absolute usage, not a percentage.
+
+      The fix is to set `resources.requests.cpu` on every container of the Pod, sidecar containers included, based on
+      measured typical usage, for example `500m`. The scheduler needs requests to place Pods anyway, and utilization
+      relative to the request can exceed 100%, because a request is a guarantee, not a ceiling. If only a limit is set,
+      Kubernetes copies it into the request, and the HPA computes utilization against that value.
+
+      An alternative is an `AverageValue` target in absolute units, for example `700m`: the HPA then compares raw
+      values and does not need requests. But Pods with neither requests nor limits get the `BestEffort` QoS class and
+      are the first to be evicted under node resource pressure, so set requests in any case.
+    linkTitles:
+      - "Horizontal Pod Autoscaling (Kubernetes docs)"
+      - "Resource Management for Pods and Containers (Kubernetes docs)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  noRunReason: The snippet is a Kubernetes manifest, not C#. The sandbox only builds and runs C# snippets, and the behaviour needs a cluster with a running HPA controller.

@@ -1,0 +1,130 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RMBPX7ETMQBETQTVDR
+slug: rolling-update-502-endpoint-removal-race
+stack: dotnet
+topic: cloud-containers
+level: senior
+type: situation
+grading: self
+tags: [kubernetes, rolling-update, graceful-shutdown, prestop-hook, kestrel]
+links:
+  - url: https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/#pod-termination
+    lang: en
+    kind: docs
+  - url: https://kubernetes.io/docs/concepts/containers/container-lifecycle-hooks/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/extensions/generic-host
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему каждый rolling update сервиса на .NET даёт всплеск ошибок 502 на ingress?
+    prompt: |
+      Сервис на ASP.NET Core (.NET 10) работает в Kubernetes за ingress-контроллером. При каждом rolling update
+      ingress несколько секунд отдаёт клиентам пачку ошибок 502. Приложение корректно обрабатывает SIGTERM: по логам
+      хост останавливается штатно, а запросы, которые уже выполнялись, завершаются. В спецификации пода нет секции
+      `lifecycle`, а `terminationGracePeriodSeconds` оставлен по умолчанию.
+
+      Что происходит и что вы поменяете?
+    hint: Когда под удаляют, кто узнаёт об этом раньше - kubelet, который посылает сигнал, или компоненты, которые направляют трафик на под?
+    answer: |
+      1. **Подтвердить, где окно ошибок.** Сопоставить время ошибок 502 с завершением старых подов, а не с запуском
+         новых. В логах ingress-контроллера видны отказы в соединении или сбросы соединений с IP подов, которые уже
+         завершаются. Если ошибки приходятся на новые поды, причина другая - readiness-проба.
+      2. **Понять причину.** При удалении пода API-сервер помечает его как завершающийся, и дальше параллельно идут
+         два независимых процесса. kubelet выполняет хук `preStop` (здесь его нет) и посылает контейнеру SIGTERM.
+         Контроллер EndpointSlice убирает под из готовых конечных точек Service, и только после этого kube-proxy и
+         ingress-контроллер, каждый через своё наблюдение за API, обновляют маршрутизацию. Сигнал обычно приходит
+         раньше: хост начинает остановку, Kestrel закрывает слушающий порт и перестаёт принимать новые соединения,
+         а ingress ещё несколько секунд шлёт запросы на IP пода и получает отказ. Отсюда и ошибки 502.
+      3. **Задержать остановку через `preStop`.** Добавить хук, который ждёт несколько секунд (обычно 5-15, по тому,
+         как быстро у вас обновляется маршрутизация), прежде чем kubelet пошлёт SIGTERM. Всё это время приложение
+         обслуживает запросы как обычно, а маршрутизация успевает убрать под. Если версия кластера поддерживает
+         действие `sleep` у хуков, это `lifecycle.preStop.sleep.seconds: 10`; иначе `exec` с командой `sleep 10`,
+         но для неё в образе нужен исполняемый файл `sleep`, а в chiseled-образах его нет.
+      4. **Пересчитать `terminationGracePeriodSeconds`.** Этот срок (по умолчанию 30 секунд) начинает отсчитываться
+         ещё до запуска `preStop` и включает его время; когда он истекает, процесс получает SIGKILL. В .NET 10
+         `HostOptions.ShutdownTimeout` по умолчанию тоже 30 секунд, поэтому с задержкой 10 секунд и сроком по умолчанию
+         kubelet может убить процесс посреди завершения запросов. Нужно, чтобы срок был не меньше суммы задержки
+         `preStop`, `ShutdownTimeout` и запаса, например 10 + 30 + 5 = 45 секунд, или уменьшить `ShutdownTimeout`.
+      5. **Закрепить результат.** Прогнать rolling update под синтетической нагрузкой и убедиться, что ошибок 5xx нет.
+         Проверить, что у новых подов есть readiness-проба, чтобы трафик шёл на них только после готовности.
+    explanation: |
+      Корректная обработка SIGTERM решает только половину задачи: она даёт завершиться запросам, которые приложение
+      уже приняло. Запросам, которые маршрутизация продолжает присылать после того, как Kestrel закрыл слушающий
+      сокет, она помочь не может. Kubernetes не ждёт, пока все kube-proxy и ingress-контроллеры узнают об удалении
+      пода, прежде чем послать сигнал: удаление из конечных точек и остановка контейнера идут независимо и
+      согласуются только в конечном счёте. Документация .NET по универсальному узлу описывает тот же порядок для
+      любого балансировщика: сначала вывести экземпляр из балансировки, затем послать сигнал остановки.
+
+      Хук `preStop` - штатный способ выиграть время: SIGTERM посылается только после того, как хук завершился.
+      Readiness-проба, которая начинает падать при остановке, эту гонку не устраняет: под и так уже убран из готовых
+      конечных точек, а задержка возникает при распространении этого изменения до маршрутизаторов.
+
+      Вторая ловушка - срок `terminationGracePeriodSeconds`. Он общий для `preStop` и для остановки приложения,
+      поэтому если добавить задержку и не увеличить срок, легко получить новые оборванные запросы, теперь уже от
+      SIGKILL. В .NET 10 `ShutdownTimeout` по умолчанию равен 30 секундам, как и срок Kubernetes по умолчанию,
+      так что на задержку `preStop` запаса не остаётся.
+    linkTitles:
+      - "Жизненный цикл пода: завершение подов (документация Kubernetes)"
+      - "Хуки жизненного цикла контейнера (документация Kubernetes)"
+      - "Универсальный узел .NET"
+  en:
+    title: Why does every rolling update of a .NET service cause a burst of 502 errors at the ingress?
+    prompt: |
+      An ASP.NET Core service (.NET 10) runs in Kubernetes behind an ingress controller. During every rolling update
+      the ingress returns a burst of 502 errors to clients for a few seconds. The app handles SIGTERM correctly: the
+      logs show that the host stops gracefully and requests already in progress complete. The Pod spec has no
+      `lifecycle` section, and `terminationGracePeriodSeconds` is left at its default.
+
+      What is going on, and what do you change?
+    hint: When a Pod is deleted, who learns about it first - the kubelet that sends the signal, or the components that route traffic to the Pod?
+    answer: |
+      1. **Confirm the error window.** Correlate the 502 timestamps with the termination of old Pods, not the startup
+         of new ones. The ingress controller logs show refused or reset connections to the IPs of Pods that are
+         already terminating. If the errors hit new Pods, the cause is different - the readiness probe.
+      2. **Understand the cause.** When a Pod is deleted, the API server marks it as terminating, and two independent
+         processes start in parallel. The kubelet runs the `preStop` hook (there is none here) and sends SIGTERM to
+         the container. The EndpointSlice controller removes the Pod from the ready endpoints of the Service, and only
+         then do kube-proxy and the ingress controller, each through its own watch on the API, update their routing.
+         The signal usually wins: the host starts stopping, Kestrel closes its listening port and stops accepting new
+         connections, and the ingress keeps sending requests to the Pod IP for a few more seconds and gets refused.
+         Hence the 502 errors.
+      3. **Delay the shutdown with `preStop`.** Add a hook that waits a few seconds (typically 5-15, based on how fast
+         your routing converges) before the kubelet sends SIGTERM. The app keeps serving requests normally during that
+         time, and routing catches up and drops the Pod. If the cluster version supports the `sleep` hook action, use
+         `lifecycle.preStop.sleep.seconds: 10`; otherwise use `exec` with the command `sleep 10`, but that needs a
+         `sleep` executable in the image, and chiseled images have none.
+      4. **Recalculate `terminationGracePeriodSeconds`.** This period (30 seconds by default) starts counting before
+         the `preStop` hook runs and includes its time; when it expires, the process gets SIGKILL. In .NET 10 the
+         default `HostOptions.ShutdownTimeout` is also 30 seconds, so with a 10 second delay and the default period
+         the kubelet can kill the process while it is still draining requests. The period must be at least the
+         `preStop` delay plus `ShutdownTimeout` plus a margin, for example 10 + 30 + 5 = 45 seconds, or lower
+         `ShutdownTimeout`.
+      5. **Lock it in.** Run a rolling update under synthetic load and check that there are no 5xx errors. Make sure
+         new Pods have a readiness probe, so traffic reaches them only once they are ready.
+    explanation: |
+      Handling SIGTERM correctly solves only half of the problem: it lets the requests the app has already accepted
+      finish. It cannot help the requests that routing keeps sending after Kestrel has closed its listening socket.
+      Kubernetes does not wait for every kube-proxy and ingress controller to learn about the Pod deletion before it
+      sends the signal: endpoint removal and container shutdown run independently and agree only eventually. The
+      .NET Generic Host docs describe the same order for any load balancer: first take the instance out of
+      balancing, then signal it to shut down.
+
+      The `preStop` hook is the standard way to buy time: SIGTERM is sent only after the hook has completed. A
+      readiness probe that starts failing during shutdown does not remove the race: the Pod is already out of the
+      ready endpoints, and the delay is in propagating that change to the routers.
+
+      The second trap is `terminationGracePeriodSeconds`. It is shared by `preStop` and the app shutdown, so adding a
+      delay without raising the period easily produces new aborted requests, this time from SIGKILL. In .NET 10 the
+      default `ShutdownTimeout` is 30 seconds, the same as the default Kubernetes period, so there is no room left
+      for a `preStop` delay.
+    linkTitles:
+      - "Pod lifecycle: termination of Pods (Kubernetes docs)"
+      - "Container lifecycle hooks (Kubernetes docs)"
+      - ".NET Generic Host"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

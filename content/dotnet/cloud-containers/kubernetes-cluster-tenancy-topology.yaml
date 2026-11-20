@@ -1,0 +1,148 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RMP74JZFK50TS3N71J
+slug: kubernetes-cluster-tenancy-topology
+stack: dotnet
+topic: cloud-containers
+level: architect
+type: open
+grading: self
+tags: [kubernetes, multi-tenancy, namespaces, rbac, network-policy]
+links:
+  - url: https://kubernetes.io/docs/concepts/security/multi-tenancy/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/azure/aks/operator-best-practices-cluster-isolation
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Общий кластер Kubernetes с пространствами имён или отдельные кластеры: как выбрать топологию для 40 сервисов и 8 команд?"
+    prompt: |
+      Компания запускает в Kubernetes 40 сервисов на .NET, которыми владеют 8 команд. Одни предлагают один
+      общий кластер, где у каждой команды своё пространство имён. Другие - отдельный кластер на каждую команду
+      или на каждое окружение.
+
+      Как вы примете решение? Какие критерии важны, какую топологию вы предложите по умолчанию и в каких случаях
+      выделите отдельный кластер?
+    hint: Что именно остаётся общим у всех арендаторов одного кластера и от чего пространство имён само по себе не защищает?
+    answer: |
+      1. **Что даёт пространство имён.** Логическую (мягкую) изоляцию: это граница для RBAC, `ResourceQuota` и
+         `LimitRange`, `NetworkPolicy` и Pod Security Admission. Всё это нужно настроить явно: по умолчанию все поды
+         кластера свободно ходят друг к другу по сети, квот нет, а `NetworkPolicy` работает только с сетевым
+         плагином (CNI), который её поддерживает. Общими остаются плоскость управления (API-сервер, etcd), объекты
+         уровня кластера (`CustomResourceDefinition`, `ClusterRole`, admission webhook-и, `StorageClass`,
+         `PersistentVolume`), версия Kubernetes и её обновления, а на общих узлах - ещё и ядро ОС.
+      2. **Что даёт отдельный кластер.** Физическую (жёсткую) изоляцию: свой API-сервер, свои обновления, свои
+         учётные данные и сетевые границы; сбой или ошибка конфигурации остаются внутри. Цена - дублирование
+         эксплуатации: планирование и проверка обновлений, дополнения (контроллер ingress, мониторинг, агенты
+         политик), доступы и права в каждом кластере, плюс простаивающий резерв мощности на узлах.
+      3. **Критерии.** Степень доверия между арендаторами (свои команды одной компании или чужой код), требования
+         соответствия и аудита (PCI DSS, персональные данные, размещение данных), допустимый радиус поражения
+         (неудачное обновление, сломанный admission webhook или перегруженный API-сервер бьют по всем), потребность
+         в правах уровня кластера (свои операторы и `CustomResourceDefinition`, другая версия Kubernetes),
+         стоимость и зрелость платформенной команды. Число команд само по себе критерием не является.
+      4. **Схема по умолчанию.** Для 8 команд одной компании - немного общих кластеров с логической изоляцией
+         внутри; так же рекомендует и руководство AKS: минимизировать число физических кластеров. Распространённая
+         практика (а не правило из документации) - отделить production от non-production разными кластерами и при
+         необходимости завести по кластеру на регион. Внутри кластера - пространство имён на команду или сервис:
+         RBAC по группам из провайдера удостоверений, квоты и значения по умолчанию для ресурсов, `NetworkPolicy` с
+         запретом по умолчанию и разрешением DNS, профиль `restricted` из Pod Security Standards, при необходимости
+         выделенные пулы узлов через taints и tolerations. Пространства имён создаются из шаблонов через GitOps,
+         чтобы новый арендатор сразу получал все ограничения.
+      5. **Когда нужен отдельный кластер.** Регулируемые данные и внешний аудит, недоверенный код (например,
+         код клиентов), требования к доступности, которые нельзя связывать с чужими изменениями, кластерные
+         компоненты, конфликтующие с общими.
+      6. **Чего избегать.** Кластера на каждую команду "на всякий случай": 8 команд на 2-3 окружения - это
+         16-24 кластера, которые надо обновлять и сопровождать. И одного кластера на production и тестовые
+         окружения, где эксперимент в тестовом пространстве имён может перегрузить общий API-сервер или узлы.
+    explanation: |
+      Документация Kubernetes разбирает два типичных сценария мультиарендности: несколько команд одной
+      организации, которые в целом доверяют друг другу, и несколько клиентов, которым доверять нельзя. В отрасли
+      их часто называют мягкой и жёсткой мультиарендностью. Пространство имён - инструмент для первого случая:
+      оно разграничивает доступ к API и ресурсы, но плоскость управления, объекты уровня кластера и узлы остаются
+      общими. Поэтому изоляция складывается из нескольких слоёв, и каждый надо включить и поддерживать:
+      пространство имён без RBAC, квот и сетевых политик почти ничего не изолирует. Руководство AKS прямо говорит,
+      что Kubernetes не вполне безопасен для враждебной мультиарендности, и для таких нагрузок рекомендует
+      физически изолированные кластеры.
+
+      Отдельный кластер снимает эти риски, но каждый кластер - это отдельный объект эксплуатации. Управляемые
+      сервисы (AKS, EKS) берут на себя плоскость управления и предлагают автоматические обновления, но планирование
+      и проверка обновлений, обновление пулов узлов, дополнения, политики и наблюдаемость в каждом кластере
+      остаются на команде. Руководство AKS отмечает и цену: у физически изолированных кластеров обычно низкая
+      плотность подов и простаивающие мощности. Между двумя крайностями есть промежуточные варианты: выделенные
+      пулы узлов для чувствительных нагрузок или виртуальная плоскость управления на арендатора поверх общего
+      кластера.
+
+      Поэтому граница кластера проводится там, где проходит граница доверия, соответствия требованиям или
+      допустимого радиуса поражения, а не по оргструктуре. Команды меняются чаще, чем требования к изоляции, и
+      кластер на команду превращает каждую реорганизацию в миграцию. Решение стоит зафиксировать как
+      архитектурное (ADR) и пересматривать при появлении новых требований, например регулируемых данных.
+    linkTitles:
+      - "Мультиарендность (документация Kubernetes)"
+      - "Рекомендации по изоляции кластеров в AKS"
+  en:
+    title: "One shared Kubernetes cluster with namespaces or separate clusters: how do you choose the topology for 40 services and 8 teams?"
+    prompt: |
+      A company runs 40 .NET services in Kubernetes, owned by 8 teams. Some people propose one shared cluster
+      where every team gets its own namespace. Others propose a separate cluster per team or per environment.
+
+      How do you make the decision? Which criteria matter, which topology do you propose by default, and in which
+      cases do you set up a separate cluster?
+    hint: What exactly stays shared by all tenants of one cluster, and what does a namespace on its own not protect against?
+    answer: |
+      1. **What a namespace gives.** Logical (soft) isolation: it is the boundary for RBAC, `ResourceQuota` and
+         `LimitRange`, `NetworkPolicy` and Pod Security Admission. All of this must be configured explicitly: by
+         default every Pod in the cluster can reach every other Pod, there are no quotas, and `NetworkPolicy` only
+         works with a network (CNI) plugin that supports it. What stays shared is the control plane (API server,
+         etcd), cluster-scoped objects (`CustomResourceDefinition`, `ClusterRole`, admission webhooks,
+         `StorageClass`, `PersistentVolume`), the Kubernetes version and its upgrades, and on shared nodes also the
+         OS kernel.
+      2. **What a separate cluster gives.** Physical (hard) isolation: its own API server, its own upgrades, its own
+         credentials and network boundaries; a failure or a misconfiguration stays inside. The price is duplicated
+         operations: planning and testing upgrades, add-ons (ingress controller, monitoring, policy agents), access
+         and permissions in every cluster, plus idle spare node capacity.
+      3. **Criteria.** The level of trust between tenants (teams of one company or foreign code), compliance and
+         audit requirements (PCI DSS, personal data, data residency), the acceptable blast radius (a failed upgrade,
+         a broken admission webhook or an overloaded API server hits everyone), the need for cluster-level rights
+         (own operators and `CustomResourceDefinition` objects, a different Kubernetes version), and the cost and
+         maturity of the platform team. The number of teams is not a criterion on its own.
+      4. **Default layout.** For 8 teams of one company, a few shared clusters with logical isolation inside; the
+         AKS guidance recommends the same: minimize the number of physical clusters. A common practice (not a rule
+         from the documentation) is to separate production from non-production with different clusters, and if
+         needed have one cluster per region. Inside a cluster there is a namespace per team or per service: RBAC by
+         groups from the identity provider, quotas and default resource values, a default-deny `NetworkPolicy`
+         that still allows DNS, the `restricted` profile of the Pod Security Standards, and dedicated node pools
+         through taints and tolerations where needed. Namespaces are created from templates through GitOps, so a
+         new tenant gets all the guardrails at once.
+      5. **When a separate cluster is needed.** Regulated data and external audit, untrusted code (for example,
+         customer code), availability requirements that must not depend on other teams' changes, cluster-level
+         components that conflict with the shared ones.
+      6. **What to avoid.** A cluster per team "just in case": 8 teams times 2-3 environments is 16-24 clusters to
+         upgrade and maintain. And one cluster for production and test environments, where an experiment in a test
+         namespace can overload the shared API server or nodes.
+    explanation: |
+      The Kubernetes documentation discusses two typical multi-tenancy scenarios: multiple teams of one
+      organization, who mostly trust each other, and multiple customers, who cannot be trusted. The industry often
+      calls them soft and hard multi-tenancy. A namespace is a tool for the first case: it separates API access and
+      resources, but the control plane, cluster-scoped objects and nodes stay shared. Isolation is therefore built
+      from several layers, and each one must be turned on and maintained: a namespace without RBAC, quotas and
+      network policies isolates almost nothing. The AKS guidance states plainly that Kubernetes is not entirely
+      safe for hostile multi-tenant use and recommends physically isolated clusters for such workloads.
+
+      A separate cluster removes these risks, but every cluster is one more thing to operate. Managed services
+      (AKS, EKS) run the control plane and offer automatic upgrades, but the team still owns upgrade planning and
+      testing, node pool upgrades, add-ons, policies and observability in every cluster. The AKS guidance also
+      names the cost: physically isolated clusters usually have low pod density and idle capacity. Between the two
+      extremes there are middle options: dedicated node pools for sensitive workloads, or a virtual control plane
+      per tenant on top of a shared cluster.
+
+      So the cluster boundary is drawn where the boundary of trust, compliance or acceptable blast radius lies, not
+      along the org chart. Teams change more often than isolation requirements, and a cluster per team turns every
+      reorganization into a migration. The decision is worth recording as an architecture decision (ADR) and
+      revisiting when new requirements appear, such as regulated data.
+    linkTitles:
+      - "Multi-tenancy (Kubernetes docs)"
+      - "Best practices for cluster isolation in Azure Kubernetes Service (AKS)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

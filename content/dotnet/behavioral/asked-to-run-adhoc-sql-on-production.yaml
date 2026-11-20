@@ -1,0 +1,122 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RM5NR0FZT0S0ZTHM3F
+slug: asked-to-run-adhoc-sql-on-production
+stack: dotnet
+topic: behavioral
+level: middle
+type: situation
+grading: self
+tags: [production, data-fix, sql, transactions, risk-management]
+links:
+  - url: https://learn.microsoft.com/en-us/sql/t-sql/language-elements/begin-transaction-transact-sql
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/sql/t-sql/functions/rowcount-transact-sql
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Руководитель просит срочно исправить данные клиента UPDATE-запросом прямо в production. Что делать?
+    prompt: |
+      У крупного клиента сломались записи в базе: часть его заказов застряла в неверном статусе, и он не может
+      работать. Руководитель просит: «Напиши UPDATE и выполни его прямо на боевой базе, клиент ждёт, нужно
+      сейчас». Доступ на запись в production у вас есть.
+
+      Что вы будете делать и в каком порядке?
+    hint: Что произойдёт, если условие `WHERE` окажется не тем, и как вы узнаете об этом раньше, чем изменения станут необратимыми?
+    answer: |
+      1. **Не отказывать и не выполнять сразу.** Признать срочность и уточнить объём: какие записи, что именно
+         в них неверно, сколько их должно быть, можно ли пока помочь клиенту иначе (например, через поддержку).
+         Сказать руководителю, сколько займёт безопасное исправление: обычно десятки минут, а не дни.
+      2. **Написать изменение как скрипт, а не набирать его в консоли.** Сначала выполнить `SELECT` с тем же
+         условием `WHERE` и проверить, что он возвращает ровно ожидаемые строки и их количество.
+      3. **Сохранить состояние «до».** Скопировать изменяемые строки в резервную таблицу или файл и убедиться,
+         что есть свежая резервная копия или восстановление на момент времени. Тогда ошибку можно отменить.
+      4. **Проверить на копии и отдать на ревью.** Прогнать скрипт на восстановленной копии базы или на
+         тестовом окружении с похожими данными и попросить второго человека его просмотреть.
+      5. **Выполнить в транзакции с проверкой.** `BEGIN TRANSACTION`, затем `UPDATE`, затем сравнить
+         `@@ROWCOUNT` с ожидаемым числом: если не совпало, `ROLLBACK`, иначе `COMMIT`. Проверку заложить в сам
+         скрипт и держать транзакцию короткой: открытая транзакция удерживает блокировки строк и мешает другим
+         пользователям.
+      6. **Зафиксировать.** Задача в трекере со скриптом, тем, кто его проверил и согласовал, числом изменённых
+         строк и результатом. Сообщить руководителю и поддержке, что исправление выполнено.
+      7. **Устранить причину.** Выяснить, почему записи сломались, и исправить ошибку в коде, иначе правку
+         придётся повторять. Если такие правки нужны часто, предложить стандартный процесс исправления данных.
+    explanation: |
+      Ручной UPDATE в production опасен не потому, что разработчик небрежен, а потому, что цена ошибки
+      несимметрична: пропущенное или неверное условие `WHERE`, соединение, которое находит больше строк, чем
+      ожидалось, или опечатка за секунду меняют тысячи записей. В SQL Server по умолчанию включён режим
+      автофиксации: каждая инструкция фиксируется сразу после выполнения, поэтому без явной транзакции откатывать
+      нечего, а без сохранённого состояния «до» восстанавливаться можно только из полной резервной копии.
+      Давление руководителя и недовольного клиента вероятность такой ошибки только повышает.
+
+      Документация Microsoft описывает ровно этот инструмент: `BEGIN TRANSACTION` начинает явную транзакцию,
+      её изменения становятся постоянными только при `COMMIT`, а `ROLLBACK` их отменяет. `@@ROWCOUNT` возвращает
+      число строк, затронутых последней инструкцией, поэтому скрипт сам может проверить, что изменил столько
+      строк, сколько планировалось, и откатиться в противном случае.
+
+      Суть ответа - соразмерность. Безопасная процедура занимает минуты или десятки минут и превращает
+      необратимое действие в проверенное и обратимое. Отказ оставляет клиента со сломанными данными, а
+      руководителя без помощи. Выполнение в одиночку и без следа делает вас единственной точкой отказа и не
+      оставляет записи для аудита и разбора. Сильный ответ показывает и уважение к срочности, и контроль риска.
+
+      Слабые ответы: выполнить запрос сразу; категорически отказаться; тихо выполнить и никому не сказать;
+      открыть транзакцию и уйти проверять результат вручную, оставив блокировки висеть.
+    linkTitles:
+      - "BEGIN TRANSACTION (Transact-SQL)"
+      - "@@ROWCOUNT (Transact-SQL)"
+  en:
+    title: A manager asks you to fix a customer's records with a hand-written UPDATE straight in production. What do you do?
+    prompt: |
+      A large customer's records in the database are broken: some of their orders are stuck in the wrong status,
+      and they cannot work. Your manager says: "Write an UPDATE and run it right on the production database, the
+      customer is waiting, we need it now". You do have write access to production.
+
+      What do you do, and in what order?
+    hint: What happens if the `WHERE` condition turns out to be wrong, and how would you find out before the changes become irreversible?
+    answer: |
+      1. **Neither refuse nor run it on the spot.** Acknowledge the urgency and clarify the scope: which records,
+         what exactly is wrong with them, how many there should be, whether the customer can be helped another
+         way in the meantime (for example through support). Tell the manager how long a safe fix takes: usually
+         tens of minutes, not days.
+      2. **Write the change as a script, not in the console.** First run a `SELECT` with the same `WHERE`
+         condition and check that it returns exactly the expected rows and their count.
+      3. **Save a before-image.** Copy the rows that will change into a backup table or a file, and make sure a
+         recent backup or point-in-time restore exists. Then a mistake can be undone.
+      4. **Test on a copy and get a review.** Run the script on a restored copy of the database or a test
+         environment with similar data, and ask a second person to review it.
+      5. **Run it in a transaction with a check.** `BEGIN TRANSACTION`, then the `UPDATE`, then compare
+         `@@ROWCOUNT` with the expected number: if it differs, `ROLLBACK`, otherwise `COMMIT`. Put the check in
+         the script itself and keep the transaction short: an open transaction holds locks on the rows and blocks
+         other users.
+      6. **Record it.** A ticket with the script, who reviewed and approved it, the number of affected rows and
+         the result. Tell the manager and support that the fix is done.
+      7. **Fix the cause.** Find out why the records broke and fix the bug in the code, otherwise the data fix
+         will have to be repeated. If such fixes are frequent, propose a standard process for data fixes.
+    explanation: |
+      A hand-written UPDATE in production is dangerous not because the developer is careless, but because the
+      cost of a mistake is asymmetric: a missing or wrong `WHERE` condition, a join that matches more rows than
+      expected, or a typo changes thousands of records in a second. SQL Server runs in autocommit mode by
+      default: each statement is committed as soon as it completes, so without an explicit transaction there is
+      nothing to roll back, and without a before-image the only way back is a full backup restore. Pressure from
+      a manager and an upset customer only makes such a mistake more likely.
+
+      The Microsoft docs describe exactly this tool: `BEGIN TRANSACTION` starts an explicit transaction, its
+      changes become permanent only at `COMMIT`, and `ROLLBACK` undoes them. `@@ROWCOUNT` returns the number of
+      rows affected by the last statement, so the script itself can check that it changed as many rows as
+      planned and roll back otherwise.
+
+      The point of the answer is proportion. The safe procedure takes minutes or tens of minutes and turns an
+      irreversible action into a checked and reversible one. A refusal leaves the customer with broken data and
+      the manager without help. Running it alone and without a trace makes you a single point of failure and
+      leaves no record for audit or investigation. A strong answer shows both respect for the urgency and
+      control of the risk.
+
+      Weak answers: run the query at once; refuse flatly; run it quietly and tell no one; open a transaction and
+      go check the result by hand, leaving the locks held.
+    linkTitles:
+      - "BEGIN TRANSACTION (Transact-SQL)"
+      - "@@ROWCOUNT (Transact-SQL)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

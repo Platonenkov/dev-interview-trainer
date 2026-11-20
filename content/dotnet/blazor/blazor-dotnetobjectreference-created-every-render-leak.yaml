@@ -1,0 +1,128 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RM0PPXXCAJYJHGT6FZ
+slug: blazor-dotnetobjectreference-created-every-render-leak
+stack: dotnet
+topic: blazor
+level: senior
+type: find-bug
+grading: auto
+tags: [blazor, js-interop, dotnetobjectreference, memory-leak, lifecycle]
+code:
+  language: razor
+  harness: none
+  source: |
+    @page "/regions"
+    @rendermode InteractiveServer
+    @implements IAsyncDisposable
+    @inject IJSRuntime JS
+
+    <div id="region-map"></div>
+    <p>Selected: @selected</p>
+
+    @code {
+        private string? selected;
+
+        protected override async Task OnAfterRenderAsync(bool firstRender)
+        {
+            var selfReference = DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("regionMap.attach", "region-map", selfReference);
+        }
+
+        [JSInvokable]
+        public Task OnRegionSelected(string region)
+        {
+            selected = region;
+            return InvokeAsync(StateHasChanged);
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("regionMap.detach", "region-map");
+            }
+            catch (JSDisconnectedException)
+            {
+            }
+        }
+    }
+bugLineSets: [[14], [15], [14, 15]]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/javascript-interoperability/call-dotnet-from-javascript
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/components/lifecycle
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строки, из-за которых компонент Blazor с JS interop утекает в памяти
+    prompt: |
+      Компонент `RegionMap.razor` в режиме `InteractiveServer` (.NET 10) показывает карту, которую рисует
+      JavaScript-библиотека. Функция `regionMap.attach` сохраняет переданную ссылку на .NET-объект и при щелчке
+      по региону вызывает через неё метод `OnRegionSelected`. Функционально всё работает, но под нагрузочным
+      тестом память сервера растёт: в дампе кучи число объектов `DotNetObjectReference<RegionMap>` увеличивается
+      с каждым щелчком по карте, а экземпляры `RegionMap` остаются живыми и после того, как пользователи ушли со
+      страницы. Щёлкните по строке или строкам с дефектом.
+    hint: Что удерживает .NET-объект, переданный в JavaScript, и сколько раз за жизнь компонента вызывается `OnAfterRenderAsync`?
+    answer: "Строки 14-15: при каждой отрисовке создаётся новая `DotNetObjectReference` и заново передаётся в `regionMap.attach`, а ни одна из этих ссылок не освобождается. Засчитывается выбор строки 14, строки 15 или обеих."
+    explanation: |
+      `DotNetObjectReference.Create(this)` создаёт обёртку, через которую JavaScript может вызывать методы
+      компонента. Когда ссылка передаётся в JS, `JSRuntime` регистрирует её в своей таблице отслеживаемых
+      объектов под новым идентификатором и держит, пока ссылку не освободят через `Dispose` в .NET или
+      `dispose()` на стороне JS. `JSRuntime` живёт всю цепь (circuit) в серверном Blazor и всё время работы
+      приложения в WebAssembly, поэтому каждая неосвобождённая ссылка удерживает компонент и всё, на что он
+      ссылается. Документация прямо говорит, что компонент должен явно освободить `DotNetObjectReference`, иначе
+      сборщик мусора не сможет его собрать и возникнет утечка памяти.
+
+      `OnAfterRenderAsync` вызывается после каждой отрисовки, а не один раз: параметр `firstRender` равен `true`
+      только при первой. Здесь каждый щелчок по региону вызывает `StateHasChanged`, новая отрисовка снова
+      вызывает `OnAfterRenderAsync`, и пара строк 14-15 без проверки `firstRender` создаёт ещё одну ссылку,
+      регистрирует её при передаче в JS и заново подключает карту. `DisposeAsync` ссылки не освобождает, поэтому
+      после ухода со страницы компонент остаётся достижимым до конца цепи. Дефект - именно эта пара строк, поэтому
+      засчитывается выбор любой из них или обеих.
+
+      Исправление: хранить ссылку в поле `DotNetObjectReference<RegionMap>? selfReference`, создавать её и
+      вызывать `regionMap.attach` только при `firstRender == true`, а в `DisposeAsync` вызывать
+      `selfReference?.Dispose()`, в том числе когда `regionMap.detach` завершился `JSDisconnectedException`.
+    linkTitles:
+      - "Вызов методов .NET из функций JavaScript в Blazor"
+      - "Жизненный цикл компонентов Razor"
+  en:
+    title: Find the lines that make a Blazor component with JS interop leak memory
+    prompt: |
+      The `RegionMap.razor` component in the `InteractiveServer` render mode (.NET 10) shows a map drawn by a
+      JavaScript library. The `regionMap.attach` function stores the .NET object reference it receives and, when a
+      region is clicked, calls `OnRegionSelected` through it. Functionally everything works, but under a load test
+      server memory grows: in a heap dump the number of `DotNetObjectReference<RegionMap>` objects increases with
+      every click on the map, and `RegionMap` instances stay alive after users have left the page.
+      Click the line or lines that contain the defect.
+    hint: What keeps a .NET object passed to JavaScript alive, and how many times during a component's life does `OnAfterRenderAsync` run?
+    answer: "Lines 14-15: every render creates a new `DotNetObjectReference` and passes it to `regionMap.attach` again, and none of these references is ever disposed. Selecting line 14, line 15 or both is accepted."
+    explanation: |
+      `DotNetObjectReference.Create(this)` creates a wrapper through which JavaScript can call the component's
+      methods. When the reference is passed to JS, `JSRuntime` registers it in its table of tracked objects under a
+      new id and keeps it until the reference is released with `Dispose` in .NET or `dispose()` on the JS side.
+      `JSRuntime` lives for the whole circuit in server-side Blazor and for the whole app lifetime in WebAssembly,
+      so every reference that is not disposed keeps the component and everything it references alive. The
+      documentation states that the component must explicitly dispose of the `DotNetObjectReference` to permit
+      garbage collection and prevent a memory leak.
+
+      `OnAfterRenderAsync` runs after every render, not once: its `firstRender` parameter is `true` only the first
+      time. Here every click on a region calls `StateHasChanged`, the new render calls `OnAfterRenderAsync` again,
+      and the pair of lines 14-15, with no `firstRender` check, creates one more reference, registers it by passing
+      it to JS and attaches the map again. `DisposeAsync` does not dispose the references, so after the user leaves
+      the page the component stays reachable until the circuit ends. The defect is this pair of lines, so selecting
+      either of them or both is accepted.
+
+      The fix: keep the reference in a field `DotNetObjectReference<RegionMap>? selfReference`, create it and call
+      `regionMap.attach` only when `firstRender == true`, and call `selfReference?.Dispose()` in `DisposeAsync`,
+      including when `regionMap.detach` ends with `JSDisconnectedException`.
+    linkTitles:
+      - "Call .NET methods from JavaScript functions in ASP.NET Core Blazor"
+      - "ASP.NET Core Razor component lifecycle"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"
+  noRunReason: "A Blazor component with JS interop needs the ASP.NET Core renderer, a SignalR circuit and a browser, which the BCL-only sandbox does not provide."

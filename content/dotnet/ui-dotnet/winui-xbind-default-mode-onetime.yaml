@@ -1,0 +1,118 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RRQSVRAK8T4SB5WRRT
+slug: winui-xbind-default-mode-onetime
+stack: dotnet
+topic: ui-dotnet
+level: middle
+type: single
+grading: auto
+tags: [winui, xbind, data-binding, binding-mode]
+code:
+  language: xml
+  harness: none
+  source: |
+    <Page
+        x:Class="Shop.OrderPage"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+        <StackPanel>
+            <TextBlock Text="{x:Bind ViewModel.Status}" />
+            <Button Content="Refresh" Click="OnRefreshClick" />
+        </StackPanel>
+    </Page>
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/windows/uwp/xaml-platform/x-bind-markup-extension
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/windows/uwp/data-binding/data-binding-in-depth
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему TextBlock с {x:Bind} в WinUI не обновляется, хотя модель вызывает PropertyChanged?
+    prompt: |
+      В code-behind страницы WinUI `OrderPage` объявлено свойство `public OrderViewModel ViewModel { get; } = new();`.
+      `OrderViewModel` реализует `INotifyPropertyChanged`: сеттер `Status` сначала присваивает поле, затем
+      вызывает `PropertyChanged` с именем `Status`. Обработчик `OnRefreshClick` загружает данные и в UI-потоке
+      присваивает `ViewModel.Status = "Shipped"`.
+
+      `TextBlock` из разметки показывает значение, которое было при загрузке страницы, и больше не меняется.
+      В чём причина?
+    hint: "Что делает привязка после первого чтения значения, если в разметке не указан `Mode`?"
+    options:
+      a: "`x:Bind` по умолчанию работает в режиме `OneTime`: значение читается один раз, поэтому нужно указать `Mode=OneWay`."
+      b: "`x:Bind` берёт источник из `DataContext`, а `DataContext` у страницы не задан."
+      c: "`TextBlock.Text` не является свойством зависимостей, поэтому привязка не может обновлять его после загрузки."
+      d: "Свойство `ViewModel` страницы само должно вызывать `PropertyChanged`, иначе `x:Bind` не подписывается на изменения `Status`."
+    optionExplanations:
+      b: "`x:Bind` не использует `DataContext`: путь отсчитывается от самой страницы или элемента управления, поэтому `ViewModel` находится. Это видно и по симптому: начальное значение на экране есть."
+      c: "`TextBlock.Text` - свойство зависимостей (`TextBlock.TextProperty`), и привязки к нему в режиме `OneWay` обновляются как обычно."
+      d: "Объект `ViewModel` не меняется после создания страницы, поэтому уведомлять о нём не нужно. В режиме `OneWay` сгенерированный код подписывается на `PropertyChanged` у самого объекта `ViewModel` и обновляет текст при изменении `Status`."
+    answer: "`x:Bind` по умолчанию работает в режиме `OneTime`; нужно написать `{x:Bind ViewModel.Status, Mode=OneWay}`."
+    explanation: |
+      `x:Bind` превращается в код, который генерируется при сборке. Если `Mode` не указан, используется `OneTime`:
+      сгенерированный код один раз читает `ViewModel.Status` при инициализации привязок страницы и не
+      подписывается на `PropertyChanged`. Поэтому событие модели представления никто не слушает, и текст
+      остаётся прежним. Такое значение по умолчанию выбрано ради производительности: большинство значений на
+      странице не меняются, а каждая подписка стоит памяти и времени.
+
+      У `{Binding}` в WinUI режим по умолчанию - `OneWay`, и именно на этом ловятся при переходе с `{Binding}` на
+      `x:Bind`: разметка компилируется, начальные значения видны, а обновления молча пропадают.
+
+      Варианты исправления: указать `Mode=OneWay` (или `TwoWay` для ввода) в каждой привязке, которая должна
+      обновляться; задать режим по умолчанию для поддерева атрибутом `x:DefaultBindMode="OneWay"`; для данных,
+      которые меняются редко и целиком, вызвать `Bindings.Update()`, который заново вычисляет привязки страницы,
+      включая `OneTime`.
+    linkTitles:
+      - "Расширение разметки x:Bind"
+      - "Подробно о привязке данных"
+  en:
+    title: Why does a TextBlock with {x:Bind} in WinUI not update even though the view model raises PropertyChanged?
+    prompt: |
+      The code-behind of the WinUI page `OrderPage` declares the property `public OrderViewModel ViewModel { get; } = new();`.
+      `OrderViewModel` implements `INotifyPropertyChanged`: the `Status` setter first assigns the field and then
+      raises `PropertyChanged` with the name `Status`. The `OnRefreshClick` handler loads data and, on the UI
+      thread, assigns `ViewModel.Status = "Shipped"`.
+
+      The `TextBlock` from the markup shows the value it had when the page was loaded and never changes again.
+      What is the cause?
+    hint: "What does the binding do after it reads the value for the first time, if the markup does not set `Mode`?"
+    options:
+      a: "`x:Bind` uses `OneTime` mode by default: the value is read once, so `Mode=OneWay` has to be set."
+      b: "`x:Bind` takes its source from `DataContext`, and the page has no `DataContext` set."
+      c: "`TextBlock.Text` is not a dependency property, so a binding cannot update it after the page loads."
+      d: "The page's `ViewModel` property must raise `PropertyChanged` itself, otherwise `x:Bind` does not subscribe to changes of `Status`."
+    optionExplanations:
+      b: "`x:Bind` does not use `DataContext`: its path starts at the page or control itself, so `ViewModel` is found. The symptom shows it too: the initial value is on screen."
+      c: "`TextBlock.Text` is a dependency property (`TextBlock.TextProperty`), and `OneWay` bindings to it update as usual."
+      d: "The `ViewModel` object does not change after the page is created, so it needs no notification. In `OneWay` mode the generated code subscribes to `PropertyChanged` on the `ViewModel` object itself and updates the text when `Status` changes."
+    answer: "`x:Bind` uses `OneTime` mode by default; write `{x:Bind ViewModel.Status, Mode=OneWay}`."
+    explanation: |
+      `x:Bind` is turned into code generated at build time. If `Mode` is not set, it is `OneTime`: the generated
+      code reads `ViewModel.Status` once when the page initializes its bindings and does not subscribe to
+      `PropertyChanged`. So nobody listens to the view model event, and the text stays the same. This default
+      was chosen for performance: most values on a page never change, and every subscription costs memory and
+      time.
+
+      For `{Binding}` in WinUI the default mode is `OneWay`, and that is exactly what catches people moving from
+      `{Binding}` to `x:Bind`: the markup compiles, the initial values appear, and updates are silently lost.
+
+      Ways to fix it: set `Mode=OneWay` (or `TwoWay` for input) on every binding that must update; set the
+      default for a subtree with the `x:DefaultBindMode="OneWay"` attribute; for data that changes rarely and
+      all at once, call `Bindings.Update()`, which re-evaluates the page bindings, including `OneTime` ones.
+    linkTitles:
+      - "x:Bind markup extension"
+      - "Data binding in depth"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  noRunReason: XAML markup of a WinUI page; x:Bind is compiled by the WinUI XAML compiler, and the sandbox runs only C# console snippets.

@@ -1,0 +1,149 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RM2BDR9QGQS590CZJW
+slug: blazor-third-party-js-library-wrapping-policy
+stack: dotnet
+topic: blazor
+level: lead
+type: open
+grading: self
+tags: [blazor, js-interop, javascript, team-policy]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/javascript-interoperability/call-javascript-from-dotnet
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/javascript-interoperability/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/javascript-interoperability/call-dotnet-from-javascript
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какую политику команды вы зададите для сторонних JavaScript-библиотек в компонентах Blazor?
+    prompt: |
+      В приложении Blazor Web App на .NET 10 используются режимы `InteractiveServer` и `InteractiveWebAssembly`.
+      Разные команды подключают сторонние JavaScript-библиотеки (графики, редактор текста, карты): добавляют теги
+      `<script>` в разметку, объявляют функции в `window` и вызывают их из компонентов через
+      `JS.InvokeVoidAsync("chartLib.render", ...)`. В production уже были ошибки при пререндеринге, утечки памяти
+      на сервере и поломка после обновления одной из библиотек.
+
+      Какие правила работы со сторонними JS-библиотеками вы введёте для команды и как будете их поддерживать?
+    hint: |
+      Что происходит, когда двадцать компонентов обращаются к одной библиотеке по строковому имени: что проверит
+      компилятор, что случится при пререндеринге и кто освободит ресурсы после навигации?
+    answer: |
+      1. **Одна обёртка на библиотеку.** Компоненты не вызывают функции библиотеки по строковым именам. У каждой
+         библиотеки есть владелец и один типизированный C#-слой: компонент, если библиотека управляет DOM-элементом
+         (график, редактор), или сервис за интерфейсом, если API невизуальный (буфер обмена, геолокация).
+         Наружу выходят только C#-типы, а строковые идентификаторы и форма JSON живут в одном месте.
+      2. **Изолированный ES-модуль вместо глобальных функций.** Обёртка поставляет небольшой JS-модуль (рядом с
+         компонентом в файле `.razor.js` или в `wwwroot` библиотеки Razor-классов), который импортирует библиотеку
+         и экспортирует несколько функций. C#-сторона загружает его лениво через
+         `InvokeAsync<IJSObjectReference>("import", path)`. Никаких функций в `window` и тегов `<script>` на страницах.
+      3. **Явный жизненный цикл.** Обёртка реализует `IAsyncDisposable`: вызывает у экземпляра библиотеки её
+         функцию уничтожения, освобождает `IJSObjectReference` модуля и экземпляров и каждую созданную
+         `DotNetObjectReference`. В `DisposeAsync` перехватывается `JSDisconnectedException`, потому что в серверном
+         режиме соединение с браузером к этому моменту может уже исчезнуть.
+      4. **Работа в любом режиме отрисовки.** Первый вызов только в `OnAfterRenderAsync` при `firstRender`, потому
+         что при пререндеринге и статической отрисовке на сервере браузера ещё нет. Только асинхронные вызовы:
+         `IJSInProcessRuntime` есть лишь в WebAssembly. Маленькие сообщения без частых вызовов в циклах, большие
+         данные через потоки. `[JSImport]` и `[JSExport]` допустимы только в коде, который работает исключительно в
+         WebAssembly.
+      5. **Границы DOM.** Библиотека получает через `ElementReference` пустой элемент, внутрь которого Blazor ничего
+         не отрисовывает. Blazor не должен рендерить в DOM, который меняет библиотека.
+      6. **Допуск и поставка.** Новая библиотека проходит ревью: лицензия, размер, активность сопровождения, нет ли
+         готового Blazor-компонента. Версия закреплена, файлы отдаются приложением (или с CDN с SRI), совместимость с
+         CSP проверена. Обновление библиотеки затрагивает только её обёртку.
+      7. **Тесты и контроль.** Компоненты тестируются с подменённым интерфейсом обёртки. Правило в code review и, по
+         возможности, анализатор запрещённых API: `IJSRuntime` внедряется только в каталоге обёрток.
+    explanation: |
+      Разрозненные строковые вызовы переносят все ошибки во время выполнения: переименование функции, другой порядок
+      аргументов или новая мажорная версия библиотеки компилятор не заметит. Каждое место вызова заново повторяет
+      одни и те же ошибки: обращение к JS в `OnInitializedAsync` при пререндеринге, забытое освобождение ресурсов,
+      синхронный вызов, который работает в WebAssembly и не работает на сервере. Обёртка решает эти задачи один раз
+      и делает их проверяемыми.
+
+      Освобождение ресурсов критично именно в серверном режиме. `DotNetObjectReference` удерживает .NET-объект от
+      сборщика мусора, пока ссылку не освободят, а `IJSObjectReference` удерживает объект на стороне JavaScript.
+      Без освобождения они живут до конца circuit, и у приложения с долгими сессиями растёт память на сервере и в
+      браузере. Изолированные модули убирают конфликты глобальных имён и позволяют загружать библиотеку только там,
+      где она нужна.
+
+      Правило про DOM нужно потому, что Blazor вычисляет разницу между предыдущим и новым деревом отрисовки и
+      применяет её к DOM, считая, что DOM всё ещё соответствует предыдущему дереву. Если библиотека изменила эти
+      узлы, следующий diff применяется к неожиданному DOM и даёт непредсказуемый результат. Поэтому внешний JS-код
+      может безопасно менять только элементы, которые Blazor считает пустыми.
+
+      Политика - это не запрет на JavaScript, а процесс: у библиотеки есть владелец, точка входа и правила, которые
+      проверяются ревью и тестами. Поведение режимов отрисовки описано для Blazor Web App начиная с .NET 8 и верно
+      для .NET 10.
+    linkTitles:
+      - "Вызов функций JavaScript из методов .NET в Blazor"
+      - "Взаимодействие с JavaScript в Blazor"
+      - "Вызов методов .NET из функций JavaScript в Blazor"
+  en:
+    title: What policy do you set for third-party JavaScript libraries in Blazor components?
+    prompt: |
+      A Blazor Web App on .NET 10 uses the `InteractiveServer` and `InteractiveWebAssembly` render modes.
+      Different teams plug in third-party JavaScript libraries (charts, a text editor, maps): they add `<script>`
+      tags to the markup, declare functions on `window` and call them from components with
+      `JS.InvokeVoidAsync("chartLib.render", ...)`. Production has already seen failures during prerendering, memory
+      leaks on the server and breakage after one of the libraries was upgraded.
+
+      Which rules for third-party JS libraries do you introduce for the team, and how do you keep them in place?
+    hint: |
+      What happens when twenty components call the same library by a string name: what does the compiler check,
+      what happens during prerendering, and who releases the resources after navigation?
+    answer: |
+      1. **One wrapper per library.** Components do not call library functions by string names. Every library has
+         an owner and one typed C# layer: a component if the library manages a DOM element (a chart, an editor), or
+         a service behind an interface if the API is non-visual (clipboard, geolocation). Only C# types are exposed,
+         and string identifiers and the JSON shape live in one place.
+      2. **An isolated ES module instead of globals.** The wrapper ships a small JS module (collocated in a
+         `.razor.js` file or in `wwwroot` of a Razor class library) that imports the library and exports a few
+         functions. The C# side loads it lazily with `InvokeAsync<IJSObjectReference>("import", path)`. No functions
+         on `window` and no `<script>` tags on pages.
+      3. **An explicit lifetime.** The wrapper implements `IAsyncDisposable`: it calls the library's destroy function
+         for its instance, disposes the `IJSObjectReference` of the module and of the instances, and every
+         `DotNetObjectReference` it created. `DisposeAsync` catches `JSDisconnectedException`, because in server mode
+         the connection to the browser may already be gone at that point.
+      4. **Works in every render mode.** The first call happens only in `OnAfterRenderAsync` when `firstRender` is
+         true, because during prerendering and static server rendering there is no browser yet. Only asynchronous
+         calls: `IJSInProcessRuntime` exists only in WebAssembly. Small messages and no chatty calls in loops; large
+         data goes through streams. `[JSImport]` and `[JSExport]` are allowed only in code that runs exclusively in
+         WebAssembly.
+      5. **DOM boundaries.** The library receives, through an `ElementReference`, an empty element into which Blazor
+         renders nothing. Blazor must not render into DOM that the library changes.
+      6. **Admission and delivery.** A new library goes through review: licence, size, maintenance activity, whether
+         a ready Blazor component exists. The version is pinned, the files are served by the app (or from a CDN with
+         SRI), and CSP compatibility is checked. Upgrading a library touches only its wrapper.
+      7. **Tests and enforcement.** Components are tested with a substituted wrapper interface. A code review rule
+         and, where possible, a banned API analyzer: `IJSRuntime` is injected only in the wrappers folder.
+    explanation: |
+      Scattered string-named calls move every error to run time: a renamed function, a different argument order or
+      a new major version of the library is invisible to the compiler. Every call site repeats the same mistakes on
+      its own: JS interop in `OnInitializedAsync` during prerendering, forgotten cleanup, a synchronous call that
+      works in WebAssembly and fails on the server. A wrapper solves these problems once and makes them testable.
+
+      Cleanup matters most in server mode. A `DotNetObjectReference` keeps the .NET object from the garbage
+      collector until the reference is disposed, and an `IJSObjectReference` keeps the object alive on the
+      JavaScript side. Without disposal they live until the circuit ends, and an app with long sessions grows memory
+      on both the server and the browser. Isolated modules remove global name clashes and let the library load only
+      where it is needed.
+
+      The DOM rule exists because Blazor computes the difference between the previous and the new render tree and
+      applies it to the DOM, assuming the DOM still matches the previous tree. If a library has changed those nodes,
+      the next diff is applied to an unexpected DOM and gives unpredictable results. That is why external JS code may
+      safely modify only elements that Blazor regards as empty.
+
+      The policy is not a ban on JavaScript but a process: each library has an owner, an entry point and rules that
+      review and tests enforce. The render mode behaviour is described for Blazor Web Apps since .NET 8 and holds
+      for .NET 10.
+    linkTitles:
+      - "Call JavaScript functions from .NET methods in ASP.NET Core Blazor"
+      - "ASP.NET Core Blazor JavaScript interoperability"
+      - "Call .NET methods from JavaScript functions in ASP.NET Core Blazor"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

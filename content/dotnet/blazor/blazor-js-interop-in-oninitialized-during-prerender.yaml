@@ -1,0 +1,105 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RM4HBBS43KAPXVA4BS
+slug: blazor-js-interop-in-oninitialized-during-prerender
+stack: dotnet
+topic: blazor
+level: middle
+type: find-bug
+grading: auto
+tags: [blazor, js-interop, prerendering, lifecycle]
+code:
+  language: razor
+  harness: none
+  source: |
+    @page "/theme"
+    @rendermode InteractiveServer
+    @inject IJSRuntime JS
+
+    <p>Theme: @theme</p>
+
+    @code {
+        private string? theme;
+
+        protected override async Task OnInitializedAsync()
+        {
+            theme = await JS.InvokeAsync<string>("localStorage.getItem", "theme");
+        }
+    }
+bugLineSets: [[12]]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/javascript-interoperability/call-javascript-from-dotnet
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/components/prerender
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему вызов JS interop в OnInitializedAsync падает при пререндеринге компонента Blazor?
+    prompt: |
+      Компонент Blazor Web App работает в режиме `InteractiveServer` с пререндерингом по умолчанию (режимы отрисовки
+      появились в .NET 8, поведение проверяется для .NET 10). Он должен прочитать тему оформления из `localStorage`
+      браузера и показать её. Но при открытии страницы запрос завершается ошибкой `InvalidOperationException` с
+      сообщением, которое начинается с `JavaScript interop calls cannot be issued at this time`.
+      Щёлкните по строке, которая выбрасывает исключение.
+    hint: Где выполняется компонент в самый первый раз и есть ли в этот момент на другой стороне браузер?
+    answer: Строка 12, вызов `JS.InvokeAsync` в `OnInitializedAsync`, который выполняется и во время пререндеринга.
+    explanation: |
+      В режиме `InteractiveServer` пререндеринг включён по умолчанию. Сначала сервер отрисовывает компонент в
+      статический HTML как часть ответа на HTTP-запрос, и только потом браузер устанавливает соединение SignalR
+      (circuit), в котором создаётся новый, уже интерактивный экземпляр компонента. `OnInitializedAsync` выполняется
+      в обоих проходах.
+
+      Во время первого прохода связи с браузером нет: выполнять JavaScript негде. Поэтому `IJSRuntime` на этом этапе
+      не может выполнить вызов и выбрасывает `InvalidOperationException`, а сообщение подсказывает, что при
+      пререндеринге вызовы JS interop можно делать только в `OnAfterRenderAsync`.
+
+      Исправление - перенести вызов в `OnAfterRenderAsync`: при пререндеринге на сервере этот метод не вызывается, а
+      в интерактивном экземпляре он выполняется уже после того, как разметка попала в браузер. Вызов делают один раз,
+      при `firstRender == true`, и после присваивания вызывают `StateHasChanged()`, потому что завершение
+      `OnAfterRenderAsync` само по себе перерисовку не запускает:
+      `if (firstRender) { theme = await JS.InvokeAsync<string>("localStorage.getItem", "theme"); StateHasChanged(); }`.
+
+      Другой вариант - отключить пререндеринг для компонента:
+      `@rendermode @(new InteractiveServerRenderMode(prerender: false))`. Тогда компонент существует только в
+      circuit, но первый HTML страницы не содержит его разметки.
+    linkTitles:
+      - "Вызов функций JavaScript из методов .NET в Blazor"
+      - "Пререндеринг компонентов Razor"
+  en:
+    title: Why does a JS interop call in OnInitializedAsync fail while a Blazor component is prerendered?
+    prompt: |
+      A Blazor Web App component runs in the `InteractiveServer` render mode with the default prerendering (render
+      modes were introduced in .NET 8, the behaviour is checked for .NET 10). It should read the theme from the
+      browser's `localStorage` and show it. But when the page is opened, the request fails with an
+      `InvalidOperationException` whose message starts with `JavaScript interop calls cannot be issued at this time`.
+      Click the line that throws the exception.
+    hint: Where does the component run the very first time, and is there a browser on the other side at that moment?
+    answer: Line 12, the `JS.InvokeAsync` call in `OnInitializedAsync`, which also runs during prerendering.
+    explanation: |
+      In the `InteractiveServer` render mode prerendering is on by default. The server first renders the component
+      to static HTML as part of the response to the HTTP request, and only then does the browser establish the
+      SignalR connection (the circuit), where a new, interactive instance of the component is created.
+      `OnInitializedAsync` runs in both passes.
+
+      During the first pass there is no connection to a browser: there is nowhere to run JavaScript. So `IJSRuntime`
+      cannot perform the call at this stage and throws `InvalidOperationException`, and the message says that with
+      prerendering, JS interop calls can only be made in `OnAfterRenderAsync`.
+
+      The fix is to move the call to `OnAfterRenderAsync`: this method is not called during prerendering on the
+      server, and in the interactive instance it runs after the markup has reached the browser. Make the call once,
+      when `firstRender == true`, and call `StateHasChanged()` after the assignment, because the completion of
+      `OnAfterRenderAsync` does not trigger a render by itself:
+      `if (firstRender) { theme = await JS.InvokeAsync<string>("localStorage.getItem", "theme"); StateHasChanged(); }`.
+
+      Another option is to turn prerendering off for the component:
+      `@rendermode @(new InteractiveServerRenderMode(prerender: false))`. Then the component exists only in the
+      circuit, but the first HTML of the page does not contain its markup.
+    linkTitles:
+      - "Call JavaScript functions from .NET methods in ASP.NET Core Blazor"
+      - "Prerender ASP.NET Core Razor components"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"
+  noRunReason: "A Blazor component needs the ASP.NET Core renderer, prerendering and a SignalR circuit, which the BCL-only sandbox does not provide."

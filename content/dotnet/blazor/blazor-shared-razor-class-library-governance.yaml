@@ -1,0 +1,152 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RMKR3N8C5QG4H5N18Y
+slug: blazor-shared-razor-class-library-governance
+stack: dotnet
+topic: blazor
+level: lead
+type: open
+grading: self
+tags: [blazor, razor-class-library, components, versioning, css-isolation, render-modes]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/components/class-libraries
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/components/class-libraries-and-static-server-side-rendering
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/components/css-isolation
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/components/render-modes
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какие правила и процесс задать для общей библиотеки компонентов Blazor, чтобы она жила годами?
+    prompt: |
+      Несколько команд пишут приложения Blazor на .NET 10: у одних Blazor Web App со статической отрисовкой
+      и островками `InteractiveServer`, у других приложение на WebAssembly. Все хотят общую библиотеку
+      компонентов (таблицы, формы, диалоги) в виде Razor class library и NuGet-пакета.
+
+      Вы отвечаете за эту библиотеку. Какие технические правила для компонентов и какой процесс выпуска и
+      поддержки вы зададите, чтобы через несколько лет библиотекой ещё можно было пользоваться, а команды
+      обновлялись независимо друг от друга?
+    hint: |
+      Что из того, что решает приложение-потребитель, компонент библиотеки не должен решать за него, и что в
+      библиотеке становится публичным контрактом, даже если это не C#-класс?
+    answer: |
+      1. **Компонент не выбирает режим отрисовки и модель размещения.** В библиотеке нет `@rendermode`: режим
+         задаёт приложение. Компоненты не используют `HttpContext`, `IJSInProcessRuntime` и прямой доступ к базе,
+         не хранят состояние в статических полях. Данные приходят через параметры и `EventCallback` или через
+         интерфейсы, которые реализует приложение. Компонент корректно отрисовывается и при статической
+         отрисовке на сервере (без интерактивности), например показывает неактивное состояние; начиная с .NET 9
+         это можно проверить через `RendererInfo.IsInteractive`. В проекте включён `SupportedPlatform` `browser`,
+         чтобы анализатор предупреждал об API, недоступных в WebAssembly.
+      2. **CSS и JS изолированы.** Стили лежат в файлах `Component.razor.css` (CSS-изоляция, общий бандл
+         подключается в приложение), темизация идёт через документированные CSS-переменные, а не через
+         глобальные селекторы. JavaScript оформлен как модули, которые компонент сам загружает через
+         `import` по пути `_content/{PACKAGE ID}/...` и освобождает (`IJSObjectReference`, `DotNetObjectReference`)
+         в `DisposeAsync`. Приложению не нужно вручную добавлять теги `<script>`.
+      3. **Явный публичный контракт и семантическое версионирование.** Контракт - это имена компонентов,
+         параметры и их типы, события, каскадные значения, CSS-переменные и документированные классы.
+         Ломающие изменения только в мажорной версии, обязательные параметры помечены `[EditorRequired]`,
+         изменения публичного API проверяются на code review (например, анализатором публичного API).
+         Целевой фреймворк - самая старая поддерживаемая версия .NET, которую используют потребители, а не
+         самая свежая.
+      4. **Политика устаревания.** Сначала `[Obsolete]` с указанием замены, минимум один минорный выпуск с
+         предупреждением, удаление только в следующей мажорной версии, changelog и инструкция по миграции.
+         Предыдущая мажорная версия получает исправления в течение объявленного срока.
+      5. **Процесс.** Есть команда-владелец (CODEOWNERS), остальные вносят изменения через pull request
+         (inner source). Критерий включения компонента: он нужен хотя бы двум командам. Демо-приложение
+         запускает каждый компонент в статической отрисовке, `InteractiveServer` и `InteractiveWebAssembly`,
+         CI прогоняет тесты компонентов и проверку доступности. Выпуски идут по предсказуемому графику.
+    explanation: |
+      Библиотека живёт дольше отдельных приложений, а потребители обновляются в разном темпе. Поэтому всё,
+      что привязывает компонент к конкретному приложению, превращается в долг для всех остальных.
+
+      Режим отрисовки - решение приложения. Компонент с жёстко заданным `@rendermode` нельзя использовать
+      там, где нужен другой режим или статическая отрисовка, а внутри интерактивного родителя с другим
+      интерактивным режимом его вложение приводит к ошибке. Зависимость от `HttpContext` ломается в
+      интерактивных режимах, где его нет, а `IJSInProcessRuntime` есть только в WebAssembly. Если приложение
+      делает компонент библиотеки интерактивным островком, его параметры пересекают границу режима отрисовки
+      и должны быть сериализуемыми: это ещё одна причина держать параметры верхнеуровневых компонентов
+      простыми.
+
+      Публичный контракт библиотеки компонентов шире, чем у обычной библиотеки классов: переименованный
+      параметр ломает разметку потребителей, а переименованный CSS-класс или переменная тихо ломает их
+      стили. CSS-изоляция и JS-модули не дают библиотеке влиять на страницу за пределами своих компонентов,
+      а освобождение ссылок interop предотвращает утечки в долгих circuit.
+
+      Без владельца и правил включения общая библиотека либо разрастается компонентами под одну команду,
+      либо замораживается. Демо-приложение со всеми режимами отрисовки ловит нарушение правил ещё до выпуска.
+      `RendererInfo` появился в .NET 9, остальное описано для Blazor Web App начиная с .NET 8 и верно для .NET 10.
+    linkTitles:
+      - "Использование компонентов Razor из Razor class library"
+      - "Razor class library и статическая отрисовка на сервере"
+      - "CSS-изоляция в Blazor"
+      - "Режимы отрисовки Blazor"
+  en:
+    title: Which rules and process do you set for a shared Blazor component library so it lasts for years?
+    prompt: |
+      Several teams build Blazor apps on .NET 10: some have a Blazor Web App with static rendering and
+      `InteractiveServer` islands, others a WebAssembly app. They all want a shared component library (grids,
+      forms, dialogs) as a Razor class library shipped as a NuGet package.
+
+      You own this library. Which technical rules for components and which release and support process do you
+      set so that the library is still usable in several years and the teams can upgrade independently?
+    hint: |
+      What does the consuming app decide that a library component must not decide for it, and what in the
+      library becomes a public contract even though it is not a C# class?
+    answer: |
+      1. **A component does not choose the render mode or the hosting model.** The library contains no
+         `@rendermode`: the app sets it. Components do not use `HttpContext`, `IJSInProcessRuntime` or direct
+         database access, and keep no state in static fields. Data comes through parameters and `EventCallback`,
+         or through interfaces that the app implements. A component renders correctly with static server-side
+         rendering (no interactivity), for example in a disabled state; since .NET 9 it can check
+         `RendererInfo.IsInteractive`. The project keeps `SupportedPlatform` `browser` so the analyzer warns
+         about APIs unavailable in WebAssembly.
+      2. **CSS and JS are isolated.** Styles live in `Component.razor.css` files (CSS isolation, a bundle that
+         the app picks up), theming goes through documented CSS custom properties rather than global selectors.
+         JavaScript is written as modules that the component loads itself with `import` from
+         `_content/{PACKAGE ID}/...` and releases (`IJSObjectReference`, `DotNetObjectReference`) in
+         `DisposeAsync`. The app does not have to add `<script>` tags by hand.
+      3. **An explicit public contract and semantic versioning.** The contract is the component names, the
+         parameters and their types, events, cascading values, CSS custom properties and documented classes.
+         Breaking changes only in a major version, required parameters marked with `[EditorRequired]`, public
+         API changes checked in code review (for example with a public API analyzer). The target framework is
+         the oldest supported .NET version that consumers use, not the newest one.
+      4. **A deprecation policy.** First `[Obsolete]` naming the replacement, at least one minor release with
+         the warning, removal only in the next major version, a changelog and a migration guide. The previous
+         major version gets fixes for an announced period.
+      5. **Process.** An owning team (CODEOWNERS), other teams contribute through pull requests (inner source).
+         A component is accepted when at least two teams need it. A demo app runs every component in static
+         rendering, `InteractiveServer` and `InteractiveWebAssembly`, and CI runs component tests and
+         accessibility checks. Releases follow a predictable schedule.
+    explanation: |
+      The library outlives individual apps, and consumers upgrade at different speeds. Anything that ties a
+      component to one particular app becomes a debt for everyone else.
+
+      The render mode is the app's decision. A component with a hard-coded `@rendermode` cannot be used where
+      another mode or static rendering is needed, and nesting it inside an interactive parent with a different
+      interactive mode causes an error. A dependency on `HttpContext` breaks in interactive modes, where it is
+      not available, and `IJSInProcessRuntime` exists only in WebAssembly. When an app makes a library
+      component an interactive island, its parameters cross the render mode boundary and must be serializable:
+      one more reason to keep the parameters of top-level components simple.
+
+      The public contract of a component library is wider than that of an ordinary class library: a renamed
+      parameter breaks consumers' markup, and a renamed CSS class or custom property silently breaks their
+      styles. CSS isolation and JS modules keep the library from affecting the page outside its own components,
+      and releasing interop references prevents leaks in long-lived circuits.
+
+      Without an owner and acceptance rules a shared library either fills up with one team's components or
+      freezes. A demo app with all render modes catches rule violations before a release. `RendererInfo`
+      appeared in .NET 9; the rest is described for Blazor Web Apps since .NET 8 and holds for .NET 10.
+    linkTitles:
+      - "Consume ASP.NET Core Razor components from a Razor class library (RCL)"
+      - "ASP.NET Core Razor class libraries (RCLs) with static server-side rendering"
+      - "ASP.NET Core Blazor CSS isolation"
+      - "ASP.NET Core Blazor render modes"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

@@ -1,0 +1,148 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RMZWB52008D4X8QMG8
+slug: blazor-unhandled-exception-error-boundary-scope
+stack: dotnet
+topic: blazor
+level: senior
+type: open
+grading: self
+tags: [blazor, error-handling, error-boundary, circuit]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/fundamentals/handle-errors
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/microsoft.aspnetcore.components.web.errorboundary
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Что происходит с circuit Blazor при необработанном исключении в компоненте и что может перехватить ErrorBoundary?"
+    prompt: |
+      Приложение Blazor Web App на .NET 10 работает в режиме `InteractiveServer`. Один из виджетов дашборда
+      иногда выбрасывает исключение, после чего вся страница перестаёт реагировать, а внизу появляется полоса
+      `An unhandled error has occurred. Reload`. Команда предлагает обернуть каждый виджет в `ErrorBoundary`.
+
+      Объясните, что происходит с circuit при необработанном исключении, какие исключения `ErrorBoundary`
+      перехватит, какие нет, и как обработать остальные.
+    hint: |
+      Через чей код проходит вызов, в котором возникло исключение: через рендерер Blazor или мимо него?
+    answer: |
+      - **Без границы исключение фатально для circuit.** Blazor логирует необработанное исключение и завершает
+        circuit: после неожиданного сбоя фреймворк не может гарантировать согласованность дерева компонентов и их
+        состояния. Пользователь видит `blazor-error-ui`, продолжить работу можно только перезагрузкой страницы,
+        то есть с новым circuit, и всё состояние в памяти теряется. Circuit других пользователей и других вкладок
+        не затронуты.
+      - **Что перехватывает `ErrorBoundary`.** Исключения, которые рендерер получает от компонентов внутри её
+        `ChildContent`: при отрисовке, в методах жизненного цикла (`OnInitialized{Async}`,
+        `OnParametersSet{Async}`, `OnAfterRender{Async}`) и в обработчиках событий, которые вызвал рендерер.
+        Вместо дочернего содержимого показывается `ErrorContent` (или стандартный пустой `<div>` с CSS-классом
+        `blazor-error-boundary`), исключение логируется, а circuit и остальная страница продолжают работать.
+      - **Что она не перехватывает.**
+        - Исключения компонентов вне границы, в том числе самого компонента, в разметке которого она объявлена.
+        - Ошибки сверх лимита `MaximumErrorCount`: если граница получает больше ошибок, они считаются
+          фатальными. `Recover()` сбрасывает счётчик.
+        - Код, который выполняется вне стека вызовов рендерера: обратный вызов `System.Threading.Timer`,
+          `Task.Run`, событие сервиса из фоновой операции, задача, запущенная без ожидания (`_ = LoadAsync();`).
+          Рендерер такого исключения не видит. Для `Timer` это необработанное исключение в потоке пула потоков,
+          которое по умолчанию завершает весь процесс сервера, а исключение брошенной задачи теряется молча.
+      - **Как обработать остальные.** В фоновом коде ставить `try`/`catch` и либо показывать состояние ошибки
+        через `InvokeAsync(StateHasChanged)`, либо передать исключение в механизм Blazor через
+        `DispatchExceptionAsync(ex)` компонента: тогда оно обрабатывается как исключение метода жизненного цикла,
+        и его получает ближайшая `ErrorBoundary`, а если её нет - рендерер, как фатальное.
+      - **Восстановление и размещение.** Граница остаётся в состоянии ошибки, пока не вызвать `Recover()`; тогда
+        дочернее содержимое отрисовывается заново с новыми экземплярами компонентов (типичное место - сброс при
+        навигации). Граница работает внутри того дерева компонентов, которое обслуживает рендерер: ставьте её
+        внутри интерактивного компонента, а не полагайтесь на границу в статически отрисованном layout, который
+        не входит в интерактивное дерево компонентов страницы.
+      - **Ожидаемые ошибки** (сбой HTTP-вызова, некорректные данные) обрабатывают `try`/`catch` в самом
+        компоненте. `ErrorBoundary` - страховка от неожиданных сбоев, а не замена обработки ошибок.
+    explanation: |
+      Ключ к ответу - кто вызывает код. Отрисовку, методы жизненного цикла и обработчики событий вызывает
+      рендерер, поэтому он получает исключение, находит ближайшую `ErrorBoundary` среди предков упавшего
+      компонента и переключает её на `ErrorContent`. Если такой границы нет, исключение считается фатальным, и
+      circuit завершается целиком: частично обновлённое дерево компонентов может быть в несогласованном
+      состоянии, и продолжать работу с ним опаснее, чем начать заново.
+
+      Таймеры, `Task.Run` и события сервисов из фоновых операций работают мимо рендерера, так что граница о них
+      не знает. Исключение в обратном вызове `System.Threading.Timer` хуже, чем падение circuit: это необработанное
+      исключение в потоке пула потоков, и по умолчанию оно завершает процесс, то есть обрывает circuit всех
+      пользователей сервера. Поэтому фоновый код в компоненте всегда оборачивают в `try`/`catch` и возвращают
+      ошибку в мир рендерера: через `InvokeAsync` с обновлением состояния или через `DispatchExceptionAsync`,
+      который как раз предназначен для исключений, возникших вне методов жизненного цикла.
+
+      После `Recover()` граница заново создаёт дочерние компоненты, поэтому их состояние в памяти не
+      сохраняется. Если виджет падает при каждой отрисовке, вызов `Recover()` из логики отрисовки даёт
+      бесконечный цикл, поэтому восстановление привязывают к действию пользователя или навигации. Описанное
+      поведение относится к Blazor Web App начиная с .NET 8 и верно для .NET 10.
+    linkTitles:
+      - "Обработка ошибок в приложениях Blazor"
+      - "Класс ErrorBoundary"
+  en:
+    title: "What happens to a Blazor circuit when a component throws, and what can ErrorBoundary catch?"
+    prompt: |
+      A Blazor Web App on .NET 10 runs in the `InteractiveServer` render mode. One of the dashboard widgets
+      sometimes throws an exception, after which the whole page stops responding and a bar saying
+      `An unhandled error has occurred. Reload` appears at the bottom. The team suggests wrapping every widget in
+      an `ErrorBoundary`.
+
+      Explain what happens to the circuit on an unhandled exception, which exceptions `ErrorBoundary` catches,
+      which it does not, and how to handle the rest.
+    hint: |
+      Whose code does the failing call go through: the Blazor renderer, or around it?
+    answer: |
+      - **Without a boundary the exception is fatal to the circuit.** Blazor logs the unhandled exception and
+        terminates the circuit: after an unexpected failure the framework cannot guarantee that the component tree
+        and its state are consistent. The user sees `blazor-error-ui`, can continue only by reloading the page,
+        which means a new circuit, and all in-memory state is lost. Circuits of other users and other tabs are not
+        affected.
+      - **What `ErrorBoundary` catches.** Exceptions that the renderer receives from components inside its
+        `ChildContent`: during rendering, in lifecycle methods (`OnInitialized{Async}`, `OnParametersSet{Async}`,
+        `OnAfterRender{Async}`) and in event handlers that the renderer invoked. Instead of the child content it
+        shows `ErrorContent` (or a default empty `<div>` with the `blazor-error-boundary` CSS class), the
+        exception is logged, and the circuit and the rest of the page keep working.
+      - **What it does not catch.**
+        - Exceptions of components outside the boundary, including the component in whose markup it is declared.
+        - Errors beyond `MaximumErrorCount`: if the boundary receives more errors, they are treated as fatal.
+          `Recover()` resets the count.
+        - Code that runs outside the renderer's call stack: a `System.Threading.Timer` callback, `Task.Run`, a
+          service event raised from a background operation, a task started without awaiting it
+          (`_ = LoadAsync();`). The renderer never sees such an exception. For `Timer` it is an unhandled
+          exception on a thread pool thread, which by default terminates the whole server process, and the
+          exception of a discarded task is lost silently.
+      - **How to handle the rest.** Put `try`/`catch` around background code and either show an error state via
+        `InvokeAsync(StateHasChanged)`, or pass the exception into Blazor's handling with the component's
+        `DispatchExceptionAsync(ex)`: it is then treated like a lifecycle method exception, and the nearest
+        `ErrorBoundary` receives it, or the renderer treats it as fatal if there is none.
+      - **Recovery and placement.** The boundary stays in the error state until `Recover()` is called; then the
+        child content is rendered again with new component instances (a typical place is a reset on navigation).
+        A boundary works inside the component tree that the renderer manages: put it inside the interactive
+        component rather than relying on a boundary in a statically rendered layout, which is not part of the
+        page's interactive component tree.
+      - **Expected errors** (a failed HTTP call, invalid data) are handled with `try`/`catch` in the component
+        itself. `ErrorBoundary` is a safety net for unexpected failures, not a replacement for error handling.
+    explanation: |
+      The key is who calls the code. Rendering, lifecycle methods and event handlers are invoked by the renderer,
+      so it receives the exception, finds the nearest `ErrorBoundary` among the ancestors of the failing component
+      and switches it to `ErrorContent`. If there is no such boundary, the exception is treated as fatal and the
+      whole circuit is terminated: a partly updated component tree may be inconsistent, and continuing with it is
+      more dangerous than starting over.
+
+      Timers, `Task.Run` and service events from background operations run around the renderer, so the boundary
+      knows nothing about them. An exception in a `System.Threading.Timer` callback is worse than a lost circuit:
+      it is an unhandled exception on a thread pool thread, and by default it terminates the process, which drops
+      the circuits of every user on that server. That is why background code in a component is always wrapped in
+      `try`/`catch` and the error is brought back into the renderer's world: through `InvokeAsync` with a state
+      update, or through `DispatchExceptionAsync`, which exists exactly for exceptions that occur outside the
+      lifecycle methods.
+
+      After `Recover()` the boundary creates the child components again, so their in-memory state is not kept. If
+      a widget fails on every render, calling `Recover()` from rendering logic creates an infinite loop, so
+      recovery is tied to a user action or to navigation. The behaviour described applies to Blazor Web Apps
+      since .NET 8 and holds for .NET 10.
+    linkTitles:
+      - "Handle errors in Blazor apps"
+      - "ErrorBoundary class"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

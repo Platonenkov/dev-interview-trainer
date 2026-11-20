@@ -1,0 +1,158 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPY2YS7KH36KCXN0R4
+slug: maui-mvvm-library-choice-for-team
+stack: dotnet
+topic: maui
+level: lead
+type: open
+grading: self
+tags: [maui, mvvm, communitytoolkit-mvvm, prism, architecture-decision]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/communitytoolkit/mvvm/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/architecture/maui/mvvm
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/communitytoolkit/mvvm/generators/observableproperty
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/communitytoolkit/mvvm/generators/relaycommand
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как выбрать между своим INotifyPropertyChanged, CommunityToolkit.Mvvm и Prism для нового приложения .NET MAUI?
+    prompt: |
+      Команда из шести разработчиков начинает новое приложение .NET MAUI, которое будут сопровождать несколько лет.
+      Часть команды знает Prism по WPF, остальные писали только простые модели представления. Нужно решить, на чём
+      строить модели представления: собственный базовый класс с реализацией `INotifyPropertyChanged`,
+      CommunityToolkit.Mvvm или полноценный фреймворк вроде Prism.
+
+      По каким критериям вы выбираете, что даёт и чего стоит каждый вариант, и как вы принимаете и фиксируете решение?
+    hint: Что вариант добавляет в модель представления, а что он забирает у приложения целиком? Что будет при обновлении MAUI?
+    answer: |
+      - **Критерии.** Сколько шаблонного кода убирает вариант; что он диктует за пределами модели представления
+        (навигация, DI, связывание частей приложения); насколько команда его знает и как быстро в него войдёт
+        новичок; риск зависимости (кто сопровождает, условия лицензии и поддержки, как быстро выходят версии под
+        новые релизы MAUI); цена обновления и цена отказа; тестируемость моделей представления без устройства.
+      - **Свой базовый класс.** Никаких зависимостей и полный контроль: базовый класс с `SetProperty` и
+        `[CallerMemberName]` плюс свои реализации `ICommand`. Цена: однообразные свойства в каждой модели и
+        собственная асинхронная команда (`CanExecute`, исключения, повторный запуск), которую команда должна написать,
+        протестировать и поддерживать. Встроенный `Command` из MAUI находится в `Microsoft.Maui.Controls`, и его
+        использование привязывает модели представления к UI-фреймворку. Подходит для маленьких приложений или жёсткой
+        политики "без внешних пакетов".
+      - **CommunityToolkit.Mvvm.** Набор строительных блоков, а не фреймворк: `ObservableObject`,
+        `ObservableValidator`, `RelayCommand` и `AsyncRelayCommand`, мессенджер, а также генераторы исходного кода
+        `[ObservableProperty]` и `[RelayCommand]`. Генераторы пишут код свойств и команд при сборке, поэтому модели
+        представления остаются обычными `partial`-классами без ссылки на MAUI, и их легко покрыть модульными тестами.
+        Пакет нацелен на .NET Standard, не зависит от UI-фреймворка и не навязывает структуру приложения: навигация и
+        DI остаются за Shell и встроенным контейнером в `MauiProgram`. Его публикует Microsoft в рамках .NET
+        Foundation, и на нём построено эталонное приложение eShop для MAUI. Привязка к библиотеке небольшая: базовые
+        классы и атрибуты в моделях представления.
+      - **Полноценный фреймворк вроде Prism.** Кроме базовой модели представления и команд, MVVM-фреймворки обычно
+        дают помощники навигации, внедрение зависимостей или локатор служб и интеграцию с UI-платформой. Это задаёт
+        большой команде единую структуру (полезно для модульного приложения), и знакомые с фреймворком разработчики
+        быстро продуктивны. Цена: фреймворк владеет навигацией и связыванием приложения, поэтому отказ от него
+        означает переписать эти слои; раз он интегрируется с UI-платформой, обновление MAUI может ждать его
+        совместимого выпуска; условия лицензии и поддержки нужно проверить до решения.
+      - **Как принять решение.** Записать требования (нужны ли модули, насколько сложная навигация, размер команды,
+        срок поддержки), сделать на двух главных кандидатах один сквозной срез (список, карточка, форма с валидацией,
+        навигация с параметром), сравнить код и тесты и зафиксировать выбор в ADR с условиями пересмотра.
+      - **Сохранить обратимость.** При любом выборе модели представления не ссылаются на `Microsoft.Maui.Controls`,
+        команды публикуются как `ICommand`, а навигация, диалоги и главный поток доступны через интерфейсы. Тогда
+        зависимость от библиотеки или фреймворка остаётся в тонком слое.
+      - **Типичный итог.** Для большинства новых команд MAUI - CommunityToolkit.Mvvm, Shell и встроенный DI. Фреймворк
+        вроде Prism - когда модульность и единая модель навигации для большой команды перевешивают привязку к
+        фреймворку и его условия лицензии. Свой базовый класс - только для очень маленьких приложений или при запрете
+        зависимостей.
+    explanation: |
+      Главное различие проходит между библиотекой и фреймворком. CommunityToolkit.Mvvm прямо заявляет, что не требует
+      определённой структуры приложения и позволяет брать только нужные компоненты, поэтому цена ошибки мала: библиотеку
+      можно заменить или обойти локально. Фреймворк стандартизирует больше (навигацию, DI, интеграцию с платформой) и
+      именно поэтому глубже проникает в приложение: его релизный цикл становится частью вашего, а замена затрагивает
+      весь каркас. Руководство по MVVM для MAUI советует выбирать фреймворк по потребностям приложения и сильным
+      сторонам команды, а не по умолчанию.
+
+      Знакомство команды важно, но само по себе не решает: опыт с Prism из WPF ускоряет старт, но приложение будет жить
+      дольше состава команды, и новичкам придётся изучать и MAUI, и фреймворк. Поэтому решение лучше проверять на
+      сквозном срезе и записывать в ADR вместе с причинами, а не выбирать по привычке.
+
+      Дешевизна тулкита объясняется генераторами: `[ObservableProperty]` превращает поле в обычное свойство, сеттер
+      которого сам вызывает уведомления об изменении, а `[RelayCommand]` создаёт свойство команды поверх метода, для
+      метода, возвращающего `Task`, - асинхронную команду. Это обычный C#, который компилируется вместе с проектом,
+      без скрытой среды выполнения. Правило "модели представления не знают про MAUI" полезно при любом выборе: оно
+      сохраняет тестируемость без устройства и оставляет решение обратимым.
+    linkTitles:
+      - "Введение в MVVM Toolkit"
+      - "Паттерн Model-View-ViewModel в приложениях .NET MAUI"
+      - "Атрибут ObservableProperty в MVVM Toolkit"
+      - "Атрибут RelayCommand в MVVM Toolkit"
+  en:
+    title: How do you choose between hand-written INotifyPropertyChanged, CommunityToolkit.Mvvm and Prism for a new .NET MAUI app?
+    prompt: |
+      A team of six developers starts a new .NET MAUI app that will be maintained for several years. Some of them
+      know Prism from WPF, the others have only written plain view models. You must decide how view models will be
+      built: a hand-written base class implementing `INotifyPropertyChanged`, CommunityToolkit.Mvvm, or a full
+      framework such as Prism.
+
+      Which criteria do you use, what does each option give and cost, and how do you make and record the decision?
+    hint: What does an option add to a view model, and what does it take over in the whole app? What happens on a MAUI upgrade?
+    answer: |
+      - **Criteria.** How much boilerplate the option removes; what it dictates beyond the view model (navigation,
+        DI, how the app is wired together); how well the team knows it and how fast a newcomer gets productive;
+        dependency risk (who maintains it, license and support terms, how quickly it ships versions for new MAUI
+        releases); upgrade cost and exit cost; testability of view models without a device.
+      - **Hand-written base class.** No dependencies and full control: a base class with `SetProperty` and
+        `[CallerMemberName]` plus your own `ICommand` implementations. Cost: repetitive properties in every model and
+        your own async command (`CanExecute`, exceptions, re-entrancy) that the team must write, test and maintain.
+        MAUI's built-in `Command` lives in `Microsoft.Maui.Controls`, and using it ties view models to the UI
+        framework. Fits small apps or a strict "no external packages" policy.
+      - **CommunityToolkit.Mvvm.** A set of building blocks, not a framework: `ObservableObject`,
+        `ObservableValidator`, `RelayCommand` and `AsyncRelayCommand`, a messenger, and the `[ObservableProperty]` and
+        `[RelayCommand]` source generators. The generators write the property and command code at build time, so view
+        models stay plain `partial` classes with no reference to MAUI and are easy to unit test. The package targets
+        .NET Standard, is UI-framework agnostic and imposes no app structure: navigation and DI stay with Shell and the
+        built-in container in `MauiProgram`. Microsoft publishes it as part of the .NET Foundation, and the eShop
+        reference app for MAUI is built on it. Lock-in is small: base classes and attributes in view models.
+      - **A full framework such as Prism.** Beyond a base view model and commands, MVVM frameworks typically bring
+        navigation helpers, dependency injection or service location, and UI platform integration. That gives a large
+        team one consistent structure (useful for a modular app), and developers who know the framework are productive
+        quickly. Cost: the framework owns navigation and the app wiring, so leaving it later means rewriting those
+        layers; because it integrates with the UI platform, a MAUI upgrade may wait for a compatible framework release;
+        check its license and support terms before you commit.
+      - **How to decide.** Write down the requirements (modules or not, how complex navigation is, team size, years
+        of support), build one vertical slice (a list, a detail page, a form with validation, navigation with a
+        parameter) with the top two candidates, compare the code and the tests, and record the choice in an ADR with
+        conditions for revisiting it.
+      - **Keep it reversible.** Whatever you choose, view models do not reference `Microsoft.Maui.Controls`, commands
+        are exposed as `ICommand`, and navigation, dialogs and the main thread are reached through interfaces. The
+        library or framework dependency then stays in a thin layer.
+      - **Typical outcome.** For most new MAUI teams: CommunityToolkit.Mvvm, Shell and the built-in DI. A framework
+        such as Prism when modularity and one navigation model for a large team outweigh the framework coupling and its
+        license terms. A hand-written base class only for very small apps or when dependencies are forbidden.
+    explanation: |
+      The key distinction is library versus framework. CommunityToolkit.Mvvm states that it has no strict requirements
+      on app structure and lets you pick only the components you need, so a wrong choice is cheap: the library can be
+      replaced or bypassed locally. A framework standardizes more (navigation, DI, platform integration), and that is
+      exactly why it reaches deeper into the app: its release cycle becomes part of yours, and replacing it touches the
+      whole skeleton. The MAUI MVVM guide advises choosing a framework by the app's needs and the team's strengths,
+      not by default.
+
+      Team familiarity matters but does not decide on its own: Prism experience from WPF speeds up the start, but the
+      app will outlive the current team, and newcomers will have to learn both MAUI and the framework. That is why
+      the decision is better tested on a vertical slice and recorded in an ADR with its reasons, not made by habit.
+
+      The generators explain why the toolkit stays cheap: `[ObservableProperty]` turns a field into an ordinary
+      property whose setter raises the change notifications, and `[RelayCommand]` creates a command property over a
+      method, an async command for a method that returns `Task`. This is plain C# compiled with the project, with no
+      hidden runtime. The rule "view models know nothing about MAUI" pays off with any choice: it keeps view models
+      testable without a device and keeps the decision reversible.
+    linkTitles:
+      - "Introduction to the MVVM Toolkit"
+      - "Model-View-ViewModel (MVVM) in .NET MAUI apps"
+      - "ObservableProperty attribute in the MVVM Toolkit"
+      - "RelayCommand attribute in the MVVM Toolkit"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

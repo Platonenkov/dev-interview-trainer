@@ -1,0 +1,88 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPACJ0NYKVW1SZZ9KM
+slug: maui-observableproperty-field-write-no-update
+stack: dotnet
+topic: maui
+level: middle
+type: find-bug
+grading: auto
+tags: [maui, mvvm, communitytoolkit-mvvm, observableproperty, source-generators, inotifypropertychanged]
+code:
+  language: csharp
+  harness: none
+  source: |
+    using CommunityToolkit.Mvvm.ComponentModel;
+    using CommunityToolkit.Mvvm.Input;
+
+    namespace Shop.ViewModels;
+
+    public partial class CounterViewModel : ObservableObject
+    {
+        [ObservableProperty]
+        private int _count;
+
+        [RelayCommand]
+        private void Increment()
+        {
+            _count++;
+        }
+    }
+bugLineSets: [[14]]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/communitytoolkit/mvvm/generators/observableproperty
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/communitytoolkit/mvvm/generators/relaycommand
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строку, из-за которой метка в .NET MAUI не обновляется после команды
+    prompt: |
+      Модель представления написана на `CommunityToolkit.Mvvm`. На странице есть `Label Text="{Binding Count}"` и
+      `Button Command="{Binding IncrementCommand}"`, `BindingContext` страницы - экземпляр `CounterViewModel`.
+      Команда срабатывает, и в отладчике видно, что значение счётчика растёт, но метка всё время показывает `0`.
+      Исключений нет. Щёлкните по строке с дефектом.
+    hint: Через что должна проходить запись значения, чтобы привязка узнала об изменении?
+    answer: Строка 14, `_count++` меняет поле напрямую, минуя сгенерированное свойство `Count`.
+    explanation: |
+      Для поля `_count` с атрибутом `[ObservableProperty]` генератор создаёт свойство `Count`. Его сеттер
+      сравнивает новое значение со старым, вызывает частичные методы `OnCountChanging` и `OnCountChanged` и
+      поднимает `PropertyChanging` и `PropertyChanged`. Само поле остаётся обычным полем: запись в него ничего не
+      уведомляет.
+
+      Привязка `{Binding Count}` подписана на `PropertyChanged` модели представления. Строка `_count++` меняет
+      значение, но событие не возникает, поэтому метка не узнаёт о новом значении и показывает старое.
+
+      Исправление - писать через свойство: `Count++;`. `[RelayCommand]` в этом коде работает правильно: из
+      метода `Increment` он создаёт свойство `IncrementCommand`, к которому и привязана кнопка.
+    linkTitles:
+      - "Атрибут ObservableProperty в CommunityToolkit.Mvvm"
+      - "Атрибут RelayCommand в CommunityToolkit.Mvvm"
+  en:
+    title: Find the line that keeps a .NET MAUI label from updating after a command
+    prompt: |
+      The view model uses `CommunityToolkit.Mvvm`. The page has `Label Text="{Binding Count}"` and
+      `Button Command="{Binding IncrementCommand}"`, and the page `BindingContext` is a `CounterViewModel` instance.
+      The command runs, and the debugger shows the counter value growing, but the label keeps showing `0`.
+      There is no exception. Click the line that contains the defect.
+    hint: What must a write of the value go through for the binding to learn about the change?
+    answer: Line 14, `_count++` changes the field directly and bypasses the generated `Count` property.
+    explanation: |
+      For the field `_count` marked `[ObservableProperty]` the generator creates a `Count` property. Its setter
+      compares the new value with the old one, calls the partial methods `OnCountChanging` and `OnCountChanged`,
+      and raises `PropertyChanging` and `PropertyChanged`. The field itself stays an ordinary field: writing to it
+      notifies nobody.
+
+      The `{Binding Count}` binding listens to the view model's `PropertyChanged`. The line `_count++` changes the
+      value, but no event is raised, so the label never learns about the new value and keeps the old one.
+
+      The fix is to write through the property: `Count++;`. `[RelayCommand]` works correctly here: from the
+      method `Increment` it creates the `IncrementCommand` property that the button binds to.
+    linkTitles:
+      - "The ObservableProperty attribute in CommunityToolkit.Mvvm"
+      - "The RelayCommand attribute in CommunityToolkit.Mvvm"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  noRunReason: The code needs the CommunityToolkit.Mvvm NuGet package and its source generators, and the bug is only visible through a .NET MAUI binding; the sandbox has no NuGet packages and no UI host.

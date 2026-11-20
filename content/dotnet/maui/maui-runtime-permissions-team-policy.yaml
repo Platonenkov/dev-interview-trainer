@@ -1,0 +1,160 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPTMMTB0KSAX4SJY39
+slug: maui-runtime-permissions-team-policy
+stack: dotnet
+topic: maui
+level: lead
+type: open
+grading: self
+tags: [maui, permissions, platform-code, android, ios, team-rules]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/maui/platform-integration/appmodel/permissions
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/maui/platform-integration/appmodel/main-thread
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/maui/platform-integration/appmodel/app-information
+    lang: en
+    kind: docs
+  - url: https://developer.android.com/training/permissions/requesting
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какие правила запроса разрешений во время выполнения задать команде в приложении .NET MAUI?
+    prompt: |
+      Команда делает приложение .NET MAUI для Android и iOS, которое использует камеру и геолокацию. Каждый
+      разработчик запрашивает разрешения по-своему: кто-то все сразу при старте, кто-то прямо из модели
+      представления, кто-то не обрабатывает отказ. Баги всплывают только на одной платформе и обычно после
+      того, как пользователь нажал «Запретить».
+
+      Какие правила вы зададите команде, чтобы запрос разрешений вёл себя одинаково на Android и iOS, и почему
+      именно такие?
+    hint: Что, кроме самого вызова API, ведёт себя по-разному на Android и iOS - до первого запроса и после отказа пользователя?
+    answer: |
+      - **Одна точка входа.** Все проверки и запросы идут через один внедряемый сервис (например,
+        `IPermissionService`) поверх `Permissions.CheckStatusAsync<T>()` и `Permissions.RequestAsync<T>()`.
+        Страницы и модели представления не вызывают статический `Permissions` напрямую: сценарий одинаков на
+        всех платформах, а модели представления можно тестировать с фейком.
+      - **Запрос в момент использования.** Разрешение запрашивается прямо перед тем, как оно нужно функции
+        (пользователь нажал «Сканировать», открыл карту), а не пачкой при старте. Пользователь понимает, зачем
+        приложение спрашивает, и вероятность согласия выше.
+      - **Сначала проверка, потом запрос.** `CheckStatusAsync` перед каждым использованием и без кэширования
+        результата: пользователь может изменить разрешение в системных настройках, пока приложение в фоне.
+        Сервис учитывает, что статусы платформ различаются: если пользователя ещё ни разу не спрашивали, iOS
+        возвращает `Unknown`, а Android - `Denied`, поэтому `Denied` от проверки на Android ещё не означает отказ.
+      - **Запрос в главном потоке.** `RequestAsync` показывает системный диалог, поэтому командное правило -
+        вызывать его только из главного потока. Сервис делает это сам через `MainThread.InvokeOnMainThreadAsync`,
+        и вызывающему коду не нужно помнить, в каком потоке он оказался после `await`.
+      - **Объяснение до запроса.** На Android `Permissions.ShouldShowRationale<T>()` показывает, что пользователь
+        уже отказывал раньше: тогда сначала показать собственное объяснение, а потом запрашивать. Для
+        чувствительных разрешений экран с объяснением показывается и перед первым системным диалогом на обеих
+        платформах.
+      - **Отказ - штатный сценарий.** Для каждой функции определено поведение при `Denied`, `Restricted` и, на iOS,
+        `Limited`: функция деградирует, а пользователю предлагается открыть настройки приложения через
+        `AppInfo.Current.ShowSettingsUI()`. Это нужно потому, что после отказа системный диалог может больше не
+        появиться: на iOS при статусе `Denied` пользователя следует отправить в настройки, а на Android, начиная с
+        Android 11, после двух отказов система перестаёт показывать диалог для этого разрешения. Никаких падений
+        и никаких запросов в цикле.
+      - **Объявление - часть изменения.** Разрешение, которое использует код, объявляется для каждой платформы:
+        `<uses-permission>` в `AndroidManifest.xml` и ключ описания в `Info.plist` с понятным локализованным
+        текстом (`NSCameraUsageDescription`, `NSLocationWhenInUseUsageDescription`). Если разрешение не объявлено,
+        `CheckStatusAsync` выбрасывает `PermissionException`. PR, который добавляет разрешение, меняет оба файла,
+        и это проверяется по чек-листу code review.
+      - **Минимально необходимое разрешение.** `LocationWhenInUse`, а не `LocationAlways`, если функции не нужен
+        доступ в фоне. Каждое новое разрешение - решение команды с записанной причиной: от него зависят проверка
+        в магазинах приложений и политика конфиденциальности.
+      - **Матрица проверок.** Сценарии для ручных или UI-тестов на обеих платформах: первый запуск, согласие,
+        отказ, повторный отказ, отзыв разрешения в настройках, пока приложение в фоне, а также минимальная и
+        целевая версии Android.
+    explanation: |
+      Класс `Permissions` скрывает различия платформенных API, но не различия в поведении. Документация MAUI
+      прямо говорит, что у каждой операционной системы свой набор разрешений и что даже у общего разрешения
+      поведение может различаться. Платформы по-разному объявляют разрешения (манифест против `Info.plist`),
+      возвращают разный статус до первого запроса (`Unknown` на iOS, `Denied` на Android), только iOS возвращает
+      `Limited`, и после отказа повторный системный диалог на обеих платформах не гарантирован. Если каждый
+      разработчик пишет свой сценарий, ошибки проявляются только на одной платформе и только после отказа, а
+      именно этот путь разработчики проверяют реже всего: на своих устройствах они давно всё разрешили.
+
+      Поэтому задача ведущего разработчика - сделать правильный путь самым простым. Общий сервис фиксирует
+      порядок «проверить - объяснить - запросить в главном потоке - обработать отказ» в одном месте, чек-лист PR
+      не даёт забыть объявление на второй платформе, а матрица проверок покрывает сценарии, которые иначе
+      всплывают только в отзывах пользователей. Запрос в момент использования и минимальный набор разрешений
+      снижают долю отказов, а когда система больше не показывает диалог, у приложения остаётся один путь -
+      отправить пользователя в настройки.
+    linkTitles:
+      - "Разрешения в .NET MAUI"
+      - "Главный поток в .NET MAUI (MainThread)"
+      - "Сведения о приложении в .NET MAUI (AppInfo)"
+      - "Запрос разрешений во время выполнения в Android"
+  en:
+    title: What runtime permission rules should a team set for a .NET MAUI app?
+    prompt: |
+      The team builds a .NET MAUI app for Android and iOS that uses the camera and location. Every developer
+      requests permissions in their own way: some request everything at startup, some call it straight from a
+      view model, some do not handle a denial. Bugs show up on only one platform, usually after the user taps
+      "Don't allow".
+
+      What rules do you set for the team so that permission requests behave the same way on Android and iOS,
+      and why these rules?
+    hint: Besides the API call itself, what behaves differently on Android and iOS - before the first request and after the user says no?
+    answer: |
+      - **One entry point.** All checks and requests go through one injected service (for example
+        `IPermissionService`) built on `Permissions.CheckStatusAsync<T>()` and `Permissions.RequestAsync<T>()`.
+        Pages and view models never call the static `Permissions` class directly: the flow is the same on every
+        platform, and view models can be tested with a fake.
+      - **Ask at the point of use.** A permission is requested right before the feature needs it (the user taps
+        "Scan", opens the map), not in a batch at startup. The user understands why the app asks, and consent is
+        more likely.
+      - **Check first, request second.** `CheckStatusAsync` before every use and without caching the result: the
+        user can change the permission in system settings while the app is in the background. The service
+        accounts for different platform statuses: if the user has never been asked, iOS returns `Unknown` while
+        Android returns `Denied`, so `Denied` from a check on Android does not yet mean a refusal.
+      - **Request on the main thread.** `RequestAsync` shows a system dialog, so the team rule is to call it only
+        from the main thread. The service does this itself through `MainThread.InvokeOnMainThreadAsync`, and the
+        calling code does not have to remember which thread it is on after an `await`.
+      - **Explain before asking.** On Android `Permissions.ShouldShowRationale<T>()` tells you that the user has
+        already refused before: then show your own explanation first and request after it. For sensitive
+        permissions an explanation screen also comes before the first system dialog on both platforms.
+      - **Denial is a normal path.** Every feature has a defined behaviour for `Denied`, `Restricted` and, on iOS,
+        `Limited`: the feature degrades and the user is offered to open the app settings through
+        `AppInfo.Current.ShowSettingsUI()`. This matters because after a denial the system dialog may not appear
+        again: on iOS a `Denied` status means you should send the user to settings, and on Android, starting with
+        Android 11, after two denials the system stops showing the dialog for that permission. No crashes and no
+        request loops.
+      - **The declaration is part of the change.** A permission used in code is declared for each platform:
+        `<uses-permission>` in `AndroidManifest.xml` and the usage description key in `Info.plist` with a clear,
+        localized text (`NSCameraUsageDescription`, `NSLocationWhenInUseUsageDescription`). If the permission is
+        not declared, `CheckStatusAsync` throws `PermissionException`. A PR that adds a permission changes both
+        files, and the code review checklist checks it.
+      - **The minimum permission.** `LocationWhenInUse` rather than `LocationAlways`, unless the feature needs
+        background access. Every new permission is a team decision with a written reason: app store review and
+        the privacy policy depend on it.
+      - **A test matrix.** Scenarios for manual or UI tests on both platforms: first launch, grant, deny, deny
+        again, revoke in settings while the app is in the background, plus the minimum and target Android
+        versions.
+    explanation: |
+      The `Permissions` class hides the differences between platform APIs, but not the differences in behaviour.
+      The MAUI documentation states that each operating system has its own set of permissions and that even a
+      common permission may behave differently. The platforms declare permissions differently (manifest versus
+      `Info.plist`), return a different status before the first request (`Unknown` on iOS, `Denied` on Android),
+      only iOS returns `Limited`, and after a denial a repeated system dialog is not guaranteed on either
+      platform. If every developer writes their own flow, bugs appear on only one platform and only after a
+      denial, which is exactly the path developers test least: on their own devices they granted everything
+      long ago.
+
+      So the lead's job is to make the right way the easiest way. A shared service fixes the order "check -
+      explain - request on the main thread - handle denial" in one place, the PR checklist keeps the declaration
+      on the second platform from being forgotten, and the test matrix covers scenarios that otherwise surface
+      only in user reviews. Asking at the point of use and keeping the permission set minimal lower the denial
+      rate, and when the system no longer shows the dialog, the only path left to the app is sending the user
+      to settings.
+    linkTitles:
+      - "Permissions in .NET MAUI"
+      - "Main thread in .NET MAUI (MainThread)"
+      - "App information in .NET MAUI (AppInfo)"
+      - "Request runtime permissions on Android"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

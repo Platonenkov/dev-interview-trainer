@@ -1,0 +1,156 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RMH0CYCQ2FJWD9GPYC
+slug: blazor-wasm-form-validation-duplicated-on-api
+stack: dotnet
+topic: blazor
+level: lead
+type: situation
+grading: self
+tags: [blazor, forms, validation, webassembly, security]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/forms/validation
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/security/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/mvc/models/validation
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Правила валидации в формах Blazor WebAssembly и в API разошлись, и в базу попали плохие данные. Что вы измените?
+    prompt: |
+      Команда поддерживает приложение Blazor WebAssembly на .NET 10 и ASP.NET Core API, в который оно пишет данные.
+      Формы построены на `EditForm` с `DataAnnotationsValidator`, атрибуты валидации стоят на клиентских моделях.
+      У API свои DTO и проверки, написанные вручную. За год правила разошлись: форма ограничивает скидку диапазоном
+      0-30% и проверяет формат email, а API проверяет только обязательность полей.
+
+      В базе нашлись заказы со скидкой 90% и некорректными email. Часть из них пришла от интеграционного скрипта,
+      который вызывает API напрямую, часть - от пользователей с закэшированной старой версией клиента.
+
+      Вы технический лидер. Что вы измените в коде, в данных и в процессе команды?
+    hint: |
+      Где на самом деле выполняется код клиентской валидации и кто, кроме вашей формы, может отправить запрос
+      в API? Сколько копий одного правила должно существовать?
+    answer: |
+      1. **Закрыть дыру на сервере сразу.** API - единственная граница доверия: каждый пишущий эндпоинт проверяет
+         запрос сам, даже если временно придётся продублировать правила. Сразу же запланировать ограничения в базе
+         для ключевых инвариантов (`CHECK` на диапазон скидки, `NOT NULL`, длины столбцов) как последний рубеж,
+         но включать их только после очистки данных (шаг 2).
+      2. **Разобраться с уже попавшими данными.** Найти некорректные строки запросом, по логам определить
+         источники (скрипт, старый клиент), вместе с владельцем бизнеса решить, что исправить, а что пометить,
+         выполнить исправление отдельной миграцией данных и только затем включить ограничения в базе.
+      3. **Оставить одну копию правил.** Вынести DTO запросов с атрибутами валидации в общую библиотеку классов,
+         на которую ссылаются и клиент, и API. Форма использует этот DTO как модель `EditForm`, а API проверяет
+         тот же тип: контроллер с `[ApiController]` автоматически отвечает 400 с `ValidationProblemDetails`,
+         а для minimal API в .NET 10 встроенную проверку тех же атрибутов включает `builder.Services.AddValidation()`.
+         Если команда предпочитает отдельные классы-валидаторы, они тоже живут в общей библиотеке.
+      4. **Помнить, что библиотека уходит в браузер.** В ней только модели и правила: никаких секретов,
+         строк подключения, EF Core и других серверных зависимостей. Правила, которым нужны данные (уникальность,
+         остатки, права доступа), остаются только на сервере.
+      5. **Показывать ошибки сервера в форме.** Ответ 400 разбирать и выводить ошибки у полей через
+         `ValidationMessageStore` в компоненте-валидаторе: статья о валидации форм Blazor показывает работу с
+         `ValidationMessageStore`, а за готовым переиспользуемым компонентом отсылает к статье о расширенной
+         валидации форм. Тогда серверные правила не выглядят для пользователя как «что-то сломалось».
+      6. **Закрепить процессом.** Правило меняется только в общей библиотеке; на него есть табличные тесты
+         валидных и невалидных значений; интеграционные тесты API отправляют невалидные запросы и ждут 400;
+         в code review довод «клиент уже проверил» не принимается.
+      7. **Учесть расхождение версий.** Старый клиент из кэша браузера будет присылать запросы по старым правилам.
+         API отвечает ему понятными ошибками валидации, а не 500, и строгие правила включаются после миграции
+         данных и предупреждения владельцев интеграций.
+    explanation: |
+      Клиентская валидация в Blazor WebAssembly - это удобство для пользователя, а не защита. Сборки приложения
+      скачиваются в браузер и выполняются на машине пользователя: их можно изучить и изменить, а запрос в API
+      можно отправить вообще без формы, как это делал интеграционный скрипт. В документации по безопасности Blazor
+      этот принцип сформулирован для авторизации: проверки на клиенте пользователь может изменить или обойти,
+      поэтому правила доступа применяет сервер. Для валидации данных логика та же. Поэтому первое действие -
+      серверная проверка, а не починка формы.
+
+      Правила разошлись потому, что существовали в двух копиях, которые меняли разные люди. Общий C#-код для
+      клиента и сервера - одно из главных преимуществ Blazor: один DTO с атрибутами даёт одинаковые проверки в
+      `DataAnnotationsValidator` и в валидации модели ASP.NET Core. При этом общая библиотека не отменяет
+      серверной проверки: она лишь гарантирует, что клиент и сервер проверяют одно и то же, а сервер всё равно
+      проверяет всегда.
+
+      Не всё можно разделить: правило «email уникален» требует базы, поэтому сервер должен уметь вернуть
+      ошибку поля, а форма - показать её. Ограничения в базе ловят то, что прошло мимо кода (скрипты, ошибки
+      в новых эндпоинтах), но дают плохие сообщения об ошибках, поэтому это страховка, а не основной механизм.
+      Отдельный риск для лида - порядок выкатки: если включить ограничение в базе до очистки данных, миграция
+      упадёт, а если ужесточить API без предупреждения, сломаются интеграции.
+
+      Описание соответствует Blazor и ASP.NET Core в .NET 10.
+    linkTitles:
+      - "Валидация форм в ASP.NET Core Blazor"
+      - "Проверка подлинности и авторизация в ASP.NET Core Blazor"
+      - "Валидация модели в ASP.NET Core MVC"
+  en:
+    title: Validation rules in Blazor WebAssembly forms and in the API have drifted apart and let bad data in. What do you change?
+    prompt: |
+      The team maintains a Blazor WebAssembly app on .NET 10 and the ASP.NET Core API it writes to.
+      Forms are built with `EditForm` and `DataAnnotationsValidator`, and the validation attributes sit on client-side models.
+      The API has its own DTOs and hand-written checks. Over a year the rules drifted apart: the form limits the discount
+      to 0-30% and checks the email format, while the API checks only that fields are present.
+
+      The database now contains orders with a 90% discount and invalid emails. Some came from an integration script
+      that calls the API directly, some from users running an older cached version of the client.
+
+      You are the tech lead. What do you change in the code, in the data and in the team's process?
+    hint: |
+      Where does the client-side validation code actually run, and who besides your form can send a request
+      to the API? How many copies of one rule should exist?
+    answer: |
+      1. **Close the hole on the server first.** The API is the only trust boundary: every write endpoint validates
+         the request itself, even if that means duplicating rules for a while. At the same time plan database
+         constraints for the key invariants (a `CHECK` on the discount range, `NOT NULL`, column lengths) as the last
+         line of defence, but enable them only after the data is cleaned (step 2).
+      2. **Deal with the data that is already in.** Find the invalid rows with a query, use logs to identify the
+         sources (the script, the old client), decide with the business owner what to fix and what to flag, run
+         the fix as a separate data migration, and only then enable the database constraints.
+      3. **Keep one copy of the rules.** Move the request DTOs with their validation attributes into a shared class
+         library referenced by both the client and the API. The form uses that DTO as the `EditForm` model, and the
+         API validates the same type: a controller with `[ApiController]` automatically answers 400 with
+         `ValidationProblemDetails`, and for minimal APIs in .NET 10 `builder.Services.AddValidation()` turns on
+         built-in validation of the same attributes. If the team prefers separate validator classes, they live in the
+         shared library too.
+      4. **Remember that the library ships to the browser.** It holds only models and rules: no secrets, no connection
+         strings, no EF Core or other server dependencies. Rules that need data (uniqueness, stock, permissions) stay
+         on the server only.
+      5. **Show server errors in the form.** Parse the 400 response and show the errors next to the fields with a
+         `ValidationMessageStore` in a validator component: the Blazor forms validation article shows how to work with
+         `ValidationMessageStore` and points to the advanced form validation article for a complete reusable component.
+         Then server rules do not look to the user like "something broke".
+      6. **Lock it in with process.** A rule changes only in the shared library; it has table-driven tests of valid and
+         invalid values; API integration tests send invalid requests and expect 400; in code review "the client already
+         checked it" is not accepted.
+      7. **Plan for version skew.** An old client from the browser cache will keep sending requests under the old rules.
+         The API answers it with clear validation errors, not 500, and strict rules are switched on after the data
+         migration and after the owners of integrations are warned.
+    explanation: |
+      Client-side validation in Blazor WebAssembly is a convenience for the user, not protection. The app assemblies are
+      downloaded to the browser and run on the user's machine: they can be inspected and modified, and a request can be
+      sent to the API with no form at all, as the integration script did. The Blazor security docs state this principle
+      for authorization: client-side checks can be modified or bypassed by the user, so access rules are enforced by the
+      server. The same reasoning applies to data validation. That is why the first action is server validation, not
+      fixing the form.
+
+      The rules drifted because they existed in two copies changed by different people. Sharing C# code between client
+      and server is one of the main advantages of Blazor: one DTO with attributes gives the same checks in
+      `DataAnnotationsValidator` and in ASP.NET Core model validation. The shared library does not replace server
+      validation, though: it only guarantees that client and server check the same thing, while the server always checks.
+
+      Not everything can be shared: "the email is unique" needs the database, so the server must be able to return a
+      field error and the form must be able to show it. Database constraints catch what got past the code (scripts, bugs
+      in endpoints added later), but they produce poor error messages, so they are a safety net, not the main mechanism.
+      A specific risk for a lead is the rollout order: enable a database constraint before cleaning the data and the
+      migration fails; tighten the API without warning and integrations break.
+
+      The description applies to Blazor and ASP.NET Core in .NET 10.
+    linkTitles:
+      - "ASP.NET Core Blazor forms validation"
+      - "ASP.NET Core Blazor authentication and authorization"
+      - "Model validation in ASP.NET Core MVC"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

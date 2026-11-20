@@ -1,0 +1,158 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPPWA8F1D47XMM7JND
+slug: maui-detail-page-never-collected
+stack: dotnet
+topic: maui
+level: senior
+type: situation
+grading: self
+tags: [maui, memory-leak, garbage-collection, dotnet-gcdump, diagnostics, lifecycle]
+links:
+  - url: https://github.com/dotnet/maui/wiki/Memory-Leaks
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-gcdump
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Память MAUI-приложения растёт после каждого закрытия страницы заказа: как найти, что её удерживает?"
+    prompt: |
+      В приложении на .NET MAUI пользователь открывает страницу деталей заказа `OrderDetailPage` и возвращается
+      назад. После каждого такого цикла потребление памяти вырастает на несколько мегабайт и не уменьшается,
+      через полчаса работы Android начинает завершать приложение в фоне.
+
+      Как вы докажете, что дело именно в странице, найдёте, что её удерживает, и исправите проблему?
+    hint: |
+      Как отличить «страница всё ещё достижима» от «сборщик мусора просто ещё не пришёл»? И какой объект в
+      приложении живёт дольше страницы и может хранить ссылку на неё?
+    answer: |
+      1. **Воспроизвести и доказать утечку.** Замерять Release-сборку с выключенным XAML Hot Reload: Hot Reload
+         искажает снимки памяти, а Debug отличается от Release компиляцией XAML, AOT, усечением (trimming) и тем,
+         как долго живут локальные переменные. Открыть и закрыть страницу 10-20 раз и смотреть на тренд памяти, а
+         не на одно значение. Затем доказать, что не собирается именно страница: при открытии сохранить
+         `WeakReference` на страницу и её модель представления, после возврата назад вызвать
+         `GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();` и записать в лог `IsAlive`. Более быстрый
+         вариант - финализатор страницы, который пишет в лог, плюс `GC.Collect()` при следующей навигации (только
+         на время отладки, потом убрать). Если страница переживает несколько сборок, её удерживает какой-то корень.
+         Если она собирается, растёт что-то другое (кэш изображений, нативная память), и это отдельное расследование.
+      2. **Снять дампы кучи.** `dotnet-gcdump collect` для приложения на устройстве или эмуляторе. На Android и iOS
+         подключение идёт через `dotnet-dsrouter` (его запускает параметр `--dsrouter`), а Release-сборке для iOS
+         нужен `EnableDiagnostics=true`, чтобы в неё попал диагностический компонент. Снять один дамп после пары
+         открытий страницы и второй после двадцати, сравнить число экземпляров `OrderDetailPage`, её модели
+         представления и элементов управления. Открыть дампы в Visual Studio (она умеет сравнивать несколько) или
+         в PerfView на Windows и пройти путь от лишнего экземпляра страницы до корня GC.
+      3. **Найти типичный корень.**
+         - Подписка методом экземпляра на событие долгоживущего объекта: singleton-сервиса,
+           `Application.Current.RequestedThemeChanged`, статического события. Список делегатов издателя хранит
+           ссылку на подписчика. Исправление: симметричная отписка (подписаться в `OnAppearing` или
+           `OnNavigatedTo`, отписаться в `OnDisappearing` или `OnNavigatedFrom`) либо слабые события.
+         - Мессенджер: регистрация в `StrongReferenceMessenger` без `Unregister`. Отписаться явно или перейти на
+           `WeakReferenceMessenger`.
+         - Время жизни в DI: страница или модель представления зарегистрированы через `AddSingleton`, либо
+           singleton-сервис сохраняет ссылку на transient-страницу или модель (колбэк, список слушателей). Сам по
+           себе singleton-страница - один экземпляр, но всё, что она накапливает, живёт до конца работы
+           приложения, а singleton, захвативший transient-объекты, удерживает по копии на каждое открытие.
+         - Таймеры и фоновая работа: не остановленный `IDispatcherTimer` или цикл в `Task` без отмены, если их
+           лямбда-выражения захватывают `this`.
+         - Собственные обработчики (handlers) и платформенный код: подписки на события нативных элементов, которые
+           не снимаются в `DisconnectHandler`. На iOS и Mac Catalyst отдельный случай - цикл через нативный
+           объект: C#-подкласс `NSObject` (например, собственное нативное представление) хранит сильную ссылку на
+           объект, который ссылается обратно на него, и такой цикл сборщик мусора может не разорвать. Исправление:
+           не хранить такие ссылки в подклассе `NSObject` или держать их через `WeakReference`.
+      4. **Исправить и закрепить.** Убрать корень, повторить проверку через `WeakReference` и сравнение дампов.
+         Добавить автоматическую проверку: тест переходит на страницу и обратно и утверждает, что слабая ссылка
+         на страницу после сборки мусора мертва.
+    explanation: |
+      Утечка в управляемом коде - это не «забытый `free`», а объект, который больше не нужен, но всё ещё
+      достижим из корня. Сборщик мусора собирает только недостижимые объекты, поэтому вопрос всегда звучит
+      так: какая цепочка ссылок ведёт к странице. Страница, оставшаяся достижимой, удерживает всё визуальное
+      дерево, нативные представления и изображения, отсюда и мегабайты на каждое открытие.
+
+      `WeakReference` не мешает сборке, поэтому это дешёвый и однозначный тест: после принудительной полной
+      сборки (с ожиданием финализаторов) живой объект точно удерживается. Без такого доказательства рост
+      памяти легко спутать с отложенной сборкой или ростом нативного кэша. Проверять стоит Release-сборку без
+      Hot Reload, иначе замеры отражают не то приложение, которое получат пользователи. `dotnet-gcdump` перед
+      снятием дампа выполняет полную сборку поколения 2, поэтому в дампе остаются только достижимые объекты, а
+      инструмент просмотра показывает путь до корня - это и отвечает на вопрос «кто держит».
+
+      Почти все реальные корни сводятся к одному: объект, живущий дольше страницы, хранит ссылку на неё или её
+      модель представления. Событие хранит делегат с подписчиком, singleton живёт столько же, сколько
+      контейнер, работающий таймер - пока его не остановят. Поэтому исправление - снимать каждую подписку
+      симметрично её созданию и выбирать время жизни в DI осознанно. Тест на сборку страницы защищает от
+      повторения: утечки возвращаются незаметно, с очередной подпиской.
+    linkTitles:
+      - "Утечки памяти в .NET MAUI (вики репозитория dotnet/maui)"
+      - "Инструмент dotnet-gcdump"
+  en:
+    title: "A .NET MAUI app's memory grows after every visit to an order page: how do you find what keeps the page alive?"
+    prompt: |
+      In a .NET MAUI app a user opens the order detail page `OrderDetailPage` and goes back. After each such
+      round trip memory grows by several megabytes and never drops; after half an hour of use Android starts
+      killing the app in the background.
+
+      How do you prove that the page is the problem, find what keeps it alive, and fix it?
+    hint: |
+      How do you tell "the page is still reachable" apart from "the garbage collector has not run yet"? And which
+      object in the app lives longer than the page and could hold a reference to it?
+    answer: |
+      1. **Reproduce and prove the leak.** Measure a Release build with XAML Hot Reload turned off: Hot Reload makes
+         memory snapshots inaccurate, and Debug differs from Release in XAML compilation, AOT, trimming and how long
+         local variables stay alive. Open and close the page 10-20 times and look at the memory trend, not a single
+         number. Then prove that the page itself is not collected: when it opens, keep a `WeakReference` to the page
+         and its view model; after going back, call `GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();`
+         and log `IsAlive`. A quicker variant is a finalizer on the page that writes to the log, plus a
+         `GC.Collect()` on the next navigation (debugging only, removed afterward). If the page survives several
+         collections, some root reaches it. If it is collected, something else grows (an image cache, native
+         memory), and that is a different investigation.
+      2. **Take heap dumps.** Run `dotnet-gcdump collect` against the app on the device or emulator. On Android and
+         iOS the connection goes through `dotnet-dsrouter` (the `--dsrouter` option starts it), and an iOS Release
+         build needs `EnableDiagnostics=true` to include the diagnostics component. Take one dump after a couple of
+         visits and another after twenty, and compare instance counts of `OrderDetailPage`, its view model and its
+         controls. Open the dumps in Visual Studio (it can compare several) or PerfView on Windows and follow the
+         path from an extra page instance to its GC root.
+      3. **Recognise the typical root.**
+         - An instance-method subscription to an event of a long-lived object: a singleton service,
+           `Application.Current.RequestedThemeChanged`, a static event. The publisher's delegate list holds the
+           subscriber. Fix: unsubscribe symmetrically (subscribe in `OnAppearing` or `OnNavigatedTo`, unsubscribe in
+           `OnDisappearing` or `OnNavigatedFrom`), or use weak events.
+         - A messenger: registration with `StrongReferenceMessenger` without `Unregister`. Unregister explicitly or
+           switch to `WeakReferenceMessenger`.
+         - DI lifetimes: the page or view model is registered with `AddSingleton`, or a singleton service stores a
+           reference to a transient page or view model (a callback, a list of listeners). A singleton page is one
+           instance by itself, but everything it accumulates lives until the app ends, and a singleton that
+           captures transient objects keeps one copy per visit.
+         - Timers and background work: an `IDispatcherTimer` that is never stopped, or a loop in a `Task` without
+           cancellation, when their lambdas capture `this`.
+         - Custom handlers and platform code: native event subscriptions not removed in `DisconnectHandler`. On iOS
+           and Mac Catalyst there is a separate case, a cycle through a native object: a C# subclass of `NSObject`
+           (for example a custom native view) holds a strong reference to an object that refers back to it, and
+           the garbage collector may fail to break such a cycle. Fix: do not keep such references in the `NSObject`
+           subclass, or hold them through a `WeakReference`.
+      4. **Fix and lock it in.** Remove the root, repeat the `WeakReference` check and the dump comparison. Add an
+         automated check: a test navigates to the page and back and asserts that the weak reference to the page is
+         dead after a garbage collection.
+    explanation: |
+      A leak in managed code is not a "forgotten `free`" but an object that is no longer needed and is still
+      reachable from a root. The garbage collector collects only unreachable objects, so the question is always
+      which chain of references leads to the page. A page that stays reachable keeps its whole visual tree,
+      native views and images, which is where the megabytes per visit come from.
+
+      A `WeakReference` does not prevent collection, so it is a cheap and unambiguous test: after a forced full
+      collection (waiting for finalizers) an object that is still alive is definitely being held. Without that
+      proof, memory growth is easy to confuse with a delayed collection or a growing native cache. Measure a
+      Release build without Hot Reload, otherwise the numbers describe a different app from the one users get.
+      `dotnet-gcdump` runs a full generation 2 collection before it captures the dump, so only reachable objects
+      remain in it, and the viewer shows the path to the root, which answers "who holds it".
+
+      Almost every real root comes down to one thing: an object that lives longer than the page holds a
+      reference to it or to its view model. An event holds a delegate with the subscriber, a singleton lives as
+      long as the container, a running timer lives until it is stopped. So the fix is to remove every
+      subscription symmetrically with its creation and to choose DI lifetimes deliberately. A test that checks
+      the page is collected guards against regressions: leaks come back quietly with the next subscription.
+    linkTitles:
+      - "Memory leaks in .NET MAUI (dotnet/maui repository wiki)"
+      - "dotnet-gcdump tool"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-20

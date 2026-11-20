@@ -1,0 +1,132 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RMAGBYCJA6J0S7PEVX
+slug: blazor-editform-needs-dataannotationsvalidator
+stack: dotnet
+topic: blazor
+level: junior
+type: single
+grading: auto
+tags: [blazor, forms, validation, editform]
+code:
+  language: razor
+  harness: none
+  source: |
+    @page "/person"
+    @rendermode InteractiveServer
+    @using System.ComponentModel.DataAnnotations
+
+    <EditForm Model="person" OnValidSubmit="Save">
+        <ValidationSummary />
+        <InputText @bind-Value="person.Name" />
+        <button type="submit">Save</button>
+    </EditForm>
+
+    @if (saved)
+    {
+        <p>Saved</p>
+    }
+
+    @code {
+        private Person person = new();
+        private bool saved;
+
+        private void Save() => saved = true;
+
+        public class Person
+        {
+            [Required]
+            public string? Name { get; set; }
+        }
+    }
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/forms/validation
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/forms/
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему EditForm в Blazor отправляется без сообщений об ошибках, хотя у модели есть [Required]?
+    prompt: |
+      Компонент Blazor (режим `InteractiveServer`, .NET 8 и более поздние версии, в том числе .NET 10) содержит
+      `EditForm` для модели `Person`, у свойства `Name` которой есть атрибут `[Required]`. Пользователь оставляет
+      поле пустым и нажимает Save: `ValidationSummary` ничего не показывает, а обработчик `OnValidSubmit` выполняется,
+      и на странице появляется «Saved». Какая причина?
+    hint: "`EditForm` создаёт `EditContext` и при отправке запрашивает проверку. Кто отвечает на этот запрос и читает атрибуты DataAnnotations?"
+    options:
+      a: "Атрибуты DataAnnotations в Blazor не поддерживаются: они проверяются только в контроллерах MVC, а в формах Blazor правила нужно писать вручную."
+      b: "Внутри `EditForm` нет компонента `<DataAnnotationsValidator />`, поэтому атрибуты `[Required]` никто не проверяет."
+      c: "Нужно использовать `OnSubmit` вместо `OnValidSubmit`: только он запускает проверку модели."
+      d: "Вместо `InputText` нужен обычный `<input @bind=\"person.Name\" />`: компоненты `Input*` не участвуют в проверке."
+    optionExplanations:
+      a: "Blazor поддерживает DataAnnotations: компонент `DataAnnotationsValidator` проверяет модель по этим атрибутам и записывает сообщения в `EditContext`."
+      c: "Наоборот: `OnSubmit` вызывается без автоматической проверки, и проверку тогда запускают сами через `EditContext.Validate()`. Без валидатора `Validate()` всё равно не найдёт ошибок."
+      d: "Наоборот: `InputText` сообщает `EditContext` об изменении поля и получает CSS-класс ошибки. Обычный `<input>` с `@bind` с `EditContext` не связан."
+    answer: "Внутри `EditForm` нет `<DataAnnotationsValidator />`, поэтому атрибуты `[Required]` игнорируются."
+    explanation: |
+      `EditForm` создаёт `EditContext` для модели. При отправке формы с `OnValidSubmit` он вызывает
+      `EditContext.Validate()`, а тот лишь вызывает событие запроса проверки. Сам `EditContext` ничего не знает
+      об атрибутах: правила проверки добавляет отдельный компонент-валидатор, который подписывается на события
+      `EditContext` и записывает сообщения об ошибках.
+
+      Для атрибутов из `System.ComponentModel.DataAnnotations` таким компонентом служит `DataAnnotationsValidator`.
+      Если его нет, на запрос проверки никто не отвечает, сообщений об ошибках нет, `Validate()` возвращает `true`,
+      и вызывается `OnValidSubmit`. `ValidationSummary` и `ValidationMessage` только показывают уже записанные
+      сообщения, поэтому выводить им нечего.
+
+      Исправление - добавить `<DataAnnotationsValidator />` внутрь `EditForm`. После этого пустое `Name` не
+      пройдёт проверку, `OnValidSubmit` не вызовется, а `ValidationSummary` покажет сообщение. Поведение одинаково
+      в .NET 8 и .NET 10.
+    linkTitles:
+      - "Проверка форм в ASP.NET Core Blazor"
+      - "Обзор форм в ASP.NET Core Blazor"
+  en:
+    title: Why does a Blazor EditForm submit without validation messages even though the model has [Required]?
+    prompt: |
+      A Blazor component (`InteractiveServer` mode, .NET 8 and later, including .NET 10) contains an `EditForm`
+      for a `Person` model whose `Name` property has a `[Required]` attribute. The user leaves the field empty and
+      clicks Save: `ValidationSummary` shows nothing, the `OnValidSubmit` handler runs, and "Saved" appears on the
+      page. What is the cause?
+    hint: "`EditForm` creates an `EditContext` and requests validation on submit. Who answers that request and reads the DataAnnotations attributes?"
+    options:
+      a: "DataAnnotations attributes are not supported in Blazor: they are checked only in MVC controllers, and Blazor forms need hand-written rules."
+      b: "There is no `<DataAnnotationsValidator />` component inside the `EditForm`, so nobody checks the `[Required]` attributes."
+      c: "You must use `OnSubmit` instead of `OnValidSubmit`: only it runs model validation."
+      d: "A plain `<input @bind=\"person.Name\" />` is needed instead of `InputText`: the `Input*` components do not take part in validation."
+    optionExplanations:
+      a: "Blazor supports DataAnnotations: the `DataAnnotationsValidator` component validates the model against these attributes and writes the messages into the `EditContext`."
+      c: "The opposite: `OnSubmit` is called without automatic validation, and you then run it yourself with `EditContext.Validate()`. Without a validator, `Validate()` still finds no errors."
+      d: "The opposite: `InputText` notifies the `EditContext` that the field changed and gets the error CSS class. A plain `<input>` with `@bind` is not connected to the `EditContext`."
+    answer: "There is no `<DataAnnotationsValidator />` inside the `EditForm`, so the `[Required]` attributes are ignored."
+    explanation: |
+      `EditForm` creates an `EditContext` for the model. When a form with `OnValidSubmit` is submitted, it calls
+      `EditContext.Validate()`, which only raises a validation-requested event. The `EditContext` itself knows
+      nothing about attributes: the rules are added by a separate validator component that subscribes to the
+      `EditContext` events and writes the error messages.
+
+      For the attributes from `System.ComponentModel.DataAnnotations` that component is `DataAnnotationsValidator`.
+      Without it nobody answers the validation request, there are no error messages, `Validate()` returns `true`
+      and `OnValidSubmit` is called. `ValidationSummary` and `ValidationMessage` only display messages that were
+      already written, so they have nothing to show.
+
+      The fix is to add `<DataAnnotationsValidator />` inside the `EditForm`. Then an empty `Name` fails
+      validation, `OnValidSubmit` is not called, and `ValidationSummary` shows the message. The behaviour is the
+      same in .NET 8 and .NET 10.
+    linkTitles:
+      - "ASP.NET Core Blazor forms validation"
+      - "ASP.NET Core Blazor forms overview"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"
+  noRunReason: "Razor component markup: Blazor forms need the ASP.NET Core renderer, which the BCL-only sandbox does not provide."

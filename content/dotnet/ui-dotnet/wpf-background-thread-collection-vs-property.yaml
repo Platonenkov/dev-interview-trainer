@@ -1,0 +1,158 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RRNJ94XBGQSAET19J0
+slug: wpf-background-thread-collection-vs-property
+stack: dotnet
+topic: ui-dotnet
+level: middle
+type: multi
+grading: auto
+tags: [wpf, data-binding, dispatcher, observablecollection, threading]
+code:
+  language: csharp
+  harness: none
+  source: |
+    public class SearchViewModel : INotifyPropertyChanged
+    {
+        private string _status = "";
+
+        public event PropertyChangedEventHandler PropertyChanged;
+
+        public ObservableCollection<string> Items { get; } = new();
+
+        public string Status
+        {
+            get => _status;
+            set
+            {
+                _status = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Status)));
+            }
+        }
+    }
+
+    // XAML: <TextBlock Text="{Binding Status}" />
+    //       <ListBox ItemsSource="{Binding Items}" />
+    //       <TextBox x:Name="nameTextBox" />
+    public partial class SearchWindow : Window
+    {
+        private readonly SearchViewModel vm = new();
+        private readonly object itemsLock = new();
+
+        public SearchWindow()
+        {
+            InitializeComponent();
+            DataContext = vm;
+        }
+
+        // Runs on the UI thread.
+        private async void OnSearchClick(object sender, RoutedEventArgs e)
+        {
+            await Task.Run(async () =>
+            {
+                // The change from the selected option runs here.
+                // The lambda is async because option e awaits the dispatcher.
+            });
+        }
+    }
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+  - id: e
+    correct: true
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.windows.data.bindingoperations.enablecollectionsynchronization
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/desktop/wpf/advanced/threading-model
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какие изменения из Task.Run безопасны для данных, привязанных в WPF?
+    prompt: |
+      Окно WPF привязано к `SearchViewModel` из кода к вопросу: `TextBlock` показывает `Status`, `ListBox`
+      показывает `Items`. Код внутри `Task.Run` выполняется в потоке из пула потоков.
+
+      Выберите все изменения, которые можно выполнить внутри `Task.Run` без исключения, так что экран
+      корректно обновится.
+    hint: Какие объекты WPF привязаны к потоку, который их создал, и что механизм привязки делает с уведомлением, пришедшим из другого потока?
+    options:
+      a: '`vm.Status = "Found 120 results";`'
+      b: '`vm.Items.Add("Order 42");`'
+      c: '`lock (itemsLock) { vm.Items.Add("Order 42"); }`, если поток UI заранее вызвал `BindingOperations.EnableCollectionSynchronization(vm.Items, itemsLock)`'
+      d: '`nameTextBox.Text = "Order 42";`'
+      e: '`await Application.Current.Dispatcher.InvokeAsync(() => vm.Items.Add("Order 42"));`'
+    optionExplanations:
+      b: "`ListBox` работает с коллекцией через `CollectionView`, который, как и сам `ItemsControl`, привязан к потоку UI. Событие `CollectionChanged` из фонового потока приводит к исключению (`NotSupportedException`): этот `CollectionView` не принимает изменения исходной коллекции из потока, отличного от потока `Dispatcher`."
+      d: "`TextBox` наследует `DispatcherObject` и привязан к потоку UI, который его создал. Обращение к его свойствам из другого потока не проходит проверку `VerifyAccess` и выбрасывает `InvalidOperationException`."
+    answer: "Установка скалярного свойства `Status`, добавление под блокировкой после `EnableCollectionSynchronization` и добавление через `Dispatcher.InvokeAsync`."
+    explanation: |
+      Если привязанное скалярное свойство источника меняется в фоновом потоке и вызывает `PropertyChanged`,
+      механизм привязки WPF доставляет новое значение в цель уже в потоке UI. Поэтому `vm.Status = ...` из
+      `Task.Run` обновит `TextBlock`. Это не делает модель представления потокобезопасной: если свойство пишут
+      несколько потоков, синхронизация остаётся на вас.
+
+      Для коллекций такого переноса по умолчанию нет. `ItemsControl` обращается к коллекции через
+      `CollectionView`, и оба привязаны к потоку UI, поэтому `CollectionChanged` из чужого потока заканчивается
+      исключением `NotSupportedException`. Есть два решения. Первое - перенести само изменение в поток UI через
+      `Dispatcher.InvokeAsync` (или `Invoke`). Второе - один раз вызвать в потоке UI
+      `BindingOperations.EnableCollectionSynchronization(collection, lockObject)`: тогда изменения коллекции
+      из любого потока со временем попадают в `ItemsControl`, а WPF сам берёт ту же блокировку, когда читает
+      коллекцию. Фоновый код при этом обязан менять коллекцию только под этой блокировкой.
+
+      Элементы управления жёстче всего привязаны к своему потоку: любое обращение к `nameTextBox` из фонового
+      потока проверяется через `VerifyAccess` и выбрасывает `InvalidOperationException`. Поэтому из фоновой
+      работы меняют модель представления, а не элементы управления.
+    linkTitles:
+      - "Метод BindingOperations.EnableCollectionSynchronization"
+      - "Модель потоков в WPF"
+  en:
+    title: Which changes made from Task.Run are safe for data bound in WPF?
+    prompt: |
+      A WPF window is bound to the `SearchViewModel` from the code of the question: a `TextBlock` shows `Status`
+      and a `ListBox` shows `Items`. The code inside `Task.Run` runs on a thread pool thread.
+
+      Select all changes that can be made inside `Task.Run` without an exception, so that the screen updates
+      correctly.
+    hint: Which WPF objects are tied to the thread that created them, and what does the binding engine do with a notification that comes from another thread?
+    options:
+      a: '`vm.Status = "Found 120 results";`'
+      b: '`vm.Items.Add("Order 42");`'
+      c: '`lock (itemsLock) { vm.Items.Add("Order 42"); }`, if the UI thread has called `BindingOperations.EnableCollectionSynchronization(vm.Items, itemsLock)` beforehand'
+      d: '`nameTextBox.Text = "Order 42";`'
+      e: '`await Application.Current.Dispatcher.InvokeAsync(() => vm.Items.Add("Order 42"));`'
+    optionExplanations:
+      b: "The `ListBox` works with the collection through a `CollectionView` which, like the `ItemsControl` itself, is tied to the UI thread. A `CollectionChanged` event from a background thread ends in an exception (`NotSupportedException`): this `CollectionView` does not accept changes to its source collection from a thread other than the `Dispatcher` thread."
+      d: "`TextBox` derives from `DispatcherObject` and is tied to the UI thread that created it. Accessing its properties from another thread fails the `VerifyAccess` check and throws `InvalidOperationException`."
+    answer: "Setting the scalar property `Status`, adding under the lock after `EnableCollectionSynchronization`, and adding through `Dispatcher.InvokeAsync`."
+    explanation: |
+      When a bound scalar source property changes on a background thread and raises `PropertyChanged`, the WPF
+      binding engine delivers the new value to the target on the UI thread. So `vm.Status = ...` from
+      `Task.Run` updates the `TextBlock`. This does not make the view model thread-safe: if several threads
+      write the property, synchronization is still your job.
+
+      Collections get no such marshaling by default. An `ItemsControl` accesses the collection through a
+      `CollectionView`, and both are tied to the UI thread, so a `CollectionChanged` from a foreign thread ends
+      in a `NotSupportedException`. There are two fixes. The first is to move the change itself to the UI thread
+      with `Dispatcher.InvokeAsync` (or `Invoke`). The second is to call
+      `BindingOperations.EnableCollectionSynchronization(collection, lockObject)` once on the UI thread: then
+      changes made to the collection on any thread eventually reach the `ItemsControl`, and WPF takes the same
+      lock whenever it reads the collection. The background code must then change the collection only under
+      that lock.
+
+      Controls are the most strictly tied to their thread: any access to `nameTextBox` from a background thread
+      goes through `VerifyAccess` and throws `InvalidOperationException`. That is why background work changes the
+      view model, not the controls.
+    linkTitles:
+      - "BindingOperations.EnableCollectionSynchronization method"
+      - "Threading model in WPF"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  noRunReason: The scenario needs a WPF window with bound controls and a Dispatcher; the sandbox has no WPF.

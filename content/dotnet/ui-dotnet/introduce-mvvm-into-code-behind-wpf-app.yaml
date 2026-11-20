@@ -1,0 +1,151 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RRPRSG1Z0V027CB015
+slug: introduce-mvvm-into-code-behind-wpf-app
+stack: dotnet
+topic: ui-dotnet
+level: lead
+type: open
+grading: self
+tags: [mvvm, wpf, legacy-code, refactoring, code-behind]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/architecture/maui/mvvm
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/communitytoolkit/mvvm/
+    lang: en
+    kind: docs
+  - url: https://martinfowler.com/bliki/StranglerFigApplication.html
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Как техлиду внедрить MVVM в большое WPF-приложение, где вся логика в code-behind, без заморозки фич?
+    prompt: |
+      Вы техлид большого WPF-приложения: около двухсот экранов, и почти вся логика живёт в обработчиках событий
+      в code-behind. `Button_Click` сам ходит в базу, проверяет ввод, показывает `MessageBox` и напрямую пишет
+      в `txtName.Text`. Модульных тестов на эту логику нет. Бизнес не готов остановить разработку: новые фичи
+      выходят каждый спринт.
+
+      Как вы будете внедрять MVVM: в каком порядке переводить экраны, как переносить логику, какие правила
+      ввести для команды и как контролировать прогресс и риски?
+    hint: |
+      Где в приложении код меняется чаще всего, и что помешает проблеме расти, пока вы её исправляете?
+    answer: |
+      1. **Договориться о цели и сделать эталонный экран.** Полностью перевести один экран средней сложности:
+         модель представления, команды, сервисы для диалогов и навигации, модульные тесты. Он становится
+         образцом для команды. Способ реализации (`ObservableObject` и `RelayCommand` из CommunityToolkit.Mvvm
+         или тонкие собственные базовые классы) выбрать один раз и зафиксировать в ADR.
+      2. **Подготовить инфраструктуру, при которой старое и новое живут рядом.** Корень композиции с
+         DI-контейнером при старте приложения, интерфейсы для диалогов, навигации и сообщений между экранами,
+         чтобы модель представления не вызывала `MessageBox` и не создавала окна сама. Непереведённые экраны
+         продолжают работать как раньше, а переведённый экран просто получает свой `DataContext`.
+      3. **Выбрать порядок по ценности.** Новые экраны - сразу на MVVM. Затем экраны, которые часто меняются
+         или часто ломаются (видно по истории коммитов и трекеру ошибок): их переводят в рамках фичи, которая
+         всё равно их затрагивает. Стабильные экраны, которые никто не трогает, оставляют как есть, возможно
+         навсегда.
+      4. **Переносить логику на экране маленькими шагами, каждый из которых можно выпустить.**
+         - Перед началом закрепить текущее поведение экрана: короткий чек-лист ручной проверки или несколько
+           UI-смоук-тестов.
+         - Вынести логику из обработчиков в класс модели представления, оставив обработчики тонкими:
+           `Save_Click` только вызывает `vm.Save()`. Сразу покрыть этот класс модульными тестами.
+         - Заменить прямую работу с элементами (`txtName.Text = ...`) на свойства с `INotifyPropertyChanged`
+           и привязки.
+         - Заменить обработчики `Click` на команды с `CanExecute` и удалить оставшийся code-behind.
+      5. **Ввести правило для нового кода и сделать его проверяемым.** В code-behind остаётся только поведение
+         самого представления: фокус, анимации, прокрутка, визуальная часть drag-and-drop, то, что требует
+         ссылки на элемент управления. Доступ к данным, бизнес-правила и решения о навигации туда не пишутся.
+         Правило закрепляется чек-листом code review и, надёжнее, отдельным проектом для моделей представления
+         без ссылки на WPF: обращение к элементу управления там просто не скомпилируется.
+      6. **Встроить работу в процесс.** Перевод затронутого экрана входит в Definition of Done задачи,
+         в оценки закладывается небольшой запас, первые переводы делаются в паре. Прогресс отслеживается
+         простыми метриками: число переведённых экранов, покрытие моделей представления тестами, число ошибок
+         на переведённых экранах. Бизнесу объясняется, что заморозки нет, но задачи на старых экранах
+         немного дороже.
+      7. **Управлять рисками.** Два стиля будут сосуществовать долго - это принимается и документируется.
+         Не переписывать всё разом, не строить лишних абстракций «на будущее» и не начинать с самого сложного
+         экрана.
+    explanation: |
+      Переписывание всего приложения разом требует заморозки или параллельной ветки, которая месяцами
+      расходится с основной, и весь риск проявляется в один момент. Постепенная замена, как в паттерне
+      Strangler Fig, даёт ценность сразу и позволяет остановиться в любой точке: каждый переведённый экран
+      уже работает в production.
+
+      Польза MVVM - тестируемая логика без UI и отделение представления от поведения. Эта польза окупается там,
+      где код меняется: экран, который никто не трогает, после перевода не станет приносить больше. Поэтому
+      порядок задаёт частота изменений, а не полнота покрытия.
+
+      Промежуточный шаг с тонкими обработчиками важен: логика уже в отдельном классе и под тестами, хотя
+      привязок ещё нет. Это снижает риск каждого изменения и даёт страховку для следующих шагов. А правило для
+      нового code-behind нужно, чтобы долг не рос быстрее, чем его гасят. Граница на уровне проектов надёжнее
+      договорённости: компилятор не устаёт на code review.
+    linkTitles:
+      - "Паттерн Model-View-ViewModel"
+      - "Введение в CommunityToolkit.Mvvm"
+      - "Мартин Фаулер: Strangler Fig Application"
+  en:
+    title: How does a tech lead introduce MVVM into a large WPF app whose logic lives in code-behind, without a feature freeze?
+    prompt: |
+      You are the tech lead of a large WPF application: about two hundred screens, and almost all logic lives in
+      event handlers in code-behind. `Button_Click` queries the database itself, validates input, shows a
+      `MessageBox` and writes directly to `txtName.Text`. This logic has no unit tests. The business is not
+      willing to stop development: new features ship every sprint.
+
+      How do you introduce MVVM: in what order do you move the screens, how do you move the logic, what rules do
+      you set for the team, and how do you track progress and risk?
+    hint: |
+      Where in the application does the code change most often, and what keeps the problem from growing while
+      you fix it?
+    answer: |
+      1. **Agree on the goal and build a reference screen.** Fully migrate one screen of medium complexity: a view
+         model, commands, services for dialogs and navigation, unit tests. It becomes the template for the team.
+         Choose the implementation style (`ObservableObject` and `RelayCommand` from CommunityToolkit.Mvvm, or
+         thin hand-written base classes) once and record it in an ADR.
+      2. **Prepare infrastructure that lets old and new code live side by side.** A composition root with a DI
+         container at application startup, interfaces for dialogs, navigation and messages between screens, so
+         that a view model does not call `MessageBox` or create windows itself. Screens that are not migrated keep
+         working as before, and a migrated screen just gets its `DataContext`.
+      3. **Choose the order by value.** New screens use MVVM from day one. Next come screens that change or break
+         often (visible in the commit history and the bug tracker): they are migrated as part of the feature that
+         touches them anyway. Stable screens that nobody touches stay as they are, possibly forever.
+      4. **Move the logic of a screen in small steps, each of them shippable.**
+         - Before you start, pin down the current behaviour of the screen: a short manual test checklist or a few
+           UI smoke tests.
+         - Move the logic out of the handlers into a view model class and keep the handlers thin: `Save_Click`
+           only calls `vm.Save()`. Cover that class with unit tests right away.
+         - Replace direct control manipulation (`txtName.Text = ...`) with properties that raise
+           `INotifyPropertyChanged` and with bindings.
+         - Replace `Click` handlers with commands that have `CanExecute`, and delete the remaining code-behind.
+      5. **Set a rule for new code and make it checkable.** Code-behind keeps only behaviour of the view itself:
+         focus, animations, scrolling, the visual part of drag-and-drop, anything that needs a reference to a
+         control. Data access, business rules and navigation decisions do not go there. The rule is backed by a
+         code review checklist and, more reliably, by a separate project for view models with no reference to
+         WPF: touching a control there simply does not compile.
+      6. **Build the work into the process.** Migrating a touched screen is part of the task's Definition of Done,
+         estimates include a small margin, and the first migrations are done in pairs. Progress is tracked with
+         simple metrics: the number of migrated screens, unit test coverage of view models, the number of bugs on
+         migrated screens. The business hears that there is no freeze, but tasks on old screens cost a bit more.
+      7. **Manage the risks.** The two styles will coexist for a long time, and that is accepted and documented.
+         Do not rewrite everything at once, do not build abstractions "for the future", and do not start with the
+         hardest screen.
+    explanation: |
+      Rewriting the whole application at once needs a freeze or a parallel branch that drifts away from the main
+      one for months, and all the risk lands at a single moment. Incremental replacement, as in the Strangler Fig
+      pattern, delivers value immediately and lets you stop at any point: every migrated screen already runs in
+      production.
+
+      The benefit of MVVM is logic that can be tested without a UI and a view separated from behaviour. That
+      benefit pays off where code changes: a screen nobody touches does not become more valuable after
+      migration. That is why the order follows change frequency, not completeness.
+
+      The intermediate step with thin handlers matters: the logic is already in its own class and under tests,
+      even though there are no bindings yet. It lowers the risk of every change and gives a safety net for the
+      next steps. The rule for new code-behind is needed so that the debt does not grow faster than it is paid
+      off. A project-level boundary is more reliable than an agreement: the compiler does not get tired during
+      code review.
+    linkTitles:
+      - "Model-View-ViewModel pattern"
+      - "Introduction to CommunityToolkit.Mvvm"
+      - "Martin Fowler: Strangler Fig Application"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

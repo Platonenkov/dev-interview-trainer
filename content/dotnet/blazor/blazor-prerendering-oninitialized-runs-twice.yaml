@@ -1,0 +1,122 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RMCEC6Q5V39FBF7VT4
+slug: blazor-prerendering-oninitialized-runs-twice
+stack: dotnet
+topic: blazor
+level: middle
+type: open
+grading: self
+tags: [blazor, prerendering, render-modes, lifecycle, persistent-state]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/components/prerender
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/components/lifecycle
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему предварительно отрисованный компонент Blazor загружает данные дважды и мигает?
+    prompt: |
+      Страница Blazor Web App на .NET 10 объявлена с `@rendermode InteractiveServer` и внедряет `WeatherService`.
+      В `OnInitializedAsync` она выполняет `forecasts = await Weather.GetForecastsAsync();`. Пока поле
+      `forecasts` равно `null`, разметка показывает надпись «Loading...», а потом список прогнозов.
+
+      В логах видно, что `GetForecastsAsync` вызывается два раза на одно открытие страницы, а пользователь видит,
+      как готовый список на мгновение сменяется надписью «Loading...» и появляется снова.
+
+      Объясните, почему так происходит и как этого избежать. Какие у каждого способа компромиссы?
+    hint: Сколько экземпляров этого компонента создаётся за одно открытие страницы и где каждый из них живёт?
+    answer: |
+      - **Причина - пререндеринг.** Для интерактивных режимов (`InteractiveServer`, `InteractiveWebAssembly`,
+        `InteractiveAuto`) он включён по умолчанию. Сначала сервер создаёт экземпляр компонента, выполняет
+        `OnInitializedAsync` и отдаёт статический HTML. Потом, когда устанавливается цепь (circuit) или
+        запускается WebAssembly, создаётся **новый** экземпляр в новом DI-scope, и жизненный цикл проходит заново.
+        Поэтому данные загружаются дважды.
+      - **Откуда мигание.** У нового экземпляра `forecasts` снова `null`. На первом незавершённом `await` в
+        `OnInitializedAsync` `ComponentBase` отрисовывает компонент, и «Loading...» заменяет предварительно
+        отрисованный список, пока не придут данные.
+      - **Перенести состояние через `PersistentComponentState`.** При пререндеринге данные сериализуются в
+        HTML-ответ, а интерактивный экземпляр забирает их вместо повторной загрузки. В .NET 10 это делается
+        декларативно: поле превращается в публичное свойство `Forecasts` с атрибутом `[PersistentState]`, а в
+        `OnInitializedAsync` пишется `Forecasts ??= await ...`. Вручную: внедрить `PersistentComponentState`,
+        сохранить данные через `RegisterOnPersisting` и `PersistAsJson`, прочитать через `TryTakeFromJson`,
+        подписку освободить в `Dispose`.
+      - **Отключить пререндеринг** для компонента: `@rendermode @(new InteractiveServerRenderMode(prerender: false))`.
+        Загрузка одна, мигания нет, но первый HTML пустой: страница хуже для SEO, и пользователь дольше ждёт
+        содержимого.
+      - **Компромиссы переноса.** Состояние сериализуется в страницу и увеличивает ответ. В `InteractiveWebAssembly`
+        и `InteractiveAuto` его может прочитать пользователь; в `InteractiveServer` оно защищено ASP.NET Core
+        Data Protection, но всё равно передаётся клиенту. Секреты и большие объёмы класть туда нельзя. Кэш на
+        сервере удешевляет второй вызов, но не убирает его и не убирает мигание.
+    explanation: |
+      Пререндеринг и интерактивная отрисовка - это два разных запуска компонента. Первый работает в рамках
+      HTTP-запроса и заканчивается вместе с ним: экземпляр и его scoped-сервисы уничтожаются после отправки HTML.
+      Второй живёт в цепи на сервере или в браузере. Между ними нет общей памяти, поэтому поле `forecasts` из
+      первого экземпляра второму недоступно, и `OnInitializedAsync` честно выполняется ещё раз.
+
+      `PersistentComponentState` и нужен как мост между этими запусками: состояние, собранное при
+      пререндеринге, встраивается в страницу и восстанавливается при инициализации интерактивного экземпляра.
+      В режиме `InteractiveWebAssembly` выигрыш больше: второй вызов шёл бы из браузера через HTTP API.
+
+      Флаги вида «уже загружали» в статических полях не помогают и опасны: на сервере статическое поле общее для
+      всех пользователей. Свойство `RendererInfo.IsInteractive` (появилось в .NET 9) позволяет показать другое
+      содержимое или отключить кнопки до перехода в интерактивный режим, но двойную загрузку не убирает.
+      Описание относится к Blazor Web App в .NET 10.
+    linkTitles:
+      - "Пререндеринг компонентов Razor"
+      - "Жизненный цикл компонентов Razor"
+  en:
+    title: Why does a prerendered Blazor component load its data twice and flicker?
+    prompt: |
+      A Blazor Web App page on .NET 10 is declared with `@rendermode InteractiveServer` and injects a `WeatherService`.
+      In `OnInitializedAsync` it runs `forecasts = await Weather.GetForecastsAsync();`. While the `forecasts`
+      field is `null`, the markup shows "Loading...", and after that a list of forecasts.
+
+      The logs show `GetForecastsAsync` called twice per page visit, and the user sees the finished list briefly
+      replaced by "Loading..." before it appears again.
+
+      Explain why this happens and how to avoid it. What are the trade-offs of each approach?
+    hint: How many instances of this component are created for one page visit, and where does each of them live?
+    answer: |
+      - **The cause is prerendering.** It is on by default for the interactive modes (`InteractiveServer`,
+        `InteractiveWebAssembly`, `InteractiveAuto`). First the server creates a component instance, runs
+        `OnInitializedAsync` and returns static HTML. Then, when the circuit is established or WebAssembly starts,
+        a **new** instance is created in a new DI scope and the lifecycle runs again. So the data is loaded twice.
+      - **Where the flicker comes from.** In the new instance `forecasts` is `null` again. At the first incomplete
+        `await` in `OnInitializedAsync`, `ComponentBase` renders the component, and "Loading..." replaces the
+        prerendered list until the data arrives.
+      - **Carry the state over with `PersistentComponentState`.** During prerendering the data is serialized into
+        the HTML response, and the interactive instance takes it instead of loading again. In .NET 10 this is
+        declarative: the field becomes a public property `Forecasts` with the `[PersistentState]` attribute, and
+        `OnInitializedAsync` does `Forecasts ??= await ...`. Manually: inject `PersistentComponentState`, save the
+        data with `RegisterOnPersisting` and `PersistAsJson`, read it with `TryTakeFromJson`, and dispose the
+        subscription in `Dispose`.
+      - **Disable prerendering** for the component: `@rendermode @(new InteractiveServerRenderMode(prerender: false))`.
+        One load and no flicker, but the first HTML is empty: the page is worse for SEO, and the user waits longer
+        for content.
+      - **Trade-offs of carrying state.** The persisted state is serialized into the page, so it grows the response.
+        With `InteractiveWebAssembly` and `InteractiveAuto` the user can read it; with `InteractiveServer` it is
+        protected with ASP.NET Core Data Protection but is still sent to the client. Do not put secrets or large
+        payloads in it. A server-side cache makes the second call cheaper but removes neither the call nor the flicker.
+    explanation: |
+      Prerendering and interactive rendering are two separate runs of the component. The first one works inside the
+      HTTP request and ends with it: the instance and its scoped services are discarded after the HTML is sent. The
+      second one lives in the circuit on the server or in the browser. They share no memory, so the `forecasts`
+      field of the first instance is not available to the second one, and `OnInitializedAsync` simply runs again.
+
+      `PersistentComponentState` is the bridge between these runs: state collected during prerendering is embedded
+      in the page and restored when the interactive instance initializes. In the `InteractiveWebAssembly` mode the
+      gain is bigger, because the second call would go from the browser through an HTTP API.
+
+      "Already loaded" flags in static fields do not help and are dangerous: on the server a static field is shared
+      by all users. The `RendererInfo.IsInteractive` property (added in .NET 9) lets you show different content or
+      disable buttons until the component becomes interactive, but it does not remove the double load. The
+      description applies to Blazor Web Apps in .NET 10.
+    linkTitles:
+      - "Prerender ASP.NET Core Razor components"
+      - "ASP.NET Core Razor component lifecycle"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

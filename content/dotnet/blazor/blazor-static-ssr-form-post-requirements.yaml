@@ -1,0 +1,143 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RMC5SF5Z8MGMA3GNYQ
+slug: blazor-static-ssr-form-post-requirements
+stack: dotnet
+topic: blazor
+level: senior
+type: multi
+grading: auto
+tags: [blazor, forms, static-ssr, antiforgery, editform]
+code:
+  language: razor
+  harness: none
+  source: |
+    @page "/feedback"
+
+    <EditForm Model="Model" OnValidSubmit="Submit">
+        <InputText @bind-Value="Model!.Email" />
+        <button type="submit">Send</button>
+    </EditForm>
+
+    @code {
+        private Feedback? Model { get; set; }
+
+        protected override void OnInitialized() => Model ??= new();
+
+        private void Submit() => Console.WriteLine(Model!.Email);
+    }
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: true
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+  - id: f
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/forms/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/security/anti-request-forgery?view=aspnetcore-10.0
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что нужно, чтобы EditForm на странице со статической отрисовкой на сервере отправлял и привязывал модель?
+    prompt: |
+      Blazor Web App на .NET 10 без глобальной интерактивности. Страница из примера не объявляет `@rendermode`,
+      поэтому отрисовывается статически на сервере (static SSR, появилась в .NET 8). Нужно, чтобы после нажатия
+      «Send» браузер отправил форму, а в `Submit` свойство `Model` содержало введённый адрес.
+
+      Выберите всё, что для этого **обязательно** нужно добавить или иметь в приложении.
+    hint: "Без интерактивности форма - это обычный POST-запрос к адресу страницы. Что сервер должен сделать с таким запросом, прежде чем вызвать обработчик отправки?"
+    options:
+      a: 'Имя формы: параметр `FormName` у `EditForm`, например `FormName="feedback"`.'
+      b: "Атрибут `[SupplyParameterFromForm]` на свойстве `Model`."
+      c: "middleware защиты от подделки запросов в конвейере: `app.UseAntiforgery()`."
+      d: "Интерактивный режим отрисовки на странице, например `@rendermode InteractiveServer`."
+      e: "Компонент `<AntiforgeryToken />`, добавленный вручную внутрь `EditForm`."
+      f: "Атрибут `Enhance` у `EditForm`, включающий улучшенную обработку отправки формы."
+    optionExplanations:
+      d: "Статическая отрисовка на сервере сама обрабатывает POST: конечная точка компонента принимает запрос, привязывает данные и вызывает обработчик отправки. Интерактивный режим для этого не нужен, а в интерактивном режиме `[SupplyParameterFromForm]` и не требуется: данные попадают в модель через привязку полей."
+      e: "`EditForm` сам добавляет в форму скрытое поле с токеном защиты от подделки. Вручную `<AntiforgeryToken />` нужен для обычного HTML-элемента `<form>`."
+      f: "`Enhance` только заменяет полную перезагрузку страницы на запрос через `fetch` с обновлением DOM. Без него форма отправляется обычным POST и так же привязывается."
+    answer: "Нужны `FormName` у формы, `[SupplyParameterFromForm]` на свойстве модели и `app.UseAntiforgery()` в конвейере (варианты a, b, c)."
+    explanation: |
+      При статической отрисовке на сервере компонент не живёт между запросами: нажатие кнопки отправляет обычный
+      POST на адрес страницы, и сервер заново создаёт и отрисовывает компонент. Поэтому нужны три вещи:
+
+      - **Имя формы.** `EditForm` с `FormName` записывает имя в скрытое поле, и по нему конечная точка находит,
+        какой форме на странице адресован POST. Без имени сервер не может сопоставить запрос с формой, отвечает
+        ошибкой о том, что POST не указывает отправленную форму, и данные не привязываются. Имена форм на
+        странице должны быть уникальными.
+      - **`[SupplyParameterFromForm]`.** Этот атрибут говорит фреймворку заполнить свойство значениями полей
+        формы из тела запроса. Без него свойство останется таким, каким его создал `OnInitialized`, то есть
+        пустым. Конструкция `Model ??= new()` нужна для GET-запроса, когда данных формы нет.
+      - **Защита от подделки запросов.** В .NET 8-10 конечные точки Razor-компонентов по умолчанию требуют
+        проверки токена. Если `UseAntiforgery` нет в конвейере, POST к такой конечной точке завершается
+        исключением: у конечной точки есть метаданные защиты от подделки, но middleware, который её
+        поддерживает, не найден. Шаблон Blazor Web App уже содержит этот вызов; его ставят после
+        `UseAuthentication` и `UseAuthorization`, если они есть.
+
+      Интерактивный режим, ручной `<AntiforgeryToken />` внутри `EditForm` и `Enhance` для отправки и привязки не
+      обязательны. Поведение описано для .NET 8, где появилась статическая отрисовка на сервере, и верно для
+      .NET 10. В .NET 11 оно меняется: конечная точка Razor-компонентов перестаёт сама проверять токен, и
+      приложение без `UseAntiforgery` защищает автоматический middleware защиты от CSRF.
+    linkTitles:
+      - "Обзор форм ASP.NET Core Blazor"
+      - "Защита от атак с подделкой межсайтовых запросов (XSRF/CSRF) в ASP.NET Core (.NET 10)"
+  en:
+    title: What does an EditForm on a static SSR page need to post and bind its model?
+    prompt: |
+      A Blazor Web App on .NET 10 has no global interactivity. The page in the example declares no `@rendermode`,
+      so it is rendered with static server-side rendering (static SSR, introduced in .NET 8). After "Send" is
+      clicked, the browser must post the form, and in `Submit` the `Model` property must contain the entered address.
+
+      Select everything that you **must** add or have in the app for this.
+    hint: "Without interactivity a form is a plain POST request to the page address. What must the server do with such a request before it calls the submit handler?"
+    options:
+      a: 'A form name: the `FormName` parameter of `EditForm`, for example `FormName="feedback"`.'
+      b: "The `[SupplyParameterFromForm]` attribute on the `Model` property."
+      c: "Antiforgery middleware in the pipeline: `app.UseAntiforgery()`."
+      d: "An interactive render mode on the page, for example `@rendermode InteractiveServer`."
+      e: "An `<AntiforgeryToken />` component added by hand inside `EditForm`."
+      f: "The `Enhance` attribute on `EditForm`, which turns on enhanced form handling."
+    optionExplanations:
+      d: "Static SSR handles the POST itself: the component endpoint receives the request, binds the data and calls the submit handler. No interactive mode is needed, and in an interactive mode `[SupplyParameterFromForm]` is not required either: the model is filled through the field bindings."
+      e: "`EditForm` adds the hidden antiforgery token field to the form by itself. A manual `<AntiforgeryToken />` is needed for a plain HTML `<form>` element."
+      f: "`Enhance` only replaces the full page reload with a `fetch` request and a DOM update. Without it the form is sent as a normal POST and is bound just the same."
+    answer: "You need `FormName` on the form, `[SupplyParameterFromForm]` on the model property and `app.UseAntiforgery()` in the pipeline (options a, b, c)."
+    explanation: |
+      With static SSR the component does not live between requests: clicking the button sends a normal POST to the
+      page address, and the server creates and renders the component again. So three things are needed:
+
+      - **A form name.** `EditForm` with `FormName` writes the name into a hidden field, and the endpoint uses it
+        to find which form on the page the POST targets. Without a name the server cannot match the request to a
+        form, responds with an error saying that the POST does not specify which form is submitted, and no data
+        is bound. Form names on a page must be unique.
+      - **`[SupplyParameterFromForm]`.** This attribute tells the framework to fill the property from the form
+        fields in the request body. Without it the property stays as `OnInitialized` created it, that is empty.
+        `Model ??= new()` is there for the GET request, when there is no form data.
+      - **Antiforgery protection.** In .NET 8-10 Razor component endpoints require token validation by default.
+        If `UseAntiforgery` is missing from the pipeline, a POST to such an endpoint fails with an exception: the
+        endpoint has antiforgery metadata, but no middleware that supports antiforgery was found. The Blazor Web
+        App template already contains the call; it goes after `UseAuthentication` and `UseAuthorization` if they
+        are present.
+
+      An interactive mode, a manual `<AntiforgeryToken />` inside `EditForm` and `Enhance` are not required for
+      posting and binding. The behaviour is described for .NET 8, where static SSR appeared, and holds for
+      .NET 10. .NET 11 changes it: the Razor Components endpoint no longer validates the token itself, and an app
+      without `UseAntiforgery` is protected by the automatic CSRF middleware instead.
+    linkTitles:
+      - "ASP.NET Core Blazor forms overview"
+      - "Prevent Cross-Site Request Forgery (XSRF/CSRF) attacks in ASP.NET Core (.NET 10)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"
+  noRunReason: "Razor component markup: a static SSR form needs the ASP.NET Core host, routing and antiforgery middleware, which the BCL-only sandbox does not provide."

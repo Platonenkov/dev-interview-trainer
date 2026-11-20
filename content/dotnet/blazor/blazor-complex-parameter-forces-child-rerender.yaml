@@ -1,0 +1,123 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RMTAYSWZXWV919PCNA
+slug: blazor-complex-parameter-forces-child-rerender
+stack: dotnet
+topic: blazor
+level: senior
+type: single
+grading: auto
+tags: [blazor, rendering, parameters, shouldrender, performance]
+code:
+  language: razor
+  harness: none
+  source: |
+    @* Parent.razor *@
+    <button @onclick="() => clicks++">Clicks: @clicks</button>
+    <ProductCard Product="product" />
+
+    @code {
+        private int clicks;
+        private readonly Product product = new() { Name = "Pen" };
+    }
+
+    @* ProductCard.razor *@
+    <p>@Product.Name</p>
+
+    @code {
+        [Parameter] public Product Product { get; set; } = default!;
+
+        protected override void OnAfterRender(bool firstRender)
+            => Console.WriteLine("ProductCard rendered");
+    }
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/components/rendering
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/performance/rendering
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему дочерний компонент Blazor перерисовывается вместе с родителем, хотя объект-параметр не менялся?
+    prompt: |
+      Родительский компонент передаёт в `ProductCard` один и тот же экземпляр класса `Product`, который создаётся
+      один раз и больше не меняется. Оба компонента наследуют `ComponentBase` и не переопределяют `ShouldRender`.
+      При каждом нажатии на кнопку в родителе в консоли появляется `ProductCard rendered`, хотя параметр
+      `Product` ссылается на тот же объект (.NET 10). Почему дочерний компонент перерисовывается?
+    hint: "Может ли фреймворк узнать, изменил ли кто-то свойство внутри того же самого экземпляра `Product`?"
+    options:
+      a: "`Product` не входит в набор известных неизменяемых типов, поэтому фреймворк считает параметр возможно изменившимся и заново передаёт параметры дочернему компоненту."
+      b: "Blazor сравнивает сложные параметры через `Equals`, а `Product` не переопределяет `Equals`, поэтому сравнение всегда даёт «не равны»."
+      c: "При каждой отрисовке родителя все дочерние компоненты создаются заново, поэтому `ProductCard` снова проходит первую отрисовку."
+      d: "`Product` объявлен как класс; если объявить его как `record`, Blazor сочтёт параметр неизменившимся и пропустит отрисовку."
+    optionExplanations:
+      b: "Для сложных типов фреймворк вообще не вызывает `Equals`: он сразу считает параметр возможно изменившимся. К тому же передаётся тот же экземпляр, и стандартное сравнение по ссылке вернуло бы «равны»."
+      c: "Алгоритм сравнения деревьев отрисовки сохраняет экземпляры дочерних компонентов. `OnInitialized` повторно не вызывается и `firstRender` равен `false`: компонент получает параметры и перерисовывается, но не создаётся заново."
+      d: "Записи не входят в набор известных неизменяемых типов. Фреймворк проверяет тип по встроенному списку, а `record` может содержать изменяемые свойства, поэтому параметр-запись тоже считается возможно изменившимся."
+    answer: "Параметр сложного типа всегда считается возможно изменившимся: фреймворк пропускает передачу параметров и отрисовку дочернего компонента, только если все параметры относятся к известным неизменяемым типам и их значения не изменились."
+    explanation: |
+      Когда родитель перерисовывается, рендерер сравнивает новые атрибуты дочернего компонента со старыми. Для
+      значений известных неизменяемых типов (примитивы, `string`, `DateTime`, `decimal`, `Guid` и некоторые
+      другие) достаточно сравнить значения. Объект класса можно изменить изнутри, не меняя ссылку, и фреймворк
+      этого не видит, поэтому любой параметр другого типа считается возможно изменившимся. В таком случае
+      рендерер вызывает `SetParametersAsync` дочернего компонента, `ComponentBase` выполняет `OnParametersSet` и
+      вызывает `StateHasChanged`, и компонент перерисовывается. То же относится к параметрам-делегатам, например
+      `RenderFragment` в `ChildContent`.
+
+      Для тяжёлых поддеревьев это заметная цена. Варианты: передавать в дочерний компонент примитивные параметры
+      (например, `ProductId` и `Name` вместо объекта) или переопределить `ShouldRender` и возвращать `true` только
+      когда данные действительно изменились (например, по сохранённой версии или идентификатору). `ShouldRender`
+      не влияет на первую отрисовку. Поведение описано для .NET 10; набор известных типов - деталь реализации
+      фреймворка и может меняться.
+    linkTitles:
+      - "Отрисовка компонентов Razor"
+      - "Рекомендации по производительности отрисовки ASP.NET Core Blazor"
+  en:
+    title: Why does a Blazor child component re-render with its parent when its object parameter did not change?
+    prompt: |
+      A parent component passes the same instance of the `Product` class to `ProductCard`; the instance is created
+      once and never changes. Both components derive from `ComponentBase` and do not override `ShouldRender`.
+      Every click on the parent's button prints `ProductCard rendered`, although the `Product` parameter refers to
+      the same object (.NET 10). Why does the child component re-render?
+    hint: "Can the framework know whether someone changed a property inside the same `Product` instance?"
+    options:
+      a: "`Product` is not one of the known immutable types, so the framework treats the parameter as possibly changed and passes parameters to the child again."
+      b: 'Blazor compares complex parameters with `Equals`, and `Product` does not override `Equals`, so the comparison always reports "not equal".'
+      c: "Every parent render creates new instances of all child components, so `ProductCard` goes through its first render again."
+      d: "`Product` is declared as a class; declaring it as a `record` would make Blazor treat the parameter as unchanged and skip the render."
+    optionExplanations:
+      b: 'For complex types the framework does not call `Equals` at all: it treats the parameter as possibly changed right away. Besides, the same instance is passed, so default reference equality would report "equal".'
+      c: "The render tree diff keeps child component instances. `OnInitialized` does not run again and `firstRender` is `false`: the component receives parameters and re-renders, but it is not recreated."
+      d: "Records are not among the known immutable types. The framework checks the type against a built-in list, and a `record` can have mutable properties, so a record parameter is also treated as possibly changed."
+    answer: "A parameter of a complex type is always treated as possibly changed: the framework skips passing parameters and re-rendering the child only when every parameter is of a known immutable type and its value is unchanged."
+    explanation: |
+      When the parent re-renders, the renderer compares the child's new attributes with the old ones. For values
+      of known immutable types (primitives, `string`, `DateTime`, `decimal`, `Guid` and some others) comparing the
+      values is enough. An object of a class can be mutated without changing the reference, and the framework
+      cannot see that, so a parameter of any other type is treated as possibly changed. In that case the renderer
+      calls the child's `SetParametersAsync`, `ComponentBase` runs `OnParametersSet` and calls `StateHasChanged`,
+      and the component re-renders. The same applies to delegate parameters such as a `RenderFragment` in
+      `ChildContent`.
+
+      For heavy subtrees this is a noticeable cost. Options: pass primitive parameters to the child (for example
+      `ProductId` and `Name` instead of the object), or override `ShouldRender` and return `true` only when the
+      data really changed (for example by a stored version or id). `ShouldRender` does not affect the first
+      render. The behaviour is described for .NET 10; the set of known types is an implementation detail of the
+      framework and may change.
+    linkTitles:
+      - "ASP.NET Core Razor component rendering"
+      - "ASP.NET Core Blazor rendering performance best practices"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"
+  noRunReason: "Razor component markup: Blazor components need the ASP.NET Core renderer, which the BCL-only sandbox does not provide."

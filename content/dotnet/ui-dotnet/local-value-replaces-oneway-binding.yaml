@@ -1,0 +1,142 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RRAZX81X6VT7KDZCV8
+slug: local-value-replaces-oneway-binding
+stack: dotnet
+topic: ui-dotnet
+level: senior
+type: single
+grading: auto
+tags: [wpf, data-binding, dependency-properties, value-precedence]
+code:
+  language: csharp
+  harness: none
+  source: |
+    public partial class ImportWindow : Window
+    {
+        private readonly ImportViewModel _vm;
+
+        public ImportWindow(ImportViewModel vm)
+        {
+            InitializeComponent();
+            _vm = vm;
+            DataContext = vm;
+        }
+
+        private void OnClearClick(object sender, RoutedEventArgs e)
+        {
+            // Clear the status line before the next import.
+            StatusText.Text = string.Empty;
+        }
+
+        private async void OnImportClick(object sender, RoutedEventArgs e)
+        {
+            // Sets _vm.Status several times and raises PropertyChanged for it.
+            await _vm.ImportAsync();
+        }
+    }
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.windows.dependencyobject.setcurrentvalue
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/desktop/wpf/properties/dependency-property-value-precedence
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему привязка OneWay в WPF перестаёт обновлять свойство после присваивания из code-behind?
+    prompt: |
+      В окне WPF есть строка состояния `<TextBlock x:Name="StatusText" Text="{Binding Status, Mode=OneWay}" />`.
+      `ImportViewModel` корректно реализует `INotifyPropertyChanged`. Пока пользователь не нажал кнопку
+      очистки, статус импорта обновляется на экране. После первого нажатия на неё `TextBlock` остаётся пустым
+      во время всех следующих импортов, хотя отладчик показывает, что `Status` меняется и событие
+      `PropertyChanged` вызывается.
+
+      Почему привязка перестала работать?
+    hint: Где WPF хранит `{Binding}`, заданный для свойства, и что записывает туда `SetValue`, который вызывает сеттер `Text`?
+    options:
+      a: "Присваивание `Text` устанавливает локальное значение через `SetValue`, и оно заменяет выражение привязки `OneWay`: привязка удалена, и последующие изменения `Status` не применяются."
+      b: "Локальное значение имеет приоритет выше привязки, поэтому привязка продолжает работать в фоне, но её значения скрыты, пока код не вызовет `ClearValue`."
+      c: "Присваивание свойства в code-behind сбрасывает `DataContext` у `TextBlock`, и у привязки больше нет источника."
+      d: "`TextBlock.Text` - обычное свойство CLR, поэтому присваивание идёт в обход системы привязки, и привязка перестаёт следить за элементом."
+    optionExplanations:
+      b: "Привязка сама хранится как локальное значение, это один уровень приоритета, а не два. Новое значение занимает её место, а не прячет её. `ClearValue` удалит и это значение: свойство вернётся к значению из стиля или по умолчанию, но не к привязке."
+      c: "Присваивание `Text` не трогает `DataContext`: он по-прежнему наследуется от окна. Другие привязки этого `TextBlock` продолжили бы работать."
+      d: "`TextBlock.Text` - свойство зависимостей (`TextBlock.TextProperty`), иначе на него нельзя было бы задать привязку. Его сеттер CLR просто вызывает `SetValue`."
+    answer: "Присваивание `Text` записало локальное значение и заменило выражение привязки `OneWay`, поэтому привязки больше нет."
+    explanation: |
+      Привязка, заданная для свойства зависимостей, хранится как его локальное значение: в слоте локального
+      значения лежит `BindingExpression`. Сеттер `StatusText.Text` вызывает `SetValue`, а тот пишет в тот же
+      слот. Для привязок `OneWay` и `OneTime` выражение при этом отбрасывается, поэтому следующие уведомления
+      `PropertyChanged` от модели уже некому применить. Ошибки или исключения нет, что и делает дефект
+      незаметным. Проверить легко: после очистки
+      `BindingOperations.GetBindingExpression(StatusText, TextBlock.TextProperty)` возвращает `null`.
+      У привязок `TwoWay` и `OneWayToSource` поведение другое: выражение перехватывает `SetValue`, передаёт
+      значение в источник и остаётся на месте.
+
+      Исправлений два. В духе MVVM очищать нужно состояние, а не элемент: `_vm.Status = string.Empty;`, и
+      привязка сама покажет пустую строку. Если значение действительно нужно изменить со стороны элемента,
+      есть `StatusText.SetCurrentValue(TextBlock.TextProperty, string.Empty)`: метод меняет действующее
+      значение, но не заменяет источник значения, поэтому привязки, стили и триггеры продолжают работать, и
+      следующее изменение `Status` снова попадёт на экран. Именно для этого `SetCurrentValue` и предназначен:
+      так элементы управления меняют свои собственные свойства, не ломая привязки приложения.
+
+      Та же логика приоритетов объясняет и похожий эффект со стилями: локальное значение, заданное из кода,
+      выше сеттеров стиля и триггеров, поэтому после него триггер стиля перестаёт влиять на свойство.
+    linkTitles:
+      - "Метод DependencyObject.SetCurrentValue"
+      - "Приоритет значений свойств зависимостей"
+  en:
+    title: Why does a OneWay binding in WPF stop updating a property after code-behind assigns it?
+    prompt: |
+      A WPF window has a status line `<TextBlock x:Name="StatusText" Text="{Binding Status, Mode=OneWay}" />`.
+      `ImportViewModel` implements `INotifyPropertyChanged` correctly. Until the user clicks the clear button,
+      the import status updates on screen. After the first click on it, the `TextBlock` stays empty during every
+      later import, although the debugger shows that `Status` changes and `PropertyChanged` is raised.
+
+      Why did the binding stop working?
+    hint: Where does WPF store a `{Binding}` set on a property, and what does `SetValue`, called by the `Text` setter, write there?
+    options:
+      a: "Assigning `Text` sets a local value through `SetValue`, which replaces the `OneWay` binding expression: the binding is removed, and later changes of `Status` are not applied."
+      b: "A local value has higher precedence than the binding, so the binding keeps running in the background, but its values stay hidden until code calls `ClearValue`."
+      c: "Assigning a property in code-behind resets the `DataContext` of the `TextBlock`, so the binding no longer has a source."
+      d: "`TextBlock.Text` is a plain CLR property, so the assignment bypasses the binding system and the binding stops tracking the control."
+    optionExplanations:
+      b: "The binding is itself stored as the local value, so it is one precedence level, not two. The new value takes its place rather than hiding it. `ClearValue` removes that value too: the property goes back to the style or default value, not to the binding."
+      c: "Assigning `Text` does not touch `DataContext`: it is still inherited from the window. Other bindings of the same `TextBlock` would keep working."
+      d: "`TextBlock.Text` is a dependency property (`TextBlock.TextProperty`), otherwise it could not be a binding target. Its CLR setter simply calls `SetValue`."
+    answer: "Assigning `Text` wrote a local value and replaced the `OneWay` binding expression, so the binding is gone."
+    explanation: |
+      A binding set on a dependency property is stored as its local value: the local value slot holds a
+      `BindingExpression`. The `StatusText.Text` setter calls `SetValue`, which writes to the same slot. For
+      `OneWay` and `OneTime` bindings the expression is discarded, so nothing is left to apply the view model's
+      later `PropertyChanged` notifications. There is no error or exception, which is what makes the defect hard
+      to spot. It is easy to check: after clearing,
+      `BindingOperations.GetBindingExpression(StatusText, TextBlock.TextProperty)` returns `null`. `TwoWay` and
+      `OneWayToSource` bindings behave differently: the expression intercepts `SetValue`, passes the value to the
+      source and stays in place.
+
+      There are two fixes. In MVVM style, clear the state, not the control: `_vm.Status = string.Empty;`, and the
+      binding shows the empty string itself. If the value really has to be changed from the control side, use
+      `StatusText.SetCurrentValue(TextBlock.TextProperty, string.Empty)`: it changes the effective value without
+      replacing the value source, so bindings, styles and triggers keep working, and the next change of `Status`
+      reaches the screen again. This is what `SetCurrentValue` is for: controls use it to change their own
+      properties without breaking the application's bindings.
+
+      The same precedence logic explains a similar effect with styles: a local value set from code is above
+      style setters and triggers, so after it a style trigger no longer affects the property.
+    linkTitles:
+      - "DependencyObject.SetCurrentValue method"
+      - "Dependency property value precedence"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  noRunReason: The scenario needs a WPF window with a bound TextBlock; the sandbox has no WPF and runs on Linux.

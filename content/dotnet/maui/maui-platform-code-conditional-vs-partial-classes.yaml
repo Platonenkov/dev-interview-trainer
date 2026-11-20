@@ -1,0 +1,131 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPXEWVZ5QYBX5YVKKT
+slug: maui-platform-code-conditional-vs-partial-classes
+stack: dotnet
+topic: maui
+level: middle
+type: open
+grading: self
+tags: [maui, platform-code, conditional-compilation, partial-classes, multi-targeting]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/maui/platform-integration/invoke-platform-code
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/maui/platform-integration/configure-multi-targeting
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Когда в .NET MAUI использовать #if ANDROID, а когда разделяемые классы в папках Platforms?"
+    prompt: |
+      В едином проекте .NET MAUI нужна платформенная функциональность, например определить ориентацию устройства
+      через нативные API Android и iOS. Есть два способа: блоки условной компиляции `#if ANDROID` / `#if IOS`
+      прямо в общем коде и разделяемые (`partial`) классы, у которых общая часть лежит в общем коде, а реализации -
+      в папках `Platforms/Android`, `Platforms/iOS` и так далее.
+
+      Как каждый способ работает при сборке, в чём их сильные и слабые стороны и когда вы выберете тот или другой?
+    hint: "Что именно попадает в сборку под Android и что видит разработчик, который читает общий класс?"
+    answer: |
+      - **Как собирается единый проект.** Проект нацелен на несколько платформенных целевых фреймворков
+        (`-android`, `-ios`, `-maccatalyst`, `-windows`) и собирается отдельно под каждый. В каждой такой сборке
+        определён свой символ (`ANDROID`, `IOS`, `MACCATALYST`, `WINDOWS`), а файлы из подпапки платформы внутри
+        `Platforms` компилируются только при сборке под эту платформу. Оба способа разделяют код на этапе компиляции.
+      - **Условная компиляция.** Код внутри `#if ANDROID` попадает только в сборку под Android. Это удобно для
+        нескольких строк: один вызов нативного API, нужный `using`, регистрация сервиса в `MauiProgram`, общий
+        для двух платформ фрагмент `#if IOS || MACCATALYST`. Минусы: платформенные ветки расползаются по общему
+        коду, класс трудно читать, а код неактивных веток не компилируется и не проверяется на типы, пока вы не
+        соберёте проект под их платформу, поэтому ошибка в ветке iOS видна только при сборке под iOS.
+      - **Разделяемые классы.** В общем коде объявляется API, например
+        `public partial class DeviceOrientationService` с методом `public partial DeviceOrientation GetOrientation();`.
+        В `Platforms/Android` и `Platforms/iOS` лежат файлы с другой частью того же класса и реализацией метода.
+        Все части разделяемого класса должны иметь одно имя и одно пространство имён - это общее правило C#.
+        Шаблон IDE даёт новому файлу в папке платформы пространство имён по пути папки, поэтому его нужно заменить
+        на пространство имён общей части, иначе получатся два разных класса. Вызывающий код видит один API без
+        единого `#if`, а сборка берёт только реализацию целевой платформы.
+      - **Подводный камень разделяемых методов.** Метод с модификатором доступа обязан иметь реализацию в каждой
+        сборке. Если для какой-то цели её нет (платформа без файла или дополнительный целевой фреймворк без
+        платформы, например для модульных тестов), сборка падает с ошибкой CS8795. Нужна реализация-заглушка
+        или условие в файле проекта.
+      - **Как выбирать.** Несколько строк в одном месте - `#if`. Заметная логика, несколько членов, несколько
+        платформ - разделяемый класс. Если реализацию нужно подменять в тестах, лучше интерфейс и по одной
+        реализации на платформу, а выбор регистрации в `MauiProgram` - короткий `#if`. Если раскладка по папкам
+        неудобна, можно настроить мультитаргетинг по суффиксам имён файлов (`*.Android.cs`) условиями `Compile Remove`
+        в файле проекта.
+      - **Проверка во время выполнения не заменяет эти способы.** Условие `DeviceInfo.Platform == DevicePlatform.Android`
+        не поможет вызвать нативный API: типы вроде `Android.Content.Context` не существуют в сборке под iOS, и код
+        просто не скомпилируется без разделения на этапе сборки.
+    explanation: |
+      Оба способа решают одну задачу: в сборку под конкретную платформу должен попасть только код, который
+      компилируется против её нативных API. Разница в организации кода. Условная компиляция держит все платформы
+      в одном файле, поэтому она дешёвая для точечных вставок, но с ростом числа веток общий класс превращается в
+      набор платформенных фрагментов, которые никто не видит целиком.
+
+      Разделяемые классы отделяют контракт от реализаций: общий код зависит от одного API, а каждая платформа
+      реализует его в своём файле. Это проще читать и сопровождать, а отсутствующая реализация обнаруживается
+      ошибкой компиляции, а не поведением во время выполнения. Цена - больше файлов и требование реализовать
+      метод для каждой цели сборки, включая цели без платформы.
+
+      Интерфейс с реализациями по платформам добавляет к этому возможность подменить зависимость в тестах и
+      внедрить её через DI, поэтому для сервисов, которые использует модель представления, он часто удобнее
+      разделяемого класса.
+    linkTitles:
+      - "Вызов платформенного кода в .NET MAUI"
+      - "Настройка мультитаргетинга в .NET MAUI"
+  en:
+    title: "When should a .NET MAUI app use #if ANDROID, and when partial classes in the Platforms folders?"
+    prompt: |
+      A single .NET MAUI project needs platform-specific functionality, for example reading the device orientation
+      through native Android and iOS APIs. There are two ways: conditional compilation blocks `#if ANDROID` /
+      `#if IOS` directly in shared code, and `partial` classes whose shared part lives in shared code while the
+      implementations live in the `Platforms/Android`, `Platforms/iOS` and other platform folders.
+
+      How does each approach work at build time, what are their strengths and weaknesses, and when do you choose each?
+    hint: "What exactly goes into the Android build, and what does a developer see when reading the shared class?"
+    answer: |
+      - **How a single project builds.** The project targets several platform target frameworks (`-android`, `-ios`,
+        `-maccatalyst`, `-windows`) and is built separately for each. Each build defines its own symbol (`ANDROID`,
+        `IOS`, `MACCATALYST`, `WINDOWS`), and the files in a platform's own subfolder under `Platforms` are compiled
+        only when building for that platform. Both approaches separate the code at compile time.
+      - **Conditional compilation.** Code inside `#if ANDROID` goes only into the Android build. It suits a few lines:
+        one native API call, a required `using`, a service registration in `MauiProgram`, a fragment shared by two
+        platforms with `#if IOS || MACCATALYST`. The downsides: platform branches spread through shared code, the class
+        becomes hard to read, and code in inactive branches is not compiled or type-checked until you build for their
+        platform, so a mistake in the iOS branch shows up only in the iOS build.
+      - **Partial classes.** Shared code declares the API, for example `public partial class DeviceOrientationService`
+        with the method `public partial DeviceOrientation GetOrientation();`. `Platforms/Android` and `Platforms/iOS`
+        hold files with another part of the same class and the method implementation. All parts of a partial class
+        must have the same name and the same namespace, which is a general C# rule. The IDE template gives a new file
+        in a platform folder a namespace based on the folder path, so replace it with the namespace of the shared part,
+        otherwise you get two different classes. Callers see one API without a single `#if`, and the build takes only
+        the target platform's implementation.
+      - **The partial method pitfall.** A method with an access modifier must have an implementation in every build.
+        If some target lacks it (a platform without a file, or an extra target framework without a platform, for
+        example one used for unit tests), the build fails with error CS8795. You need a stub implementation or a
+        condition in the project file.
+      - **How to choose.** A few lines in one place: `#if`. Substantial logic, several members, several platforms: a
+        partial class. If the implementation must be replaced in tests, prefer an interface with one implementation per
+        platform, and pick the registration in `MauiProgram` with a short `#if`. If the folder layout is inconvenient,
+        you can set up multi-targeting by file name suffix (`*.Android.cs`) with `Compile Remove` conditions in the
+        project file.
+      - **A runtime check does not replace them.** The condition `DeviceInfo.Platform == DevicePlatform.Android` does
+        not let you call a native API: types such as `Android.Content.Context` do not exist in the iOS build, so the
+        code does not compile without separation at build time.
+    explanation: |
+      Both approaches solve the same problem: the build for a given platform must contain only code that compiles
+      against that platform's native APIs. The difference is how the code is organized. Conditional compilation keeps
+      all platforms in one file, so it is cheap for small insertions, but as branches grow the shared class turns into
+      a set of platform fragments that nobody sees as a whole.
+
+      Partial classes separate the contract from the implementations: shared code depends on one API, and each
+      platform implements it in its own file. This is easier to read and maintain, and a missing implementation is a
+      compile error rather than runtime behaviour. The cost is more files and the requirement to implement the method
+      for every build target, including targets without a platform.
+
+      An interface with per-platform implementations adds the ability to replace the dependency in tests and inject
+      it through DI, so for services used by a view model it is often more convenient than a partial class.
+    linkTitles:
+      - "Invoke platform code in .NET MAUI"
+      - "Configure multi-targeting in .NET MAUI"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

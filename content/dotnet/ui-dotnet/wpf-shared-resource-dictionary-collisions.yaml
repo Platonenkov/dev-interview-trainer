@@ -1,0 +1,141 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RR0JEGSD4JQEANZ8PR
+slug: wpf-shared-resource-dictionary-collisions
+stack: dotnet
+topic: ui-dotnet
+level: lead
+type: situation
+grading: self
+tags: [wpf, resource-dictionary, styles, xaml, code-ownership]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/desktop/wpf/systems/xaml-resources-merged-dictionaries
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/desktop/wpf/systems/xaml-resources-overview
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Две команды ломают друг другу экраны WPF через общие стили в App.xaml
+    prompt: |
+      WPF-оболочка содержит модули двух команд, Orders и Billing. Каждая команда держит свои стили в
+      собственном `ResourceDictionary`: `Orders.xaml` в сборке Orders и `Billing.xaml` в сборке Billing.
+      В `App.xaml` в коллекцию `MergedDictionaries` словаря `Application.Resources` подключены по порядку:
+      сначала тема оболочки `Theme.xaml`, затем `Orders.xaml`, затем `Billing.xaml`.
+
+      В обоих словарях команд есть неявный стиль `Style TargetType="Button"` без `x:Key` и кисть с ключом
+      `PrimaryBrush`, а экраны обеих команд ссылаются на неё через `{StaticResource PrimaryBrush}`. В словаре
+      Orders есть ещё неявный стиль для `TextBox`. После каждого релиза одной команды у другой меняется внешний
+      вид экранов: кнопки, цвета, шаблоны полей ввода. Ни сборка, ни приложение при этом не падают. Команды
+      винят друг друга, в двух последних спринтах были срочные исправления стилей.
+
+      Вы технический лидер. Что вы измените в коде и в процессе?
+    hint: |
+      Откуда приложение берёт ресурс, если ключ не найден на самом элементе и его родителях, и кто выигрывает
+      при совпадении ключей?
+    answer: |
+      1. **Разобрать механику и подтвердить причину.** Поиск ресурса идёт от элемента вверх: его `Resources`,
+         ресурсы логических родителей до окна, затем `Application.Resources`, затем ресурсы темы и системные.
+         Внутри словаря сначала проверяется он сам, затем объединённые словари, и если ключ есть в нескольких из
+         них, побеждает словарь, объединённый последним. Дубликат ключа в одном словаре недопустим, а дубликат в
+         разных объединённых словарях молча допускается. Ключ неявного стиля - сам тип, поэтому два неявных стиля
+         `Button` - это тот же дубликат: стиль Billing, подключённый последним, применяется ко всем кнопкам
+         приложения, а неявный стиль `TextBox` из Orders - ко всем полям ввода, включая экраны Billing. В Live
+         Visual Tree и Live Property Explorer (или в Snoop) видно, какой стиль и какое значение реально применены.
+      2. **Разделить глобальные и модульные ресурсы.** На уровне приложения остаётся только тема оболочки:
+         цвета, кисти, базовые неявные стили элементов управления. У неё один владелец (команда оболочки или
+         дизайн-системы) и отдельная библиотека. Словарь модуля объединяется в `Resources` корневого
+         представления модуля, а не в `App.xaml`: его неявные стили и ключи действуют только в поддереве модуля и
+         перекрывают глобальные только там. Объединять его стоит один раз в корне модуля, а не в каждом
+         `UserControl`: каждое подключение словаря через `Source` обычно загружает отдельный экземпляр словаря,
+         что стоит памяти и времени загрузки.
+      3. **Ввести правила для ключей и стилей.** Ключи модуля с префиксом (`Orders.PrimaryButtonStyle`), общие
+         токены (`PrimaryBrush` и другие) определяет только тема, модуль их не переопределяет. Если модулю нужна
+         другая кнопка, он делает стиль с явным ключом и `BasedOn="{StaticResource {x:Type Button}}"`, а не
+         новый неявный стиль на уровне приложения.
+      4. **Закрепить владение в процессе.** CODEOWNERS на `App.xaml` и библиотеку темы: изменение глобальных
+         ресурсов проходит code review у владельца темы и сопровождается скриншотами затронутых экранов.
+         Правила записать в ADR и в гайд по модулям, у темы - версионирование и changelog.
+      5. **Автоматизировать проверку.** Тест, который загружает ресурсы приложения со всеми объединёнными
+         словарями и падает, если ключ определён больше чем в одном словаре или если модуль добавляет что-то на
+         уровень приложения. Плюс визуальные регрессионные тесты ключевых экранов обеих команд.
+      6. **Мигрировать постепенно.** Сначала тест с белым списком текущих дубликатов, затем перенос модулей по
+         одному в модульные словари, пока список не опустеет. Без заморозки фич и большого переписывания.
+    explanation: |
+      Команды не небрежны, проблема в архитектуре: `App.xaml` превратился в одно глобальное пространство ключей,
+      где конфликт разрешается молча по правилу «побеждает последний объединённый словарь». Ошибки нет ни при
+      сборке, ни при запуске, и результат зависит от порядка строк в файле, который никому не принадлежит.
+      Поэтому одно техническое исправление не поможет: без владельца глобальный пул снова наполнится.
+
+      Решение совмещает область действия ресурса с границей ответственности. Модуль владеет своим поддеревом и
+      его ресурсами, тема - глобальными ресурсами, а пересечение (общие токены и базовые стили) идёт через одну
+      библиотеку с владельцем и code review. Цена - меньше свободы переиспользования между модулями: всё общее
+      нужно поднимать в тему, а не копировать. Зато поломка становится видна в тесте или на review, а не у
+      пользователя после релиза.
+    linkTitles:
+      - "Объединённые словари ресурсов"
+      - "Обзор ресурсов XAML"
+  en:
+    title: Two teams keep breaking each other's WPF screens through shared styles in App.xaml
+    prompt: |
+      A WPF shell hosts the modules of two teams, Orders and Billing. Each team keeps its styles in its own
+      `ResourceDictionary`: `Orders.xaml` in the Orders assembly and `Billing.xaml` in the Billing assembly.
+      In `App.xaml` the `MergedDictionaries` collection of `Application.Resources` lists, in this order: the
+      shell theme `Theme.xaml` first, then `Orders.xaml`, then `Billing.xaml`.
+
+      Both team dictionaries contain an implicit `Style TargetType="Button"` without `x:Key` and a brush with the
+      key `PrimaryBrush`, and the screens of both teams reference it with `{StaticResource PrimaryBrush}`. The
+      Orders dictionary also has an implicit style for `TextBox`. After every release of one team, the screens of
+      the other change their look: buttons, colors, text box templates. Neither the build nor the application
+      fails. The teams blame each other, and the last two sprints each needed a hotfix for styles.
+
+      You are the tech lead. What do you change in the code and in the process?
+    hint: |
+      Where does the application take a resource from when the key is not found on the element itself or its
+      parents, and who wins when keys collide?
+    answer: |
+      1. **Explain the mechanics and confirm the cause.** Resource lookup goes up from the element: its
+         `Resources`, the resources of its logical parents up to the window, then `Application.Resources`, then
+         theme and system resources. Within a dictionary, the dictionary itself is checked first, then its merged
+         dictionaries, and if a key exists in several of them, the dictionary merged last wins. A duplicate key in
+         one dictionary is not allowed, but a duplicate across merged dictionaries is silently accepted. The key
+         of an implicit style is the type itself, so two implicit `Button` styles are the same kind of duplicate:
+         the Billing style, merged last, applies to every button in the application, and the implicit `TextBox`
+         style from Orders applies to every text box, including the Billing screens. Live Visual Tree and Live
+         Property Explorer (or Snoop) show which style and value are actually applied.
+      2. **Separate global and module resources.** The application level keeps only the shell theme: colors,
+         brushes and base implicit control styles. It has one owner (the shell or design system team) and its own
+         library. A module dictionary is merged into the `Resources` of the module's root view, not into
+         `App.xaml`: its implicit styles and keys act only in the module's subtree and shadow the global ones only
+         there. Merge it once at the module root, not in every `UserControl`: each merge through `Source`
+         typically loads a separate instance of the dictionary, which costs memory and load time.
+      3. **Set rules for keys and styles.** Module keys carry a prefix (`Orders.PrimaryButtonStyle`), shared
+         tokens (`PrimaryBrush` and the like) are defined only by the theme, and a module does not redefine them.
+         If a module needs a different button, it adds a style with an explicit key and
+         `BasedOn="{StaticResource {x:Type Button}}"`, not a new implicit style at the application level.
+      4. **Make ownership part of the process.** CODEOWNERS on `App.xaml` and the theme library: a change to
+         global resources goes through code review by the theme owner and comes with screenshots of the affected
+         screens. Record the rules in an ADR and in the module guide, and give the theme versioning and a changelog.
+      5. **Automate the check.** A test that loads the application resources with all merged dictionaries and
+         fails when a key is defined in more than one dictionary or when a module adds anything at the application
+         level. Add visual regression tests of the key screens of both teams.
+      6. **Migrate gradually.** Start with the test and an allowlist of the current duplicates, then move the
+         modules to module-scoped dictionaries one by one until the list is empty. No feature freeze and no big
+         rewrite.
+    explanation: |
+      The teams are not careless; the problem is the architecture. `App.xaml` has become one global key
+      namespace where conflicts are resolved silently by the rule "the last merged dictionary wins". There is no
+      error at build time or at run time, and the result depends on the order of lines in a file that nobody owns.
+      That is why a purely technical fix does not hold: without an owner the global pool fills up again.
+
+      The solution aligns the scope of a resource with the boundary of responsibility. A module owns its subtree
+      and its resources, the theme owns the global resources, and the overlap (shared tokens and base styles) goes
+      through one library with an owner and code review. The cost is less freedom to reuse between modules:
+      anything shared has to move into the theme rather than be copied. In return a break shows up in a test or in
+      review, not in front of users after a release.
+    linkTitles:
+      - "Merged resource dictionaries"
+      - "Overview of XAML resources"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

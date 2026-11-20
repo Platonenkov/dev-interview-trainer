@@ -1,0 +1,146 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPNA45W6VP0MH7MMSC
+slug: maui-onappearing-reload-on-back-navigation
+stack: dotnet
+topic: maui
+level: middle
+type: open
+grading: self
+tags: [maui, lifecycle, navigation, onappearing, shell]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/maui/user-interface/pages/contentpage
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/maui/fundamentals/shell/navigation
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/maui/user-interface/pages/navigationpage
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/microsoft.maui.controls.page
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Где странице .NET MAUI загружать данные и что меняется при возврате со страницы подробностей?
+    prompt: |
+      Страница списка заказов получает модель представления через конструктор и назначает её `BindingContext`.
+      Данные загружаются в переопределении `OnAppearing`, объявленном как `async void`: оно ожидает метод
+      `LoadOrdersAsync` модели представления, а тот очищает коллекцию `Orders` и заново заполняет её ответом
+      сервера. Пользователи жалуются: после возврата со страницы заказа список мигает, прокрутка сбрасывается
+      к началу, а в логах сервера на каждое нажатие «Назад» приходится лишний запрос.
+
+      Объясните, когда вызываются конструктор страницы, `OnAppearing` и `OnNavigatedTo`, где начинать загрузку
+      данных и как добиться того, чтобы при возврате на страницу данные обновлялись только тогда, когда это
+      действительно нужно.
+    hint: Что происходит со страницей списка, пока сверху открыта страница подробностей, и что - когда её закрывают?
+    answer: |
+      - **Конструктор** выполняется один раз на экземпляр страницы. Пока открыта страница подробностей,
+        страница списка остаётся в стеке навигации под ней. При возврате страницу подробностей снимают со
+        стека и снова показывают тот же экземпляр списка, поэтому конструктор повторно не вызывается. Новый
+        экземпляр появляется только при новом переходе вперёд, если приложение создаёт страницу заново, и это
+        зависит от того, как страница создаётся и регистрируется.
+      - **Асинхронную загрузку в конструкторе** начинать неудобно: его нельзя дождаться через `await`, ошибки
+        задачи легко потерять, отмену не к чему привязать, а параметры навигации Shell применяются к странице
+        уже после того, как она создана.
+      - **`OnAppearing`** вызывается, когда страница вот-вот станет видимой: при первом показе и снова, когда
+        страницу подробностей закрыли. В зависимости от платформы и контейнера он может вызываться и при
+        возврате на вкладку этой страницы.
+      - **`OnNavigatedTo`** вызывается у страницы, которая стала целью навигации. После возврата назад целью
+        становится открывшаяся страница списка, поэтому этот метод тоже повторяется, но он привязан к навигации,
+        а не к видимости.
+      - **Причина симптомов.** Описанный код повторяет загрузку при каждом «Назад». Очистка и повторное
+        заполнение коллекции пересоздают элементы списка, отсюда мигание, сброс прокрутки и лишний запрос.
+      - **Первая загрузка.** Начинать её в `OnAppearing` или `OnNavigatedTo` (страница уже на экране, можно
+        показать индикатор), но с защитой от повтора: флаг в модели представления, который выставляется после
+        успешной загрузки, или сохранённая задача первой загрузки, чтобы повторный вызов не запустил вторую.
+      - **Осознанное обновление.** Если заказ изменился на странице подробностей, вернуть результат:
+        `Shell.Current.GoToAsync("..", parameters)` с данными навигации и принять их в
+        `IQueryAttributable.ApplyQueryAttributes`, либо отправить сообщение через мессенджер. Затем обновить один
+        элемент, а не весь список. Для обновления по желанию пользователя - `RefreshView` (pull-to-refresh) или
+        проверка возраста данных.
+      - **Надёжность.** Переопределение `OnAppearing` возвращает `void`, поэтому `async`-версия - это
+        `async void`: тело нужно обернуть в `try/catch` и показать состояние ошибки, иначе исключение уронит
+        приложение. Если пользователь ушёл со страницы, незавершённую загрузку отменить через
+        `CancellationToken` в `OnDisappearing` или `OnNavigatedFrom`.
+    explanation: |
+      Конструктор и `OnAppearing` отвечают на разные вопросы: «когда создан объект страницы» и «когда страница
+      снова на экране». При навигации со стеком страница под страницей подробностей не уничтожается, она просто
+      закрыта сверху. Когда верхнюю страницу снимают со стека, нижняя снова становится видимой и текущей, но её
+      экземпляр, модель представления и уже загруженные данные остаются прежними.
+
+      Поэтому безусловная загрузка в `OnAppearing` - это не «загрузить данные страницы», а «перезагружать их
+      при каждом показе». Иногда это и нужно, но тогда это должно быть решением, а не побочным эффектом.
+      Обычно правильнее загрузить данные один раз, а изменения со страницы подробностей передать обратно
+      точечно: Shell позволяет передавать данные и при навигации назад через `..`.
+
+      Конструктор не подходит для запуска загрузки не потому, что он вызывается редко, а потому, что из него
+      нельзя корректно дождаться асинхронной операции и обработать её ошибку, и в нём ещё нет параметров
+      навигации.
+    linkTitles:
+      - "ContentPage в .NET MAUI"
+      - "Навигация в .NET MAUI Shell"
+      - "NavigationPage в .NET MAUI"
+      - "Класс Page (справочник API)"
+  en:
+    title: Where should a .NET MAUI page load its data, and what changes when the user comes back from a detail page?
+    prompt: |
+      The order list page receives its view model through the constructor and sets it as `BindingContext`.
+      Data is loaded in an `OnAppearing` override declared as `async void`: it awaits the view model's
+      `LoadOrdersAsync` method, which clears the `Orders` collection and refills it with the server response.
+      Users complain: after they come back from an order page the list flickers, the scroll position jumps to
+      the top, and the server logs show an extra request for every tap on "Back".
+
+      Explain when the page constructor, `OnAppearing` and `OnNavigatedTo` run, where to start loading data,
+      and how to make the page refresh its data on return only when that is really needed.
+    hint: What happens to the list page while the detail page is open on top of it, and what happens when the detail page is closed?
+    answer: |
+      - **The constructor** runs once per page instance. While the detail page is open, the list page stays in
+        the navigation stack under it. Going back pops the detail page and shows the same list instance again,
+        so the constructor does not run again. A new instance appears only on a new forward navigation if the
+        app creates the page anew, and that depends on how the page is created and registered.
+      - **Starting async loading in the constructor** is awkward: you cannot `await` it, task errors are easy
+        to lose, there is nothing to tie cancellation to, and Shell navigation parameters are applied to the
+        page only after it has been created.
+      - **`OnAppearing`** runs when the page is about to become visible: on the first display and again when
+        the detail page is closed. Depending on the platform and the container, it may also run when the user
+        returns to the page's tab.
+      - **`OnNavigatedTo`** runs on the page that became the target of navigation. After back navigation the
+        revealed list page is the target, so this method repeats too, but it is tied to navigation rather than
+        visibility.
+      - **The cause of the symptoms.** The described code repeats the load on every "Back". Clearing and
+        refilling the collection recreates the list items, hence the flicker, the scroll reset and the extra
+        request.
+      - **The first load.** Start it in `OnAppearing` or `OnNavigatedTo` (the page is already on screen, so you
+        can show a busy indicator), but guard it against repeats: a flag in the view model that is set after a
+        successful load, or a stored task of the first load, so that a second call does not start another load.
+      - **Deliberate refresh.** If the detail page changed the order, return the result:
+        `Shell.Current.GoToAsync("..", parameters)` with navigation data, received in
+        `IQueryAttributable.ApplyQueryAttributes`, or send a message through a messenger. Then update one item,
+        not the whole list. For a refresh the user asks for, use `RefreshView` (pull-to-refresh) or a check of
+        the data age.
+      - **Robustness.** The `OnAppearing` override returns `void`, so an `async` version is `async void`: wrap
+        the body in `try/catch` and show an error state, otherwise an exception crashes the app. If the user
+        leaves the page, cancel an unfinished load with a `CancellationToken` in `OnDisappearing` or
+        `OnNavigatedFrom`.
+    explanation: |
+      The constructor and `OnAppearing` answer different questions: "when was the page object created" and
+      "when is the page on screen again". With stack navigation the page under the detail page is not destroyed,
+      it is only covered. When the top page is popped, the page below becomes visible and current again, but its
+      instance, its view model and the data it already loaded stay the same.
+
+      So an unconditional load in `OnAppearing` does not mean "load the page data", it means "reload it on every
+      display". Sometimes that is what you want, but then it should be a decision, not a side effect. Usually it
+      is better to load the data once and pass changes from the detail page back precisely: Shell lets you pass
+      data on backward navigation with `..` as well.
+
+      The constructor is a poor place to start loading not because it runs rarely, but because it cannot
+      properly await an async operation and handle its error, and navigation parameters are not there yet.
+    linkTitles:
+      - "ContentPage in .NET MAUI"
+      - ".NET MAUI Shell navigation"
+      - "NavigationPage in .NET MAUI"
+      - "Page class (API reference)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

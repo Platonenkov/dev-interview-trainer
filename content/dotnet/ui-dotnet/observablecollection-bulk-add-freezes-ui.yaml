@@ -1,0 +1,164 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RRJP97ZFY0AS99NAC0
+slug: observablecollection-bulk-add-freezes-ui
+stack: dotnet
+topic: ui-dotnet
+level: senior
+type: situation
+grading: self
+tags: [wpf, observablecollection, data-binding, performance, collection-view]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/desktop/wpf/advanced/optimizing-performance-data-binding
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.collections.objectmodel.observablecollection-1
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.windows.data.bindingoperations.enablecollectionsynchronization
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Загрузка 50 000 результатов поиска в ObservableCollection подвешивает экран WPF на несколько секунд
+    prompt: |
+      Экран поиска в WPF-приложении показывает результаты в `ListView`. Его `ItemsSource` привязан к
+      `CollectionViewSource` с `SortDescriptions` (пользователь сортирует по столбцам), а источник этого
+      `CollectionViewSource` - свойство модели представления
+      `public ObservableCollection<ResultViewModel> Results { get; } = new();`. Рядом `TextBlock` показывает
+      `Results.Count`. Метод поиска запускается из потока UI: он вызывает `Results.Clear()`, через `await`
+      получает от сервиса список результатов и затем в цикле `foreach` выполняет
+      `Results.Add(new ResultViewModel(hit))` для каждого результата.
+
+      На коротких выдачах всё работает, но на запросе с 50 000 результатов окно перестаёт реагировать на
+      несколько секунд, а затем список появляется целиком. Сервис поиска отвечает за доли секунды.
+      Как вы найдёте причину и что исправите?
+    hint: |
+      Что происходит в привязанном представлении при каждом вызове `Add` и сколько таких вызовов делает цикл?
+    answer: |
+      1. **Подтвердить, где уходит время.** Записать профиль CPU (Performance Profiler в Visual Studio или
+         dotTrace) на запросе с 50 000 результатов. Ожидаемая картина: сервис отвечает быстро, а поток UI несколько
+         секунд занят циклом `Add` - обработкой `CollectionChanged` в представлении коллекции
+         (`ListCollectionView`), работой генератора контейнеров `ListView` и обновлением привязки к
+         `Results.Count`. Для быстрой проверки достаточно засечь время цикла через `Stopwatch` и посчитать события
+         `CollectionChanged`: по одному на каждый элемент.
+      2. **Понять механизм.** Каждый `Add` вызывает `CollectionChanged` с действием `Add` и `PropertyChanged`
+         для `Count` и `Item[]`. Представление коллекции синхронно обрабатывает каждое уведомление: вставляет
+         элемент в свой список на место по сортировке, проверяет фильтр и сообщает `ListView` об изменении, а
+         привязка к `Count` перечитывает значение. Продолжение после `await` выполняется в потоке UI, поэтому все
+         50 000 итераций идут одной операцией диспетчера: ввод не обрабатывается, и кадр не обновляется до конца
+         цикла.
+      3. **Понять, почему не подойдёт «добавить пачкой».** У `ObservableCollection<T>` в .NET 10 нет
+         `AddRange`, а представления коллекций WPF не поддерживают уведомления о диапазоне, то есть событие `Add`
+         сразу с несколькими элементами. Дешёвый сигнал о массовом изменении, который они понимают, - «изменилось
+         всё»: `Reset` или новый объект коллекции.
+      4. **Исправить загрузку.** Подготовить данные вне потока UI: получить результаты и создать
+         `ResultViewModel` в обычном `List<T>`, при необходимости через `Task.Run`. Затем отдать их привязке одним
+         уведомлением:
+         - заменить коллекцию целиком: сделать у `Results` сеттер с `PropertyChanged` и присвоить
+           `new ObservableCollection<ResultViewModel>(items)`. `CollectionViewSource` получит новый источник,
+           построит представление и отсортирует его один раз;
+         - если объект коллекции должен остаться тем же (на него подписан другой код), сделать наследник
+           `ObservableCollection<T>` с методом вроде `ReplaceAll`: он вызывает `CheckReentrancy`, заполняет
+           защищённый список `Items` в обход `InsertItem`, а затем один раз вызывает `OnCollectionChanged` с
+           `NotifyCollectionChangedAction.Reset` и `OnPropertyChanged` для `Count` и `Item[]`.
+      5. **Проверить побочные эффекты.** После замены коллекции или `Reset` сбрасываются выделение и позиция
+         прокрутки, их при необходимости восстанавливают. Сортировку и фильтр, настроенные в коде на представлении
+         старой коллекции (`CollectionViewSource.GetDefaultView`), нужно применить к новой. Заодно проверить, что
+         виртуализация списка работает: иначе даже одно уведомление создаст 50 000 контейнеров.
+      6. **Пересмотреть требование и закрепить.** 50 000 строк никто не читает: постраничная загрузка или показ
+         первых результатов с догрузкой и сортировка на стороне сервиса снимают проблему в корне. В тест модели
+         представления добавить проверку, что поиск вызывает одно уведомление коллекции, а не по одному на элемент.
+    explanation: |
+      `ObservableCollection<T>` рассчитана на точечные изменения: пользователь добавил или удалил строку. Именно
+      для этого её и рекомендуют: уведомление добавляет или удаляет один элемент в `ItemsControl` без перестройки
+      всего списка. Но у каждого уведомления есть своя цена на стороне WPF. Для одного элемента она незаметна,
+      а 50 000 вызовов `Add` подряд в потоке UI складываются в секунды. Сортировка, фильтр и группировка в
+      представлении делают каждое уведомление ещё дороже.
+
+      Для массовой загрузки выгоднее обратное: документация WPF предупреждает, что новый источник заставляет
+      список выбросить элементы и перестроить их целиком. При частых точечных правках это дорого, а при одной
+      массовой замене это ровно одна перестройка вместо 50 000 инкрементальных.
+
+      Полумеры не помогают. Добавление пачками с передачей управления диспетчеру между ними оставляет интерфейс
+      отзывчивым, но общий объём работы тот же, и список заполняется заметно долго.
+      `BindingOperations.EnableCollectionSynchronization` позволяет менять коллекцию из фонового потока, но не
+      убирает стоимость обработки каждого изменения в потоке UI. Помогает только сокращение числа уведомлений до
+      одного.
+    linkTitles:
+      - "Оптимизация производительности: привязка данных"
+      - "Класс ObservableCollection<T>"
+      - "Метод BindingOperations.EnableCollectionSynchronization"
+  en:
+    title: Loading 50,000 search results into an ObservableCollection freezes a WPF screen for seconds
+    prompt: |
+      A search screen in a WPF application shows results in a `ListView`. Its `ItemsSource` is bound to a
+      `CollectionViewSource` with `SortDescriptions` (the user sorts by columns), and the source of that
+      `CollectionViewSource` is the view model property
+      `public ObservableCollection<ResultViewModel> Results { get; } = new();`. A `TextBlock` next to it shows
+      `Results.Count`. The search method starts on the UI thread: it calls `Results.Clear()`, gets the list of
+      results from the service with `await`, and then in a `foreach` loop runs
+      `Results.Add(new ResultViewModel(hit))` for every result.
+
+      Short result sets work fine, but for a query with 50,000 results the window stops responding for several
+      seconds, and then the whole list appears at once. The search service answers in a fraction of a second.
+      How do you find the cause and what do you fix?
+    hint: |
+      What happens in the bound view on every `Add` call, and how many such calls does the loop make?
+    answer: |
+      1. **Confirm where the time goes.** Record a CPU profile (Performance Profiler in Visual Studio or
+         dotTrace) for a query with 50,000 results. The expected picture: the service answers quickly, while the
+         UI thread spends seconds in the `Add` loop - handling `CollectionChanged` in the collection view
+         (`ListCollectionView`), in the `ListView` container generator and in updating the binding to
+         `Results.Count`. For a quick check, time the loop with a `Stopwatch` and count the `CollectionChanged`
+         events: one per item.
+      2. **Understand the mechanism.** Every `Add` raises `CollectionChanged` with the `Add` action and
+         `PropertyChanged` for `Count` and `Item[]`. The collection view handles each notification synchronously:
+         it inserts the item into its own list at the sorted position, checks the filter and tells the `ListView`
+         about the change, and the binding to `Count` re-reads its value. The continuation after `await` runs on
+         the UI thread, so all 50,000 iterations run as one dispatcher operation: no input is processed and no
+         frame is updated until the loop ends.
+      3. **Understand why "add as a batch" is not an option.** `ObservableCollection<T>` in .NET 10 has no
+         `AddRange`, and WPF collection views do not support range notifications, that is an `Add` event carrying
+         several items. The cheap bulk-change signal they do understand is "everything changed": a `Reset` or a
+         new collection object.
+      4. **Fix the loading.** Prepare the data off the UI thread: fetch the results and create the
+         `ResultViewModel` objects in a plain `List<T>`, with `Task.Run` if needed. Then hand them to the binding
+         with one notification:
+         - replace the whole collection: give `Results` a setter that raises `PropertyChanged` and assign
+           `new ObservableCollection<ResultViewModel>(items)`. The `CollectionViewSource` gets a new source, builds
+           the view and sorts it once;
+         - if the collection object must stay the same (other code is subscribed to it), write a subclass of
+           `ObservableCollection<T>` with a method such as `ReplaceAll`: it calls `CheckReentrancy`, fills the
+           protected `Items` list, bypassing `InsertItem`, and then calls `OnCollectionChanged` once with
+           `NotifyCollectionChangedAction.Reset` and `OnPropertyChanged` for `Count` and `Item[]`.
+      5. **Check the side effects.** After replacing the collection or a `Reset`, the selection and the scroll
+         position are lost, so restore them if needed. Sorting and filtering configured in code on the view of the
+         old collection (`CollectionViewSource.GetDefaultView`) must be applied to the new one. Also check that the
+         list virtualization works: otherwise even one notification creates 50,000 containers.
+      6. **Revisit the requirement and lock it in.** Nobody reads 50,000 rows: paging, or showing the first
+         results with loading on demand, and sorting on the service side remove the problem at the root. Add a
+         view model test that checks that a search raises one collection notification, not one per item.
+    explanation: |
+      `ObservableCollection<T>` is designed for point changes: the user added or removed a row. That is what it is
+      recommended for: a notification adds or removes one item in an `ItemsControl` without regenerating the
+      whole list. But every notification has its own cost on the WPF side. For one item it is invisible, while
+      50,000 `Add` calls in a row on the UI thread add up to seconds. Sorting, filtering and grouping in the view
+      make every notification even more expensive.
+
+      For a bulk load the opposite trade-off wins: the WPF docs warn that a new source makes the list throw away
+      its items and regenerate all of them. That is expensive for frequent point changes, but for one bulk
+      replacement it is exactly one rebuild instead of 50,000 incremental ones.
+
+      Half-measures do not help. Adding in batches and yielding to the dispatcher between them keeps the UI
+      responsive, but the total amount of work is the same, and the list takes noticeably long to fill.
+      `BindingOperations.EnableCollectionSynchronization` lets you change the collection from a background
+      thread, but it does not remove the per-item cost of processing the changes on the UI thread. Only reducing
+      the notifications to one helps.
+    linkTitles:
+      - "Optimizing performance: data binding"
+      - "ObservableCollection<T> class"
+      - "BindingOperations.EnableCollectionSynchronization method"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

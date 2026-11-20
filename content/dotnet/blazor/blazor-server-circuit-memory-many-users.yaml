@@ -1,0 +1,178 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RMPES6HNCNZS43BVK4
+slug: blazor-server-circuit-memory-many-users
+stack: dotnet
+topic: blazor
+level: senior
+type: situation
+grading: self
+tags: [blazor, circuits, memory, scaling, signalr]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/host-and-deploy/server
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/hosting-models
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/fundamentals/signalr
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/blazor-ef-core
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/release-notes/aspnetcore-10.0
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Приложение Blazor в режиме InteractiveServer исчерпывает память и теряет пользователей при росте числа сессий: что делать?"
+    prompt: |
+      Внутреннее приложение Blazor Web App на .NET 10 использует режим `InteractiveServer` и работает на двух
+      экземплярах за балансировщиком нагрузки с привязкой сессий. Пока одновременно работало около сотни
+      пользователей, проблем не было. После подключения нескольких отделов число одновременных сессий выросло
+      в десятки раз: память процесса растёт до лимита контейнера, экземпляр перезапускается, и все пользователи
+      на нём видят сообщение о потере соединения и теряют несохранённые данные.
+
+      Команда добавила третий экземпляр и заодно перенастроила балансировщик на распределение запросов по кругу
+      (round robin). После этого часть пользователей видит, что соединение не восстанавливается и страницу
+      приходится перезагружать.
+
+      Как вы будете искать причину и что исправите?
+    hint: |
+      Что сервер хранит для каждого пользователя между двумя щелчками, и что происходит с этим, когда
+      пользователь закрывает вкладку или теряет сеть?
+    answer: |
+      1. **Понять модель.** Каждая вкладка пользователя - это цепь (circuit): экземпляры всех компонентов, их поля
+         и scoped-сервисы живут в памяти сервера, пока цепь жива. После обрыва сети цепь ещё какое-то время
+         удерживается для переподключения. Значит, память - это число цепей, умноженное на память одной цепи,
+         плюс утечки. Минимальная цепь занимает порядка 250 КБ, реальная - столько, сколько держат её компоненты.
+      2. **Измерить.** Считать открытые, подключённые и отключённые цепи через собственный `CircuitHandler`
+         (`OnCircuitOpenedAsync`, `OnCircuitClosedAsync`, `OnConnectionUpAsync`, `OnConnectionDownAsync`).
+         Смотреть размер кучи и частоту сборок мусора через `dotnet-counters`, снимать `dotnet-gcdump` при разном
+         числе пользователей и сравнивать, какие типы растут. Делить размер кучи на число цепей и проверять,
+         падает ли память после ухода пользователей: если нет, это утечка, а не нагрузка.
+      3. **Уменьшить состояние одной цепи.** Не держать в полях компонентов и scoped-сервисах целые выборки:
+         постраничная загрузка, `Virtualize`, проекции в небольшие DTO. Вместо scoped `DbContext`, который в
+         серверном Blazor живёт всю цепь и копит отслеживаемые сущности, использовать `IDbContextFactory<TContext>`
+         и короткоживущий контекст на операцию. Общие справочники держать один раз в singleton-кэше с лимитом
+         размера, а не копировать в каждую цепь.
+      4. **Убрать утечки.** Отписываться в `Dispose` от событий singleton-сервисов, освобождать
+         `DotNetObjectReference`, таймеры и `CancellationTokenSource`: иначе компоненты переживают свою цепь.
+      5. **Настроить удержание отключённых цепей.** Сколько отключённых цепей хранить и как долго, задают
+         `DisconnectedCircuitMaxRetained` и `DisconnectedCircuitRetentionPeriod` из `CircuitOptions` в
+         `AddInteractiveServerComponents(options => ...)`. Меньшие значения экономят память, но пользователь с
+         нестабильной сетью чаще теряет состояние. В .NET 10 эту цену можно снизить: состояние компонентов,
+         помеченное атрибутом `[PersistentState]`, сохраняется при вытеснении цепи и восстанавливается в новой
+         цепи, когда пользователь возвращается.
+      6. **Сократить число цепей.** Страницы, которым не нужна интерактивность, отдавать статической отрисовкой на
+         сервере (static SSR): для них цепь не создаётся.
+      7. **Масштабировать правильно.** Цепь живёт на одном экземпляре, поэтому при нескольких экземплярах нужны
+         sticky sessions (или Azure SignalR Service с включённой привязкой клиента к серверу). Round robin
+         отправляет запросы соединения и переподключения на экземпляр, где этой цепи нет, отсюда и сбои
+         переподключения. Нагрузочным тестом определить, сколько цепей выдерживает один экземпляр, и
+         масштабировать по памяти и числу цепей.
+    explanation: |
+      Главное отличие `InteractiveServer` от WebAssembly и статической отрисовки в том, что состояние
+      пользователя хранится на сервере. Память растёт не от числа запросов, а от числа одновременно живущих цепей
+      и от того, сколько держит каждая из них. Поэтому сначала нужны цифры: число цепей и память на цепь. Они
+      показывают, что делать - уменьшать состояние, искать утечку или добавлять экземпляры.
+
+      Закрытие вкладки освобождает цепь сразу, а обрыв сети - нет: сервер удерживает ограниченное число
+      отключённых цепей ограниченное время (по умолчанию это значения `CircuitOptions`), чтобы пользователь мог
+      переподключиться без потери состояния. При массовом обрыве соединений это заметный объём. Перезапуск из-за
+      нехватки памяти особенно болезнен: теряются все цепи экземпляра сразу, пользователи перезагружают страницы
+      и создают новые цепи на оставшихся экземплярах, увеличивая нагрузку на них.
+
+      `DbContext`, зарегистрированный как scoped, в серверном Blazor живёт столько же, сколько цепь, поэтому
+      отслеживаемые сущности накапливаются в памяти на всё время работы пользователя. Фабрика контекстов даёт
+      короткое время жизни на одну операцию.
+
+      Azure SignalR Service снимает с приложения работу с соединениями, но не цепи: компоненты и их состояние
+      по-прежнему живут в памяти экземпляра приложения. Если даже после оптимизации состояние одного пользователя
+      велико, а пользователей много, стоит перенести интерактивные части в `InteractiveWebAssembly`, где
+      состояние хранится в браузере. Описанное относится к Blazor Web App начиная с .NET 8, а сохранение
+      состояния вытесненной цепи появилось в .NET 10.
+    linkTitles:
+      - "Размещение и развёртывание серверных приложений Blazor"
+      - "Модели размещения Blazor"
+      - "Рекомендации по SignalR в Blazor"
+      - "Использование EF Core в приложениях Blazor"
+      - "Что нового в ASP.NET Core в .NET 10"
+  en:
+    title: "An InteractiveServer Blazor app runs out of memory and drops users as sessions grow: what do you do?"
+    prompt: |
+      An internal Blazor Web App on .NET 10 uses the `InteractiveServer` render mode and runs on two instances
+      behind a load balancer with session affinity. With about a hundred concurrent users there were no problems.
+      After several departments joined, the number of concurrent sessions grew tenfold and more: process memory
+      grows to the container limit, the instance restarts, and every user on it sees a lost-connection message and
+      loses unsaved data.
+
+      The team added a third instance and at the same time switched the load balancer to round robin. Since then
+      some users see that the connection is not restored and they have to reload the page.
+
+      How do you find the cause and what do you fix?
+    hint: |
+      What does the server keep for every user between two clicks, and what happens to it when the user closes
+      the tab or loses the network?
+    answer: |
+      1. **Understand the model.** Every browser tab of a user is a circuit: instances of all components, their
+         fields and scoped services live in server memory while the circuit is alive. After a network drop the
+         circuit is retained for a while so the user can reconnect. So memory is the number of circuits
+         multiplied by the memory of one circuit, plus leaks. A minimal circuit takes about 250 KB, a real one as
+         much as its components hold.
+      2. **Measure.** Count opened, connected and disconnected circuits with your own `CircuitHandler`
+         (`OnCircuitOpenedAsync`, `OnCircuitClosedAsync`, `OnConnectionUpAsync`, `OnConnectionDownAsync`).
+         Watch heap size and GC frequency with `dotnet-counters`, take `dotnet-gcdump` snapshots at different user
+         counts and compare which types grow. Divide heap size by the circuit count and check whether memory drops
+         after users leave: if it does not, it is a leak, not load.
+      3. **Shrink per-circuit state.** Do not keep whole result sets in component fields and scoped services: use
+         paging, `Virtualize` and projections into small DTOs. Instead of a scoped `DbContext`, which in server-side
+         Blazor lives for the whole circuit and accumulates tracked entities, use `IDbContextFactory<TContext>` and
+         a short-lived context per operation. Keep shared reference data once in a size-limited singleton cache
+         instead of copying it into every circuit.
+      4. **Remove leaks.** Unsubscribe from singleton service events in `Dispose`, dispose
+         `DotNetObjectReference` instances, timers and `CancellationTokenSource` objects: otherwise components
+         outlive their circuit.
+      5. **Tune retention of disconnected circuits.** How many disconnected circuits are kept and for how long is
+         set by `DisconnectedCircuitMaxRetained` and `DisconnectedCircuitRetentionPeriod` of `CircuitOptions` in
+         `AddInteractiveServerComponents(options => ...)`. Lower values save memory, but users on unstable
+         networks lose state more often. In .NET 10 this cost can be reduced: component state marked with the
+         `[PersistentState]` attribute is persisted when a circuit is evicted and restored in a new circuit when
+         the user comes back.
+      6. **Create fewer circuits.** Serve pages that need no interactivity with static server-side rendering
+         (static SSR): no circuit is created for them.
+      7. **Scale out correctly.** A circuit lives on one instance, so several instances need sticky sessions (or
+         Azure SignalR Service with client-to-server stickiness turned on). Round robin sends connection and
+         reconnection requests to an instance that does not have the circuit, which explains the failed
+         reconnects. Use a load test to find how many circuits one instance can hold, and scale on memory and
+         circuit count.
+    explanation: |
+      The key difference of `InteractiveServer` from WebAssembly and static rendering is that user state is kept
+      on the server. Memory grows not with the number of requests but with the number of circuits alive at the
+      same time and with how much each of them holds. That is why you need numbers first: circuit count and memory
+      per circuit. They tell you what to do - shrink state, hunt a leak or add instances.
+
+      Closing a tab releases the circuit at once, a network drop does not: the server retains a limited number of
+      disconnected circuits for a limited time (the defaults come from `CircuitOptions`) so users can reconnect
+      without losing state. When many connections drop at once, that is a noticeable amount. A restart caused by
+      running out of memory is especially painful: all circuits of the instance are lost at once, users reload
+      their pages and create new circuits on the remaining instances, which increases the load there.
+
+      A `DbContext` registered as scoped lives as long as the circuit in server-side Blazor, so tracked entities
+      pile up in memory for the whole time the user works. A context factory gives a short lifetime per operation.
+
+      Azure SignalR Service takes connection handling off the app, but not the circuits: components and their
+      state still live in the memory of the app instance. If per-user state is still large after optimization and
+      there are many users, move interactive parts to `InteractiveWebAssembly`, where state lives in the browser.
+      This applies to Blazor Web Apps since .NET 8, and persisting the state of an evicted circuit was added in
+      .NET 10.
+    linkTitles:
+      - "Host and deploy ASP.NET Core server-side Blazor apps"
+      - "ASP.NET Core Blazor hosting models"
+      - "ASP.NET Core Blazor SignalR guidance"
+      - "ASP.NET Core Blazor with Entity Framework Core"
+      - "What's new in ASP.NET Core in .NET 10"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

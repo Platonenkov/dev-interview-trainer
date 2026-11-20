@@ -1,0 +1,171 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RMSJE8PVY8SDHPWYG2
+slug: blazor-circuit-state-lost-on-reload
+stack: dotnet
+topic: blazor
+level: senior
+type: open
+grading: self
+tags: [blazor, state-management, circuit, browser-storage]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/state-management
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/state-management/server
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/state-management/protected-browser-storage
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/fundamentals/signalr
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Какое состояние пользователя теряется в Blazor InteractiveServer при перезагрузке, новой вкладке и долгом разрыве сети?"
+    prompt: |
+      Приложение Blazor Web App на .NET 10 работает в режиме `InteractiveServer`. Состояние пользователя хранится
+      в полях компонентов и в scoped-сервисах: черновик длинной формы, фильтры списка, корзина. Пользователи
+      жалуются, что данные пропадают после F5, при открытии ссылки в новой вкладке и после того, как ноутбук
+      полчаса провёл без сети.
+
+      Объясните, где на самом деле живёт это состояние, переживает ли оно каждое из этих событий и куда
+      переносить состояние, которое должно их пережить.
+    hint: |
+      Что сервер хранит для интерактивной сессии в этом режиме, и возвращаются ли перезагрузка, новая вкладка
+      и долгий разрыв к тому же самому объекту?
+    answer: |
+      - **Где живёт состояние.** В памяти сервера внутри circuit: дерево компонентов с их полями, последний
+        результат отрисовки и экземпляры scoped-сервисов (scope DI в этом режиме совпадает с circuit). Circuit
+        принадлежит одной вкладке браузера и одному серверу.
+      - **Перезагрузка страницы.** Браузер заново загружает документ и устанавливает новое соединение, сервер
+        создаёт новый circuit с новыми экземплярами компонентов и scoped-сервисов. Состояние в памяти потеряно.
+        Остаётся только то, что хранится вне circuit: cookie аутентификации (поэтому пользователь остаётся
+        залогинен, а корзина пропадает), URL, хранилище браузера, база данных.
+      - **Новая вкладка.** У неё свой circuit и свои экземпляры scoped-сервисов, вторая вкладка не видит
+        состояния первой.
+      - **Разрыв сети.** При коротком разрыве клиент переподключается к тому же circuit, и состояние
+        сохраняется. Но сервер держит отключённые circuit ограниченное время и в ограниченном количестве
+        (`CircuitOptions.DisconnectedCircuitRetentionPeriod` и `DisconnectedCircuitMaxRetained`, по умолчанию
+        3 минуты и 100 circuit). По истечении срока circuit освобождается, а при превышении лимита сервер
+        освобождает часть удерживаемых circuit раньше срока. После этого переподключение отклоняется, состояние
+        пользователя на сервере потеряно, пользователю предлагают перезагрузить страницу, и создаётся новый
+        circuit. Так же circuit теряется при перезапуске процесса, развёртывании или выходе сервера из балансировки.
+      - **Куда переносить, по вопросу «кто и как долго должен видеть это состояние»:**
+        - URL (маршрут, query string): навигационное состояние - фильтры, сортировка, номер страницы, выбранная
+          вкладка. Переживает перезагрузку, переносится в новую вкладку вместе со ссылкой, им можно поделиться
+          (`[SupplyParameterFromQuery]`, `NavigationManager`).
+        - `sessionStorage` через `ProtectedSessionStorage`: привязан к вкладке, переживает перезагрузку, но не
+          общий для вкладок. Подходит для черновика формы в одной вкладке.
+        - `localStorage` через `ProtectedLocalStorage`: общий для всех вкладок одного origin и переживает
+          перезапуск браузера, но остаётся на одном устройстве.
+        - База данных на сервере: всё ценное и то, что должно пережить смену устройства или браузера,
+          например корзина авторизованного пользователя или сохранённые черновики. Ключ - пользователь, а не circuit.
+        - Поля и scoped-сервисы остаются для временного состояния интерфейса, которое не жалко потерять, и как
+          кэш поверх надёжного хранилища.
+      - **Ограничения.** `ProtectedLocalStorage` и `ProtectedSessionStorage` асинхронны, работают только при
+        серверной интерактивной отрисовке и недоступны во время пререндеринга, поэтому их читают в
+        `OnAfterRenderAsync` и показывают состояние загрузки. Статическое поле или singleton - не решение: они
+        общие для всех пользователей и тоже пропадают при перезапуске сервера.
+    explanation: |
+      Circuit - это единица интерактивной сессии в режиме `InteractiveServer`. Перезагрузка или новая вкладка - это
+      новый HTTP-запрос и новое соединение SignalR, и фреймворк не связывает их со старым circuit: к прежнему
+      circuit может вернуться только тот же экземпляр страницы, который продолжает работать в браузере после
+      разрыва. Поэтому всё, что лежит только в памяти circuit, по сути является кэшем с временем жизни вкладки.
+
+      Отсюда правило выбора хранилища. Состояние, которое описывает, что пользователь видит, кладут в URL: оно
+      переживает перезагрузку и копируется ссылкой. Состояние одной вкладки, которое жалко потерять при F5, - в
+      `sessionStorage`. Состояние устройства, общее для вкладок, - в `localStorage`, учитывая, что вкладки могут
+      перезаписывать его друг у друга. Всё, что имеет ценность для бизнеса, - в базу. Защищённое хранилище
+      браузера шифрует данные через ASP.NET Core Data Protection, поэтому пользователь не может их подменить, но
+      объём ограничен браузером, а сами данные остаются на устройстве.
+
+      В многосерверном развёртывании circuit живёт на одном сервере, поэтому нужны sticky sessions (или Azure
+      SignalR Service, который сам направляет соединение на сервер с нужным circuit), а отказ сервера уничтожает
+      все его circuit. Начиная с .NET 10 состояние компонентов, объявленное с атрибутом `[PersistentState]`, можно
+      сохранить при вытеснении отключённого circuit и восстановить, когда та же страница переподключается к
+      серверу (подробности - в статье о серверном управлении состоянием). Это сужает проблему долгого разрыва, но
+      не заменяет надёжное хранилище: сохраняется только явно объявленное состояние, хранение ограничено по
+      времени и объёму, и состояние не становится общим между вкладками. Описание относится к Blazor Web App
+      начиная с .NET 8 и верно для .NET 10.
+    linkTitles:
+      - "Обзор управления состоянием в Blazor"
+      - "Управление состоянием на стороне сервера в Blazor"
+      - "Защищённое хранилище браузера в Blazor"
+      - "Рекомендации по SignalR в Blazor"
+  en:
+    title: "Which user state does Blazor InteractiveServer lose on a reload, a new tab and a long network drop?"
+    prompt: |
+      A Blazor Web App on .NET 10 runs in the `InteractiveServer` render mode. User state is kept in component
+      fields and scoped services: a draft of a long form, list filters, a shopping cart. Users complain that data
+      disappears after F5, when they open a link in a new tab, and after their laptop spent half an hour offline.
+
+      Explain where this state actually lives, whether it survives each of these events, and where to move state
+      that must survive them.
+    hint: |
+      What does the server keep for an interactive session in this mode, and do a reload, a new tab and a long
+      drop get back to that same object?
+    answer: |
+      - **Where the state lives.** In server memory inside the circuit: the component tree with its fields, the
+        last render output and the scoped service instances (in this mode the DI scope matches the circuit). A
+        circuit belongs to one browser tab and one server.
+      - **Page reload.** The browser loads the document again and opens a new connection, and the server creates
+        a new circuit with new component and scoped service instances. The in-memory state is lost. Only what is
+        stored outside the circuit remains: the authentication cookie (which is why the user stays signed in while
+        the cart disappears), the URL, browser storage, the database.
+      - **New tab.** It gets its own circuit and its own scoped service instances; the second tab does not see the
+        state of the first.
+      - **Network drop.** After a short drop the client reconnects to the same circuit and the state is kept. But
+        the server retains disconnected circuits for a limited time and in a limited number
+        (`CircuitOptions.DisconnectedCircuitRetentionPeriod` and `DisconnectedCircuitMaxRetained`, by default
+        3 minutes and 100 circuits). When the period expires the circuit is released, and when the limit is
+        exceeded the server releases some retained circuits before their period ends. After that the reconnection
+        is rejected, the user's state on the server is lost, the user is asked to reload the page, and a new
+        circuit is created. A process restart, a deployment or a server leaving the load balancer destroys the
+        circuit as well.
+      - **Where to move it, by asking "who must see this state, and for how long":**
+        - The URL (route, query string): navigation state such as filters, sort order, page number, the selected
+          tab. It survives a reload, travels to a new tab with the link and can be shared
+          (`[SupplyParameterFromQuery]`, `NavigationManager`).
+        - `sessionStorage` through `ProtectedSessionStorage`: scoped to the tab, survives a reload, not shared
+          between tabs. Fits a form draft in one tab.
+        - `localStorage` through `ProtectedLocalStorage`: shared by all tabs of one origin and survives a browser
+          restart, but stays on one device.
+        - A server-side database: anything valuable or anything that must survive a change of device or browser,
+          for example a signed-in user's cart or saved drafts. The key is the user, not the circuit.
+        - Fields and scoped services remain for transient UI state that is fine to lose, and as a cache over
+          durable storage.
+      - **Limits.** `ProtectedLocalStorage` and `ProtectedSessionStorage` are asynchronous, work only with
+        server-side interactive rendering and are unavailable during prerendering, so you read them in
+        `OnAfterRenderAsync` and show a loading state. A static field or a singleton is not a fix: it is shared by
+        all users and is also lost when the server restarts.
+    explanation: |
+      The circuit is the unit of an interactive session in `InteractiveServer` mode. A reload or a new tab is a new
+      HTTP request and a new SignalR connection, and the framework does not link them to the old circuit: only the
+      same page instance that keeps running in the browser after a drop can return to its circuit. So anything kept
+      only in circuit memory is effectively a cache that lives as long as the tab.
+
+      This gives the rule for choosing storage. State that describes what the user is looking at goes into the URL:
+      it survives a reload and is copied with a link. State of one tab that would hurt to lose on F5 goes into
+      `sessionStorage`. Device state shared by tabs goes into `localStorage`, keeping in mind that tabs can
+      overwrite each other. Anything with business value goes into the database. Protected browser storage
+      encrypts data with ASP.NET Core Data Protection, so the user cannot tamper with it, but its size is limited
+      by the browser and the data stays on the device.
+
+      In a multi-server deployment a circuit lives on one server, so sticky sessions are required (or Azure
+      SignalR Service, which itself routes the connection to the server that holds the circuit), and a server
+      failure destroys all its circuits. Since .NET 10, component state declared with the `[PersistentState]`
+      attribute can be persisted when a disconnected circuit is evicted and restored when the same page
+      reconnects to the server (see the server-side state management article for details). This narrows the
+      long-drop problem but does not replace durable storage: only explicitly declared state is kept, storage is
+      limited in time and size, and it does not make state shared between tabs. The description applies to
+      Blazor Web Apps since .NET 8 and holds for .NET 10.
+    linkTitles:
+      - "ASP.NET Core Blazor state management overview"
+      - "ASP.NET Core Blazor server-side state management"
+      - "ASP.NET Core Blazor protected browser storage"
+      - "ASP.NET Core Blazor SignalR guidance"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

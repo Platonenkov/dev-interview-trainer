@@ -1,0 +1,127 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RM952KW8BX47YDRT16
+slug: blazor-eventcallback-vs-action-parent-rerender
+stack: dotnet
+topic: blazor
+level: middle
+type: single
+grading: auto
+tags: [blazor, eventcallback, rendering, components]
+code:
+  language: razor
+  harness: none
+  source: |
+    @* Child.razor *@
+    <button @onclick="NotifyWithAction">Action</button>
+    <button @onclick="NotifyWithCallback">EventCallback</button>
+
+    @code {
+        [Parameter] public Action? OnAction { get; set; }
+        [Parameter] public EventCallback OnCallback { get; set; }
+
+        private void NotifyWithAction() => OnAction?.Invoke();
+        private Task NotifyWithCallback() => OnCallback.InvokeAsync();
+    }
+
+    @* Parent.razor *@
+    <p>Clicks: @clicks</p>
+    <Child OnAction="Increment" OnCallback="Increment" />
+
+    @code {
+        private int clicks;
+        private void Increment() => clicks++;
+    }
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/components/event-handling
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/components/rendering
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Почему родитель Blazor перерисовывается после вызова EventCallback, но не после вызова Action?"
+    prompt: |
+      Родительский компонент передаёт дочернему один и тот же метод `Increment` дважды: как параметр типа `Action`
+      и как параметр типа `EventCallback` (.NET 10, компоненты работают в интерактивном режиме отрисовки).
+      После нажатия кнопки «EventCallback» счётчик в родителе сразу обновляется. После нажатия кнопки «Action»
+      поле `clicks` увеличивается, но текст `Clicks:` на странице не меняется. Почему?
+    hint: "Что `EventCallback` знает о компоненте, в котором его создали, и чего не знает обычный делегат?"
+    options:
+      a: "Вызов `Action` из дочернего компонента выполняется в потоке пула потоков вне диспетчера рендерера, поэтому изменение поля родителя теряется."
+      b: "`EventCallback`, созданный из метода родителя, хранит родителя как получателя. `InvokeAsync` передаёт вызов в `IHandleEvent.HandleEventAsync` родителя, и `ComponentBase` после обработчика вызывает `StateHasChanged` у родителя. `Action` - обычный делегат: метод родителя выполняется, но перерисовывается только дочерний компонент, чей `@onclick` сработал."
+      c: "Перерисовка дочернего компонента распространяется вверх по дереву на родителя, а параметр типа `Action` отключает это распространение."
+      d: "Параметр типа `Action` не связывается: компилятор Razor молча игнорирует атрибут `OnAction`, и метод `Increment` вообще не вызывается."
+    optionExplanations:
+      a: "Делегат вызывается синхронно внутри обработчика `@onclick` дочернего компонента, то есть на диспетчере рендерера. Поле `clicks` действительно меняется, просто никто не вызывает отрисовку родителя."
+      c: "Отрисовка не распространяется вверх: перерисовка дочернего компонента никогда сама по себе не перерисовывает родителя. Наоборот, перерисовка родителя передаёт параметры вниз, дочерним компонентам."
+      d: "Параметр типа `Action` допустим, и группа методов `Increment` присваивается ему как обычный делегат. Метод вызывается, поле меняется, но экран не обновляется."
+    answer: "`EventCallback` вызывает метод через `IHandleEvent.HandleEventAsync` родителя, и `ComponentBase` перерисовывает родителя; вызов `Action` проходит мимо этого механизма."
+    explanation: |
+      Когда родитель присваивает метод `Increment` параметру типа `EventCallback`, компилятор Razor создаёт значение
+      через `EventCallbackFactory` и запоминает в нём получателя (receiver) - сам родительский компонент.
+      `EventCallback.InvokeAsync` не вызывает делегат напрямую, а передаёт его в `IHandleEvent.HandleEventAsync`
+      получателя. Реализация `ComponentBase` выполняет делегат и вызывает `StateHasChanged` у родителя (для
+      асинхронного обработчика ещё и после завершения его задачи), поэтому `Clicks:` обновляется.
+
+      Параметр `Action` - обычный делегат. Дочерний компонент вызывает его внутри своего обработчика `@onclick`, и
+      рендерер знает только об этом обработчике: после него `ComponentBase` перерисовывает дочерний компонент.
+      Метод родителя выполнился, поле изменилось, но `StateHasChanged` у родителя никто не вызвал, и новое значение
+      появится только при следующей перерисовке родителя по другой причине.
+
+      Поэтому для уведомлений от дочернего компонента к родителю используют `EventCallback` или
+      `EventCallback<TValue>`: они ещё и правильно работают с асинхронными обработчиками. Если параметр всё же
+      остаётся `Action`, родитель должен сам вызвать `StateHasChanged` в своём методе.
+    linkTitles:
+      - "Обработка событий в ASP.NET Core Blazor"
+      - "Отрисовка компонентов Razor"
+  en:
+    title: "Why does a Blazor parent re-render after an EventCallback call but not after an Action call?"
+    prompt: |
+      A parent component passes the same `Increment` method to a child twice: as a parameter of type `Action`
+      and as a parameter of type `EventCallback` (.NET 10, the components run in an interactive render mode).
+      After a click on the "EventCallback" button the parent's counter updates at once. After a click on the
+      "Action" button the `clicks` field increases, but the `Clicks:` text on the page does not change. Why?
+    hint: "What does an `EventCallback` know about the component it was created in that a plain delegate does not?"
+    options:
+      a: "The `Action` call from the child runs on a thread pool thread outside the renderer's dispatcher, so the change to the parent's field is lost."
+      b: "An `EventCallback` created from a parent method stores the parent as its receiver. `InvokeAsync` routes the call through the parent's `IHandleEvent.HandleEventAsync`, and `ComponentBase` calls `StateHasChanged` on the parent after the handler. An `Action` is a plain delegate: the parent method runs, but only the child whose `@onclick` fired re-renders."
+      c: "Re-rendering a child propagates up the tree to the parent, and a parameter of type `Action` turns that propagation off."
+      d: "A parameter of type `Action` is not bound: the Razor compiler silently ignores the `OnAction` attribute, and `Increment` is never called."
+    optionExplanations:
+      a: "The delegate is invoked synchronously inside the child's `@onclick` handler, that is, on the renderer's dispatcher. The `clicks` field really changes; nobody just triggers a render of the parent."
+      c: "Rendering does not propagate upward: a child re-render never re-renders the parent by itself. It is the other way round: a parent re-render passes parameters down to its children."
+      d: "A parameter of type `Action` is allowed, and the `Increment` method group is assigned to it as an ordinary delegate. The method runs and the field changes, but the screen does not update."
+    answer: "`EventCallback` invokes the method through the parent's `IHandleEvent.HandleEventAsync`, so `ComponentBase` re-renders the parent; an `Action` call bypasses that mechanism."
+    explanation: |
+      When the parent assigns `Increment` to a parameter of type `EventCallback`, the Razor compiler creates the
+      value through `EventCallbackFactory` and stores a receiver in it: the parent component itself.
+      `EventCallback.InvokeAsync` does not call the delegate directly; it hands it to the receiver's
+      `IHandleEvent.HandleEventAsync`. The `ComponentBase` implementation runs the delegate and calls
+      `StateHasChanged` on the parent (for an async handler also after its task completes), so `Clicks:` updates.
+
+      An `Action` parameter is a plain delegate. The child invokes it inside its own `@onclick` handler, and the
+      renderer knows only about that handler: after it, `ComponentBase` re-renders the child. The parent method ran
+      and the field changed, but nobody called `StateHasChanged` on the parent, so the new value appears only at the
+      parent's next render for some other reason.
+
+      That is why child-to-parent notifications use `EventCallback` or `EventCallback<TValue>`; they also handle
+      async handlers correctly. If the parameter has to stay an `Action`, the parent must call `StateHasChanged`
+      in its own method.
+    linkTitles:
+      - "ASP.NET Core Blazor event handling"
+      - "ASP.NET Core Razor component rendering"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"
+  noRunReason: "Razor component markup: Blazor components need the ASP.NET Core renderer, which the BCL-only console sandbox does not provide."

@@ -1,0 +1,146 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPY4563A1RHMK9Y2RT
+slug: maui-release-build-trimming-reflection-bindings
+stack: dotnet
+topic: maui
+level: senior
+type: open
+grading: self
+tags: [maui, data-binding, compiled-bindings, trimming, ios]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/maui/deployment/trimming
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/maui/fundamentals/data-binding/compiled-bindings
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему в Release-сборке .NET MAUI для iOS с полной обрезкой часть привязок остаётся пустой и как это исправить, не отключая обрезку?
+    prompt: |
+      Приложение .NET MAUI работает правильно, когда разработчики запускают Debug-сборку на симуляторе iOS.
+      В файле проекта свойство `TrimMode` со значением `full` задано в `PropertyGroup` с условием на конфигурацию
+      Release. В Release-сборке на устройстве iOS на нескольких страницах часть меток остаётся пустой.
+      Исключений и падений нет. В XAML используются обычные привязки `{Binding PropertyName}` без `x:DataType`.
+
+      Объясните, почему дефект виден только в Release-сборке на устройстве, как исправить его, не отключая
+      обрезку (trimming), и как не допустить его повторения.
+    hint: Как триммер узнаёт, что свойство используется, если к нему обращаются только по строковому имени во время выполнения? И какой код обрезается в каждой из двух сборок?
+    answer: |
+      - **Почему Debug на симуляторе работает.** Сборки iOS для симулятора по умолчанию не обрезаются вовсе.
+        Даже Debug-сборка на устройстве здесь не показала бы дефект: без условия на Release она получает
+        обрезку по умолчанию, `partial`, а этот режим обрезает только BCL, сборки платформы и сборки, явно
+        помеченные как обрезаемые, но не код приложения. Свойства модели представления остаются на месте.
+      - **Почему ломается Release.** В режиме `full` триммер (ILLink) обрезает и код приложения: он выполняет
+        статический анализ и оставляет только то, на что есть ссылки в IL. `{Binding Title}` без `x:DataType` -
+        это строковый путь, который разрешается через отражение во время выполнения, поэтому в IL нет ссылки
+        на геттер `Title`. Если никакой код на C# это свойство не читает, триммер может удалить член. Привязка
+        ничего не находит и молча оставляет значение по умолчанию: ошибки привязки в MAUI не выбрасывают
+        исключений, поэтому симптом - пустое поле.
+      - **Основное исправление - скомпилированные привязки.** Задать `x:DataType` на странице (тип модели
+        представления) и на каждом `DataTemplate` (тип элемента коллекции). Компилятор XAML превращает такую
+        привязку в код, который обращается к свойству напрямую, триммер видит ссылку и сохраняет член.
+        Привязки, которые создаются в C#, писать через перегрузки с лямбдой, например
+        `label.SetBinding(Label.TextProperty, static (OrderViewModel vm) => vm.Title)`, а не через строковые пути.
+      - **Найти оставшиеся места.** Привязки в XAML, которые можно скомпилировать, отмечают предупреждения
+        `XC0022` и `XC0023`. Они подавляются, пока `MauiStrictXamlCompilation` не равно `true`, а по умолчанию это
+        свойство включено только при публикации с полной обрезкой или Native AOT. Стоит включить его явно и
+        добавить эти коды в `WarningsAsErrors`, чтобы новая строковая привязка ломала сборку, а не экран.
+        Для кода на C#, который создаёт привязки по строковому пути или иначе использует отражение, триммер
+        выдаёт предупреждения анализа обрезки: их нужно исправлять, а не подавлять.
+      - **То, что скомпилировать нельзя.** Для немногих мест, где отражение остаётся (динамический контекст с
+        `x:DataType="{x:Null}"`, код, читающий свойства по имени), сохранить нужные члены явно: атрибуты
+        `[DynamicDependency]` или `[DynamicallyAccessedMembers]` на коде, который использует отражение, или
+        дескриптор корней для конкретного типа. Корень на целую сборку через `TrimmerRootAssembly` - крайняя
+        мера. Отключение обрезки только прячет дефект и увеличивает размер пакета.
+      - **Закрепить.** Убрать условие на конфигурацию у `TrimMode`: документация советует не привязывать полную
+        обрезку к конфигурации сборки, потому что от `TrimMode` зависят переключатели возможностей и приложение
+        должно вести себя одинаково во всех конфигурациях. Смоук-тесты интерфейса прогонять в CI на обрезанной
+        сборке на устройстве: запуск на симуляторе этот класс ошибок не покажет.
+    explanation: |
+      Обрезка - это статический анализ: ILLink идёт по ссылкам в IL и удаляет всё, до чего не дошёл. Обращение
+      через отражение по строковому имени этому анализу не видно, поэтому документация по обрезке в .NET MAUI
+      относит привязки со строковым путём к возможностям, несовместимым с полной обрезкой, и предлагает вместо
+      них скомпилированные привязки.
+
+      Разница между сборками здесь в том, какой код обрезается. Симулятор iOS по умолчанию не обрезается, режим
+      `partial` не трогает код приложения, и только `full`, заданный для Release, удаляет неиспользуемые члены
+      моделей представления. Поэтому дефект проявился только в одной конфигурации, и именно поэтому полную
+      обрезку не стоит включать по условию.
+
+      Скомпилированная привязка устраняет причину, а не симптом: с `x:DataType` компилятор XAML разрешает путь
+      на этапе сборки и генерирует код, который вызывает геттер свойства, и для триммера это обычная ссылка.
+      Попутно неверный путь становится ошибкой сборки, а привязка работает быстрее, потому что не использует
+      отражение. Атрибуты и дескрипторы сохранения - точечное дополнение для кода, которому отражение
+      действительно нужно, а не замена скомпилированным привязкам.
+
+      Описанное поведение верно для .NET 10. Перегрузки `SetBinding` с лямбдой появились в .NET 9.
+    linkTitles:
+      - "Обрезка приложения .NET MAUI"
+      - "Скомпилированные привязки в .NET MAUI"
+  en:
+    title: Why do some bindings stay empty in a fully trimmed iOS Release build of a .NET MAUI app, and how do you fix it without disabling trimming?
+    prompt: |
+      A .NET MAUI app works correctly when the developers run the Debug build on the iOS simulator. In the
+      project file `TrimMode` is set to `full` inside a `PropertyGroup` with a condition on the Release
+      configuration. In the Release build on an iOS device some labels on several pages stay empty. There are no
+      exceptions and no crashes. The XAML uses plain `{Binding PropertyName}` bindings without `x:DataType`.
+
+      Explain why the defect shows up only in the Release build on a device, how to fix it without turning
+      trimming off, and how to keep it from coming back.
+    hint: How does the trimmer learn that a property is used if the only access to it is a string name resolved at run time? And which code is trimmed in each of the two builds?
+    answer: |
+      - **Why Debug on the simulator works.** iOS simulator builds are not trimmed at all by default. Even a
+        Debug build on a device would not show the defect here: without the Release condition it gets the
+        default `partial` trimming, which trims only the BCL, the platform assemblies and assemblies that opted
+        into trimming, not the app code. The view model properties stay in place.
+      - **Why Release breaks.** In `full` mode the trimmer (ILLink) trims the app code too: it does static
+        analysis and keeps only what IL references. `{Binding Title}` without `x:DataType` is a string path
+        resolved through reflection at run time, so nothing in IL references the getter of `Title`. If no C#
+        code reads that property, the trimmer may remove the member. The binding finds nothing and silently
+        keeps the default value: binding failures in MAUI throw no exceptions, so the symptom is an empty field.
+      - **The main fix is compiled bindings.** Set `x:DataType` on the page (the view model type) and on every
+        `DataTemplate` (the item type). The XAML compiler turns such a binding into code that accesses the
+        property directly, the trimmer sees the reference and keeps the member. Write bindings created in C#
+        with the lambda overloads, for example
+        `label.SetBinding(Label.TextProperty, static (OrderViewModel vm) => vm.Title)`, not with string paths.
+      - **Find what is left.** XAML bindings that could be compiled are flagged by the `XC0022` and `XC0023`
+        warnings. They are suppressed unless `MauiStrictXamlCompilation` is `true`, and by default that property
+        is on only when you publish with full trimming or Native AOT. Turn it on explicitly and add these codes
+        to `WarningsAsErrors`, so a new string binding breaks the build instead of a screen. For C# code that
+        creates bindings by string path or otherwise uses reflection, the trimmer reports trim analysis
+        warnings: fix them, do not suppress them.
+      - **What cannot be compiled.** For the few places where reflection stays (a dynamic context with
+        `x:DataType="{x:Null}"`, code that reads properties by name), keep the members explicitly:
+        `[DynamicDependency]` or `[DynamicallyAccessedMembers]` on the code that uses reflection, or a root
+        descriptor for a specific type. Rooting a whole assembly with `TrimmerRootAssembly` is a last resort.
+        Turning trimming off only hides the defect and makes the package larger.
+      - **Lock it in.** Remove the configuration condition from `TrimMode`: the documentation advises against
+        conditioning full trimming on the build configuration, because feature switches depend on `TrimMode`
+        and the app should behave identically in every configuration. Run UI smoke tests in CI on a trimmed
+        build on a device: a run on the simulator does not show this class of bugs.
+    explanation: |
+      Trimming is static analysis: ILLink follows references in IL and removes everything it does not reach.
+      Access through reflection by a string name is invisible to that analysis, which is why the .NET MAUI
+      trimming documentation lists bindings with a string path among the features that are incompatible with
+      full trimming, and recommends compiled bindings instead.
+
+      The difference between the builds is which code gets trimmed. The iOS simulator is not trimmed by
+      default, `partial` mode leaves the app code alone, and only `full`, set for Release, removes unused view
+      model members. That is why the defect appeared in one configuration only, and why full trimming should not
+      be switched on by a condition.
+
+      A compiled binding removes the cause, not the symptom: with `x:DataType` the XAML compiler resolves the
+      path at build time and generates code that calls the property getter, which is an ordinary reference for
+      the trimmer. As a bonus a wrong path becomes a build error, and the binding is faster because it does not
+      use reflection. Preservation attributes and descriptors are a targeted complement for code that really
+      needs reflection, not a replacement for compiled bindings.
+
+      The behaviour described holds for .NET 10. The lambda overloads of `SetBinding` appeared in .NET 9.
+    linkTitles:
+      - "Trim a .NET MAUI app"
+      - "Compiled bindings in .NET MAUI"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

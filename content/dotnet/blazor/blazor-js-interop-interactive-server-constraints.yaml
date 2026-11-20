@@ -1,0 +1,104 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RMA7WW9BVNSCBHWYSY
+slug: blazor-js-interop-interactive-server-constraints
+stack: dotnet
+topic: blazor
+level: senior
+type: multi
+grading: auto
+tags: [blazor, js-interop, signalr, render-modes]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+  - id: e
+    correct: true
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/javascript-interoperability/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/blazor/javascript-interoperability/call-javascript-from-dotnet
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что верно для JavaScript interop в режиме отрисовки InteractiveServer?
+    prompt: |
+      Компонент Blazor Web App на .NET 10 работает в режиме отрисовки `InteractiveServer` и вызывает JavaScript через
+      `IJSRuntime`. Выберите все верные утверждения о JS interop в этом режиме.
+    hint: "Где выполняется код .NET, где находится браузер и что их соединяет?"
+    options:
+      a: "Любой вызов через `IJSRuntime` асинхронный: вызов сериализуется, уходит в браузер по SignalR-соединению circuit, а результат возвращается отдельным сообщением, поэтому каждый вызов стоит сетевого запроса туда и обратно."
+      b: "`IJSRuntime` можно привести к `IJSInProcessRuntime` и вызывать JavaScript синхронно, чтобы избежать сетевого запроса."
+      c: "Данные, которые браузер отправляет на сервер через interop, ограничены максимальным размером входящего сообщения SignalR для методов хаба (`HubOptions.MaximumReceiveMessageSize`, по умолчанию 32 КБ), поэтому большие объёмы из JavaScript в .NET передают потоком через `IJSStreamReference`."
+      d: "Объект, переданный аргументом в `InvokeVoidAsync`, попадает в JavaScript по ссылке, поэтому изменения, которые сделает функция JS, будут видны в объекте .NET."
+      e: "Если circuit уже разорван, например пользователь закрыл вкладку, вызов interop в `DisposeAsync` выбрасывает `JSDisconnectedException`, и компоненту следует его перехватить."
+    optionExplanations:
+      b: "`IJSInProcessRuntime` реализован только там, где .NET и JavaScript работают в одном процессе, то есть в WebAssembly. На сервере среда JS удалённая, и серверная реализация `IJSRuntime` этот интерфейс не реализует, поэтому синхронных вызовов нет."
+      d: "Аргументы сериализуются в JSON через `System.Text.Json`, и JavaScript получает копию. Чтобы передать в JS ссылку на объект .NET, используют `DotNetObjectReference`, и вызовы его методов из JS снова идут по сети."
+    answer: "Варианты a, c и e."
+    explanation: |
+      Код компонента в режиме `InteractiveServer` выполняется на сервере, а JavaScript - в браузере, и единственный
+      канал между ними - SignalR-соединение circuit. Отсюда все ограничения:
+
+      - Каждый вызов - это сообщение по сети и ожидание ответа. Поэтому вызовы interop всегда асинхронные, а interop в
+        цикле или на каждое движение мыши дорог: вызовы объединяют в одну функцию JS, которая делает всю работу за
+        один запрос.
+      - `IJSInProcessRuntime` реализован только в среде выполнения WebAssembly. Компонент, который должен работать в
+        нескольких режимах, использует только асинхронный `IJSRuntime`.
+      - Лимит `MaximumReceiveMessageSize` действует на сообщения от клиента к серверу. Вместо того чтобы поднимать его
+        ради редких больших передач, данные из JS в .NET передают потоком через `IJSStreamReference`. Для передачи
+        потока в обратную сторону, из .NET в JS, есть `DotNetStreamReference`.
+      - После разрыва circuit канала больше нет, а `DisposeAsync` компонента всё равно вызывается. Освобождение
+        JS-модулей в нём оборачивают в `try` с `catch (JSDisconnectedException)`: объекты на стороне браузера уже
+        исчезли вместе со страницей.
+
+      Поведение описано для режимов отрисовки, появившихся в .NET 8, и верно для .NET 10.
+    linkTitles:
+      - "JavaScript interop в ASP.NET Core Blazor"
+      - "Вызов функций JavaScript из методов .NET в Blazor"
+  en:
+    title: What is true about JavaScript interop in the InteractiveServer render mode?
+    prompt: |
+      A Blazor Web App component on .NET 10 runs in the `InteractiveServer` render mode and calls JavaScript through
+      `IJSRuntime`. Select every true statement about JS interop in this mode.
+    hint: "Where does the .NET code run, where is the browser, and what connects them?"
+    options:
+      a: "Every call through `IJSRuntime` is asynchronous: the call is serialized, sent to the browser over the circuit's SignalR connection, and the result comes back in a separate message, so each call costs a network round trip."
+      b: "You can cast `IJSRuntime` to `IJSInProcessRuntime` and call JavaScript synchronously to avoid the network round trip."
+      c: "Data that the browser sends to the server through interop is limited by the maximum incoming SignalR message size for hub methods (`HubOptions.MaximumReceiveMessageSize`, 32 KB by default), so large data from JavaScript to .NET is passed as a stream through `IJSStreamReference`."
+      d: "An object passed as an argument to `InvokeVoidAsync` reaches JavaScript by reference, so changes that the JS function makes to it are visible in the .NET object."
+      e: "If the circuit is already disconnected, for example because the user closed the tab, an interop call in `DisposeAsync` throws `JSDisconnectedException`, which the component should catch."
+    optionExplanations:
+      b: "`IJSInProcessRuntime` is implemented only where .NET and JavaScript run in the same process, that is in WebAssembly. On the server the JS runtime is remote and the server implementation of `IJSRuntime` does not implement this interface, so there are no synchronous calls."
+      d: "Arguments are serialized to JSON with `System.Text.Json`, and JavaScript gets a copy. To give JS a reference to a .NET object you use `DotNetObjectReference`, and calls to its methods from JS go over the network again."
+    answer: "Options a, c and e."
+    explanation: |
+      In the `InteractiveServer` mode the component code runs on the server and JavaScript runs in the browser, and
+      the only channel between them is the circuit's SignalR connection. All the constraints follow from that:
+
+      - Every call is a network message plus a wait for the reply. That is why interop calls are always asynchronous,
+        and interop in a loop or on every mouse move is expensive: calls are combined into one JS function that does
+        all the work in a single request.
+      - `IJSInProcessRuntime` is implemented only by the WebAssembly runtime. A component that must work in several
+        render modes uses only the asynchronous `IJSRuntime`.
+      - The `MaximumReceiveMessageSize` limit applies to messages from the client to the server. Instead of raising it
+        for rare large transfers, data from JS to .NET is passed as a stream through `IJSStreamReference`. To stream
+        data in the other direction, from .NET to JS, there is `DotNetStreamReference`.
+      - After the circuit is lost the channel is gone, but the component's `DisposeAsync` still runs. Disposing JS
+        modules there is wrapped in `try` with `catch (JSDisconnectedException)`: the browser-side objects have
+        already disappeared with the page.
+
+      The behaviour is described for the render modes introduced in .NET 8 and holds for .NET 10.
+    linkTitles:
+      - "ASP.NET Core Blazor JavaScript interoperability (JS interop)"
+      - "Call JavaScript functions from .NET methods in ASP.NET Core Blazor"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

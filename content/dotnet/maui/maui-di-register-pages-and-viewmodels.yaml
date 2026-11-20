@@ -1,0 +1,129 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPNC7G7793GKQSADTR
+slug: maui-di-register-pages-and-viewmodels
+stack: dotnet
+topic: maui
+level: middle
+type: open
+grading: self
+tags: [maui, dependency-injection, mvvm, shell, service-lifetime]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/maui/fundamentals/dependency-injection
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/maui/fundamentals/shell/navigation
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как внедрять модели представления и сервисы в страницы .NET MAUI и какое время жизни им давать?
+    prompt: |
+      В приложении .NET MAUI (.NET 10) на Shell есть страница `OrderDetailsPage` с моделью представления
+      `OrderDetailsViewModel`, которой нужен сервис `IOrderService`.
+
+      Как сделать, чтобы модель представления и сервисы приходили в конструктор страницы через внедрение
+      зависимостей? Кто создаёт страницу при переходе по маршруту? Какое время жизни выбрать для страниц,
+      моделей представления и сервисов и что пойдёт не так при неверном выборе?
+    hint: Кто создаёт объект страницы при переходе в Shell и сколько её экземпляров появляется при повторных посещениях?
+    answer: |
+      - **Регистрация.** В `MauiProgram.CreateMauiApp` через `builder.Services`: `AddSingleton<IOrderService, OrderService>()`,
+        `AddTransient<OrderDetailsViewModel>()`, `AddTransient<OrderDetailsPage>()`. Страница принимает модель
+        представления в конструкторе и присваивает её `BindingContext`, модель принимает `IOrderService`.
+        Страница деталей не входит в визуальную иерархию Shell, поэтому её маршрут регистрируется отдельно:
+        `Routing.RegisterRoute("orderdetails", typeof(OrderDetailsPage))`. Одной регистрации в контейнере для
+        навигации недостаточно.
+      - **Кто создаёт страницу.** При переходе страницу создаёт Shell - и для `ShellContent`
+        (`ContentTemplate="{DataTemplate local:OrdersPage}"`), и для маршрутов из `Routing.RegisterRoute` - и
+        получает зависимости её конструктора из контейнера. По документации в приложении на Shell страницу можно
+        не регистрировать в контейнере, если не нужно задавать её время жизни; модель представления и сервисы
+        зарегистрировать нужно, со всей цепочкой зависимостей. Создавать такую страницу через `new` нельзя:
+        контейнер тогда не участвует. Без Shell (`NavigationPage`) страницу нужно получить из контейнера самому,
+        например внедрив её или фабрику в предыдущую страницу.
+      - **Время жизни.**
+        - Сервисы с общим состоянием или дорогие в создании (клиент API, настройки, кэш) - singleton.
+        - Страницы деталей и их модели представления - transient: каждый переход получает новый экземпляр без
+          данных прошлого заказа, а закрытую страницу может собрать сборщик мусора.
+        - Корневая страница, которая нужна всё время работы приложения, может быть singleton вместе со своей
+          моделью, как в примере документации (`AddSingleton<MainPage>()`).
+        - `AddScoped` в MAUI полезен редко: границы запроса, как в ASP.NET Core, здесь нет, поэтому обычно
+          выбирают singleton или transient.
+      - **Ловушки.** Singleton, зависящий от transient, захватывает его на всё время работы приложения. Singleton-страница
+        или модель представления показывает устаревшее состояние и копит подписки на события долгоживущих сервисов.
+        Прямое обращение к контейнеру через `IPlatformApplication.Current.Services` - крайний случай, а не основной способ.
+    explanation: |
+      .NET MAUI использует тот же контейнер `Microsoft.Extensions.DependencyInjection`, что и ASP.NET Core:
+      у `MauiAppBuilder` есть свойство `Services` типа `IServiceCollection`, а регистрации попадают в контейнер при
+      вызове `MauiAppBuilder.Build()`. Внедрение через конструктор делает зависимости страницы и модели
+      представления явными: модель можно протестировать без устройства, подставив фейковый `IOrderService`.
+
+      Ключевой момент - кто создаёт страницу. Если страницу создаёт Shell при переходе, её конструктор получает
+      зависимости из контейнера. Если страницу создаёт код через `new`, внедрение не работает, и разработчик
+      начинает вручную тянуть сервисы из контейнера. Регистрация в контейнере и регистрация маршрута - разные
+      вещи: первая отвечает за создание объекта, вторая - за то, что Shell знает, какую страницу открыть по имени.
+
+      Время жизни в мобильном приложении важнее, чем кажется: страницы и модели представления живут долго, и
+      singleton для страницы деталей означает, что при следующем открытии пользователь увидит прошлый заказ, а
+      подписки модели на события сервисов не освободятся никогда. Transient для страниц и моделей с состоянием
+      экрана и singleton для общих сервисов - разумное значение по умолчанию. Ответ верен для .NET MAUI в .NET 10.
+    linkTitles:
+      - "Внедрение зависимостей в .NET MAUI"
+      - "Навигация в .NET MAUI Shell"
+  en:
+    title: How do you inject view models and services into .NET MAUI pages, and which lifetime should they get?
+    prompt: |
+      A Shell-based .NET MAUI (.NET 10) app has an `OrderDetailsPage` page with an `OrderDetailsViewModel` view
+      model that needs an `IOrderService` service.
+
+      How do you get the view model and services into the page constructor through dependency injection? Who
+      creates the page when Shell navigates to a route? Which lifetime do you choose for pages, view models and
+      services, and what goes wrong with a bad choice?
+    hint: Who creates the page object when Shell navigates, and how many instances exist across repeated visits?
+    answer: |
+      - **Registration.** In `MauiProgram.CreateMauiApp`, through `builder.Services`: `AddSingleton<IOrderService, OrderService>()`,
+        `AddTransient<OrderDetailsViewModel>()`, `AddTransient<OrderDetailsPage>()`. The page takes the view model
+        in its constructor and assigns it to `BindingContext`; the view model takes `IOrderService`.
+        The detail page is not part of the Shell visual hierarchy, so its route is registered separately:
+        `Routing.RegisterRoute("orderdetails", typeof(OrderDetailsPage))`. Container registration alone is not
+        enough for navigation.
+      - **Who creates the page.** On navigation Shell creates the page - both for a `ShellContent`
+        (`ContentTemplate="{DataTemplate local:OrdersPage}"`) and for routes from `Routing.RegisterRoute` - and
+        takes its constructor dependencies from the container. According to the docs, in a Shell app you need not
+        register the page with the container unless you want to set its lifetime; the view model and services
+        must be registered, with their whole dependency chain. Do not create such a page with `new`: the container
+        is then bypassed. Without Shell (`NavigationPage`) you have to get the page from the container yourself,
+        for example by injecting it or a factory into the previous page.
+      - **Lifetimes.**
+        - Services with shared state or that are expensive to create (API client, settings, cache) - singleton.
+        - Detail pages and their view models - transient: every navigation gets a new instance without the
+          previous order's data, and a closed page can be collected by the garbage collector.
+        - A root page that is needed for the whole run of the app can be a singleton together with its view
+          model, as in the docs sample (`AddSingleton<MainPage>()`).
+        - `AddScoped` is rarely useful in MAUI: there is no request boundary as in ASP.NET Core, so the usual
+          choice is singleton or transient.
+      - **Pitfalls.** A singleton that depends on a transient captures it for the whole lifetime of the app. A
+        singleton page or view model shows stale state and accumulates subscriptions to events of long-lived
+        services. Reaching into the container through `IPlatformApplication.Current.Services` is a last resort,
+        not the main approach.
+    explanation: |
+      .NET MAUI uses the same `Microsoft.Extensions.DependencyInjection` container as ASP.NET Core:
+      `MauiAppBuilder` has a `Services` property of type `IServiceCollection`, and the registrations reach the
+      container when `MauiAppBuilder.Build()` is called. Constructor injection makes the dependencies of the page
+      and the view model explicit: the view model can be tested without a device by passing a fake `IOrderService`.
+
+      The key point is who creates the page. When Shell creates it during navigation, its constructor gets its
+      dependencies from the container. When code creates the page with `new`, injection does not happen, and the
+      developer starts pulling services out of the container by hand. Container registration and route
+      registration are different things: the first is about creating the object, the second tells Shell which
+      page to open for a name.
+
+      Lifetime matters more in a mobile app than it seems: pages and view models live long, and a singleton
+      detail page means the user sees the previous order on the next visit, while the view model's subscriptions
+      to service events are never released. Transient for pages and view models that hold screen state, and
+      singleton for shared services, is a sensible default. The answer holds for .NET MAUI in .NET 10.
+    linkTitles:
+      - "Dependency injection in .NET MAUI"
+      - ".NET MAUI Shell navigation"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

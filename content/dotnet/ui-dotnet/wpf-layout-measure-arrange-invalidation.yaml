@@ -1,0 +1,153 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RRCWQPKNC45D9K2CZ9
+slug: wpf-layout-measure-arrange-invalidation
+stack: dotnet
+topic: ui-dotnet
+level: senior
+type: open
+grading: self
+tags: [wpf, layout, rendering, performance, dependency-properties]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/desktop/wpf/advanced/layout
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.windows.frameworkpropertymetadataoptions
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.windows.uielement.invalidatemeasure
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/desktop/wpf/advanced/optimizing-performance-layout-and-design
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как система компоновки WPF вычисляет размеры и положение элементов и что запускает новый проход компоновки?
+    prompt: |
+      Опишите, как WPF вычисляет размер и положение каждого элемента окна. Что происходит в проходах
+      `Measure` и `Arrange`, как изменение свойства приводит к новому проходу компоновки для части дерева и
+      почему частые изменения размеров в глубоком дереве обходятся дорого?
+    hint: |
+      Кто окончательно решает, каким будет размер элемента, - сам элемент или его родитель? И откуда WPF знает,
+      что изменившееся свойство вообще влияет на компоновку?
+    answer: |
+      - **Два рекурсивных прохода.** Родитель вызывает у каждого дочернего элемента `Measure(availableSize)`.
+        Ребёнок применяет к ограничению свои свойства `FrameworkElement` (`Width`, `Height`, `Margin`,
+        `MinWidth`/`MaxWidth`), измеряет своих детей в `MeasureOverride` и сообщает желаемый размер
+        `DesiredSize`, который `Measure` сохраняет для прохода размещения. Затем родитель вызывает
+        `Arrange(finalRect)` с выделенным ребёнку местом, ребёнок раскладывает своих детей в `ArrangeOverride`,
+        а отступы и выравнивание помещают его внутрь этого места. Итог - `RenderSize`
+        (`ActualWidth`/`ActualHeight`). Поведение панели при компоновке задают её `MeasureOverride` и
+        `ArrangeOverride`: `StackPanel` даёт детям неограниченное место по направлению укладки, `Grid` вычисляет
+        строки и столбцы, `Canvas` использует явные координаты.
+      - **Ребёнок просит, родитель решает.** `DesiredSize` - только запрос. Место определяет родитель, и
+        ребёнок не обязан заполнять его целиком.
+      - **Что запускает новый проход.** Добавление элемента в коллекцию детей, применение `LayoutTransform`,
+        вызов `UpdateLayout` и изменение свойства зависимостей, в метаданных которого указано влияние на
+        измерение или размещение. Это флаги `FrameworkPropertyMetadataOptions.AffectsMeasure` (например, у
+        `Width`, `Margin`, `FontSize`, `TextBlock.Text`) и `AffectsArrange` (например, у `HorizontalAlignment`):
+        изменение значения помечает измерение или размещение элемента невалидным, как это делают
+        `InvalidateMeasure` и `InvalidateArrange`. `AffectsParentMeasure` и `AffectsParentArrange` затрагивают
+        родителя, а `AffectsRender` требует только перерисовки, без компоновки. Собственная панель или элемент
+        может вызвать `InvalidateMeasure`/`InvalidateArrange` сам.
+      - **Пересчитывается только затронутая часть.** Инвалидация не выполняет компоновку сразу: обновление
+        происходит асинхронно, позже в потоке UI, если его не вызвать принудительно через `UpdateLayout`.
+        Поэтому несколько изменений подряд обрабатываются одним проходом. Проход обрабатывает элементы, у
+        которых `IsMeasureValid` или `IsArrangeValid` равно `false`, а валидные сохраняют свой размер. Если
+        после повторного измерения элемент хочет другой размер, родителю приходится заново выполнить свою
+        компоновку, и у предков с автоматическим размером это может подниматься выше. Распространение
+        ограничивает контейнер, размер которого не зависит от содержимого (например, фиксированный). Вниз
+        родитель снова размещает детей: соседи, у которых ограничение не изменилось, переиспользуют сохранённый
+        `DesiredSize`, но могут получить новое место в `Arrange` (например, элементы ниже в `StackPanel`
+        сдвигаются).
+      - **Почему это дорого.** Изменение размера листа в глубоком дереве панелей с автоматическим размером
+        (строки `Auto`, вложенные `StackPanel`, `Grid` с общими размерами) может заставить заново измерить
+        большую часть окна. Если это происходит в каждом кадре анимации или на каждый добавленный элемент, поток
+        UI тратит время на компоновку. Что помогает: анимировать `RenderTransform` (и обновлять существующую
+        трансформацию, а не заменять её) вместо `Width` или `LayoutTransform`, задавать контейнерам
+        фиксированные размеры там, где это возможно, выбирать самую простую подходящую панель, использовать
+        виртуализацию списков, строить дерево сверху вниз и не вызывать `UpdateLayout` в цикле.
+    explanation: |
+      Проходов два, потому что родитель может распределить место только после того, как узнал желаемые размеры
+      детей: `Grid` со столбцами `Auto` сначала измеряет содержимое, затем делит ширину и только потом
+      размещает. Отсюда схема «ребёнок просит, родитель решает», и именно поэтому изменение размера одного
+      элемента может повлиять на его соседей и предков.
+
+      Флаги метаданных свойств зависимостей связывают изменение значения с нужной работой: компоновка
+      запускается только для свойств, которые на неё влияют, а изменение, например, `Border.Background` ведёт
+      лишь к перерисовке. Отложенная асинхронная обработка и сохранённый `DesiredSize` у валидных элементов
+      делают большинство проходов дешёвыми.
+
+      Но стоимость растёт с числом затронутых элементов, а автоматические размеры передают изменения вверх по
+      дереву. Типичный пример: анимация `Width` или `Height` в глубоком дереве перезапускает измерение каждый
+      кадр, тогда как `RenderTransform` не влияет на компоновку. Профилировщик, показывающий время потока UI в
+      компоновке, подтверждает такую проблему.
+    linkTitles:
+      - "Система компоновки WPF"
+      - "Перечисление FrameworkPropertyMetadataOptions"
+      - "Метод UIElement.InvalidateMeasure"
+      - "Оптимизация производительности: компоновка и дизайн"
+  en:
+    title: How does the WPF layout system size and position elements, and what triggers a new layout pass?
+    prompt: |
+      Describe how WPF computes the size and position of every element in a window. What happens in the
+      `Measure` and `Arrange` passes, how does a property change lead to a new layout pass for part of the tree,
+      and why can frequent size changes in a deep tree be expensive?
+    hint: |
+      Who has the final say on an element's size - the element itself or its parent? And how does WPF know that
+      a changed property affects layout at all?
+    answer: |
+      - **Two recursive passes.** A parent calls `Measure(availableSize)` on each child. The child applies its
+        `FrameworkElement` properties (`Width`, `Height`, `Margin`, `MinWidth`/`MaxWidth`) to the constraint,
+        measures its own children in `MeasureOverride` and reports its `DesiredSize`, which `Measure` stores for
+        the arrange pass. Then the parent calls `Arrange(finalRect)` with the slot it gives the child, the child
+        places its children in `ArrangeOverride`, and margin and alignment put it inside that slot. The result is
+        the `RenderSize` (`ActualWidth`/`ActualHeight`). A panel's layout behaviour is defined by its
+        `MeasureOverride` and `ArrangeOverride`: `StackPanel` gives children unlimited space in the stacking
+        direction, `Grid` resolves rows and columns, `Canvas` uses explicit coordinates.
+      - **The child asks, the parent decides.** `DesiredSize` is only a request. The parent decides the slot,
+        and the child does not have to fill all of it.
+      - **What triggers a new pass.** Adding a child to a collection, applying a `LayoutTransform`, calling
+        `UpdateLayout`, and changing a dependency property whose metadata says it affects measure or arrange.
+        These are the `FrameworkPropertyMetadataOptions.AffectsMeasure` flag (for example on `Width`, `Margin`,
+        `FontSize`, `TextBlock.Text`) and `AffectsArrange` (for example on `HorizontalAlignment`): a value change
+        marks the element's measure or arrange invalid, as `InvalidateMeasure` and `InvalidateArrange` do.
+        `AffectsParentMeasure` and `AffectsParentArrange` affect the parent, and `AffectsRender` only asks for a
+        redraw, without layout. A custom panel or element can call `InvalidateMeasure`/`InvalidateArrange`
+        itself.
+      - **Only the affected part reruns.** Invalidation does not run layout at once: the update happens
+        asynchronously, later on the UI thread, unless `UpdateLayout` forces it. So several changes in a row are
+        handled by one pass. The pass processes elements whose `IsMeasureValid` or `IsArrangeValid` is `false`,
+        and valid elements keep their size. If a re-measured element now wants a different size, its parent has
+        to redo its own layout, and with auto-sized ancestors this can climb further up. A container whose size
+        does not depend on its content (for example a fixed-size one) limits the spread. Going down, the parent
+        arranges its children again: siblings whose constraint did not change reuse their stored `DesiredSize`,
+        but they may get a new slot in `Arrange` (for example, the items below in a `StackPanel` shift).
+      - **Why it is expensive.** A size change at a leaf of a deep tree of auto-sized panels (`Auto` rows, nested
+        `StackPanel`s, a `Grid` with shared sizes) can force most of the window to be measured again. If it
+        happens on every animation frame or for every added item, the UI thread spends its time in layout. What
+        helps: animate `RenderTransform` (and update the existing transform rather than replacing it) instead of
+        `Width` or `LayoutTransform`, give containers fixed sizes where possible, pick the simplest panel that
+        fits, virtualize lists, build the tree top-down, and do not call `UpdateLayout` in a loop.
+    explanation: |
+      There are two passes because a parent can share out space only after it knows the desired sizes of its
+      children: a `Grid` with `Auto` columns first measures the content, then splits the width, and only then
+      arranges. Hence the rule "the child asks, the parent decides", and hence a size change of one element can
+      affect its siblings and ancestors.
+
+      The dependency property metadata flags tie a value change to the work it needs: layout runs only for
+      properties that affect it, while a change of, say, `Border.Background` only causes a redraw. Deferred
+      asynchronous processing and the stored `DesiredSize` of valid elements keep most passes cheap.
+
+      But the cost grows with the number of affected elements, and auto sizing passes changes up the tree. A
+      typical case: animating `Width` or `Height` in a deep tree restarts measuring on every frame, while
+      `RenderTransform` does not affect layout. A profiler that shows UI thread time spent in layout confirms
+      such a problem.
+    linkTitles:
+      - "WPF layout system"
+      - "FrameworkPropertyMetadataOptions enum"
+      - "UIElement.InvalidateMeasure method"
+      - "Optimizing performance: layout and design"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

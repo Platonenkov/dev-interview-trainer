@@ -1,0 +1,164 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPKEX8BGPPMM28D79J
+slug: maui-collectionview-scrolling-jank
+stack: dotnet
+topic: maui
+level: senior
+type: situation
+grading: self
+tags: [maui, collectionview, virtualization, performance, android]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/maui/user-interface/controls/collectionview/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/maui/user-interface/controls/collectionview/layout
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/maui/deployment/performance
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/maui/user-interface/controls/scrollview
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/maui/user-interface/controls/image
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "CollectionView на 5000 товаров дёргается при прокрутке на Android: что проверить и изменить?"
+    prompt: |
+      Страница каталога в приложении на .NET MAUI (.NET 10) показывает 5000 товаров в `CollectionView`.
+      На эмуляторе и флагманских телефонах всё терпимо, но на Android-смартфонах среднего класса прокрутка
+      заметно дёргается, а страница долго открывается.
+
+      Устройство страницы:
+
+      - корень страницы - `ScrollView`, внутри него `VerticalStackLayout`;
+      - в стеке сначала `SearchBar`, под ним `CollectionView` с `ItemsSource`, привязанным к коллекции товаров;
+      - каждая строка шаблона - `Frame` с тенью (`HasShadow="True"`), внутри `HorizontalStackLayout` с `Image`
+        (источник привязан к URL фотографии товара, размер не задан) и вложенным `VerticalStackLayout` с двумя
+        `Label`: название и цена, причём цена форматируется через конвертер;
+      - `x:DataType` нигде не задан, `ItemSizingStrategy` не задан, все строки визуально одной высоты.
+
+      Что вы проверите и что измените, в каком порядке?
+    hint: Действительно ли список создаёт только видимые строки? Что ему позволяет его родитель?
+    answer: |
+      1. **Измерить в честных условиях.** Release-сборка на реальном телефоне среднего класса, а не Debug на
+         эмуляторе. Зафиксировать исходные цифры: время открытия страницы, память, пропущенные кадры при
+         прокрутке (профилировщик Android Studio или `dotnet-trace`). Без этого нельзя доказать, что правка помогла.
+      2. **Вернуть виртуализацию.** `CollectionView` лежит в `VerticalStackLayout` внутри `ScrollView`. Стек и
+         прокрутка не ограничивают высоту дочернего элемента, поэтому `CollectionView` может измерить и создать
+         строки для всех 5000 элементов вместо видимых, а две вложенные прокрутки конфликтуют. Убрать `ScrollView`,
+         заменить стек на `Grid` с `RowDefinitions="Auto,*"` и поставить `CollectionView` в строку `*`. Поиск можно
+         оставить в строке `Auto` или перенести в `CollectionView.Header`.
+      3. **Облегчить шаблон строки.** Одна `Grid` вместо вложенных стеков. `Border` вместо `Frame`, без тени.
+         Скомпилированные привязки через `x:DataType` на `DataTemplate`. Готовая строка цены в модели элемента
+         вместо конвертера, который выполняется при каждой привязке строки.
+      4. **Разобраться с картинками.** Задать `Image` фиксированные `WidthRequest` и `HeightRequest`, чтобы
+         загрузка картинки не вызывала повторную раскладку строки. Получать с сервера миниатюры под размер строки,
+         а не исходные фото: декодирование больших изображений съедает память и время. Кэширование загруженных
+         по URL картинок (`UriImageSource.CachingEnabled`) включено по умолчанию - его стоит оставить включённым
+         и не создавать новые `ImageSource` в конвертерах.
+      5. **Не измерять каждую строку.** Если у всех строк одна высота, задать
+         `ItemSizingStrategy="MeasureFirstItem"`: измеряется только первый элемент, остальные получают его размер.
+         По умолчанию действует `MeasureAllItems`.
+      6. **Проверить данные.** Заполнять коллекцию одним присваиванием, а не 5000 вызовами `Add` у
+         `ObservableCollection`, каждый из которых отправляет уведомление. Подумать о постраничной подгрузке через
+         `RemainingItemsThreshold` и `RemainingItemsThresholdReached`. Если используется `DataTemplateSelector`,
+         он должен возвращать заранее созданные шаблоны, а не новый `DataTemplate` на каждый вызов.
+      7. **Повторить замеры** на том же телефоне и сравнить с исходными цифрами.
+    explanation: |
+      Плавная прокрутка длинного списка держится на виртуализации: на Android `CollectionView` отображается на
+      нативный `RecyclerView`, который создаёт представления только для видимых строк и переиспользует их при
+      прокрутке. Это работает, только когда у списка есть конечная высота. `VerticalStackLayout` и `ScrollView`
+      предлагают дочернему элементу неограниченную высоту, и список либо создаёт все строки сразу, либо ведёт себя
+      непредсказуемо. Документация предупреждает, что `CollectionView` внутри `StackLayout` может перестать
+      прокручиваться и советует заменить стек на `Grid`, а `ScrollView` не следует вкладывать с другими
+      прокручиваемыми элементами, такими как `CollectionView`. Поэтому родитель проверяется первым: никакая
+      оптимизация шаблона не спасёт 5000 созданных строк.
+
+      Когда виртуализация работает, узким местом становится стоимость одной строки: при быстрой прокрутке строки
+      привязываются и раскладываются много раз в секунду, и на слабом процессоре каждая лишняя вложенная раскладка,
+      тень, конвертер или привязка через отражение стоит кадров. Картинки без фиксированного размера меняют высоту
+      строки после загрузки и запускают повторную раскладку.
+
+      `MeasureFirstItem` убирает измерение каждого элемента, но годится только при одинаковой высоте строк: иначе
+      строки с длинным текстом обрежутся. Порядок важен и для команды: сначала замер, потом причина с самым большим
+      эффектом, затем точечные правки, каждую из которых подтверждает повторный замер.
+    linkTitles:
+      - "CollectionView в .NET MAUI"
+      - "Раскладка CollectionView и стратегия измерения элементов"
+      - "Повышение производительности приложений .NET MAUI"
+      - "ScrollView в .NET MAUI"
+      - "Image в .NET MAUI и кэширование изображений"
+  en:
+    title: "A CollectionView of 5,000 products stutters while scrolling on Android: what do you check and change?"
+    prompt: |
+      A catalog page in a .NET MAUI app (.NET 10) shows 5,000 products in a `CollectionView`. On the emulator
+      and flagship phones it is acceptable, but on mid-range Android phones scrolling visibly stutters and the
+      page is slow to open.
+
+      How the page is built:
+
+      - the page root is a `ScrollView` that contains a `VerticalStackLayout`;
+      - the stack holds a `SearchBar` first and below it a `CollectionView` whose `ItemsSource` is bound to the
+        product collection;
+      - each template row is a `Frame` with a shadow (`HasShadow="True"`) that contains a `HorizontalStackLayout`
+        with an `Image` (its source bound to the product photo URL, no size set) and a nested
+        `VerticalStackLayout` with two `Label` elements: the name and the price, where the price is formatted by a
+        converter;
+      - `x:DataType` is not set anywhere, `ItemSizingStrategy` is not set, and all rows look the same height.
+
+      What do you check and what do you change, and in what order?
+    hint: Does the list actually create only the rows that are visible? What does its parent allow it to do?
+    answer: |
+      1. **Measure under honest conditions.** A Release build on a real mid-range phone, not Debug on an
+         emulator. Record a baseline: page open time, memory, dropped frames while scrolling (the Android Studio
+         profiler or `dotnet-trace`). Without it you cannot prove that a change helped.
+      2. **Restore virtualization.** The `CollectionView` sits in a `VerticalStackLayout` inside a `ScrollView`.
+         A stack and a scroll view do not constrain the height of their child, so the `CollectionView` may measure
+         and create rows for all 5,000 items instead of the visible ones, and the two nested scrolls conflict.
+         Remove the `ScrollView`, replace the stack with a `Grid` with `RowDefinitions="Auto,*"` and put the
+         `CollectionView` in the `*` row. The search bar can stay in the `Auto` row or move to `CollectionView.Header`.
+      3. **Lighten the row template.** One `Grid` instead of nested stacks. `Border` instead of `Frame`, with no
+         shadow. Compiled bindings with `x:DataType` on the `DataTemplate`. A ready price string in the item model
+         instead of a converter that runs on every row binding.
+      4. **Deal with the images.** Give the `Image` a fixed `WidthRequest` and `HeightRequest`, so that loading
+         the picture does not trigger another layout of the row. Get thumbnails sized for the row from the server,
+         not the original photos: decoding large images costs memory and time. Caching of images loaded from a URL
+         (`UriImageSource.CachingEnabled`) is on by default - keep it on, and do not create new `ImageSource`
+         objects in converters.
+      5. **Stop measuring every row.** If all rows have the same height, set `ItemSizingStrategy="MeasureFirstItem"`:
+         only the first item is measured and the others get its size. The default is `MeasureAllItems`.
+      6. **Check the data.** Fill the collection with one assignment, not 5,000 `Add` calls on an
+         `ObservableCollection`, each of which raises a notification. Consider incremental loading with
+         `RemainingItemsThreshold` and `RemainingItemsThresholdReached`. If a `DataTemplateSelector` is used, it must
+         return templates created up front, not a new `DataTemplate` on every call.
+      7. **Measure again** on the same phone and compare with the baseline.
+    explanation: |
+      Smooth scrolling of a long list rests on virtualization: on Android `CollectionView` maps to a native
+      `RecyclerView`, which creates views only for the visible rows and reuses them while scrolling. That works
+      only when the list has a finite height. `VerticalStackLayout` and `ScrollView` offer their child unlimited
+      height, so the list either creates every row at once or behaves unpredictably. The documentation warns that
+      a `CollectionView` inside a `StackLayout` can stop scrolling and advises replacing the stack with a `Grid`,
+      and a `ScrollView` should not be nested with other scrolling controls such as `CollectionView`. That is why
+      the parent is checked first: no template tuning saves 5,000 created rows.
+
+      Once virtualization works, the bottleneck is the cost of one row: during a fast scroll rows are bound and
+      laid out many times per second, and on a slow CPU every extra nested layout, shadow, converter or
+      reflection-based binding costs frames. Images without a fixed size change the row height after loading and
+      trigger another layout pass.
+
+      `MeasureFirstItem` removes the measuring of every item, but it fits only rows of equal height: otherwise rows
+      with long text get clipped. The order also matters for the team: measure first, fix the cause with the
+      biggest effect next, then make targeted changes, each confirmed by measuring again.
+    linkTitles:
+      - "CollectionView in .NET MAUI"
+      - "CollectionView layout and item sizing strategy"
+      - "Improve .NET MAUI app performance"
+      - "ScrollView in .NET MAUI"
+      - "Image in .NET MAUI and image caching"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

@@ -393,19 +393,22 @@ public sealed class StaticIslandPerformanceTests(StaticSiteFolder site)
 
     private long IndexBytes() => new FileInfo(IndexFile()).Length;
 
-    // Ten thousand answers over the questions of the site, in order, the last five hundred all misses so that every answered
-    // question ends up due; every fifth question is never answered, so "not answered yet" has questions to pick from.
+    // Ten thousand answers over the questions of the site, in order; the tail holds one miss per answered question (at least
+    // five hundred) so that every answered question ends up due whatever the size of the bank; every fifth question is never
+    // answered, so "not answered yet" has questions to pick from.
     private static string SeededOutbox(StaticIndexDto index)
     {
         string[] ids = [.. index.Questions.Where((_, position) => position % 5 != 4).Select(question => question.Id)];
         Assert.NotEmpty(ids);
-        Assert.True(ids.Length <= 500, "the seeding assumes at most 500 answered questions");
+        // The tail cycles through the ids in order, so it covers every answered question only when it is at least that long.
+        int missTail = Math.Max(500, ids.Length);
+        Assert.True(missTail * 2 <= SeededAnswers, $"{ids.Length} answered questions leave too few answers before the miss tail");
         DateTimeOffset end = DateTimeOffset.UtcNow - TimeSpan.FromDays(5);
         TimeSpan span = TimeSpan.FromDays(45);
         StringBuilder json = new("{\"version\":1,\"answers\":[");
         for (int i = 0; i < SeededAnswers; i++)
         {
-            string grade = i >= SeededAnswers - 500 ? "didnt-know" : (i % 3) switch { 0 => "knew", 1 => "partial", _ => "didnt-know" };
+            string grade = i >= SeededAnswers - missTail ? "didnt-know" : (i % 3) switch { 0 => "knew", 1 => "partial", _ => "didnt-know" };
             DateTimeOffset at = end - span + (span * i / SeededAnswers);
             json.Append(i == 0 ? "" : ",")
                 .Append("{\"clientAnswerId\":\"01M").Append(i.ToString("D23", CultureInfo.InvariantCulture))

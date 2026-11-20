@@ -1,0 +1,182 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNQ4E4S3PC372B1729
+slug: ring-based-rollout-across-regions
+stack: dotnet
+topic: devops
+level: architect
+type: open
+grading: self
+tags: [deployment, progressive-exposure, deployment-rings, blast-radius, configuration, rollback]
+links:
+  - url: https://learn.microsoft.com/en-us/azure/well-architected/operational-excellence/safe-deployments
+    lang: en
+    kind: docs
+  - url: https://sre.google/workbook/canarying-releases/
+    lang: en
+    kind: book
+locales:
+  ru:
+    title: Как выкатывать изменения кода и конфигурации на платформу в десятках регионов, чтобы одна ошибка не вызвала глобальный сбой?
+    prompt: |
+      Платформа на .NET работает в нескольких десятках облачных регионов. Каждый день в неё уходят изменения
+      кода, конфигурации, флагов функций и инфраструктуры. Руководство требует, чтобы одно неудачное изменение
+      ни при каких условиях не могло положить все регионы сразу.
+
+      Как вы спроектируете процесс выкатки? Какие этапы он проходит, что решает, можно ли идти дальше, как
+      устроен откат, какие изменения в него попадают и чем вы платите за такую схему?
+    hint: Сколько регионов должно увидеть изменение до того, как вы получите первый надёжный сигнал о его качестве? И чем изменение конфигурации отличается от изменения кода с точки зрения риска?
+    answer: |
+      1. **Постепенное расширение охвата по кольцам.** Любое изменение проходит одни и те же кольца, каждое
+         больше предыдущего:
+         - кольцо 0: внутренние и тестовые окружения, сотрудники компании (dogfooding);
+         - кольцо 1: один небольшой регион или одна ячейка (scale unit) с малым трафиком - canary;
+         - кольцо 2: по одному региону в каждой географии. Правило этой схемы (рекомендация автора, а не цитата
+           из источников): никогда не выкатывать в одной волне оба региона пары аварийного восстановления, чтобы
+           дефектное изменение не вывело из строя основной регион и его резерв одновременно;
+         - кольцо 3 и дальше: остальные регионы волнами растущего размера.
+
+         Внутри региона изменение тоже идёт постепенно: по зонам доступности, ячейкам или долям экземпляров,
+         а не во весь регион сразу.
+      2. **Время выдержки (bake time).** После каждого кольца изменение какое-то время работает под реальным
+         трафиком, прежде чем идти дальше. Выдержку измеряют часами и днями, а не минутами, и она растёт от
+         кольца к кольцу, чтобы изменение застало разные часовые пояса и сценарии использования, включая пиковые
+         часы. Так ловятся проблемы, которые проявляются не сразу: утечки памяти, истечение кэшей и токенов, рост
+         очередей.
+      3. **Автоматические health gates.** Переход к следующему кольцу разрешает не человек по ощущениям, а
+         проверка: доля ошибок, задержки и бизнес-метрики (успешные заказы, входы) новой версии сравниваются с
+         базовой линией или с соседними ячейками на старой версии. Если показатели хуже порога, конвейер
+         **сам останавливает выкатку** и запускает откат. Для этого метрики и логи должны иметь тег версии и
+         кольца.
+      4. **Быстрый и проверенный откат.** Откат - это заранее отрепетированное действие конвейера, а не ручная
+         процедура: вернуть предыдущий артефакт, предыдущую ревизию конфигурации, выключить флаг. Чтобы он был
+         возможен, версии N и N-1 должны работать одновременно: контракты API и сообщений совместимы в обе
+         стороны, схема базы меняется по схеме expand and contract.
+      5. **Конфигурация - тоже изменение.** Конфигурация, флаги функций, правила маршрутизации, сертификаты,
+         правила WAF и сетевые политики проходят те же кольца и те же проверки, что и код, хранятся в
+         репозитории и версионируются. Мгновенная глобальная рассылка конфигурации в обход колец - типичный
+         путь к глобальному сбою.
+      6. **Никаких глобальных единых точек.** Кольца ограничивают радиус поражения только тогда, когда регионы
+         независимы. Глобальный control plane, общая база конфигурации или общий DNS должны иметь собственную
+         поэтапную выкатку, а регионы должны продолжать работать на последней известной исправной
+         конфигурации, если глобальный компонент недоступен. В AWS Builders' Library это свойство называют
+         static stability (статическая стабильность).
+      7. **Дисциплина процесса.**
+         - Ограничить число одновременных изменений в каждом кольце или ячейке, в идеале одно изменение на
+           сервис в волне, чтобы деградацию можно было связать с конкретным изменением. Выстраивать в очередь
+           все сервисы платформы не нужно: независимые сервисы могут идти по кольцам параллельно, если их
+           сигналы здоровья разделены.
+         - Срочные исправления тоже идут по кольцам, только с сокращённой выдержкой. Полный обход колец - это
+           процедура break-glass с явным согласованием и записью в журнал.
+         - Во время инцидента выкатки в остальные регионы замораживаются.
+      8. **Цена решения.**
+         - Полная выкатка занимает дни, а не минуты, и исправление тоже доходит до всех регионов не сразу.
+         - Ограничение одновременных изменений снижает пропускную способность: изменения ждут своей очереди в
+           кольце.
+         - Несколько версий одновременно работают в production, отсюда требования к совместимости.
+         - Нужны конвейер с управлением кольцами, метрики с разбивкой по версии и сравнение с базовой линией.
+         - Сигнал с маленького кольца бывает статистически слабым, а редкие или региональные дефекты могут
+           проявиться только в поздних кольцах.
+    explanation: |
+      Цель схемы - ограничить радиус поражения: в каждый момент дефектное изменение может затронуть только
+      ту часть системы, которая уже его получила. Если изменение уходит во все регионы одновременно, никакая
+      избыточность по регионам не помогает: все копии ломаются одинаково и одновременно. Кольца превращают
+      глобальный риск в последовательность локальных, где каждый следующий шаг делается только после
+      доказательства, что предыдущий здоров.
+
+      Автоматические проверки важны потому, что человек медленный и непоследовательный, особенно ночью: пока
+      дежурный смотрит на дашборд, конвейер успел бы остановиться сам. Выдержка нужна потому, что многие
+      дефекты не видны в первые минуты.
+
+      Отдельно стоит конфигурация. Её изменения выглядят безобидными и часто распространяются мгновенно,
+      поэтому изменение конфигурации, разосланное сразу везде, может сломать все регионы одновременно, хотя
+      код в них не менялся. Сильный ответ явно включает конфигурацию, флаги, сертификаты и инфраструктурные
+      правила в те же кольца.
+
+      Компромисс прямой: скорость выпуска в обмен на ограниченный ущерб. Для платформы, где глобальный сбой
+      стоит дороже, чем задержка релиза на несколько дней, это выгодная сделка, но она требует инвестиций в
+      наблюдаемость, совместимость версий и независимость регионов.
+    linkTitles:
+      - "Azure Well-Architected Framework: безопасные практики развёртывания"
+      - "Google SRE Workbook: Canarying Releases"
+  en:
+    title: How do you roll out code and configuration changes to a platform in dozens of regions so that one bad change cannot cause a global outage?
+    prompt: |
+      A .NET platform runs in several dozen cloud regions. Every day it receives changes to code, configuration,
+      feature flags and infrastructure. Management requires that a single bad change must never be able to take
+      down all regions at once.
+
+      How do you design the rollout process? Which stages does it go through, what decides whether it may
+      proceed, how does rollback work, which changes does it cover, and what do you pay for this design?
+    hint: How many regions should see a change before you get the first reliable signal about its quality? And how does a configuration change differ from a code change in terms of risk?
+    answer: |
+      1. **Progressive exposure in rings.** Every change goes through the same rings, each larger than the
+         previous one:
+         - ring 0: internal and test environments, company employees (dogfooding);
+         - ring 1: one small region or one cell (scale unit) with little traffic - the canary;
+         - ring 2: one region in each geography. A rule of this design (the author's recommendation, not a quote
+           from the sources): never roll out to both regions of a disaster-recovery pair in the same wave, so that
+           a bad change cannot take out the primary and its failover together;
+         - ring 3 and beyond: the remaining regions in waves of growing size.
+
+         Inside a region the change also moves gradually: by availability zone, cell or share of instances,
+         not to the whole region at once.
+      2. **Bake time.** After each ring the change runs under real traffic for a while before it moves on.
+         Bake time is measured in hours and days rather than minutes, and it grows ring by ring so that the
+         change meets different time zones and usage patterns, including peak hours. This catches problems that
+         do not show up immediately: memory leaks, expiring caches and tokens, growing queues.
+      3. **Automated health gates.** Moving to the next ring is approved not by a person's gut feeling but by a
+         check: error rate, latency and business metrics (successful orders, sign-ins) of the new version are
+         compared with a baseline or with neighbouring cells on the old version. If they are worse than a
+         threshold, the pipeline **halts the rollout by itself** and starts the rollback. This needs metrics and
+         logs tagged with version and ring.
+      4. **A fast, rehearsed rollback.** Rollback is a pipeline action practised in advance, not a manual
+         procedure: restore the previous artifact, the previous configuration revision, switch the flag off. For
+         it to be possible, versions N and N-1 must run side by side: API and message contracts are compatible
+         in both directions, and the database schema changes with expand and contract.
+      5. **Configuration is a change too.** Configuration, feature flags, routing rules, certificates, WAF rules
+         and network policies go through the same rings and the same gates as code, live in a repository and
+         are versioned. Pushing configuration instantly and globally, bypassing the rings, is a typical path to
+         a global outage.
+      6. **No global single points.** Rings bound the blast radius only when regions are independent. A global
+         control plane, a shared configuration store or shared DNS needs its own staged rollout, and regions
+         must keep running on the last known good configuration when the global component is unavailable. The
+         AWS Builders' Library calls this property static stability.
+      7. **Process discipline.**
+         - Limit concurrent changes in each ring or cell, ideally one change per service in a wave, so that a
+           degradation can be attributed to one change. There is no need to serialise every service of the
+           platform: independent services can move through the rings in parallel if their health signals are
+           kept apart.
+         - Urgent fixes also go through the rings, only with a shorter bake. Skipping the rings entirely is a
+           break-glass procedure with explicit approval and an audit record.
+         - During an incident, rollouts to the remaining regions are frozen.
+      8. **The cost.**
+         - A full rollout takes days, not minutes, and a fix also reaches all regions with a delay.
+         - Limiting concurrent changes lowers throughput: changes queue up for a ring.
+         - Several versions run in production at the same time, hence the compatibility requirements.
+         - You need a pipeline that manages rings, per-version metrics and baseline comparison.
+         - The signal from a small ring can be statistically weak, and rare or region-specific defects may
+           only show up in late rings.
+    explanation: |
+      The goal of the design is a bounded blast radius: at any moment a defective change can affect only the
+      part of the system that has already received it. If a change goes to every region at once, no amount of
+      regional redundancy helps: all copies break the same way at the same time. Rings turn a global risk into a
+      sequence of local ones, where each next step is taken only after evidence that the previous one is healthy.
+
+      Automated gates matter because people are slow and inconsistent, especially at night: while the on-call
+      engineer is reading a dashboard, the pipeline could already have stopped itself. Bake time matters because
+      many defects are invisible in the first minutes.
+
+      Configuration deserves special attention. Its changes look harmless and often propagate instantly, so a
+      configuration change pushed everywhere at once can break every region together even though no code
+      changed. A strong answer explicitly puts configuration, flags, certificates and infrastructure rules
+      through the same rings.
+
+      The trade-off is direct: release speed in exchange for bounded damage. For a platform where a global outage
+      costs more than a release delayed by a few days, it is a good deal, but it requires investment in
+      observability, version compatibility and regional independence.
+    linkTitles:
+      - "Azure Well-Architected Framework: safe deployment practices"
+      - "Google SRE Workbook: Canarying Releases"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

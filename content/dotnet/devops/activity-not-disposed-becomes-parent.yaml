@@ -1,0 +1,141 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RN121437NRN0BRRHP0
+slug: activity-not-disposed-becomes-parent
+stack: dotnet
+topic: devops
+level: senior
+type: find-bug
+grading: auto
+tags: [tracing, activity, activity-current, async-local]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    using System.Diagnostics;
+
+    using ActivityListener listener = new()
+    {
+        ShouldListenTo = candidate => candidate.Name == "Shop.Jobs",
+        Sample = (ref ActivityCreationOptions<ActivityContext> options) => ActivitySamplingResult.AllData
+    };
+    ActivitySource.AddActivityListener(listener);
+
+    ActivitySource source = new("Shop.Jobs");
+
+    void RunImport()
+    {
+        Activity import = source.StartActivity("Import");
+        import?.SetTag("rows", 3);
+        // import work goes here
+    }
+
+    RunImport();
+
+    using Activity health = source.StartActivity("Health");
+    Console.WriteLine(health?.Parent?.OperationName ?? "root");
+bugLineSets: [[14]]
+fixedSource: |
+  using System.Diagnostics;
+
+  using ActivityListener listener = new()
+  {
+      ShouldListenTo = candidate => candidate.Name == "Shop.Jobs",
+      Sample = (ref ActivityCreationOptions<ActivityContext> options) => ActivitySamplingResult.AllData
+  };
+  ActivitySource.AddActivityListener(listener);
+
+  ActivitySource source = new("Shop.Jobs");
+
+  void RunImport()
+  {
+      using Activity import = source.StartActivity("Import");
+      import?.SetTag("rows", 3);
+      // import work goes here
+  }
+
+  RunImport();
+
+  using Activity health = source.StartActivity("Health");
+  Console.WriteLine(health?.Parent?.OperationName ?? "root");
+fixedExpect: { kind: output, value: "root" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.diagnostics.activity.current
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/distributed-tracing-instrumentation-walkthroughs
+    lang: en
+    kind: docs
+  - url: https://github.com/dotnet/runtime/blob/main/src/libraries/System.Diagnostics.DiagnosticSource/src/ActivityUserGuide.md
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему активность Health получает родителя Import, хотя должна быть корневой?
+    prompt: |
+      В программе зарегистрирован `ActivityListener`, который записывает все активности источника `Shop.Jobs`.
+      Метод `RunImport` начинает активность `Import`. Затем программа начинает активность `Health`, которая
+      должна быть корневой, и печатает имя её родителя или `root`, если родителя нет. Ожидается `root`, но
+      программа печатает `Import`. Щёлкните по строке с дефектом.
+    hint: Откуда `StartActivity("Health")` берёт родителя, если родительский контекст не передан явно?
+    answer: |
+      Строка 14: активность `Import` создаётся без `using` и никогда не останавливается, поэтому остаётся в
+      `Activity.Current` и становится родителем `Health`.
+    explanation: |
+      `ActivitySource.StartActivity` создаёт и сразу запускает активность, а запущенная активность становится
+      текущей: `Activity.Current` теперь указывает на `Import`. Значение `Activity.Current` переходит через
+      асинхронные вызовы, оно хранится в `AsyncLocal`. Остановка активности (`Stop`, которую вызывает `Dispose`)
+      возвращает в `Activity.Current` ту активность, которая была текущей до её запуска. В строке 14 активность
+      никто не останавливает. Локальная функция `RunImport` синхронная, поэтому изменение `Activity.Current`
+      остаётся видимым вызывающему коду и после выхода из неё. `StartActivity("Health")` вызывается без явного
+      родительского контекста, поэтому родителем становится `Activity.Current`, то есть `Import`, и программа
+      печатает `Import`.
+
+      В сервисе последствия хуже, чем один неверный родитель. Все последующие активности в этом потоке выполнения
+      оказываются дочерними к «зависшему» `Import` и попадают в его трассировку. А сам `Import` никогда не
+      завершается: обратный вызов `ActivityStopped` слушателей для него не вызывается, и его `Duration` остаётся
+      нулевой.
+
+      Исправление - объявление `using`: в конце `RunImport` вызывается `Dispose`, активность останавливается, и
+      `Activity.Current` возвращается к прежнему значению (`null`). Тогда `Health` становится корневой, и
+      программа печатает `root`. Строка 15 корректна: `?.` нужен на случай, когда слушателей нет и
+      `StartActivity` возвращает `null`. Поведение описано для .NET 10.
+    linkTitles:
+      - "Свойство Activity.Current"
+      - "Добавление распределённой трассировки в .NET: пошаговые примеры"
+      - "Руководство по Activity в репозитории dotnet/runtime"
+  en:
+    title: Why does the Health activity get Import as its parent when it should be a root?
+    prompt: |
+      The program registers an `ActivityListener` that records every activity of the `Shop.Jobs` source. The
+      `RunImport` method starts an `Import` activity. Then the program starts a `Health` activity, which should be
+      a root, and prints the name of its parent, or `root` when there is no parent. It should print `root`, but it
+      prints `Import`. Click the line that contains the defect.
+    hint: Where does `StartActivity("Health")` take its parent from when no parent context is passed explicitly?
+    answer: |
+      Line 14: the `Import` activity is created without `using` and is never stopped, so it stays in
+      `Activity.Current` and becomes the parent of `Health`.
+    explanation: |
+      `ActivitySource.StartActivity` creates and starts the activity at the same time, and a started activity
+      becomes the current one: `Activity.Current` now points to `Import`. The value of `Activity.Current` flows
+      across async calls, it is stored in an `AsyncLocal`. Stopping the activity (`Stop`, which `Dispose` calls)
+      puts back into `Activity.Current` the activity that was current before it started. On line 14 nobody stops
+      the activity. The local function `RunImport` is synchronous, so the change to `Activity.Current` stays
+      visible to the caller after it returns. `StartActivity("Health")` is called without an explicit parent
+      context, so the parent is `Activity.Current`, that is `Import`, and the program prints `Import`.
+
+      In a service the consequences are worse than one wrong parent. Every later activity in that execution flow
+      becomes a child of the "hung" `Import` and ends up in its trace. And `Import` itself never ends: the
+      `ActivityStopped` callback of the listeners is never invoked for it, and its `Duration` stays zero.
+
+      The fix is a `using` declaration: `Dispose` runs at the end of `RunImport`, the activity stops and
+      `Activity.Current` returns to its previous value (`null`). Then `Health` becomes a root and the program
+      prints `root`. Line 15 is fine: `?.` covers the case when there are no listeners and `StartActivity` returns
+      `null`. The behaviour is described for .NET 10.
+    linkTitles:
+      - "Activity.Current property"
+      - "Adding distributed tracing instrumentation: walkthroughs"
+      - "Activity user guide in the dotnet/runtime repository"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

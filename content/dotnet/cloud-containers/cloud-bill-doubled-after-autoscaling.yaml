@@ -1,0 +1,163 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RMJ64DCFTQZETF7KF4
+slug: cloud-bill-doubled-after-autoscaling
+stack: dotnet
+topic: cloud-containers
+level: lead
+type: situation
+grading: self
+tags: [autoscaling, cost-optimization, kubernetes, finops]
+links:
+  - url: https://learn.microsoft.com/en-us/azure/well-architected/cost-optimization/
+    lang: en
+    kind: docs
+  - url: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/azure/aks/cluster-autoscaler
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/azure/cost-management-billing/costs/tutorial-acm-create-budgets
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/tag-resources
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Через два месяца после включения автомасштабирования счёт за облако вырос вдвое: что делать?"
+    prompt: |
+      Два месяца назад для ваших .NET-сервисов в Kubernetes (AKS) включили автомасштабирование подов и узлов.
+      Счёт за облако с тех пор вырос примерно вдвое. Финансовый отдел просит вас как техлида объяснить, откуда
+      рост, и предложить план.
+
+      Что вы будете делать и в каком порядке?
+    hint: От чего зависит сумма в счёте и что в кластере решает, сколько в нём узлов?
+    answer: |
+      1. **Не отключать автомасштабирование вслепую и договориться о сроках.** Ответить финансам, что будет разбор
+         с цифрами и план с ожидаемой экономией к понятной дате. Резкое отключение сэкономит деньги ценой
+         доступности, а пока неизвестно, что именно выросло.
+      2. **Разложить затраты.** Разбить счёт по тегам, группам ресурсов и подпискам, а внутри общего кластера -
+         по пространствам имён и сервисам (средствами распределения затрат кластера). Наложить на график стоимости
+         события масштабирования: число реплик, число узлов и трафик. Главный вопрос: выросла ли стоимость единицы
+         работы (1000 запросов, одного обработанного сообщения) или просто вырос трафик. Ресурсы без тегов и без
+         владельца - уже находка.
+      3. **Найти причины.** Типичные:
+         - завышенные `requests`: планировщик размещает поды по сумме `requests`, а не по фактическому потреблению,
+           и автомасштабирование кластера добавляет узлы, когда поды не помещаются по ресурсам, то есть под
+           зарезервированную, но простаивающую ёмкость;
+         - нет разумного потолка: `maxReplicas` у HPA или максимум узлов в пуле заданы "с запасом", и всплеск
+           нагрузки или шторм повторных попыток раздувает кластер;
+         - масштабирование вниз не происходит: высокий `minReplicas`, слишком низкая целевая утилизация,
+           метрика, которая почти не падает (например, память .NET-процесса: сборщик мусора не обязательно сразу
+           возвращает память ОС после спада нагрузки), или поды, которые не дают автомасштабированию кластера
+           удалить недогруженный узел;
+         - неверный сигнал: всплески CPU при старте подов во время деплоя или повторные попытки запускают
+           масштабирование;
+         - тестовые окружения масштабируются как production и работают круглосуточно;
+         - косвенные затраты: больше реплик - больше логов и телеметрии, сайдкаров, исходящего трафика и
+           подключений к базе.
+      4. **Исправлять по одному изменению и с измерением.** Подогнать `requests` под наблюдаемое потребление,
+         задать потолки реплик и узлов исходя из того, что выдержат зависимости, настроить цели и окна
+         стабилизации. Для непроизводственных окружений - масштабирование до нуля через KEDA или Azure Container
+         Apps (стандартный HPA ниже одной реплики не опускается) либо остановка по расписанию. Стабильную базовую
+         нагрузку покрыть резервированием или savings plans, прерываемые нагрузки перевести на spot-узлы. После
+         каждого шага проверять latency и долю ошибок.
+      5. **Сделать стоимость инженерной метрикой.** Бюджеты с оповещениями о пороге (в Azure - бюджеты Cost
+         Management, в других облаках - их аналоги), обязательный тег владельца, который проверяет политика
+         (Azure Policy), стоимость единицы работы на дашборде команды, регулярный разбор затрат. У каждого сервиса
+         есть владелец бюджета, а изменения пределов масштабирования проходят code review.
+      6. **Отчитаться.** Финансам - объяснение с цифрами: какая часть роста связана с ростом бизнеса, какая - с
+         ошибками конфигурации, план с ожидаемой экономией, сроками и честно названными компромиссами по
+         надёжности.
+    explanation: |
+      Автомасштабирование оптимизирует заданный сигнал, а не стоимость. Счёт выставляется за выделенную ёмкость:
+      узлы, экземпляры, реплики. В Kubernetes выделенная ёмкость следует за `requests`: планировщик ставит под на
+      узел, только если сумма `requests` помещается в ёмкость узла, а автомасштабирование кластера добавляет узел,
+      когда поды не удаётся разместить из-за нехватки ресурсов. Поэтому сервис с загрузкой процессора 20% и
+      завышенными `requests` может требовать вдвое больше узлов, чем ему нужно.
+
+      Кроме того, масштабирование асимметрично: вверх оно идёт быстро, а вниз - осторожно, с окнами стабилизации
+      и проверкой, что поды узла можно перенести. Если цели, потолки и метрики подобраны неудачно, кластер легко
+      "застревает" наверху, и затраты растут без роста трафика.
+
+      Задача лида здесь не только техническая. Нужно не поддаться ни импульсу "выключить всё", ни слепому доверию к
+      автоматике, а сначала разделить рост бизнеса и потери от конфигурации. Потолки тоже несут риск: слишком низкий
+      предел приведёт к отказу при настоящем пике, поэтому его выводят из ёмкости зависимостей и ставят оповещение
+      на его достижение. Устойчивый результат появляется, когда у стоимости есть владельцы, теги, бюджеты и
+      оповещения, и её смотрят наравне с latency и ошибками, а не узнают о ней из письма финансового отдела.
+    linkTitles:
+      - "Azure Well-Architected Framework: оптимизация затрат"
+      - "Управление ресурсами для подов и контейнеров (документация Kubernetes)"
+      - "Автомасштабирование кластера в AKS"
+      - "Создание бюджетов и управление ими в Cost Management"
+      - "Теги для упорядочивания ресурсов Azure"
+  en:
+    title: "Two months after enabling autoscaling the cloud bill has doubled: what do you do?"
+    prompt: |
+      Two months ago pod and node autoscaling was enabled for your .NET services in Kubernetes (AKS). Since then the
+      cloud bill has roughly doubled. The finance department asks you, as the tech lead, to explain where the
+      growth comes from and to propose a plan.
+
+      What do you do, and in what order?
+    hint: What does the amount on the bill depend on, and what in the cluster decides how many nodes it has?
+    answer: |
+      1. **Do not switch autoscaling off blindly, and agree on a timeline.** Tell finance there will be an analysis
+         with numbers and a plan with expected savings by a clear date. A sudden shutdown saves money at the cost of
+         availability, and nobody yet knows what actually grew.
+      2. **Attribute the cost.** Break the bill down by tags, resource groups and subscriptions, and inside a shared
+         cluster by namespace and service (with cluster cost allocation tooling). Overlay scaling events on the cost
+         graph: replica count, node count and traffic. The key question: did the cost per unit of work (per 1000
+         requests, per processed message) grow, or did traffic simply grow? Resources without tags and without an
+         owner are already a finding.
+      3. **Find the causes.** Typical ones:
+         - oversized `requests`: the scheduler places pods by the sum of `requests`, not by real usage, and the
+           cluster autoscaler adds nodes when pods do not fit for lack of resources, that is, for reserved but idle
+           capacity;
+         - no sensible cap: the HPA `maxReplicas` or the node pool maximum is set "with headroom", and a load spike
+           or a retry storm inflates the cluster;
+         - scale-in never happens: a high `minReplicas`, a target utilization that is too low, a metric that barely
+           drops (for example the memory of a .NET process: the garbage collector does not necessarily return memory
+           to the OS right after load drops), or pods that prevent the cluster autoscaler from removing an
+           underused node;
+         - the wrong signal: CPU spikes from pod startup during deployments, or retries, trigger scaling;
+         - test environments scale like production and run around the clock;
+         - indirect costs: more replicas mean more logs and telemetry, more sidecars, more egress and more
+           database connections.
+      4. **Fix one change at a time and measure.** Size `requests` to observed usage, set replica and node caps
+         based on what the dependencies can absorb, and tune targets and stabilization windows. For non-production
+         environments use scale to zero with KEDA or Azure Container Apps (a standard HPA does not go below one
+         replica) or shut them down on a schedule. Cover the steady baseline with reservations or savings plans, and
+         move interruptible workloads to spot nodes. Check latency and error rate after each step.
+      5. **Make cost an engineering metric.** Budgets with threshold alerts (Cost Management budgets in Azure, the
+         equivalent service in other clouds), a mandatory owner tag checked by policy (Azure Policy), cost per unit of
+         work on the team dashboard, and a regular cost review. Every service has a budget owner, and changes to
+         scaling limits go through code review.
+      6. **Report back.** Give finance an explanation with numbers: which part of the growth is business growth and
+         which is misconfiguration, plus a plan with expected savings, dates and honestly stated reliability
+         trade-offs.
+    explanation: |
+      Autoscaling optimizes the signal it is given, not cost. The bill is for provisioned capacity: nodes,
+      instances, replicas. In Kubernetes provisioned capacity follows `requests`: the scheduler places a pod on a
+      node only if the sum of `requests` fits the node capacity, and the cluster autoscaler adds a node when pods
+      cannot be scheduled for lack of resources. So a service at 20% CPU with oversized `requests` can need twice
+      the nodes it actually uses.
+
+      Scaling is also asymmetric: it goes up quickly and comes down cautiously, with stabilization windows and a
+      check that the pods of a node can be moved. With poorly chosen targets, caps and metrics the cluster easily
+      "sticks" at the top, and cost grows without any growth in traffic.
+
+      The lead's job here is not only technical. You resist both the urge to "turn it all off" and blind trust in
+      automation, and first separate business growth from configuration waste. Caps carry risk too: a limit that is
+      too low causes an outage at a real peak, so it is derived from the capacity of the dependencies and has an
+      alert when it is reached. The lasting result comes when cost has owners, tags, budgets and alerts, and is
+      watched next to latency and errors instead of being discovered from an email from finance.
+    linkTitles:
+      - "Azure Well-Architected Framework: cost optimization"
+      - "Resource management for pods and containers (Kubernetes docs)"
+      - "Cluster autoscaling in AKS"
+      - "Create and manage budgets in Cost Management"
+      - "Use tags to organize your Azure resources"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

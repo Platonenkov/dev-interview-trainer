@@ -1,0 +1,127 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNAF9SK5GKHWDEPP3S
+slug: ci-pull-request-pipeline-stages
+stack: dotnet
+topic: devops
+level: middle
+type: open
+grading: self
+tags: [ci-cd, pull-request, dotnet-cli, build-pipeline]
+links:
+  - url: https://martinfowler.com/articles/continuousIntegration.html
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/dotnet/devops/github-actions-overview
+    lang: en
+    kind: docs
+  - url: https://github.com/actions/setup-dotnet
+    lang: en
+    kind: docs
+  - url: https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какие проверки должен запускать CI .NET-сервиса на каждый pull request и в каком порядке?
+    prompt: |
+      Команда настраивает конвейер непрерывной интеграции для .NET-сервиса. Какие проверки он должен выполнять
+      на каждый pull request, в каком порядке их расположить и почему именно так? При каком условии pull request
+      можно сливать?
+    hint: Какая проверка самая дешёвая, и какой шаг бессмысленно запускать, пока не прошёл предыдущий?
+    answer: |
+      Порядок строится по принципу «сначала дешёвое и быстрое»: чем раньше падает проверка, тем быстрее автор
+      получает ответ и тем меньше ресурсов CI потрачено зря.
+
+      1. **Окружение.** Версия SDK закреплена в `global.json`, и CI ставит именно её (например, у
+         `actions/setup-dotnet` для этого есть параметр `global-json-file`). Конвейер проверяет результат слияния
+         с целевой веткой, а не только ветку автора.
+      2. **Восстановление пакетов** `dotnet restore --locked-mode`. При включённом `RestorePackagesWithLockFile`
+         восстановление падает, если `packages.lock.json` не соответствует проектам, поэтому зависимости
+         воспроизводимы. Папка пакетов NuGet кэшируется с ключом по хешу lock-файлов. Здесь же уместна проверка
+         уязвимых зависимостей (NuGet Audit или `dotnet list package --vulnerable`).
+      3. **Форматирование** `dotnet format --verify-no-changes`. Обычно дешевле сборки и падает, если код не
+         соответствует `.editorconfig`, так что спор о стиле не доходит до code review.
+      4. **Сборка** `dotnet build --no-restore -c Release` с включённым `TreatWarningsAsErrors` (в
+         `Directory.Build.props` или через `-p:TreatWarningsAsErrors=true`). Компилятор и анализаторы работают
+         здесь, а предупреждения не копятся.
+      5. **Модульные тесты** `dotnet test --no-build -c Release`. Быстрые и без внешних зависимостей, отчёт
+         публикуется в pull request.
+      6. **Интеграционные тесты.** Медленнее, с настоящей базой в контейнере. Их можно запускать отдельным
+         параллельным заданием после сборки.
+      7. **Публикация одного артефакта** `dotnet publish --no-build -c Release` и загрузка результата (или образа
+         контейнера). Именно этот артефакт затем продвигается по окружениям, а не пересобирается для каждого.
+      8. **Правило слияния.** Все шаги - обязательные проверки статуса (required status checks) в защите ветки:
+         pull request сливается только при зелёном конвейере, без ручных исключений.
+    explanation: |
+      Порядок следует из стоимости и зависимостей шагов. Если не восстановились пакеты, всё остальное
+      бессмысленно. Проверка форматирования обычно дешевле сборки, а тесты, особенно интеграционные, занимают
+      больше всего времени, поэтому дешёвые проверки стоят впереди и останавливают конвейер раньше. Ключи
+      `--no-restore` и `--no-build` гарантируют, что тесты проверяют те самые двоичные файлы, которые потом
+      публикуются: сборка выполняется один раз.
+
+      Непрерывная интеграция держится на двух условиях: сборка должна быть быстрой, а основная ветка всегда
+      должна оставаться рабочей. Распространённый ориентир - сборка примерно за десять минут. Поэтому медленные
+      проверки распараллеливают или выносят в отдельные задания, а слияние без зелёного конвейера запрещают
+      технически, через защиту ветки, а не договорённостью.
+
+      Частые ошибки: собирать проект заново на каждом шаге (дольше, и проверяется не то, что публикуется),
+      восстанавливать пакеты без lock-файла (сборка зависит от того, что сегодня лежит в ленте NuGet) и
+      публиковать артефакт до прохождения тестов.
+    linkTitles:
+      - "Мартин Фаулер: Continuous Integration"
+      - "GitHub Actions и .NET"
+      - "Репозиторий actions/setup-dotnet"
+      - "GitHub: защищённые ветки"
+  en:
+    title: Which checks should the CI of a .NET service run on every pull request, and in what order?
+    prompt: |
+      A team sets up a continuous integration pipeline for a .NET service. Which checks should it run on every
+      pull request, in what order should they go, and why that order? Under which condition may the pull request
+      be merged?
+    hint: Which check is the cheapest, and which step is pointless to run until the previous one has passed?
+    answer: |
+      The order follows the rule "cheap and fast first": the earlier a check fails, the sooner the author gets
+      feedback and the less CI capacity is wasted.
+
+      1. **Environment.** The SDK version is pinned in `global.json`, and CI installs exactly that version (for
+         example, `actions/setup-dotnet` has the `global-json-file` input for this). The pipeline checks the result
+         of merging with the target branch, not only the author's branch.
+      2. **Package restore** with `dotnet restore --locked-mode`. With `RestorePackagesWithLockFile` enabled, restore
+         fails if `packages.lock.json` does not match the projects, so dependencies are reproducible. The NuGet
+         packages folder is cached with a key based on the hash of the lock files. A check for vulnerable
+         dependencies fits here too (NuGet Audit or `dotnet list package --vulnerable`).
+      3. **Formatting** with `dotnet format --verify-no-changes`. It is usually cheaper than a build and fails when
+         the code does not match `.editorconfig`, so style arguments never reach code review.
+      4. **Build** with `dotnet build --no-restore -c Release` and `TreatWarningsAsErrors` enabled (in
+         `Directory.Build.props` or with `-p:TreatWarningsAsErrors=true`). The compiler and analyzers run here, and
+         warnings do not pile up.
+      5. **Unit tests** with `dotnet test --no-build -c Release`. Fast and free of external dependencies; the
+         report is published to the pull request.
+      6. **Integration tests.** Slower, with a real database in a container. They can run as a separate parallel
+         job after the build.
+      7. **Publish one artifact** with `dotnet publish --no-build -c Release` and upload the result (or a container
+         image). This artifact is then promoted through the environments instead of being rebuilt for each.
+      8. **Merge rule.** Every step is a required status check in branch protection: the pull request merges only
+         when the pipeline is green, with no manual exceptions.
+    explanation: |
+      The order comes from the cost and the dependencies of the steps. If packages did not restore, nothing else
+      makes sense. The format check is usually cheaper than a build, and tests, especially integration tests, take
+      the longest, so the cheap checks go first and stop the pipeline earlier. The `--no-restore` and `--no-build`
+      switches guarantee that the tests check the very binaries that are published later: the build happens once.
+
+      Continuous integration rests on two conditions: the build must be fast, and the mainline must always stay
+      healthy. A common guideline is a build of about ten minutes. That is why slow checks are parallelised or
+      moved to separate jobs, and merging without a green pipeline is blocked technically, through branch
+      protection, not by agreement.
+
+      Common mistakes: rebuilding the project at every step (slower, and what is tested is not what is published),
+      restoring packages without a lock file (the build depends on whatever the NuGet feed serves today), and
+      publishing the artifact before the tests pass.
+    linkTitles:
+      - "Martin Fowler: Continuous Integration"
+      - "GitHub Actions and .NET"
+      - "actions/setup-dotnet repository"
+      - "GitHub: about protected branches"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

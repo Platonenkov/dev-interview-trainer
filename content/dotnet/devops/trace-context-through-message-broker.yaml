@@ -1,0 +1,162 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNDCWKHGPK7SY3PTZ3
+slug: trace-context-through-message-broker
+stack: dotnet
+topic: devops
+level: senior
+type: open
+grading: self
+tags: [tracing, opentelemetry, messaging, context-propagation, span-links]
+links:
+  - url: https://opentelemetry.io/docs/specs/semconv/messaging/messaging-spans/
+    lang: en
+    kind: spec
+  - url: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/distributed-tracing-concepts
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.diagnostics.distributedcontextpropagator
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как сохранить одну распределённую трассу через брокер сообщений и как трассировать пакетную обработку?
+    prompt: |
+      API на ASP.NET Core принимает HTTP-запрос и публикует сообщение в брокер (RabbitMQ, Kafka, Azure Service Bus).
+      Отдельный worker-сервис читает сообщение и обрабатывает его. В бэкенде трассировки запрос к API и обработка
+      в worker видны как две несвязанные трассы.
+
+      Почему так происходит и как связать их в одну трассу? Как моделировать спаны, если consumer забирает и
+      обрабатывает сообщения пакетами, например по 50 штук за раз?
+    hint: Как контекст трассы попадает из одного HTTP-сервиса в другой и что может сыграть эту роль у сообщения? Как описать спан, который связан сразу со многими трассами?
+    answer: |
+      1. **Почему трасса рвётся.** ASP.NET Core и `HttpClient` распространяют контекст только по HTTP: исходящий
+         запрос получает заголовок `traceparent` (а также `tracestate` и baggage), а сервер читает его и делает свой
+         спан дочерним. Брокер - не HTTP. Если клиентская библиотека брокера или фреймворк сообщений не
+         инструментированы, контекст в сообщение никто не записывает. В `BackgroundService` worker-а нет
+         `Activity.Current`, поэтому `StartActivity` начинает новую корневую трассу.
+      2. **Producer: записать контекст в заголовки сообщения.** При публикации стартует спан с
+         `ActivityKind.Producer` (например, `send orders`), и его контекст записывается в заголовки сообщения в том же
+         формате W3C: `DistributedContextPropagator.Current.Inject(activity, headers, setter)` или
+         `Propagators.DefaultTextMapPropagator.Inject(...)` из OpenTelemetry. Контекст принадлежит сообщению, а не
+         соединению: он переживает повторы, повторную доставку и попадание в dead-letter queue. При использовании
+         outbox заголовки надо сохранить в строку outbox в той же транзакции: ретранслятор публикует сообщение позже и
+         в другом контексте.
+      3. **Consumer: извлечь контекст и начать от него спан.** Для каждого сообщения worker читает заголовки,
+         разбирает их (`DistributedContextPropagator.Current.ExtractTraceIdAndState` и `ActivityContext.TryParse`
+         или `Extract` у пропагатора OpenTelemetry) и стартует спан с `ActivityKind.Consumer` и этим родителем:
+         `source.StartActivity("process orders", ActivityKind.Consumer, parentContext)`. Всё, что делает обработчик
+         (EF Core, `HttpClient`), становится его потомками, и трасса идёт API -> брокер -> worker. Источник нужно
+         зарегистрировать через `AddSource`, а спаны снабдить атрибутами семантических соглашений:
+         `messaging.system.name` (в более старых версиях соглашений - `messaging.system`),
+         `messaging.destination.name`, `messaging.operation.type`, идентификатор сообщения.
+      4. **Пакет: ссылки вместо родителя.** У спана только один родитель, а 50 сообщений пакета пришли из 50 разных
+         трасс. Если взять родителем первое сообщение, остальные 49 трасс потеряют свою обработку, а выбранная трасса
+         покажет чужую работу. Поэтому спан пакета - корневой (или дочерний к собственному спану цикла чтения
+         worker-а) и несёт по одной `ActivityLink` на контекст каждого сообщения, плюс атрибут
+         `messaging.batch.message_count`. Ссылки передаются при старте через параметр `links` метода
+         `StartActivity`, тогда их видит сэмплер; в .NET 9 появился и `Activity.AddLink`. Если внутри пакета
+         сообщения обрабатываются по одному, можно дополнительно стартовать спан на каждое сообщение с родителем из
+         его контекста, и каждая исходная трасса покажет свою часть работы.
+      5. **Цена и проверка.**
+         - Связанные ссылками трассы остаются отдельными: бэкенд показывает переход по ссылке, а не одно дерево.
+         - Решения о сэмплировании у них независимы: `ParentBasedSampler` следует за родителем, а не за ссылками,
+           поэтому связанная трасса producer-а может оказаться не сохранённой.
+         - Если сообщение лежит в очереди часами, трасса с родителем растягивается на часы; некоторые команды по этой
+           причине используют ссылки даже для одиночных сообщений.
+         - Семантические соглашения для сообщений ещё не стабильны, имена атрибутов менялись между версиями
+           (например, `messaging.system` стал `messaging.system.name`), поэтому версию соглашений, которой следуют
+           ваша инструментация и дашборды, стоит зафиксировать.
+         - Интеграционный тест: опубликовать сообщение и проверить, что спан consumer-а имеет тот же `TraceId`, что
+           и спан producer-а, или ссылку на него.
+    explanation: |
+      Распространение контекста - не свойство сети, а договорённость прикладного уровня: отправитель кладёт контекст
+      в носитель (carrier), получатель достаёт его оттуда. Для HTTP носитель - заголовки запроса, и это делает
+      встроенная инструментация. Для брокера носителем должны стать заголовки (свойства) сообщения, и пока их никто не
+      заполняет и не читает, связи между трассами нет. Формат тот же - W3C Trace Context, поэтому достаточно
+      стандартного пропагатора.
+
+      Пакетная обработка упирается в модель трассы: дерево допускает одного родителя. Семантические соглашения
+      OpenTelemetry для сообщений поэтому описывают контекст создания сообщения и ссылки (span links): один спан
+      честно связан со всеми трассами, из которых пришли сообщения, и ни одна из них не присваивает себе чужую работу.
+
+      Типичные ошибки: надеяться на `Activity.Current` в фоновом worker-е, передавать только `TraceId` без
+      `SpanId` и флагов, брать родителем первое сообщение пакета, забывать про outbox, где публикация отделена от
+      исходного запроса, и копировать имена атрибутов из устаревшей версии соглашений. Поведение API описано для
+      .NET 10; `Activity.AddLink` доступен начиная с .NET 9.
+    linkTitles:
+      - "OpenTelemetry: семантические соглашения для спанов систем сообщений"
+      - "Концепции распределённой трассировки в .NET"
+      - "Класс DistributedContextPropagator"
+  en:
+    title: How do you keep one distributed trace through a message broker, and how do you trace batch processing?
+    prompt: |
+      An ASP.NET Core API receives an HTTP request and publishes a message to a broker (RabbitMQ, Kafka, Azure
+      Service Bus). A separate worker service reads the message and processes it. In the tracing backend the API
+      request and the worker processing show up as two unrelated traces.
+
+      Why does this happen, and how do you link them into one trace? How do you model the spans when the consumer
+      fetches and processes messages in batches, for example 50 at a time?
+    hint: How does trace context get from one HTTP service to another, and what can play that role for a message? How do you describe a span that is related to many traces at once?
+    answer: |
+      1. **Why the trace breaks.** ASP.NET Core and `HttpClient` propagate context only over HTTP: the outgoing
+         request gets a `traceparent` header (plus `tracestate` and baggage), and the server reads it and makes its
+         span a child. A broker is not HTTP. Unless the broker client library or messaging framework is
+         instrumented, nobody writes the context into the message. The worker's `BackgroundService` has no
+         `Activity.Current`, so `StartActivity` begins a new root trace.
+      2. **Producer: write the context into the message headers.** When publishing, start a span with
+         `ActivityKind.Producer` (for example `send orders`) and write its context into the message headers in the
+         same W3C format: `DistributedContextPropagator.Current.Inject(activity, headers, setter)` or
+         `Propagators.DefaultTextMapPropagator.Inject(...)` from OpenTelemetry. The context belongs to the message,
+         not the connection: it survives retries, redelivery and a trip to the dead-letter queue. With an outbox,
+         store the headers in the outbox row in the same transaction: the relay publishes the message later and in
+         another context.
+      3. **Consumer: extract the context and start a span from it.** For each message the worker reads the headers,
+         parses them (`DistributedContextPropagator.Current.ExtractTraceIdAndState` and `ActivityContext.TryParse`,
+         or `Extract` on the OpenTelemetry propagator) and starts a span with `ActivityKind.Consumer` and that
+         parent: `source.StartActivity("process orders", ActivityKind.Consumer, parentContext)`. Everything the
+         handler does (EF Core, `HttpClient`) becomes its descendants, and the trace goes API -> broker -> worker.
+         Register the source with `AddSource`, and give the spans semantic convention attributes:
+         `messaging.system.name` (in older versions of the conventions, `messaging.system`),
+         `messaging.destination.name`, `messaging.operation.type`, the message id.
+      4. **Batch: links instead of a parent.** A span has only one parent, but the 50 messages of a batch came from
+         50 different traces. If the first message becomes the parent, the other 49 traces lose their processing
+         and the chosen trace shows work that is not its own. So the batch span is a root (or a child of the
+         worker's own polling span) and carries one `ActivityLink` per message context, plus the
+         `messaging.batch.message_count` attribute. Links are passed at start through the `links` parameter of
+         `StartActivity`, so the sampler sees them; .NET 9 also added `Activity.AddLink`. If messages inside the
+         batch are handled one by one, you can additionally start a span per message whose parent is that message's
+         context, so every original trace shows its own part of the work.
+      5. **Cost and verification.**
+         - Traces connected by links stay separate: the backend shows a jump through the link, not one tree.
+         - Their sampling decisions are independent: `ParentBasedSampler` follows the parent, not the links, so the
+           linked producer trace may not be kept.
+         - If a message waits in the queue for hours, a trace with a parent stretches over hours; some teams use
+           links even for single messages for that reason.
+         - The messaging semantic conventions are not stable yet and attribute names changed between versions (for
+           example, `messaging.system` became `messaging.system.name`), so pin the conventions version that your
+           instrumentation and dashboards follow.
+         - An integration test: publish a message and check that the consumer span has the same `TraceId` as the
+           producer span, or a link to it.
+    explanation: |
+      Context propagation is not a property of the network but an application-level agreement: the sender puts the
+      context into a carrier, and the receiver takes it out. For HTTP the carrier is the request headers, and the
+      built-in instrumentation does the work. For a broker the carrier must be the message headers (properties),
+      and as long as nobody fills and reads them, the traces are not connected. The format is the same W3C Trace
+      Context, so the standard propagator is enough.
+
+      Batch processing runs into the trace model: a tree allows one parent. That is why the OpenTelemetry messaging
+      semantic conventions describe the message creation context and span links: one span is honestly connected to
+      every trace its messages came from, and none of those traces claims work that is not its own.
+
+      Typical mistakes: relying on `Activity.Current` in a background worker, passing only the `TraceId` without
+      the `SpanId` and flags, making the first message of a batch the parent, forgetting the outbox, where
+      publishing is separated from the original request, and copying attribute names from an outdated version of
+      the conventions. The API behaviour is described for .NET 10; `Activity.AddLink` is available since .NET 9.
+    linkTitles:
+      - "OpenTelemetry: semantic conventions for messaging spans"
+      - "Distributed tracing concepts in .NET"
+      - "DistributedContextPropagator class"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

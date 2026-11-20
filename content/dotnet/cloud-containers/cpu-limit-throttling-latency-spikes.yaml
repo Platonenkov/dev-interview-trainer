@@ -1,0 +1,147 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RM35WYEPH0JK8B6J0M
+slug: cpu-limit-throttling-latency-spikes
+stack: dotnet
+topic: cloud-containers
+level: senior
+type: situation
+grading: self
+tags: [kubernetes, cpu-limits, cfs-throttling, thread-pool, scaling]
+links:
+  - url: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+    lang: en
+    kind: docs
+  - url: https://kubernetes.io/docs/concepts/workloads/pods/pod-qos/
+    lang: en
+    kind: docs
+  - url: https://docs.kernel.org/scheduler/sched-bwc.html
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.environment.processorcount
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.threadpool
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/runtime-config/garbage-collector
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: API на .NET в Kubernetes с CPU-лимитом 1 даёт всплески p99 при средней загрузке 40%
+    prompt: |
+      API на ASP.NET Core (.NET 10) работает в Kubernetes на узлах с 8 ядрами. У контейнера `limits.cpu: 1`.
+      Дашборд показывает среднюю загрузку CPU около 40% от лимита, но p99 задержки регулярно подскакивает в
+      несколько раз, а p50 остаётся нормальным. Ошибок в логах нет, память в порядке.
+
+      Что вы проверите и что измените, и в каком порядке?
+    hint: Средняя загрузка за минуту и ограничение, которое ядро применяет в каждом коротком интервале, - это одно и то же? И сколько процессоров при этом видит среда выполнения .NET?
+    answer: |
+      1. **Подтвердить троттлинг, а не смотреть на загрузку.** Сравнить `container_cpu_cfs_throttled_periods_total`
+         с `container_cpu_cfs_periods_total` (метрики cAdvisor) или поля `nr_throttled` и `throttled_usec` в
+         `cpu.stat` контейнера. Заметная доля периодов с троттлингом, совпадающая по времени со всплесками p99,
+         подтверждает причину. Средняя загрузка за интервал сбора в 15-60 секунд её не показывает.
+      2. **Посмотреть, что видит среда выполнения.** При лимите 1 `Environment.ProcessorCount` в контейнере
+         возвращает 1. Снять счётчики через `dotnet-counters`: длину очереди и число потоков пула потоков, время
+         пауз сборщика мусора. Рост очереди пула при нескольких потоках указывает на голодание пула, а долгие
+         паузы - на сборщик мусора, которому доступен один процессор.
+      3. **Изменить ресурсы.** Задать `requests.cpu` по реальному устойчивому потреблению с запасом (от него
+         зависят размещение Pod и HPA), а CPU-лимит убрать или поднять заметно выше запроса, чтобы короткие
+         всплески не останавливались. Если лимит обязателен (политика namespace, класс QoS Guaranteed), выдать
+         целые ядра, например 2, и проверить, что пул потоков и сборщик мусора согласованы с новым числом
+         процессоров. Лимит памяти оставить.
+      4. **Убрать блокировки в коде.** Найти sync-over-async и другие блокирующие вызовы, которые заставляют пул
+         потоков добавлять потоки. Не поднимать `ThreadPool.SetMinThreads` вслепую: это маскирует блокировки, а
+         лишние потоки конкурируют за ту же квоту CPU.
+      5. **Проверить и масштабировать.** Нагрузочный тест до и после: p99 и доля периодов с троттлингом. Дальнейший
+         рост нагрузки покрывать горизонтальным масштабированием (HPA по загрузке относительно запросов), а не
+         заниженным лимитом на каждый Pod.
+    explanation: |
+      Kubernetes передаёт CPU-лимит ядру Linux как квоту CFS: за каждый период планировщика (в ядре по умолчанию
+      100 мс) контейнер получает не больше 100 мс процессорного времени на один CPU лимита. Квота считается по всем
+      потокам сразу. Если на узле с 8 ядрами четыре потока приложения работают параллельно (обработка запросов,
+      фоновая JIT-компиляция, потоки сборщика мусора), они расходуют квоту за 25 мс, и весь контейнер стоит до
+      конца периода - ещё 75 мс. Запрос, который попал в такой период, получает эти миллисекунды к своей задержке.
+      Средняя загрузка при этом остаётся 40%, потому что паузы короткие, а метрика усредняет их за десятки секунд.
+      Отсюда картина: p50 в норме, p99 скачет.
+
+      Вторая половина проблемы - в самой среде выполнения. В .NET 10 `Environment.ProcessorCount` в контейнере
+      учитывает CPU-лимит и округляет его вверх, поэтому при лимите 1 приложение считает, что у него один
+      процессор, хотя на узле 8 ядер. По умолчанию минимальное число потоков пула равно числу процессоров, поэтому
+      при всплеске блокирующей работы пул быстро выходит за минимум и дальше добавляет потоки постепенно. Если
+      включён серверный сборщик мусора, число процессоров ограничивает и число его куч, так что при одном
+      процессоре сборка теряет параллелизм.
+
+      Запрос CPU и лимит работают по-разному. Запрос - это гарантированная доля при конкуренции за ядра и основа
+      для планировщика и HPA. Лимит - жёсткий потолок, который применяется даже тогда, когда узел простаивает.
+      Поэтому для API, чувствительного к задержкам, обычно правильно задавать честные запросы и не задавать
+      заниженный CPU-лимит. Цена такого решения: Pod получает класс QoS Burstable, а производительность зависит от
+      свободных ядер узла, поэтому ёмкость надо планировать по запросам, а не надеяться на запас.
+    linkTitles:
+      - "Управление ресурсами контейнеров (документация Kubernetes)"
+      - "Классы качества обслуживания Pod (документация Kubernetes)"
+      - "CFS Bandwidth Control (документация ядра Linux)"
+      - "Свойство Environment.ProcessorCount"
+      - "Класс ThreadPool"
+      - "Параметры конфигурации сборщика мусора"
+  en:
+    title: A .NET API in Kubernetes with a CPU limit of 1 has p99 spikes at 40% average CPU
+    prompt: |
+      An ASP.NET Core API (.NET 10) runs in Kubernetes on nodes with 8 cores. The container has `limits.cpu: 1`.
+      The dashboard shows average CPU usage around 40% of the limit, but p99 latency regularly jumps several times
+      higher while p50 stays normal. There are no errors in the logs and memory is fine.
+
+      What do you check and what do you change, and in what order?
+    hint: Are the average usage over a minute and the limit that the kernel enforces in every short interval the same thing? And how many processors does the .NET runtime see?
+    answer: |
+      1. **Confirm throttling instead of looking at usage.** Compare `container_cpu_cfs_throttled_periods_total`
+         with `container_cpu_cfs_periods_total` (cAdvisor metrics), or the `nr_throttled` and `throttled_usec`
+         fields in the container's `cpu.stat`. A noticeable share of throttled periods that lines up in time with
+         the p99 spikes confirms the cause. Average usage over a 15-60 second scrape interval does not show it.
+      2. **Check what the runtime sees.** With a limit of 1, `Environment.ProcessorCount` returns 1 in the
+         container. Collect counters with `dotnet-counters`: thread pool queue length and thread count, GC pause
+         time. A growing thread pool queue with few threads points to thread pool starvation, and long pauses point
+         to a garbage collector that has one processor available.
+      3. **Change the resources.** Set `requests.cpu` to the real steady usage plus a margin (it drives Pod
+         placement and the HPA), and remove the CPU limit or raise it well above the request so that short bursts
+         are not stopped. If a limit is mandatory (namespace policy, Guaranteed QoS class), give whole cores, for
+         example 2, and check that the thread pool and the garbage collector are consistent with the new processor
+         count. Keep the memory limit.
+      4. **Remove blocking in the code.** Find sync-over-async and other blocking calls that force the thread pool
+         to inject threads. Do not raise `ThreadPool.SetMinThreads` blindly: it hides the blocking, and the extra
+         threads compete for the same CPU quota.
+      5. **Verify and scale out.** Run a load test before and after: p99 and the share of throttled periods. Cover
+         further load growth with horizontal scaling (HPA on utilization relative to requests), not with a tight
+         per-Pod limit.
+    explanation: |
+      Kubernetes passes the CPU limit to the Linux kernel as a CFS quota: in every scheduler period (100 ms by
+      default in the kernel) the container gets at most 100 ms of CPU time per CPU of the limit. The quota is shared
+      by all threads at once. If on an 8-core node four app threads run in parallel (request handling, background
+      JIT compilation, garbage collector threads), they use up the quota in 25 ms, and the whole container is
+      stopped for the rest of the period, another 75 ms. A request that falls into such a period gets those
+      milliseconds added to its latency. Average usage stays at 40% because the pauses are short and the metric
+      averages them over tens of seconds. Hence the picture: p50 is fine, p99 jumps.
+
+      The other half of the problem is in the runtime itself. In .NET 10 `Environment.ProcessorCount` in a
+      container takes the CPU limit into account and rounds it up, so with a limit of 1 the app believes it has
+      one processor, although the node has 8 cores. By default the minimum number of thread pool threads equals
+      the number of processors, so a burst of blocking work quickly goes past the minimum and the pool then adds
+      threads gradually. If server GC is enabled, the processor count also caps the number of its heaps, so with
+      one processor garbage collection loses its parallelism.
+
+      CPU requests and limits work differently. A request is a guaranteed share under contention for cores and
+      the basis for the scheduler and the HPA. A limit is a hard ceiling that applies even when the node is idle.
+      That is why for a latency-sensitive API it is usually right to set honest requests and no tight CPU limit.
+      The cost of that choice: the Pod gets the Burstable QoS class and its performance depends on free cores on
+      the node, so capacity must be planned by requests rather than by hoping for spare cores.
+    linkTitles:
+      - "Resource management for Pods and containers (Kubernetes docs)"
+      - "Pod Quality of Service classes (Kubernetes docs)"
+      - "CFS Bandwidth Control (Linux kernel docs)"
+      - "Environment.ProcessorCount property"
+      - "ThreadPool class"
+      - "Runtime configuration options for garbage collection"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

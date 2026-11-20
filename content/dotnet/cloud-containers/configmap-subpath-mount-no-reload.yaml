@@ -1,0 +1,131 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RMTSFTHBC12WCPVYMH
+slug: configmap-subpath-mount-no-reload
+stack: dotnet
+topic: cloud-containers
+level: senior
+type: find-bug
+grading: auto
+tags: [kubernetes, configmap, configuration, reload-on-change]
+code:
+  language: yaml
+  harness: none
+  source: |
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: orders-api
+    spec:
+      replicas: 2
+      selector:
+        matchLabels:
+          app: orders-api
+      template:
+        metadata:
+          labels:
+            app: orders-api
+        spec:
+          containers:
+            - name: orders-api
+              image: registry.example.com/orders-api:1.4.2
+              volumeMounts:
+                - name: app-config
+                  mountPath: /app/appsettings.json
+                  subPath: appsettings.json
+                  readOnly: true
+          volumes:
+            - name: app-config
+              configMap:
+                name: orders-api-config
+bugLineSets: [[21], [20, 21]]
+links:
+  - url: https://kubernetes.io/docs/concepts/configuration/configmap/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/configuration/
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какая строка манифеста не даёт приложению увидеть изменения ConfigMap?
+    prompt: |
+      Сервис на ASP.NET Core в .NET 10 создаётся через `WebApplication.CreateBuilder`, который подключает
+      `appsettings.json` с `reloadOnChange: true`, а настройки читаются через `IOptionsMonitor<T>`. Файл
+      `appsettings.json` приходит в контейнер из ConfigMap `orders-api-config`.
+
+      После `kubectl apply` с изменённым ConfigMap прошло полчаса, но в контейнере по-прежнему лежит старый файл,
+      и приложение работает со старыми значениями. Помогает только перезапуск Pod. Щёлкните по строке манифеста,
+      из-за которой обновление не доходит до контейнера.
+    hint: Как kubelet доставляет новое содержимое ConfigMap в уже смонтированный том, и работает ли это для любого способа монтирования?
+    answer: "Строка 21, `subPath: appsettings.json` в монтировании тома."
+    explanation: |
+      Когда ConfigMap смонтирован как том целиком, kubelet хранит файлы в скрытом каталоге, на который указывает
+      символическая ссылка `..data`, а видимые файлы - это ссылки через `..data`. При изменении ConfigMap kubelet
+      записывает новый каталог и атомарно переключает `..data`. Изменение приходит не мгновенно, а с задержкой
+      порядка периода синхронизации kubelet плюс время жизни его кэша.
+
+      С `subPath` механизм другой: в контейнер монтируется конкретный файл в том виде, в каком он был при старте
+      контейнера. Документация Kubernetes прямо говорит, что контейнер, который использует ConfigMap через
+      `subPath`, не получает обновлений ConfigMap. Файл внутри контейнера не меняется, поэтому `reloadOnChange`
+      и `IOptionsMonitor<T>` тут ни при чём: наблюдателю за файлами просто нечего заметить. Строка 20 сама по себе
+      не ошибка, она лишь задаёт путь для этого монтирования файла.
+
+      `subPath` здесь появился не случайно: если смонтировать том целиком в `/app`, он закроет опубликованные файлы
+      приложения. Правильное исправление - смонтировать ConfigMap целиком в отдельный каталог, например
+      `/app/config`, и подключить файл явно:
+      `builder.Configuration.AddJsonFile("/app/config/appsettings.json", optional: true, reloadOnChange: true)`.
+      Источник, добавленный последним, переопределяет значения из ранее добавленных источников. kubelet меняет
+      символическую ссылку `..data`, а не сам файл, и встроенный наблюдатель за файлами замечает это не во всех
+      окружениях. Если перезагрузка не срабатывает, можно включить опрос через переменную окружения
+      `DOTNET_USE_POLLING_FILE_WATCHER=true`.
+
+      Значения, переданные из ConfigMap через переменные окружения, тоже не обновляются без перезапуска. Многие
+      команды поэтому вообще не полагаются на горячую перезагрузку и выкатывают изменение конфигурации как новую
+      версию: контрольная сумма ConfigMap в аннотации шаблона Pod запускает плавное обновление Deployment.
+    linkTitles:
+      - "ConfigMap (документация Kubernetes)"
+      - "Конфигурация в ASP.NET Core"
+  en:
+    title: Which manifest line keeps the app from seeing ConfigMap updates?
+    prompt: |
+      An ASP.NET Core service on .NET 10 is created with `WebApplication.CreateBuilder`, which adds
+      `appsettings.json` with `reloadOnChange: true`, and settings are read through `IOptionsMonitor<T>`. The
+      `appsettings.json` file comes into the container from the `orders-api-config` ConfigMap.
+
+      Half an hour after `kubectl apply` with a changed ConfigMap, the container still has the old file and the
+      app keeps using the old values. Only restarting the Pod helps. Click the manifest line that stops the update
+      from reaching the container.
+    hint: How does the kubelet deliver new ConfigMap content into a volume that is already mounted, and does that work for every way of mounting it?
+    answer: "Line 21, `subPath: appsettings.json` in the volume mount."
+    explanation: |
+      When a ConfigMap is mounted as a whole volume, the kubelet keeps the files in a hidden directory that the
+      symbolic link `..data` points to, and the visible files are links through `..data`. When the ConfigMap
+      changes, the kubelet writes a new directory and atomically switches `..data`. The change is not instant: it
+      arrives after about the kubelet sync period plus the lifetime of its cache.
+
+      With `subPath` the mechanism is different: a specific file is mounted into the container as it was when the
+      container started. The Kubernetes documentation states directly that a container using a ConfigMap as a
+      `subPath` volume mount does not receive ConfigMap updates. The file inside the container never changes, so
+      `reloadOnChange` and `IOptionsMonitor<T>` are not to blame: the file watcher has nothing to notice. Line 20
+      is not a defect on its own, it only sets the path for this single-file mount.
+
+      The `subPath` is there for a reason: mounting the whole volume at `/app` would hide the published app
+      files. The proper fix is to mount the whole ConfigMap into a separate directory, for example `/app/config`,
+      and add the file explicitly:
+      `builder.Configuration.AddJsonFile("/app/config/appsettings.json", optional: true, reloadOnChange: true)`.
+      The source added last overrides values from the sources added before it. The kubelet switches the
+      symbolic link `..data` rather than the file itself, and the built-in file watcher does not notice that in
+      every environment. If reload does not fire, polling can be turned on with the environment variable
+      `DOTNET_USE_POLLING_FILE_WATCHER=true`.
+
+      Values passed from a ConfigMap through environment variables are not updated without a restart either.
+      That is why many teams do not rely on hot reload at all and ship a configuration change as a new version: a
+      checksum of the ConfigMap in a Pod template annotation triggers a rolling update of the Deployment.
+    linkTitles:
+      - "ConfigMaps (Kubernetes docs)"
+      - "Configuration in ASP.NET Core"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"
+  noRunReason: "The snippet is a Kubernetes manifest, not C#. The sandbox only builds and runs C# snippets, and the defect shows up only in a cluster when the kubelet updates mounted ConfigMap volumes."

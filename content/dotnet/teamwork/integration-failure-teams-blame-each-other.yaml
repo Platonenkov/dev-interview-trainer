@@ -1,0 +1,152 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RR3KK0EH8DDDSNEFRC
+slug: integration-failure-teams-blame-each-other
+stack: dotnet
+topic: teamwork
+level: senior
+type: situation
+grading: self
+tags: [conflict-resolution, postmortem, blameless-culture, api-contracts, cross-team]
+links:
+  - url: https://sre.google/sre-book/postmortem-culture/
+    lang: en
+    kind: book
+  - url: https://martinfowler.com/articles/consumerDrivenContracts.html
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: После сбоя интеграции две команды в чате обвиняют друг друга в нарушении контракта. Как помирить их и разобраться?
+    prompt: |
+      Ночью на два часа перестало работать оформление заказов: сервис заказов вашей команды получал ошибки
+      от платёжного сервиса соседней команды. Сервис уже восстановлен, но в общем чате команды обвиняют друг
+      друга. Платёжная команда пишет, что вы отправляете запросы не по контракту, ваши коллеги - что платёжная
+      команда без предупреждения изменила API. Сообщения становятся всё резче, к спору подключаются руководители.
+
+      Вы senior-разработчик в команде сервиса заказов, и вас попросили разобраться. Что вы будете делать и в
+      каком порядке?
+    hint: Поможет ли ответ на вопрос «кто виноват» предотвратить следующий такой сбой на границе между командами?
+    answer: |
+      1. **Убрать спор из чата.** Написать в канал одно спокойное сообщение: сервис восстановлен, разбор будет
+         совместным, в такое-то время, а до тех пор собираем факты, а не выводы. Не отвечать на каждое обвинение
+         и не защищать публично свою команду. Отдельно убедиться, что восстановление устойчиво и сбой не повторится
+         в ближайшие часы.
+      2. **Собрать факты обеих сторон в одну хронологию.** История деплоев и изменений конфигурации обоих
+         сервисов, какую версию API или схемы использовала каждая сторона, логи и трассировки упавших вызовов с
+         реальными примерами запросов и ответов, алерты и момент, когда каждая команда заметила проблему. Это один
+         общий документ, который обе команды могут дополнять и комментировать, а не две версии событий.
+      3. **Провести одну совместную встречу без поиска виноватых.** Участвуют обе команды. Ведущий не должен
+         принадлежать ни одной из них: раз вы сами из команды заказов, попросите инженера или лида из третьей
+         команды, или хотя бы открыто признайте свою заинтересованность. Правила: говорим о событиях и системах,
+         а не о людях и командах; сначала согласуем хронологию, и только потом обсуждаем причины.
+      4. **Заменить вопрос.** Вместо «кто нарушил контракт» спросить «где этот контракт записан и что его
+         проверяет». Обычно оказывается, что контракт существовал только неявно: поставщик внёс изменение, которое
+         считал совместимым (например, новое значение перечисления в ответе или более строгую проверку поля,
+         которое раньше было необязательным), потребитель опирался на поведение, которое нигде не описано, ни один
+         тест ни с одной стороны не ловил расхождение, а об изменении никто не объявил. Причины есть с обеих сторон
+         и в промежутке между ними.
+      5. **Закончить общими задачами по интерфейсу.** Явный версионируемый контракт (например, описание OpenAPI
+         там, где его видят обе команды), контрактные тесты от потребителя, которые запускаются в CI поставщика,
+         правило обратно совместимых изменений и вывода из употребления с заранее объявленным сроком, терпимый к
+         лишним полям разбор ответов на стороне потребителя, метрики и алерты на ошибки интеграции, видимые обеим
+         командам, и канал для объявления изменений. У каждой задачи есть владелец и срок; ключевые задачи
+         принадлежат обеим командам вместе.
+      6. **Довести до конца.** Опубликовать один общий постмортем, отслеживать выполнение задач и отдельно,
+         наедине, поговорить с лидами обеих команд о тоне в чате - это не тема для документа. Эскалировать
+         руководству стоит только если команды не могут договориться о задачах.
+    explanation: |
+      Вопрос «кто виноват» в сбое интеграции почти никогда не имеет полезного ответа. Каждая команда видит только
+      свою половину: свой код, свои деплои, свою трактовку контракта. Пока они спорят в чате, каждая собирает
+      аргументы в свою пользу, позиции твердеют, и даже если «победитель» найден, следующий сбой на той же границе
+      никто не предотвратил. Общая хронология из фактов обеих сторон заменяет спор о мнениях проверяемой картиной.
+
+      Книга Google SRE считает постмортемы без поиска виноватых основой культуры SRE: разбор ищет причины,
+      которые привели к инциденту, а не человека или команду, которых можно обвинить, и исходит из того, что все
+      действовали добросовестно на основе той информации, что у них была. Книга также подчёркивает, что за
+      открытый рассказ о проблемах людей нужно поощрять, а не наказывать: в её примере инженер, чей релиз уронил
+      сервис, сразу откатил изменение и получил за это благодарности коллег. Для двух команд это особенно заметно:
+      команда, которая ждёт обвинений, приносит на встречу защиту, а не логи.
+
+      Сбои интеграции живут на границе, поэтому и исправлять нужно границу. В подходе consumer-driven contracts
+      каждый потребитель явно формулирует, что ему действительно нужно от поставщика, и статья на сайте Мартина
+      Фаулера называет главной пользой детальное понимание и быструю обратную связь о последствиях изменения:
+      поставщик видит, какие ожидания потребителей изменение нарушит, и может его спланировать, например выводить
+      элементы контракта из употребления в течение заранее известного срока. На практике такие ожидания обычно
+      превращают в автоматические тесты в сборке поставщика, и тогда несовместимое изменение обнаруживается в CI,
+      а не в production. Совместное владение такими задачами превращает две конфликтующие команды в участников
+      общего решения.
+
+      Слабые ответы: выступить судьёй и выбрать правую сторону, сразу эскалировать руководству, позволить каждой
+      команде написать свой постмортем или ограничиться правкой одного поля, из-за которого упали вызовы.
+    linkTitles:
+      - "Культура постмортемов: учимся на ошибках (книга Google SRE)"
+      - "Контракты, управляемые потребителем (Ian Robinson, сайт Мартина Фаулера)"
+  en:
+    title: After an integration outage two teams blame each other in chat for breaking the contract. How do you mediate?
+    prompt: |
+      At night checkout stopped working for two hours: your team's order service was getting errors from a
+      neighbouring team's payment service. The service is restored, but the teams now blame each other in a shared
+      chat. The payment team says you send requests that do not follow the contract, your colleagues say the payment
+      team changed the API without notice. The messages get sharper, and managers join the argument.
+
+      You are a senior developer on the order service team, and you have been asked to sort it out. What do you do,
+      and in what order?
+    hint: Will the answer to "whose fault is it" prevent the next such outage at the boundary between the teams?
+    answer: |
+      1. **Take the argument out of the chat.** Post one calm message in the channel: the service is restored, the
+         analysis will be joint, at a set time, and until then we collect facts, not verdicts. Do not answer each
+         accusation and do not defend your own team in public. Separately make sure the recovery is stable and the
+         failure will not come back in the next few hours.
+      2. **Gather both sides' facts into one timeline.** The deploy and configuration history of both services,
+         which API or schema version each side used, logs and traces of the failing calls with real request and
+         response examples, the alerts and the moment each team noticed the problem. This is one shared document
+         that both teams can add to and comment on, not two versions of events.
+      3. **Run one joint blameless session.** Both teams take part. The facilitator should belong to neither: since
+         you are on the order team yourself, ask an engineer or lead from a third team, or at least state your own
+         interest openly. Ground rules: talk about events and systems, not people and teams; agree on the timeline
+         first, and only then discuss causes.
+      4. **Change the question.** Instead of "who broke the contract" ask "where is this contract written down and
+         what checks it". Usually it turns out that the contract existed only implicitly: the provider made a change
+         it believed compatible (for example, a new enum value in a response or stricter validation of a field that
+         used to be optional), the consumer relied on behaviour that was documented nowhere, no test on either side
+         caught the mismatch, and nobody announced the change. The causes sit on both sides and in the gap between
+         them.
+      5. **End with jointly owned actions for the interface.** An explicit, versioned contract (for example, an
+         OpenAPI description where both teams can see it), consumer-driven contract tests that run in the provider's
+         CI, a rule for backward-compatible changes and for deprecation with an announced date, response parsing on
+         the consumer side that tolerates extra fields, metrics and alerts on integration errors visible to both
+         teams, and a channel for announcing changes. Each item has an owner and a deadline; the key items belong to
+         both teams together.
+      6. **Close the loop.** Publish one joint postmortem, track the action items, and separately, in private,
+         talk to both team leads about the tone in the chat - that is not a topic for the document. Escalate to
+         management only if the teams cannot agree on the action items.
+    explanation: |
+      The question "whose fault is it" almost never has a useful answer in an integration outage. Each team sees
+      only its half: its code, its deploys, its reading of the contract. While they argue in chat, each collects
+      arguments for its own side, positions harden, and even if a "winner" is found, nobody has prevented the next
+      failure at the same boundary. A shared timeline built from both sides' facts replaces a dispute of opinions
+      with a picture that can be checked.
+
+      The Google SRE book treats blameless postmortems as a core part of SRE culture: the analysis looks for the
+      causes that contributed to the incident, not for a person or a team to blame, and assumes that everyone acted
+      in good faith on the information they had. The book also stresses that people should be rewarded, not
+      punished, for bringing problems into the open: in its example an engineer whose release took down a service
+      rolled the change back at once and received peer bonuses for it. Between two teams this is especially
+      visible: a team that expects blame brings a defence to the meeting, not its logs.
+
+      Integration failures live at the boundary, so the boundary is what needs fixing. With consumer-driven
+      contracts each consumer states explicitly what it actually needs from the provider, and the article on
+      Martin Fowler's site names fine-grained insight and rapid feedback on the impact of a change as a key
+      benefit: the provider sees which consumer expectations a change would break and can plan it, for example by
+      deprecating contract elements for a set period. In common practice these expectations are turned into
+      automated tests in the provider's build, so an incompatible change shows up in CI instead of in production.
+      Joint ownership of these items turns two conflicting teams into participants in one shared fix.
+
+      Weak answers: acting as a judge and picking the side that is right, escalating to management at once, letting
+      each team write its own postmortem, or stopping at fixing the one field that made the calls fail.
+    linkTitles:
+      - "Postmortem Culture: Learning from Failure (Google SRE book)"
+      - "Consumer-Driven Contracts: A Service Evolution Pattern (Ian Robinson, martinfowler.com)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

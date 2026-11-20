@@ -1,0 +1,135 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNX4J99ZZK1E0KNCAM
+slug: slo-burn-rate-alerting
+stack: dotnet
+topic: devops
+level: senior
+type: open
+grading: self
+tags: [slo, error-budget, burn-rate, alerting, metrics]
+links:
+  - url: https://sre.google/workbook/alerting-on-slos/
+    lang: en
+    kind: book
+  - url: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/built-in-metrics-aspnetcore
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Как строить алерты по SLO 99,9% через скорость расходования бюджета ошибок?"
+    prompt: |
+      У сервиса на ASP.NET Core SLO доступности 99,9% на скользящем окне 30 дней: не меньше 99,9% запросов должны
+      завершаться успешно. Сейчас дежурного будит алерт «доля ошибок за последние 5 минут выше 1%». Он срабатывает
+      на короткие всплески, после которых ничего делать не нужно, и молчит, когда доля ошибок неделю держится на 0,5%.
+
+      Как вы построите алерты на основе скорости расходования бюджета ошибок (burn rate)? Что такое burn rate,
+      какие окна и пороги вы выберете и почему одного окна недостаточно?
+    hint: "Какую долю месячного бюджета ошибок съедает пятиминутный всплеск, а какую - доля ошибок 0,5%, которая держится неделю?"
+    answer: |
+      1. **Бюджет ошибок.** SLO 99,9% на 30 днях разрешает 0,1% неуспешных запросов. При 10 млн запросов в месяц это
+         10 000 ошибок, а в пересчёте на полный отказ - около 43 минут (30 × 24 × 60 × 0,001 = 43,2).
+      2. **Burn rate** - наблюдаемая доля ошибок, делённая на допустимую долю `1 - SLO`, здесь 0,001. При burn rate 1
+         бюджет закончится ровно за 30 дней, при 10 - за 3 дня, при 1000 - примерно за 43 минуты. Алерт формулируется
+         как «за это окно израсходовано X% месячного бюджета», отсюда порог: burn rate = X × окно SLO / окно алерта.
+         2% бюджета за 1 час дают 0,02 × 720 / 1 = 14,4; 5% за 6 часов - 6; 10% за 3 дня - 1.
+      3. **Несколько порогов и по два окна на каждый.** Каждое правило проверяет один и тот же порог на длинном и
+         коротком окне, короткое окно - 1/12 длинного. Правила объединяются по «или». Стартовые значения из Google SRE
+         Workbook:
+
+      | Действие | Длинное окно | Короткое окно | Burn rate | Порог доли ошибок | Израсходовано бюджета |
+      |---|---|---|---|---|---|
+      | Пейджинг | 1 ч | 5 мин | 14,4 | 1,44% | 2% |
+      | Пейджинг | 6 ч | 30 мин | 6 | 0,6% | 5% |
+      | Тикет | 3 дня | 6 ч | 1 | 0,1% | 10% |
+
+      4. **Зачем два окна.** Длинное окно гарантирует, что сожжена значимая доля бюджета: двухминутный всплеск с 20%
+         ошибок даёт за час 0,67% и никого не будит. Короткое окно подтверждает, что бюджет расходуется прямо сейчас:
+         после восстановления алерт гаснет за несколько минут, а не висит до часа, пока сбой не выйдет из длинного
+         окна. При полном отказе порог 1,44% на часовом окне достигается примерно через 52 секунды, так что быстрые
+         сбои всё равно ловятся меньше чем за минуту.
+      5. **SLI из метрик.** Начиная с .NET 8 ASP.NET Core публикует гистограмму `http.server.request.duration`
+         (meter `Microsoft.AspNetCore.Hosting`) с атрибутом `http.response.status_code`. Плохие события - ответы 5xx,
+         все события - все запросы, их число берётся из счётчика измерений гистограммы. Доли ошибок по каждому окну
+         считаются правилами записи (recording rules) в системе метрик, а не в коде сервиса. Запросы health check лучше
+         исключить, а ответы 4xx обычно не считаются ошибками сервиса.
+      6. **Подводные камни.** При малом трафике одна ошибка на сотню запросов уже даёт 1%: нужен синтетический трафик,
+         минимальное число запросов в условии алерта или объединение мелких сервисов. Правило с burn rate 1 за 3 дня не
+         будит людей, а создаёт задачу на рабочее время. Пороги - отправная точка, их пересматривают по истории
+         срабатываний.
+    explanation: |
+      Фиксированный порог на доле ошибок не учитывает время, а SLO - это обещание про долю ошибок за 30 дней.
+      Всплеск 1% на 5 минут расходует около 0,12% месячного бюджета (0,05 «минуты полного отказа» из 43,2), но будит
+      дежурного. А 0,5% ошибок - это burn rate 5: бюджет закончится за 6 дней и SLO будет нарушен, но алерт молчит.
+      Burn rate переводит текущую долю ошибок в ответ на важный вопрос: нарушим ли мы SLO и как скоро. Отсюда
+      градация: чем выше скорость, тем короче окно и срочнее реакция, а медленное расходование - задача, а не пейджинг.
+
+      Пара окон снимает противоречие одного окна. Только короткое окно реагирует быстро, но шумит: любой короткий
+      всплеск превышает порог. Только длинное окно точно, но долго сбрасывается: алерт продолжает гореть ещё час
+      после устранения сбоя. Требование превышения порога на обоих окнах даёт и точность длинного окна, и быстрый
+      сброс короткого.
+    linkTitles:
+      - "Google SRE Workbook: Alerting on SLOs"
+      - "Встроенные метрики ASP.NET Core"
+  en:
+    title: "How do you build alerts for a 99.9% SLO with error-budget burn rate?"
+    prompt: |
+      An ASP.NET Core service has an availability SLO of 99.9% over a rolling 30-day window: at least 99.9% of
+      requests must succeed. Today the on-call engineer is paged by the alert "error ratio over the last 5 minutes is
+      above 1%". It fires on short spikes that need no action, and stays silent when the error ratio sits at 0.5%
+      for a week.
+
+      How do you build alerts on the error-budget burn rate instead? What is burn rate, which windows and thresholds
+      do you choose, and why is a single window not enough?
+    hint: "What share of the monthly error budget does a five-minute spike consume, and what share does a 0.5% error ratio that lasts a week consume?"
+    answer: |
+      1. **Error budget.** An SLO of 99.9% over 30 days allows 0.1% of requests to fail. With 10 million requests a
+         month that is 10,000 failed requests, and in terms of a full outage it is about 43 minutes
+         (30 × 24 × 60 × 0.001 = 43.2).
+      2. **Burn rate** is the observed error ratio divided by the allowed ratio `1 - SLO`, here 0.001. At burn rate 1
+         the budget runs out in exactly 30 days, at 10 in 3 days, at 1000 in about 43 minutes. An alert is phrased as
+         "this window has spent X% of the monthly budget", which gives the threshold: burn rate = X × SLO window /
+         alert window. 2% of the budget in 1 hour gives 0.02 × 720 / 1 = 14.4; 5% in 6 hours gives 6; 10% in 3 days
+         gives 1.
+      3. **Several thresholds, two windows each.** Every rule checks the same threshold over a long and a short
+         window, and the short window is 1/12 of the long one. The rules are combined with OR. Starting values from
+         the Google SRE Workbook:
+
+      | Action | Long window | Short window | Burn rate | Error ratio threshold | Budget spent |
+      |---|---|---|---|---|---|
+      | Page | 1 h | 5 min | 14.4 | 1.44% | 2% |
+      | Page | 6 h | 30 min | 6 | 0.6% | 5% |
+      | Ticket | 3 days | 6 h | 1 | 0.1% | 10% |
+
+      4. **Why two windows.** The long window makes sure a meaningful share of the budget is gone: a two-minute spike
+         at 20% errors gives 0.67% over the hour and pages nobody. The short window confirms that the budget is
+         burning right now: after recovery the alert clears within minutes instead of firing for up to an hour until
+         the outage leaves the long window. During a full outage the 1.44% threshold on the one-hour window is
+         reached after about 52 seconds, so fast failures are still caught in under a minute.
+      5. **SLI from metrics.** Starting with .NET 8, ASP.NET Core publishes the `http.server.request.duration`
+         histogram (meter `Microsoft.AspNetCore.Hosting`) with the `http.response.status_code` attribute. Bad events
+         are 5xx responses, all events are all requests, and their count comes from the measurement count of the
+         histogram. The error ratio for each window is computed by recording rules in the metrics system, not in the
+         service code. Health check requests are best excluded, and 4xx responses are usually not counted as service
+         errors.
+      6. **Pitfalls.** With low traffic one error in a hundred requests already gives 1%: add synthetic traffic, a
+         minimum request count in the alert condition, or group small services together. The burn rate 1 over 3 days
+         rule does not wake anyone, it creates a task for working hours. The thresholds are a starting point and are
+         revisited using the history of firings.
+    explanation: |
+      A fixed threshold on the error ratio ignores time, while an SLO is a promise about the error ratio over
+      30 days. A 1% spike for 5 minutes spends about 0.12% of the monthly budget (0.05 "minutes of full outage" out
+      of 43.2), yet it pages the on-call engineer. A 0.5% error ratio is burn rate 5: the budget runs out in 6 days
+      and the SLO is breached, yet the alert stays silent. Burn rate turns the current error ratio into the question
+      that matters: will we breach the SLO, and how soon. That gives the grading: the higher the rate, the shorter
+      the window and the more urgent the response, while slow burning is a task, not a page.
+
+      A pair of windows removes the conflict of a single window. A short window alone reacts fast but is noisy: any
+      brief spike crosses the threshold. A long window alone is precise but slow to reset: the alert keeps firing for
+      an hour after the failure is fixed. Requiring the threshold to be exceeded in both windows gives the precision
+      of the long window and the fast reset of the short one.
+    linkTitles:
+      - "Google SRE Workbook: Alerting on SLOs"
+      - "ASP.NET Core built-in metrics"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

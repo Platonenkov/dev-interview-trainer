@@ -1,0 +1,132 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RM06JHVE0FFXP49GWN
+slug: container-security-context-hardening
+stack: dotnet
+topic: cloud-containers
+level: senior
+type: multi
+grading: auto
+tags: [kubernetes, security-context, containers, least-privilege]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: true
+  - id: c
+    correct: true
+  - id: d
+    correct: true
+  - id: e
+    correct: false
+  - id: f
+    correct: false
+links:
+  - url: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/
+    lang: en
+    kind: docs
+  - url: https://kubernetes.io/docs/concepts/security/pod-security-standards/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/compatibility/containers/8.0/app-user
+    lang: en
+    kind: docs
+  - url: https://devblogs.microsoft.com/dotnet/securing-containers-with-rootless/
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Какие настройки securityContext укрепляют Pod с контейнером ASP.NET Core?
+    prompt: |
+      Deployment запускает сервис на ASP.NET Core в образе на базе `mcr.microsoft.com/dotnet/aspnet:10.0`.
+      Dockerfile задаёт `USER $APP_UID`, Kestrel слушает порт 8080. Команда безопасности просит уменьшить права
+      контейнера на случай, если приложение будет скомпрометировано, например через уязвимую зависимость.
+
+      Выберите все настройки спецификации Pod, которые уменьшают права контейнера.
+    hint: "Для каждой настройки спросите себя: что она меняет в том, чем скомпрометированное приложение может воспользоваться?"
+    options:
+      a: "`runAsNonRoot: true` в `securityContext` на уровне Pod"
+      b: "`readOnlyRootFilesystem: true` в `securityContext` контейнера и том `emptyDir`, смонтированный в `/tmp`"
+      c: "`allowPrivilegeEscalation: false` в `securityContext` контейнера"
+      d: '`capabilities.drop: ["ALL"]` в `securityContext` контейнера'
+      e: "`privileged: true` в `securityContext` контейнера"
+      f: "`hostNetwork: true` в спецификации Pod"
+    optionExplanations:
+      e: "Привилегированный контейнер получает практически те же права, что и процессы на узле, включая доступ к устройствам хоста. Это расширяет права, а не сужает их, и профиль Baseline стандартов Pod Security его запрещает."
+      f: "С `hostNetwork: true` Pod использует сетевое пространство имён узла: видит его интерфейсы и может слушать порты хоста. Это расширяет права, и профиль Baseline стандартов Pod Security это запрещает."
+    answer: "`runAsNonRoot: true`, `readOnlyRootFilesystem: true` с `emptyDir` для `/tmp`, `allowPrivilegeEscalation: false` и `capabilities.drop: [\"ALL\"]`."
+    explanation: |
+      Каждая из правильных настроек закрывает один из путей, которым атакующий воспользуется после взлома приложения:
+
+      - `runAsNonRoot: true`: kubelet не запустит контейнер, если процесс будет работать с UID 0. Проверить он может
+        только числовой идентификатор пользователя. Образы .NET начиная с .NET 8 содержат пользователя `app` с UID 1654
+        (переменная `APP_UID`), поэтому `USER $APP_UID` в Dockerfile или явный `runAsUser: 1654` проходят проверку, а
+        пользователь, заданный только именем, приведёт к ошибке запуска Pod.
+      - `readOnlyRootFilesystem: true`: процесс не может подменить файлы приложения или положить свои инструменты в
+        файловую систему образа. Приложению при этом может понадобиться доступный на запись временный каталог: туда
+        сбрасываются загружаемые файлы форм сверх порога памяти и тела запросов, буферизованные через
+        `EnableBuffering`, а среда выполнения создаёт там сокет диагностики. Поэтому в `/tmp` монтируют `emptyDir`.
+      - `allowPrivilegeEscalation: false` выставляет процессу флаг `no_new_privs`: дочерний процесс не получит больше
+        прав, чем родитель, даже через setuid-файлы.
+      - `capabilities.drop: ["ALL"]`: Kestrel на порту 8080 не нужна ни одна из привилегий Linux, которые задаёт
+        поле `capabilities`. Набор по умолчанию зависит от среды выполнения контейнеров: у containerd и Docker он
+        включает, например, `NET_RAW` и `CHOWN`.
+
+      `privileged: true` и `hostNetwork: true` действуют в обратную сторону: они дают контейнеру доступ к ресурсам
+      узла. Профиль Restricted стандартов Pod Security требует `runAsNonRoot`, `allowPrivilegeEscalation: false`,
+      сброс всех привилегий (`capabilities.drop: ["ALL"]`) и профиль seccomp `RuntimeDefault` или `Localhost`.
+      `readOnlyRootFilesystem` ни один профиль не требует, но это частое дополнение для сервисов без состояния.
+    linkTitles:
+      - "Настройка контекста безопасности для Pod или контейнера"
+      - "Стандарты безопасности Pod (Pod Security Standards)"
+      - "Образы .NET по умолчанию используют пользователя app (критическое изменение в .NET 8)"
+      - "Защита облачных приложений .NET контейнерами Linux без root (блог .NET)"
+  en:
+    title: Which securityContext settings harden a Pod that runs an ASP.NET Core container?
+    prompt: |
+      A Deployment runs an ASP.NET Core service on an image based on `mcr.microsoft.com/dotnet/aspnet:10.0`.
+      The Dockerfile sets `USER $APP_UID`, and Kestrel listens on port 8080. The security team asks you to reduce the
+      container's privileges in case the app is compromised, for example through a vulnerable dependency.
+
+      Select all Pod spec settings that reduce the container's privileges.
+    hint: "For each setting, ask yourself: what does it change about what a compromised app can make use of?"
+    options:
+      a: "`runAsNonRoot: true` in the Pod-level `securityContext`"
+      b: "`readOnlyRootFilesystem: true` in the container `securityContext`, plus an `emptyDir` volume mounted at `/tmp`"
+      c: "`allowPrivilegeEscalation: false` in the container `securityContext`"
+      d: '`capabilities.drop: ["ALL"]` in the container `securityContext`'
+      e: "`privileged: true` in the container `securityContext`"
+      f: "`hostNetwork: true` in the Pod spec"
+    optionExplanations:
+      e: "A privileged container gets practically the same privileges as processes on the node, including access to host devices. This widens privilege instead of reducing it, and the Baseline Pod Security Standard forbids it."
+      f: "With `hostNetwork: true` the Pod uses the node's network namespace: it sees the node's interfaces and can listen on host ports. This widens privilege, and the Baseline Pod Security Standard forbids it."
+    answer: "`runAsNonRoot: true`, `readOnlyRootFilesystem: true` with an `emptyDir` for `/tmp`, `allowPrivilegeEscalation: false` and `capabilities.drop: [\"ALL\"]`."
+    explanation: |
+      Each correct setting closes one path an attacker would use after compromising the app:
+
+      - `runAsNonRoot: true`: the kubelet refuses to start the container if the process would run as UID 0. It can
+        only verify a numeric user id. Since .NET 8 the .NET images contain the `app` user with UID 1654 (the
+        `APP_UID` variable), so `USER $APP_UID` in the Dockerfile or an explicit `runAsUser: 1654` passes the check,
+        while a user given only by name makes the Pod fail to start.
+      - `readOnlyRootFilesystem: true`: the process cannot replace the app's files or drop its own tools into the image
+        file system. The app may still need a writable temp directory: uploaded form files over the memory threshold
+        and request bodies buffered with `EnableBuffering` spill to disk there, and the runtime places its diagnostics
+        socket there. That is why an `emptyDir` is mounted at `/tmp`.
+      - `allowPrivilegeEscalation: false` sets the `no_new_privs` flag on the process: a child process cannot gain
+        more privileges than its parent, even through setuid files.
+      - `capabilities.drop: ["ALL"]`: Kestrel on port 8080 needs none of the Linux capabilities that the
+        `capabilities` field controls. The default set depends on the container runtime: for containerd and Docker it
+        includes, for example, `NET_RAW` and `CHOWN`.
+
+      `privileged: true` and `hostNetwork: true` work the other way: they give the container access to node
+      resources. The Restricted Pod Security Standard requires `runAsNonRoot`, `allowPrivilegeEscalation: false`,
+      dropping all capabilities (`capabilities.drop: ["ALL"]`) and a `RuntimeDefault` or `Localhost` seccomp profile.
+      No profile requires `readOnlyRootFilesystem`, but it is a common addition for stateless services.
+    linkTitles:
+      - "Configure a security context for a Pod or container"
+      - "Pod Security Standards"
+      - "Default .NET images use the app user (breaking change in .NET 8)"
+      - "Secure your .NET cloud apps with rootless Linux containers (.NET Blog)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

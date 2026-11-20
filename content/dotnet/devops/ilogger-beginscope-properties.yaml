@@ -1,0 +1,127 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNQCEN1M16Z8EPSTED
+slug: ilogger-beginscope-properties
+stack: dotnet
+topic: devops
+level: middle
+type: multi
+grading: auto
+tags: [logging, ilogger, log-scopes, structured-logging]
+code:
+  language: csharp
+  harness: none
+  source: |
+    public async Task ProcessAsync(Order order, CancellationToken ct)
+    {
+        using (_logger.BeginScope(new Dictionary<string, object>
+        {
+            ["OrderId"] = order.Id
+        }))
+        {
+            _logger.LogInformation("Validating order");
+            await _payments.ChargeAsync(order, ct);
+            _logger.LogInformation("Payment captured");
+        }
+
+        _logger.LogInformation("Processing finished");
+    }
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: true
+  - id: e
+    correct: false
+  - id: f
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/core/extensions/logging
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/extensions/console-log-formatter
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как работает область логирования ILogger.BeginScope со свойством OrderId?
+    prompt: |
+      Сервис на .NET 10 пишет логи через `ILogger<OrderService>` из `Microsoft.Extensions.Logging`. Метод обработки
+      заказа открывает область логирования со словарём, в котором лежит `OrderId` (код выше). Выберите все верные
+      утверждения.
+    hint: Где хранится текущая область логирования и что происходит с ней при вызове `Dispose`?
+    options:
+      a: "Для провайдера, который поддерживает области, обе записи внутри блока `using` - `Validating order` и `Payment captured` - получают свойство `OrderId`."
+      b: "Запись `Payment captured` получает `OrderId`, даже если продолжение после `await` выполняется в другом потоке пула потоков."
+      c: "Запись `Processing finished` тоже получает `OrderId`: область действует до конца обработки HTTP-запроса."
+      d: "Консольный провайдер выводит области, только если в настройках его форматировщика включён `IncludeScopes`, а провайдер без поддержки областей их просто не выводит."
+      e: "`BeginScope` дописывает `OrderId` в текст каждого сообщения, поэтому в любом провайдере строка `Validating order` превращается в `Validating order OrderId=42`."
+      f: "Пока выполняется этот метод, `OrderId` получают и записи других запросов, которые сервис параллельно обрабатывает с тем же экземпляром логгера."
+    optionExplanations:
+      c: "Область живёт, пока не освобождён объект, который вернул `BeginScope`. `Dispose` в конце блока `using` восстанавливает предыдущую область, поэтому `Processing finished` записывается уже без `OrderId`."
+      e: "Текст сообщения не меняется. Состояние области передаётся провайдеру отдельно от сообщения, и провайдер сам решает, выводить ли его и в каком виде, например отдельным полем `Scopes` в JSON-форматировщике."
+      f: "Текущая область хранится в `AsyncLocal<T>` и видна только в своём асинхронном потоке выполнения. Параллельные запросы, даже через тот же логгер, видят каждый свою область."
+    answer: Верны утверждения a, b и d.
+    explanation: |
+      `BeginScope` возвращает `IDisposable` и делает переданное состояние текущей областью. Пока объект не
+      освобождён, провайдеры с поддержкой областей прикрепляют её к каждой записи. Если состояние - словарь
+      (любая коллекция пар `KeyValuePair<string, object>`), структурированные приёмники получают `OrderId` отдельным
+      свойством, по которому можно фильтровать. Текст сообщения при этом остаётся прежним.
+
+      Стандартная реализация хранилища областей, `LoggerExternalScopeProvider`, держит текущую область в
+      `AsyncLocal<T>`. Значение `AsyncLocal<T>` переносится через `await` вместе с `ExecutionContext`, поэтому
+      продолжение в другом потоке видит ту же область, а параллельные запросы видят каждый свою. `Dispose` в конце
+      блока `using` восстанавливает предыдущую область.
+
+      Будут ли области видны в выводе, решает провайдер. У консольного провайдера параметр `IncludeScopes`
+      (`ConsoleFormatterOptions.IncludeScopes`, в конфигурации `Logging:Console:FormatterOptions:IncludeScopes`) по
+      умолчанию выключен, и без него области не печатаются. Провайдер, который области не поддерживает, их
+      игнорирует. Поэтому, если `OrderId` не виден в логах, первым делом проверьте настройки провайдера.
+    linkTitles:
+      - "Логирование в C# и .NET"
+      - "Форматирование журнала консоли"
+  en:
+    title: How does an ILogger.BeginScope logging scope with an OrderId property work?
+    prompt: |
+      A .NET 10 service logs through `ILogger<OrderService>` from `Microsoft.Extensions.Logging`. The order
+      processing method opens a logging scope with a dictionary that holds `OrderId` (code above). Select all true
+      statements.
+    hint: Where is the current logging scope stored, and what happens to it when `Dispose` is called?
+    options:
+      a: "For a provider that supports scopes, both entries inside the `using` block - `Validating order` and `Payment captured` - get the `OrderId` property."
+      b: "The `Payment captured` entry gets `OrderId` even when the continuation after `await` runs on another thread pool thread."
+      c: "The `Processing finished` entry also gets `OrderId`: the scope lasts until the HTTP request has been handled."
+      d: "The console provider writes scopes only when `IncludeScopes` is enabled in its formatter options, and a provider without scope support simply does not write them."
+      e: "`BeginScope` appends `OrderId` to the text of every message, so in any provider the line `Validating order` becomes `Validating order OrderId=42`."
+      f: "While this method runs, entries of other requests that the service handles in parallel with the same logger instance also get `OrderId`."
+    optionExplanations:
+      c: "A scope lives until the object returned by `BeginScope` is disposed. `Dispose` at the end of the `using` block restores the previous scope, so `Processing finished` is written without `OrderId`."
+      e: "The message text does not change. The scope state reaches the provider separately from the message, and the provider decides whether and how to write it, for example as a separate `Scopes` field in the JSON formatter."
+      f: "The current scope is stored in `AsyncLocal<T>` and is visible only in its own asynchronous flow. Parallel requests, even through the same logger, each see their own scope."
+    answer: Statements a, b and d are true.
+    explanation: |
+      `BeginScope` returns an `IDisposable` and makes the given state the current scope. Until the object is
+      disposed, providers that support scopes attach it to every entry. When the state is a dictionary (any
+      collection of `KeyValuePair<string, object>`), structured sinks get `OrderId` as a separate property you can
+      filter on. The message text stays the same.
+
+      The standard scope store, `LoggerExternalScopeProvider`, keeps the current scope in `AsyncLocal<T>`. An
+      `AsyncLocal<T>` value flows across `await` together with the `ExecutionContext`, so a continuation on another
+      thread sees the same scope, while parallel requests each see their own. `Dispose` at the end of the `using`
+      block restores the previous scope.
+
+      Whether scopes appear in the output is up to the provider. For the console provider the `IncludeScopes`
+      option (`ConsoleFormatterOptions.IncludeScopes`, in configuration `Logging:Console:FormatterOptions:IncludeScopes`)
+      is off by default, and without it scopes are not printed. A provider that does not support scopes ignores them.
+      So if `OrderId` is missing from the logs, check the provider settings first.
+    linkTitles:
+      - "Logging in C# and .NET"
+      - "Console log formatting"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"
+  noRunReason: The snippet is a fragment of a class that depends on Microsoft.Extensions.Logging and application types, which are not available in the BCL-only sandbox.

@@ -1,0 +1,144 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RND5NNN4RPP462DMAG
+slug: log-volume-spike-after-release
+stack: dotnet
+topic: devops
+level: senior
+type: situation
+grading: self
+tags: [logging, log-levels, configuration, cost, incident-response]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/core/extensions/logging/overview
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/extensions/configuration-providers
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "После релиза счёт за логи вырос втрое из-за миллионов записей Information: что делать сейчас и потом?"
+    prompt: |
+      После релиза счёт за приём и хранение логов вырос втрое. Выяснилось, что один .NET-сервис пишет миллионы
+      записей уровня `Information` в минуту. Ошибок у пользователей нет, сервис отвечает нормально.
+
+      Что вы сделаете прямо сейчас, чтобы остановить рост расходов, и что потом, чтобы это не повторилось?
+    hint: "Где в приложении решается, будет ли запись написана, и можно ли изменить это решение без нового релиза?"
+    answer: |
+      1. **Найти источник.** В бэкенде логов сгруппировать записи сервиса за последний час по категории (имя логгера,
+         обычно полное имя типа из `ILogger<T>`) и по шаблону сообщения (`{OriginalFormat}`) или `EventId`. Как
+         правило, почти весь объём дают один-два шаблона. По шаблону найти строку кода и коммит, который её добавил.
+      2. **Убедиться, что это не симптом.** Миллионы одинаковых записей могут означать не болтливый лог, а дефект:
+         бесконечную повторную обработку сообщения, повторы без задержки, цикл опроса без паузы. Проверить метрики
+         CPU, вызовов зависимостей и очередей. Если сломано поведение, правильный шаг - откат релиза, а не фильтр.
+      3. **Поднять минимальный уровень только для этой категории.** Добавить ключ
+         `Logging:LogLevel:Shop.Orders.SyncWorker` со значением `Warning` (имя категории - из шага 1). Для каждого
+         провайдера выбирается правило с самым длинным совпадающим префиксом категории, поэтому остальные категории
+         продолжают писать `Information`. Но правила раздела конкретного провайдера, например
+         `Logging:Console:LogLevel`, имеют приоритет над общим `Logging:LogLevel`, даже если там задан только
+         `Default`: если такой раздел есть, правило нужно добавить и в него. Опускать `Default` для всего сервиса не
+         нужно: пропадёт контекст, который понадобится при следующем инциденте.
+      4. **Применить без передеплоя.** Правила из раздела `Logging` конфигурации перечитываются во время работы,
+         когда перезагружается их источник, поэтому новое правило действует без перезапуска, если источник это
+         умеет: JSON-файл с `reloadOnChange: true` (так стандартный хост подключает `appsettings.json`), файл
+         конфигурации на смонтированном томе или внешний источник с обновлением, например Azure App Configuration.
+         С томом проверить, что изменение действительно доходит до процесса: ConfigMap в Kubernetes, смонтированный
+         через `subPath`, не обновляется, а файловый наблюдатель может не заметить подмену файла через символическую
+         ссылку; в этом случае может помочь `DOTNET_USE_POLLING_FILE_WATCHER`. Переменные окружения и аргументы
+         командной строки читаются при старте, их изменение требует перезапуска экземпляров, а правила `AddFilter` в
+         коде - нового релиза. После изменения проверить по графику, что поток записей упал: это и подтверждение,
+         что правило применилось.
+      5. **Если приложение быстро не изменить,** отбросить записи этой категории в конвейере доставки (агент сбора,
+         OpenTelemetry Collector) до бэкенда. Это остановит рост счёта, но сервис по-прежнему тратит CPU и сеть на
+         форматирование и отправку.
+      6. **Потом исправить сам код.** Перевести запись на `Debug` или `Trace`, писать одну сводную запись на пакет
+         вместо записи на каждый элемент, а если запись по сути считает события - заменить её счётчиком `Counter<T>`
+         из `System.Diagnostics.Metrics`. После выкатки исправления убрать временное правило из конфигурации.
+      7. **Не допустить повторения.**
+         - Алерт на резкий рост объёма логов по сервису и категории и алерт на расходы в бэкенде логов.
+         - Правило для code review: `Information` - для значимых событий, а не для каждого элемента в цикле или
+           каждой итерации опроса.
+         - Сравнение объёма логов новой и предыдущей версии при постепенной выкатке и число записей на запрос в
+           нагрузочном тесте.
+         - Разбор инцидента без поиска виноватых, с этими действиями в виде задач.
+    explanation: |
+      Сначала измерение, потом действие: без группировки по категории и шаблону легко заглушить не то или пропустить,
+      что лог - лишь видимая часть дефекта.
+
+      Фильтр по категории - самое узкое и дешёвое средство. Проверка уровня выполняется в приложении до
+      форматирования и отправки записи, поэтому экономит не только хранение, но и CPU, сеть и приём в бэкенде. Его
+      можно применить за минуты, а релиз с исправлением проходит конвейер, ревью и выкатку, и каждая минута ожидания
+      стоит денег. Именно поэтому важно, чтобы уровни логирования жили в перезагружаемой конфигурации, а не в коде,
+      и чтобы команда заранее знала, какой источник конфигурации действительно перезагружается в её окружении.
+
+      Но фильтр - временная мера: он прячет симптом и остаётся в конфигурации неочевидным знанием. Поэтому
+      исправляется сам вызов, а алерты на объём и правила ревью закрывают причину, по которой проблему первым
+      заметил счёт, а не мониторинг.
+    linkTitles:
+      - "Логирование в .NET"
+      - "Поставщики конфигурации в .NET"
+  en:
+    title: "After a release the logging bill tripled because of millions of Information entries: what do you do now and afterwards?"
+    prompt: |
+      After a release the bill for log ingestion and storage tripled. It turns out that one .NET service writes
+      millions of `Information` entries per minute. Users see no errors and the service responds normally.
+
+      What do you do right now to stop the costs from growing, and what do you do afterwards so that it does not
+      happen again?
+    hint: "Where in the application is it decided whether an entry gets written, and can that decision change without a new release?"
+    answer: |
+      1. **Find the source.** In the log backend, group the service's entries for the last hour by category (the
+         logger name, usually the full type name from `ILogger<T>`) and by message template (`{OriginalFormat}`) or
+         `EventId`. Usually one or two templates account for almost all of the volume. Use the template to find the
+         line of code and the commit that added it.
+      2. **Make sure it is not a symptom.** Millions of identical entries may mean not a chatty log but a defect:
+         endless reprocessing of a message, retries without delay, a polling loop without a pause. Check the metrics
+         of CPU, dependency calls and queues. If the behaviour is broken, the right step is rolling back the release,
+         not a filter.
+      3. **Raise the minimum level for this category only.** Add the key `Logging:LogLevel:Shop.Orders.SyncWorker`
+         with the value `Warning` (the category name comes from step 1). For each provider the rule with the longest
+         matching category prefix is chosen, so other categories keep writing `Information`. But the rules of a
+         provider-specific section, such as `Logging:Console:LogLevel`, take precedence over the general
+         `Logging:LogLevel`, even when that section sets only `Default`: if such a section exists, add the rule there
+         as well. Do not lower `Default` for the whole service: you lose context you will need in the next incident.
+      4. **Apply it without a redeploy.** Rules from the `Logging` configuration section are re-read at run time
+         when their source reloads, so the new rule takes effect without a restart if the source supports it: a JSON
+         file with `reloadOnChange: true` (this is how the default host adds `appsettings.json`), a configuration
+         file on a mounted volume, or an external source with refresh, such as Azure App Configuration. With a
+         volume, check that the change actually reaches the process: a Kubernetes ConfigMap mounted with `subPath`
+         is not updated, and the file watcher can miss a file swapped through a symbolic link; in that case
+         `DOTNET_USE_POLLING_FILE_WATCHER` may help. Environment variables and command-line arguments are read at
+         startup, so changing them requires restarting the instances, and `AddFilter` rules in code require a new
+         release. After the change, check on the graph that the flow of entries dropped: that is also the proof that
+         the rule was applied.
+      5. **If the application cannot be changed quickly,** drop this category's entries in the delivery pipeline
+         (the collection agent, an OpenTelemetry Collector) before the backend. That stops the bill from growing, but
+         the service still spends CPU and network on formatting and sending.
+      6. **Afterwards, fix the code itself.** Move the entry to `Debug` or `Trace`, write one summary entry per batch
+         instead of one per item, and if the entry is really counting events, replace it with a `Counter<T>` from
+         `System.Diagnostics.Metrics`. Once the fix is deployed, remove the temporary rule from configuration.
+      7. **Prevent a repeat.**
+         - An alert on a sharp growth of log volume per service and category, and a cost alert in the log backend.
+         - A code review rule: `Information` is for significant events, not for every item in a loop or every
+           polling iteration.
+         - Comparing the log volume of the next and the previous version during a gradual rollout, and the number of
+           entries per request in a load test.
+         - A blameless incident review with these actions as tasks.
+    explanation: |
+      Measure first, act second: without grouping by category and template it is easy to silence the wrong thing or
+      miss that the log is only the visible part of a defect.
+
+      A category filter is the narrowest and cheapest tool. The level check runs in the application before the
+      entry is formatted and sent, so it saves not only storage but also CPU, network and backend ingestion. It can
+      be applied in minutes, while a release with a fix goes through the pipeline, review and rollout, and every
+      minute of waiting costs money. That is exactly why log levels should live in reloadable configuration, not in
+      code, and why the team should know in advance which configuration source really reloads in its environment.
+
+      But the filter is a temporary measure: it hides the symptom and stays in configuration as non-obvious
+      knowledge. So the call itself gets fixed, and volume alerts and review rules address the reason why the bill,
+      not the monitoring, noticed the problem first.
+    linkTitles:
+      - "Logging in C# and .NET"
+      - "Configuration providers in .NET"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

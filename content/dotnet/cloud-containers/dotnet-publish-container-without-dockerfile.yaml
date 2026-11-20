@@ -1,0 +1,124 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RM24GCA4H6D0CGMH87
+slug: dotnet-publish-container-without-dockerfile
+stack: dotnet
+topic: cloud-containers
+level: middle
+type: open
+grading: self
+tags: [docker, containers, dotnet-publish, publish-container, oci-image]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/core/containers/sdk-publish
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/containers/publish-configuration
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/docker/container-images
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что делает dotnet publish с целью PublishContainer и когда всё ещё нужен Dockerfile?
+    prompt: |
+      Начиная с .NET 8 SDK контейнерный образ приложения можно собрать без Dockerfile, например командой
+      `dotnet publish --os linux --arch x64 -t:PublishContainer`.
+
+      Что именно делает эта команда, как SDK выбирает базовый образ и в каких случаях Dockerfile всё равно нужен?
+    hint: Какие инструкции Dockerfile сводятся к метаданным образа и копированию файлов, а какие требуют выполнить команду внутри собираемого образа?
+    answer: |
+      - **Что делает.** SDK публикует приложение, как обычный `dotnet publish`, а затем сам собирает образ в формате
+        OCI: берёт базовый образ из реестра, добавляет поверх него слой с результатом публикации и записывает
+        конфигурацию образа (точку входа, рабочий каталог, пользователя, порты, переменные окружения). Ни Dockerfile,
+        ни `docker build` не используются.
+      - **Куда кладёт.** По умолчанию образ загружается в локальный демон Docker (или Podman), и только для этого
+        нужен запущенный контейнерный движок. Со свойством `ContainerRegistry` SDK отправляет образ прямо в реестр,
+        а с `ContainerArchiveOutputPath` сохраняет его в архив `.tar.gz`, и движок не нужен.
+      - **Базовый образ.** Если `ContainerBaseImage` не задан, SDK выбирает образ по проекту: для автономного
+        (self-contained) приложения - `mcr.microsoft.com/dotnet/runtime-deps`, для проекта ASP.NET Core -
+        `mcr.microsoft.com/dotnet/aspnet`, для остальных проектов - `mcr.microsoft.com/dotnet/runtime`. Тег выводится
+        из числовой части `TargetFramework`, например `10.0` для `net10.0`. Свойство `ContainerBaseImage` задаёт любой
+        другой образ, а `ContainerFamily` выбирает вариант того же образа, например `alpine`: значение добавляется к тегу.
+      - **Настройка.** Имя, теги, порты, переменные окружения и пользователь задаются свойствами и элементами MSBuild:
+        `ContainerRepository`, `ContainerImageTags`, `ContainerPort`, `ContainerEnvironmentVariable`, `ContainerUser`.
+      - **Когда нужен Dockerfile.** У SDK нет аналога инструкции `RUN`: он не выполняет команды внутри образа. Если
+        нужно доустановить пакеты ОС (шрифты, клиентские утилиты), создать в образе каталоги или файлы вне результата
+        публикации или выполнить скрипт во время сборки образа, нужен Dockerfile. Частый компромисс - собрать через
+        Dockerfile свой базовый образ с нужными пакетами, указать его в `ContainerBaseImage`, а приложение по-прежнему
+        публиковать через SDK.
+    explanation: |
+      Образ контейнера - это набор слоёв файловой системы плюс JSON-конфигурация. Для типичного .NET-приложения
+      Dockerfile делает немного: берёт официальный образ среды выполнения, копирует результат `dotnet publish` и задаёт
+      `ENTRYPOINT`, `WORKDIR`, `USER` и `EXPOSE`. Всё это SDK умеет сделать сам: файлы публикации он упаковывает в слой,
+      а конфигурацию пишет из свойств проекта. Поэтому сборка образа становится частью MSBuild и не требует
+      контейнерного движка, пока образ не нужно загрузить в локальный Docker.
+
+      Граница проходит по `RUN`. Чтобы выполнить `apt-get install` или любой скрипт, движок сборки, например BuildKit,
+      должен запустить контейнер из промежуточного образа и зафиксировать изменения его файловой системы. SDK этого не
+      делает, поэтому всё, что требует команд внутри образа, остаётся за Dockerfile. Шаги, которые выполняются до
+      публикации на машине сборки, например сборку фронтенда, можно встроить в MSBuild, и для них Dockerfile не нужен.
+
+      Две детали. Образы .NET 8 и более поздних версий содержат непривилегированного пользователя `app`, и для проектов
+      с целевой платформой .NET 8 и выше на базовых образах Microsoft SDK по умолчанию записывает в конфигурацию образа
+      именно этого пользователя, поэтому контейнер запускается не от root; переопределяется это свойством
+      `ContainerUser`. Кроме того, в первых версиях .NET 8 SDK (8.0.1xx) проекты, кроме веб-проектов, должны были явно
+      включать `EnableSdkContainerSupport`; в более поздних версиях SDK публикация в контейнер доступна для всех типов
+      проектов. Сказанное верно и для .NET 10 SDK.
+    linkTitles:
+      - "Контейнеризация приложения .NET с помощью dotnet publish"
+      - "Справочник по настройке публикации .NET-приложения в контейнер"
+      - "Контейнерные образы .NET"
+  en:
+    title: What does dotnet publish with the PublishContainer target do, and when do you still need a Dockerfile?
+    prompt: |
+      Starting with the .NET 8 SDK you can build a container image of an app without a Dockerfile, for example with
+      `dotnet publish --os linux --arch x64 -t:PublishContainer`.
+
+      What exactly does this command do, how does the SDK choose the base image, and when do you still need a Dockerfile?
+    hint: Which Dockerfile instructions come down to image metadata and copying files, and which ones need a command to run inside the image being built?
+    answer: |
+      - **What it does.** The SDK publishes the app like a normal `dotnet publish`, then builds an OCI image itself:
+        it takes the base image from a registry, adds a layer with the publish output on top and writes the image
+        configuration (entry point, working directory, user, ports, environment variables). Neither a Dockerfile nor
+        `docker build` is involved.
+      - **Where it goes.** By default the image is loaded into the local Docker (or Podman) daemon, and only that step
+        needs a running container engine. With the `ContainerRegistry` property the SDK pushes the image straight to a
+        registry, and with `ContainerArchiveOutputPath` it writes a `.tar.gz` archive, with no engine needed.
+      - **Base image.** When `ContainerBaseImage` is not set, the SDK picks the image from the project:
+        `mcr.microsoft.com/dotnet/runtime-deps` for a self-contained app, `mcr.microsoft.com/dotnet/aspnet` for an
+        ASP.NET Core project, and `mcr.microsoft.com/dotnet/runtime` for other projects. The tag is inferred from the
+        numeric part of `TargetFramework`, for example `10.0` for `net10.0`. The `ContainerBaseImage` property sets any
+        other image, and `ContainerFamily` selects a variant of the same image, such as `alpine`: the value is appended
+        to the tag.
+      - **Configuration.** Name, tags, ports, environment variables and user are MSBuild properties and items:
+        `ContainerRepository`, `ContainerImageTags`, `ContainerPort`, `ContainerEnvironmentVariable`, `ContainerUser`.
+      - **When you need a Dockerfile.** The SDK has no equivalent of the `RUN` instruction: it does not run commands
+        inside the image. If you need extra OS packages (fonts, client tools), directories or files in the image
+        outside the publish output, or a script that runs during the image build, you need a Dockerfile. A common
+        compromise is to build your own base image with the needed packages from a Dockerfile, set it as
+        `ContainerBaseImage`, and keep publishing the app through the SDK.
+    explanation: |
+      A container image is a set of file system layers plus a JSON configuration. For a typical .NET app a Dockerfile
+      does little: it takes the official runtime image, copies the `dotnet publish` output and sets `ENTRYPOINT`,
+      `WORKDIR`, `USER` and `EXPOSE`. The SDK can do all of that on its own: it packs the publish output into a layer
+      and writes the configuration from project properties. Building the image becomes part of MSBuild and needs no
+      container engine until the image has to be loaded into the local Docker.
+
+      The line is drawn at `RUN`. To run `apt-get install` or any script, a build engine such as BuildKit has to start a
+      container from an intermediate image and commit the changes to its file system. The SDK does not do that, so
+      anything that needs commands inside the image stays with a Dockerfile. Steps that run on the build machine before
+      publishing, such as a front-end build, can be wired into MSBuild and need no Dockerfile.
+
+      Two details. .NET 8 and later images include the non-root `app` user, and for projects targeting .NET 8 or later
+      on Microsoft base images the SDK writes that user into the image configuration by default, so the container does
+      not run as root; you override it with the `ContainerUser` property. Also, in the first .NET 8 SDK versions
+      (8.0.1xx) projects other than web projects had to enable `EnableSdkContainerSupport` explicitly; later SDK
+      versions support container publishing for all project types. All of this also holds for the .NET 10 SDK.
+    linkTitles:
+      - "Containerize a .NET app with dotnet publish"
+      - "Containerize a .NET app reference (publish configuration)"
+      - ".NET container images"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

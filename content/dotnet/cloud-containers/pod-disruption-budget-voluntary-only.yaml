@@ -1,0 +1,109 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RMCEG8JX2D0MQC9X48
+slug: pod-disruption-budget-voluntary-only
+stack: dotnet
+topic: cloud-containers
+level: senior
+type: single
+grading: auto
+tags: [kubernetes, pod-disruption-budget, eviction, availability]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+links:
+  - url: https://kubernetes.io/docs/concepts/workloads/pods/disruptions/
+    lang: en
+    kind: docs
+  - url: https://kubernetes.io/docs/concepts/scheduling-eviction/api-eviction/
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: От каких событий защищает PodDisruptionBudget с minAvailable 2 сервис из трёх реплик?
+    prompt: |
+      API на ASP.NET Core работает в Kubernetes как Deployment из трёх реплик. Для него создан
+      `PodDisruptionBudget` с `minAvailable: 2` и селектором на эти поды.
+
+      Какое из событий этот бюджет не позволит довести до состояния, когда доступных подов меньше двух?
+    hint: Кто и как удаляет под в каждом из этих случаев и спрашивает ли он при этом сервер API о бюджете?
+    options:
+      a: "Слив узла через `kubectl drain` при обновлении пула узлов"
+      b: "Отказ узла: виртуальная машина пропала из-за сбоя оборудования"
+      c: "Завершение процесса .NET ядром (OOM kill) при превышении лимита памяти контейнера"
+      d: "Последовательное обновление (rolling update) самого Deployment на новый образ"
+      e: "Удаление подов командой `kubectl delete pod`"
+    optionExplanations:
+      b: "Отказ узла - непредвиденное нарушение: под исчезает без какого-либо вызова API, и запрещать нечего. Бюджет его не предотвращает, хотя пропавший под учитывается при последующих вытеснениях."
+      c: "OOM kill выполняет ядро, после чего kubelet перезапускает контейнер. Eviction API в этом не участвует, поэтому бюджет не проверяется."
+      d: "Поды, недоступные во время обновления, учитываются в бюджете, но сам контроллер Deployment при обновлении бюджетом не ограничивается: бюджет не проверяется, и доступность во время обновления определяют только `maxUnavailable` и `maxSurge` стратегии обновления."
+      e: "Прямое удаление пода - добровольное действие, но оно обходит бюджет: PodDisruptionBudget проверяется только при вытеснении через Eviction API."
+    answer: "Слив узла через `kubectl drain` при обновлении пула узлов."
+    explanation: |
+      `PodDisruptionBudget` ограничивает только добровольные нарушения, которые проходят через Eviction API.
+      При запросе на вытеснение сервер API проверяет бюджет: если после вытеснения доступных подов останется меньше
+      `minAvailable`, запрос отклоняется с кодом 429. `kubectl drain` вытесняет поды с узла именно через этот API и
+      периодически повторяет отклонённые запросы. С тремя репликами и `minAvailable: 2` бюджет разрешает вытеснить
+      только один под; следующее вытеснение пройдёт, когда замена станет готовой.
+
+      Документация Kubernetes рекомендует администраторам кластера и облачным провайдерам использовать инструменты,
+      которые тоже вызывают Eviction API, а не удаляют поды напрямую. Учитывают ли бюджет автомасштабирование и
+      обновления узлов в вашем кластере, нужно проверить в документации провайдера.
+
+      Непредвиденные нарушения (отказ узла, OOM kill, падение процесса) не проходят через API, поэтому бюджет не
+      может их остановить. Он лишь учитывает их: если один под уже недоступен из-за сбоя, следующее вытеснение
+      будет отклонено. Прямое удаление подов или Deployment и последовательное обновление Deployment бюджет тоже
+      обходят. Против непредвиденных сбоев защищают запас реплик, их распределение по узлам и зонам
+      (`topologySpreadConstraints`, anti-affinity) и проверки готовности.
+    linkTitles:
+      - "Нарушения работы подов (документация Kubernetes)"
+      - "Вытеснение через API (документация Kubernetes)"
+  en:
+    title: Which events does a PodDisruptionBudget with minAvailable 2 protect a three-replica service from?
+    prompt: |
+      An ASP.NET Core API runs in Kubernetes as a Deployment of three replicas. A `PodDisruptionBudget` with
+      `minAvailable: 2` and a selector for these Pods has been created.
+
+      Which of these events will the budget prevent from leaving fewer than two available Pods?
+    hint: Who removes the Pod in each of these cases, and how, and does that component ask the API server about the budget?
+    options:
+      a: "Draining a node with `kubectl drain` during a node pool upgrade"
+      b: "A node failure: the virtual machine disappears because of a hardware fault"
+      c: "The kernel killing the .NET process (OOM kill) when it exceeds the container memory limit"
+      d: "A rolling update of the Deployment itself to a new image"
+      e: "Deleting Pods with `kubectl delete pod`"
+    optionExplanations:
+      b: "A node failure is an involuntary disruption: the Pod disappears without any API call, so there is nothing to refuse. The budget does not prevent it, although the lost Pod counts against later evictions."
+      c: "An OOM kill is done by the kernel, after which the kubelet restarts the container. The Eviction API is not involved, so the budget is not checked."
+      d: "Pods that are unavailable during the update count against the budget, but the Deployment controller itself is not limited by it during an update: the budget is not consulted, and availability during the update is governed only by `maxUnavailable` and `maxSurge` of the update strategy."
+      e: "Deleting a Pod directly is a voluntary action, but it bypasses the budget: a PodDisruptionBudget is checked only for eviction through the Eviction API."
+    answer: "Draining a node with `kubectl drain` during a node pool upgrade."
+    explanation: |
+      A `PodDisruptionBudget` limits only voluntary disruptions that go through the Eviction API. On an eviction
+      request the API server checks the budget: if fewer than `minAvailable` available Pods would remain, the request
+      is rejected with status 429. `kubectl drain` evicts the Pods of a node through exactly this API and periodically
+      retries rejected requests. With three replicas and `minAvailable: 2`, the budget allows only one Pod to be
+      evicted; the next eviction succeeds once the replacement becomes ready.
+
+      The Kubernetes docs recommend that cluster administrators and hosting providers use tools that also call the
+      Eviction API instead of deleting Pods directly. Whether node autoscaling and node upgrades in your cluster
+      respect the budget is something to check in your provider's documentation.
+
+      Involuntary disruptions (a node failure, an OOM kill, a process crash) do not go through the API, so the budget
+      cannot stop them. It only counts them: if one Pod is already unavailable because of a failure, the next eviction
+      is rejected. Deleting Pods or the Deployment directly and a rolling update of the Deployment also bypass the
+      budget. Protection against involuntary failures comes from spare replicas, spreading them across nodes and zones
+      (`topologySpreadConstraints`, anti-affinity) and readiness probes.
+    linkTitles:
+      - "Disruptions (Kubernetes docs)"
+      - "API-initiated eviction (Kubernetes docs)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

@@ -1,0 +1,136 @@
+{
+  "topic": "concurrency",
+  "stubs": [
+    {
+      "slug": "interlocked-add-exchange-return-values",
+      "level": "junior",
+      "type": "output",
+      "subtopic": "Interlocked",
+      "angle": "What does a snippet print that calls Interlocked.Increment, Interlocked.Add and Interlocked.Exchange on one int and prints each return value and the final value?",
+      "answerHinge": "Increment and Add return the new value after the operation, while Exchange returns the value that was stored before it, so the output is 1 6 6 0.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/api/system.threading.interlocked.add",
+        "https://learn.microsoft.com/en-us/dotnet/api/system.threading.interlocked.exchange"
+      ]
+    },
+    {
+      "slug": "channel-complete-drains-buffered-items",
+      "level": "middle",
+      "type": "output",
+      "subtopic": "Channels",
+      "angle": "What does a snippet print that writes one item to an unbounded channel, calls Writer.Complete, tries a second TryWrite, drains the reader with TryRead and then prints Reader.Completion.IsCompleted?",
+      "answerHinge": "After Complete, TryWrite returns false, but items already buffered are still readable, and Reader.Completion completes only once the buffer has been drained, so the output is False, the first item, and True.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/api/system.threading.channels.channelwriter-1.complete",
+        "https://learn.microsoft.com/en-us/dotnet/core/extensions/channels"
+      ]
+    },
+    {
+      "slug": "concurrentdictionary-indexer-increment-lost-updates",
+      "level": "middle",
+      "type": "find-bug",
+      "subtopic": "Concurrent collections and race conditions",
+      "angle": "Find the line in a Parallel.For word counter where dict[key] = dict[key] \u002B 1 on a ConcurrentDictionary\u003Cstring, int\u003E loses counts.",
+      "answerHinge": "ConcurrentDictionary makes each single call thread-safe, but a read through the indexer followed by a write is a compound read-modify-write that races, so the fix is an atomic AddOrUpdate call.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/api/system.collections.concurrent.concurrentdictionary-2.addorupdate",
+        "https://learn.microsoft.com/en-us/dotnet/standard/collections/thread-safe/how-to-add-and-remove-items"
+      ]
+    },
+    {
+      "slug": "threading-timer-callbacks-overlap",
+      "level": "middle",
+      "type": "single",
+      "subtopic": "Thread pool",
+      "angle": "What happens when a System.Threading.Timer has a 1-second period and its callback sometimes takes 3 seconds?",
+      "answerHinge": "The timer queues the callback to the thread pool on every period regardless of whether the previous call finished, so callbacks can run at the same time on several pool threads unless you use a one-shot timer that is rescheduled or PeriodicTimer.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/api/system.threading.timer",
+        "https://learn.microsoft.com/en-us/dotnet/api/system.threading.periodictimer"
+      ]
+    },
+    {
+      "slug": "readerwriterlockslim-write-inside-read-lock",
+      "level": "senior",
+      "type": "find-bug",
+      "subtopic": "Locks",
+      "angle": "Find the line that makes a cache built on ReaderWriterLockSlim throw LockRecursionException when a missing key is added while the read lock is held.",
+      "answerHinge": "With the default LockRecursionPolicy.NoRecursion a thread holding a read lock cannot call EnterWriteLock, and upgrading requires EnterUpgradeableReadLock instead of EnterReadLock.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/api/system.threading.readerwriterlockslim",
+        "https://learn.microsoft.com/en-us/dotnet/api/system.threading.readerwriterlockslim.enterupgradeablereadlock"
+      ]
+    },
+    {
+      "slug": "spinlock-vs-monitor-when-spinning-pays",
+      "level": "senior",
+      "type": "open",
+      "subtopic": "Locks",
+      "angle": "How do SpinLock and SpinWait differ from Monitor-based lock, and when does spinning instead of blocking actually pay off?",
+      "answerHinge": "Spinning burns CPU and pays only when the lock is held for less time than a context switch costs and contention is low, and Monitor already spins briefly before blocking, so SpinLock is justified only by measurements on very short critical sections.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/standard/threading/spinlock",
+        "https://learn.microsoft.com/en-us/dotnet/api/system.threading.spinwait"
+      ]
+    },
+    {
+      "slug": "monitor-wait-releases-and-reacquires-lock",
+      "level": "senior",
+      "type": "single",
+      "subtopic": "Locks",
+      "angle": "What does Monitor.Wait do with the lock in a bounded producer-consumer buffer, and why must the condition be checked in a while loop?",
+      "answerHinge": "Monitor.Wait releases the lock, waits until it is pulsed, and reacquires the lock before returning, so another thread may have changed the state in between and the condition has to be rechecked in a loop.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/api/system.threading.monitor.wait",
+        "https://learn.microsoft.com/en-us/dotnet/api/system.threading.monitor"
+      ]
+    },
+    {
+      "slug": "parallel-loops-on-request-path-policy",
+      "level": "lead",
+      "type": "open",
+      "subtopic": "Thread pool",
+      "angle": "Developers keep adding Parallel.ForEach and Task.Run fan-out inside ASP.NET Core request handlers to make endpoints faster: what policy do you set for the team and why?",
+      "answerHinge": "Request handlers already run concurrently on the one shared thread pool, so per-request parallelism multiplies thread demand and causes starvation under load, which means parallelism on the request path needs a bounded degree (Parallel.ForEachAsync with MaxDegreeOfParallelism) and evidence from a load test.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/api/system.threading.tasks.parallel.foreachasync",
+        "https://learn.microsoft.com/en-us/dotnet/standard/parallel-programming/potential-pitfalls-in-data-and-task-parallelism"
+      ]
+    },
+    {
+      "slug": "shared-state-review-default-guideline",
+      "level": "lead",
+      "type": "single",
+      "subtopic": "Race conditions",
+      "angle": "Which default guideline for shared mutable state should a lead put into the team\u0027s code review checklist?",
+      "answerHinge": "Prefer not sharing or not mutating (confinement, immutable snapshots), then ready-made thread-safe types, then simple locks, and allow hand-written lock-free code only with profiling evidence and stress tests.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/standard/threading/managed-threading-best-practices"
+      ]
+    },
+    {
+      "slug": "team-lock-discipline-rules",
+      "level": "lead",
+      "type": "multi",
+      "subtopic": "Locks",
+      "angle": "Which rules for using lock should a team adopt to reduce deadlocks and accidental lock sharing in a large codebase?",
+      "answerHinge": "The sound rules are a private dedicated lock object, a consistent global order when several locks are taken, and no callbacks, events or IO under a lock, while lock(this), lock on a string literal and relying on reentrancy to nest locks freely are the wrong options.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/statements/lock",
+        "https://learn.microsoft.com/en-us/dotnet/standard/threading/managed-threading-best-practices"
+      ]
+    },
+    {
+      "slug": "cpu-bound-work-isolation-from-request-thread-pool",
+      "level": "architect",
+      "type": "open",
+      "subtopic": "Threads and the thread pool",
+      "angle": "A platform runs CPU-heavy report generation and blocking legacy SDK calls in the same processes that serve latency-sensitive APIs: how do you decide where this work should run across services?",
+      "answerHinge": "A process has one thread pool, so CPU-bound or blocking work competes with request handling for the same threads and cores, and isolating it (dedicated threads at minimum, a separate worker service fed by a queue for independent scaling) protects API latency at the cost of more deployment units.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/standard/threading/the-managed-thread-pool",
+        "https://learn.microsoft.com/en-us/dotnet/core/extensions/workers"
+      ]
+    }
+  ]
+}

@@ -1,5 +1,6 @@
 """Tests for the content wave driver. Run: python -m unittest discover -s tools/content-wave -v"""
 
+import argparse
 import contextlib
 import io
 import json
@@ -11,6 +12,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -167,6 +169,79 @@ class LedgerTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("budget --record", message)
 
+    def test_actual_spent_sums_utc_days(self):
+        # The server's figure restarts at midnight UTC; the wave total is the sum of each day's last reading.
+        ledger = {
+            "readings": [{"utc": "2026-11-19T21:00:00Z", "usd": 80, "baselineUsd": 0, "outstandingAtReading": []},
+                         {"utc": "2026-11-19T23:00:00Z", "usd": 89, "baselineUsd": 0, "outstandingAtReading": []},
+                         {"utc": "2026-11-20T01:00:00Z", "usd": 0, "baselineUsd": 0, "outstandingAtReading": []}],
+            "submits": [],
+        }
+        self.assertAlmostEqual(89, wave.actual_spent(ledger))
+
+    def test_actual_spent_adds_a_batch_submitted_after_the_reading_to_non_ledger_spend(self):
+        # The reading (100) includes 20 of spend that is not in the ledger; batch Y comes after it: additive, not max.
+        ledger = {
+            "readings": [{"utc": "2026-11-19T10:00:00Z", "usd": 100, "baselineUsd": 0, "outstandingAtReading": []}],
+            "submits": [{"batchId": "y", "estimateUsd": 40, "status": "collected", "dayUtc": "2026-11-19",
+                         "submittedUtc": "2026-11-19T11:00:00Z", "actualUsd": 30}],
+        }
+        self.assertAlmostEqual(130, wave.actual_spent(ledger))
+
+    def test_actual_spent_does_not_recount_a_batch_collected_before_the_reading(self):
+        ledger = {
+            "readings": [{"utc": "2026-11-19T10:00:00Z", "usd": 100, "baselineUsd": 0, "outstandingAtReading": []}],
+            "submits": [{"batchId": "x", "estimateUsd": 40, "status": "collected", "dayUtc": "2026-11-19",
+                         "submittedUtc": "2026-11-19T09:00:00Z", "actualUsd": 30}],
+        }
+        self.assertAlmostEqual(100, wave.actual_spent(ledger))
+
+    def test_actual_spent_batch_held_at_the_reading_and_collected_next_day_is_booked_to_its_submit_day(self):
+        # Day D reading 89 holds batch A at its estimate 80, so 9 is non-ledger spend; A's actual 60 is D spend.
+        ledger = {
+            "readings": [{"utc": "2026-11-19T23:00:00Z", "usd": 89, "baselineUsd": 0, "outstandingAtReading": ["a"]},
+                         {"utc": "2026-11-20T01:00:00Z", "usd": 0, "baselineUsd": 0, "outstandingAtReading": []}],
+            "submits": [{"batchId": "a", "estimateUsd": 80, "status": "collected", "dayUtc": "2026-11-19",
+                         "submittedUtc": "2026-11-19T22:00:00Z", "collectedUtc": "2026-11-20T00:30:00Z",
+                         "actualUsd": 60}],
+        }
+        self.assertAlmostEqual(69, wave.actual_spent(ledger))
+
+    def test_actual_spent_batch_submitted_after_the_last_reading_of_its_day_and_collected_later(self):
+        ledger = {
+            "readings": [{"utc": "2026-11-19T23:00:00Z", "usd": 89.56, "baselineUsd": 0, "outstandingAtReading": []},
+                         {"utc": "2026-11-20T01:00:00Z", "usd": 0, "baselineUsd": 0, "outstandingAtReading": []}],
+            "submits": [{"batchId": "z", "estimateUsd": 2, "status": "collected", "dayUtc": "2026-11-19",
+                         "submittedUtc": "2026-11-19T23:30:00Z", "collectedUtc": "2026-11-20T00:10:00Z",
+                         "actualUsd": 0.51}],
+        }
+        self.assertAlmostEqual(90.07, wave.actual_spent(ledger))
+
+    def test_actual_spent_day_without_a_reading_counts_collected_actuals(self):
+        ledger = {
+            "readings": [{"utc": "2026-11-20T01:00:00Z", "usd": 5, "baselineUsd": 0, "outstandingAtReading": []}],
+            "submits": [{"batchId": "z", "estimateUsd": 2, "status": "collected", "dayUtc": "2026-11-19",
+                         "submittedUtc": "2026-11-19T23:30:00Z", "actualUsd": 0.5}],
+        }
+        self.assertAlmostEqual(5.5, wave.actual_spent(ledger))
+
+    def test_ledger_check_requires_a_reading_of_the_current_utc_day(self):
+        ledger = {
+            "readings": [{"utc": "2026-11-19T10:00:00Z", "usd": 10, "baselineUsd": 0, "outstandingAtReading": []}],
+            "submits": [],
+        }
+        ok, message = wave.ledger_check(ledger, 1, 0, 146, 5, today="2026-11-20")
+        self.assertFalse(ok)
+        self.assertEqual("no budget reading for today (UTC); run review_budget and budget --record first", message)
+        ok, _ = wave.ledger_check(ledger, 1, 0, 146, 5, today="2026-11-19")
+        self.assertTrue(ok)
+
+    def test_baseline_does_not_carry_into_a_new_utc_day(self):
+        ledger = {"readings": [{"utc": "2026-11-19T10:00:00Z", "usd": 12, "baselineUsd": 10,
+                                "outstandingAtReading": []}]}
+        self.assertEqual(10, wave._last_baseline(ledger, "2026-11-19"))
+        self.assertEqual(0, wave._last_baseline(ledger, "2026-11-20"))
+
     def test_ledger_baseline_excludes_pre_wave_spend(self):
         ledger = {
             "readings": [{"utc": "2026-11-13T10:00:00Z", "usd": 12, "baselineUsd": 10, "outstandingAtReading": []}],
@@ -183,6 +258,96 @@ class LedgerTests(unittest.TestCase):
         self.assertTrue(any("cutoff" in p for p in wave.submit_gate(targets, ledger, 10, late)))
         self.assertTrue(any("per-submit" in p for p in wave.submit_gate(targets, ledger, 51, early)))
         self.assertEqual([], wave.submit_gate(targets, ledger, 10, early))
+
+    def test_submit_gate_ignores_a_reading_of_an_earlier_day_and_asks_for_a_new_one(self):
+        targets = {"capPerSubmitUsd": 50, "capPerDayUsd": 150}
+        ledger = {"readings": [{"utc": "2026-11-12T10:00:00Z", "usd": 140, "baselineUsd": 0,
+                                "outstandingAtReading": []}], "submits": []}
+        problems = wave.submit_gate(targets, ledger, 10, wave.parse_utc("2026-11-13T01:00:00Z"))
+        self.assertEqual(["no budget reading for today (UTC); run review_budget and budget --record first"],
+                         problems)
+        self.assertEqual([wave.NO_TODAY_READING],
+                         wave.submit_gate(targets, {"readings": [], "submits": []}, 10,
+                                          wave.parse_utc("2026-11-13T01:00:00Z")))
+
+    def test_submit_gate_counts_batches_submitted_and_collected_after_the_reading(self):
+        targets = {"capPerSubmitUsd": 50, "capPerDayUsd": 150}
+        now = wave.parse_utc("2026-11-13T15:00:00Z")
+        ledger = {"readings": [{"utc": "2026-11-13T10:00:00Z", "usd": 0, "baselineUsd": 0,
+                                "outstandingAtReading": []}],
+                  "submits": [{"batchId": f"b{i}", "estimateUsd": 50, "status": "collected", "dayUtc": "2026-11-13",
+                               "submittedUtc": f"2026-11-13T1{i}:30:00Z", "actualUsd": 50} for i in range(1, 3)]}
+        self.assertEqual([], wave.submit_gate(targets, ledger, 50, now))
+        ledger["submits"].append({"batchId": "b3", "estimateUsd": 50, "status": "collected",
+                                  "dayUtc": "2026-11-13", "submittedUtc": "2026-11-13T13:30:00Z", "actualUsd": 50})
+        problems = wave.submit_gate(targets, ledger, 50, now)
+        self.assertTrue(any("per-day cap" in p for p in problems), problems)
+
+    def test_submit_gate_does_not_double_count_a_batch_collected_before_the_reading(self):
+        targets = {"capPerSubmitUsd": 50, "capPerDayUsd": 150}
+        ledger = {"readings": [{"utc": "2026-11-13T12:00:00Z", "usd": 100, "baselineUsd": 0,
+                                "outstandingAtReading": []}],
+                  "submits": [{"batchId": "b1", "estimateUsd": 50, "status": "collected", "dayUtc": "2026-11-13",
+                               "submittedUtc": "2026-11-13T11:00:00Z", "actualUsd": 50}]}
+        self.assertEqual([], wave.submit_gate(targets, ledger, 50, wave.parse_utc("2026-11-13T15:00:00Z")))
+
+
+class BudgetCommandTests(unittest.TestCase):
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        (self.dir / "targets.json").write_text(json.dumps(
+            {"budgetUsd": 300, "budgetFloorUsd": 0, "capPerSubmitUsd": 100, "capPerDayUsd": 250}), encoding="utf-8")
+        (self.dir / "ledger.json").write_text(json.dumps({"readings": [], "submits": []}), encoding="utf-8")
+
+    def run_budget(self, now, **kwargs):
+        args = argparse.Namespace(**{"record": None, "baseline": False, "force_baseline": False, "estimate": None,
+                                     "stage": None, **kwargs})
+        moment = wave.parse_utc(now)
+        out = io.StringIO()
+        with mock.patch.object(wave, "utc_now", return_value=moment), contextlib.redirect_stdout(out):
+            code = wave.cmd_budget(args, self.dir)
+        return code, out.getvalue()
+
+    def ledger(self):
+        return json.loads((self.dir / "ledger.json").read_text(encoding="utf-8"))
+
+    def test_baseline_does_not_carry_into_the_next_day_through_cmd_budget(self):
+        self.run_budget("2026-11-19T10:00:00Z", record=12.0, baseline=True)
+        self.run_budget("2026-11-19T11:00:00Z", record=15.0)
+        self.run_budget("2026-11-20T01:00:00Z", record=3.0)
+        baselines = [r["baselineUsd"] for r in self.ledger()["readings"]]
+        self.assertEqual([12.0, 12.0, 0.0], baselines)
+
+    def test_baseline_is_refused_when_a_submit_of_today_exists_unless_forced(self):
+        self.run_budget("2026-11-19T10:00:00Z", record=12.0)
+        ledger = self.ledger()
+        ledger["submits"] = [{"batchId": "b1", "estimateUsd": 5, "status": "submitted", "dayUtc": "2026-11-19"}]
+        (self.dir / "ledger.json").write_text(json.dumps(ledger), encoding="utf-8")
+        code, text = self.run_budget("2026-11-19T12:00:00Z", record=40.0, baseline=True)
+        self.assertEqual(1, code)
+        self.assertIn("--force-baseline", text)
+        self.assertEqual(1, len(self.ledger()["readings"]))
+        code, _ = self.run_budget("2026-11-19T12:00:00Z", record=40.0, baseline=True, force_baseline=True)
+        self.assertEqual(0, code)
+        self.assertEqual(40.0, self.ledger()["readings"][-1]["baselineUsd"])
+        # A submit of an earlier day does not block a baseline.
+        code, _ = self.run_budget("2026-11-20T01:00:00Z", record=2.0, baseline=True)
+        self.assertEqual(0, code)
+
+    def test_estimate_without_a_reading_of_today_is_refused(self):
+        self.run_budget("2026-11-19T10:00:00Z", record=12.0)
+        code, text = self.run_budget("2026-11-20T01:00:00Z", estimate=10.0)
+        self.assertEqual(1, code)
+        self.assertIn("no budget reading for today (UTC)", text)
+
+    def test_one_stamp_serves_the_reading_and_its_baseline_day(self):
+        self.run_budget("2026-11-19T10:00:00Z", record=12.0, baseline=True)
+        with mock.patch.object(wave, "utc_stamp", side_effect=["2026-11-19T23:59:59Z", "2026-11-20T00:00:00Z"]):
+            self.run_budget("2026-11-19T23:59:59Z", record=15.0)
+        reading = self.ledger()["readings"][-1]
+        self.assertEqual("2026-11-19T23:59:59Z", reading["utc"])
+        self.assertEqual(12.0, reading["baselineUsd"])
 
 
 class TaskFileTests(unittest.TestCase):
@@ -1441,6 +1606,16 @@ class RepairTests(unittest.TestCase):
             env.cleanup()
 
 
+LINKS_BLOCK = (
+    "links:\n  - url: https://a.example/old\n    lang: en\n    kind: docs\n"
+    "locales:\n  en:\n    linkTitles:\n      - \"Old title\"\n")
+
+LINK_DOC_TEXT = (
+    "slug: s\nlinks:\n  - url: https://a.example/old\n    lang: en\n    kind: docs\n"
+    "locales:\n  en:\n    answer: |\n      Body text\n    linkTitles:\n      - \"Old title\"\n"
+    "  ru:\n    answer: x\nmeta:\n  authors: [a]\n  verified: 2026-11-13\n")
+
+
 class FinalizeTests(unittest.TestCase):
     def test_finalize_refuses_unresolved(self):
         env = VerifyEnv()
@@ -1482,6 +1657,185 @@ class FinalizeTests(unittest.TestCase):
             self.assertEqual([record["path"]], edited)
             self.assertEqual("owner-edited", record["status"])
             self.assertIn("verified: 2026-11-20", path.read_text(encoding="utf-8"))
+        finally:
+            env.cleanup()
+
+    def _verify_pass_with_links(self, env):
+        record = env.add("testing-01")
+        text = env.write_question(record, status="verify-pass")
+        text = text.replace("meta:\n", LINKS_BLOCK + "meta:\n", 1)
+        path = env.worktree / record["path"]
+        path.write_text(text, encoding="utf-8")
+        record["contentHash"] = wave.content_hash(text)
+        record["evidence"]["mech"]["hash"] = record["contentHash"]
+        record["verdicts"].append({"round": 1, "verdict": "pass", "hash": record["contentHash"], "issues": [],
+                                   "verifiedDate": "2026-11-13", "hashNoLinks": wave.content_hash_without_links(text)})
+        record["verifiedDate"] = "2026-11-13"
+        return record, path
+
+    def test_owner_check_takes_a_link_only_edit_of_a_verify_pass_file_and_keeps_the_pass_date(self):
+        env = VerifyEnv()
+        try:
+            record, path = self._verify_pass_with_links(env)
+            pass_hash = record["verdicts"][0]["hash"]
+            cli = ContentFakeCli(env.worktree)
+            self.assertEqual(([], []), wave.owner_check(env.state, env.worktree, env.wave_dir, cli, "2026-11-20"))
+            self.assertEqual("verify-pass", record["status"])
+            text = path.read_text(encoding="utf-8")
+            text = text.replace("https://a.example/old", "https://a.example/new").replace("Old title", "New title")
+            path.write_text(text, encoding="utf-8")
+            failures, edited = wave.owner_check(env.state, env.worktree, env.wave_dir, cli, "2026-11-20")
+            self.assertEqual([], failures)
+            self.assertEqual([record["path"]], edited)
+            self.assertEqual("owner-edited", record["status"])
+            self.assertEqual("2026-11-13", record["verifiedDate"])
+            self.assertEqual("2026-11-13", wave.read_verified(path.read_text(encoding="utf-8")))
+            new_hash = wave.file_hash(env.worktree, record)
+            self.assertEqual(new_hash, record["ownerEditedHash"])
+            note = record["notes"][-1]
+            self.assertEqual("owner-check", note["stage"])
+            self.assertEqual(f"link-only edit after pass {pass_hash} -> {new_hash}", note["text"])
+            marker = record["editedAfterPass"]
+            self.assertEqual({"passHash": pass_hash, "hash": new_hash, "kind": "links"},
+                             {k: marker[k] for k in ("passHash", "hash", "kind")})
+            self.assertIn("edited after pass", wave.risk_flags(record))
+            self.assertIn(f"2026-11-13 (edited {marker['utc'][:10]}: links)", wave.report_row(record)["verified"])
+            problems, _ = wave.final_gate(env.state, env.worktree, env.wave_dir, cli, set())
+            self.assertEqual([], problems)
+        finally:
+            env.cleanup()
+
+    def test_owner_check_judges_a_later_edit_of_a_link_edited_file_against_its_pass(self):
+        env = VerifyEnv()
+        try:
+            record, path = self._verify_pass_with_links(env)
+            cli = ContentFakeCli(env.worktree)
+            path.write_text(path.read_text(encoding="utf-8").replace("https://a.example/old", "https://a.example/new"),
+                            encoding="utf-8")
+            self.assertEqual([], wave.owner_check(env.state, env.worktree, env.wave_dir, cli, "2026-11-20")[0])
+            self.assertEqual("owner-edited", record["status"])
+            path.write_text(path.read_text(encoding="utf-8").replace("Answer", "Answer, new claim"), encoding="utf-8")
+            failures, edited = wave.owner_check(env.state, env.worktree, env.wave_dir, cli, "2026-11-21")
+            self.assertEqual([], edited)
+            self.assertEqual([f"{record['path']}: content changed after its pass verdict; re-verify it "
+                              "(verify-tasks) or revert"], failures)
+            self.assertEqual("2026-11-13", record["verifiedDate"])
+            path.write_text(path.read_text(encoding="utf-8").replace("Answer, new claim", "Answer")
+                            .replace("https://a.example/new", "https://a.example/newer"), encoding="utf-8")
+            failures, edited = wave.owner_check(env.state, env.worktree, env.wave_dir, cli, "2026-11-21")
+            self.assertEqual(([], [record["path"]]), (failures, edited))
+            self.assertEqual(["links", "links"], [e["kind"] for e in record["editHistory"]])
+            self.assertEqual("2026-11-13", record["verifiedDate"])
+        finally:
+            env.cleanup()
+
+    def test_owner_check_refuses_a_content_edit_of_a_verify_pass_file(self):
+        env = VerifyEnv()
+        try:
+            record, path = self._verify_pass_with_links(env)
+            path.write_text(path.read_text(encoding="utf-8").replace("Answer", "Answer, new claim"), encoding="utf-8")
+            failures, edited = wave.owner_check(env.state, env.worktree, env.wave_dir, ContentFakeCli(env.worktree),
+                                                "2026-11-20")
+            self.assertEqual([], edited)
+            self.assertEqual([f"{record['path']}: content changed after its pass verdict; re-verify it "
+                              "(verify-tasks) or revert"], failures)
+            self.assertEqual("verify-pass", record["status"])
+            self.assertNotIn("editedAfterPass", record)
+            self.assertEqual("2026-11-13", record["verifiedDate"])
+        finally:
+            env.cleanup()
+
+    def test_owner_check_refuses_a_link_edit_together_with_a_content_edit(self):
+        env = VerifyEnv()
+        try:
+            record, path = self._verify_pass_with_links(env)
+            text = path.read_text(encoding="utf-8").replace("https://a.example/old", "https://a.example/new")
+            path.write_text(text.replace("Answer", "Answer plus"), encoding="utf-8")
+            failures, edited = wave.owner_check(env.state, env.worktree, env.wave_dir, ContentFakeCli(env.worktree),
+                                                "2026-11-20")
+            self.assertEqual([], edited)
+            self.assertEqual(1, len(failures))
+        finally:
+            env.cleanup()
+
+    def test_owner_check_treats_a_pass_without_hash_no_links_as_a_content_edit(self):
+        env = VerifyEnv()
+        try:
+            record, path = self._verify_pass_with_links(env)
+            del record["verdicts"][0]["hashNoLinks"]
+            path.write_text(path.read_text(encoding="utf-8").replace("a.example/old", "a.example/new"),
+                            encoding="utf-8")
+            self.assertEqual("content", wave._edited_after_pass(record, env.worktree))
+        finally:
+            env.cleanup()
+
+    def test_owner_check_completes_a_pending_verify_op_first(self):
+        env = VerifyEnv()
+        try:
+            record, path = self._verify_pass_with_links(env)
+            record["verifiedDate"] = None
+            record["pendingFileOp"] = {"op": "verify", "date": "2026-11-13"}
+            wave.owner_check(env.state, env.worktree, env.wave_dir, ContentFakeCli(env.worktree), "2026-11-20")
+            self.assertNotIn("pendingFileOp", record)
+            self.assertEqual("2026-11-13", record["verifiedDate"])
+        finally:
+            env.cleanup()
+
+    def test_owner_check_marks_an_owner_edit_after_the_gate(self):
+        env = VerifyEnv()
+        try:
+            record, path = self._verify_pass_with_links(env)
+            cli = ContentFakeCli(env.worktree)
+            problems, _ = wave.final_gate(env.state, env.worktree, env.wave_dir, cli, set())
+            self.assertEqual([], problems)
+            final_hash = record["finalHash"]
+            path.write_text(path.read_text(encoding="utf-8").replace("Answer", "Answer by owner"), encoding="utf-8")
+            failures, edited = wave.owner_check(env.state, env.worktree, env.wave_dir, cli, "2026-11-20")
+            self.assertEqual(([], [record["path"]]), (failures, edited))
+            self.assertEqual("2026-11-20", record["verifiedDate"])
+            self.assertEqual("owner", record["editedAfterPass"]["kind"])
+            self.assertEqual(final_hash, record["editedAfterPass"]["passHash"])
+            self.assertIn("edited after pass", wave.risk_flags(record))
+        finally:
+            env.cleanup()
+
+    def test_verdict_pass_records_the_hash_without_links(self):
+        env = VerifyEnv()
+        try:
+            record = env.add("testing-01")
+            text = env.write_question(record)
+            path = env.worktree / record["path"]
+            path.write_text(text.replace("meta:\n", LINKS_BLOCK + "meta:\n", 1), encoding="utf-8")
+            record["contentHash"] = wave.file_hash(env.worktree, record)
+            record["evidence"]["mech"]["hash"] = record["contentHash"]
+            env.register_verify("verify-r1-testing-1", ["testing-01"])
+            summary = env.verdicts(env.batch("msgbatch_nl", {"verify-r1-testing-1": verdict_item(
+                verdict("testing-01"))}))
+            self.assertEqual(["testing-01"], summary["verify-pass"])
+            [entry] = env.state["testing-01"]["verdicts"]
+            self.assertEqual(wave.file_hash_no_links(env.worktree, env.state["testing-01"]), entry["hashNoLinks"])
+        finally:
+            env.cleanup()
+
+    def test_content_hash_without_links_ignores_link_urls_titles_and_the_verified_date_only(self):
+        text = LINK_DOC_TEXT
+        base = wave.content_hash_without_links(text)
+        self.assertEqual(base, wave.content_hash_without_links(
+            text.replace("https://a.example/old", "https://b.example/other").replace("Old title", "Another")))
+        self.assertEqual(base, wave.content_hash_without_links(text.replace("2026-11-13", "2026-12-01")))
+        self.assertEqual(base, wave.content_hash_without_links(text.replace("\n", "\r\n")))
+        extra = text.replace("links:\n", "links:\n  - url: https://c.example/extra\n    lang: en\n    kind: docs\n")
+        self.assertEqual(base, wave.content_hash_without_links(extra))
+        self.assertNotEqual(wave.content_hash(text), wave.content_hash(extra))
+        self.assertNotEqual(base, wave.content_hash_without_links(text.replace("Body text", "Body changed")))
+        self.assertNotEqual(base, wave.content_hash_without_links(text.replace("slug: s", "slug: t")))
+
+    def test_report_title_uses_the_wave_name(self):
+        env = VerifyEnv()
+        try:
+            env.add("testing-01")
+            markdown, _ = wave.build_report(env.state, env.targets, "g1a", {}, wave_name="content-wave-2")
+            self.assertTrue(markdown.startswith("# content-wave-2 review sheet: g1a\n"), markdown[:60])
         finally:
             env.cleanup()
 
@@ -2328,7 +2682,7 @@ class ActualStopTests(unittest.TestCase):
     def test_submit_gate_without_cutoff_has_no_cutoff_problem(self):
         targets = {"capPerSubmitUsd": 50, "capPerDayUsd": 150}
         ledger = spent_ledger(0)
-        late = wave.parse_utc("2031-01-01T00:00:00Z")
+        late = wave.parse_utc("2026-11-19T12:00:00Z")
         self.assertEqual([], wave.submit_gate(targets, ledger, 10, late))
 
     def test_ledger_ceiling_counts_outstanding_and_this_submit_at_max_share(self):
@@ -2753,6 +3107,184 @@ class PlanCountsCommandTests(unittest.TestCase):
     def test_plan_counts_prints_outline_item_sizes_once_prompts_exist(self):
         text = self.run_command(with_prompts=True)
         self.assertRegex(text, r"outline-testing: \d+")
+
+
+class ReopenTests(unittest.TestCase):
+    def setUp(self):
+        self.env = VerifyEnv()
+        self.addCleanup(self.env.cleanup)
+        self.paths = (self.env.worktree, self.env.wave_dir)
+        self.record = self.env.add("testing-01", level="lead")
+        self.record["status"] = "rejected"
+        self.record["attempts"] = {"gen": 1, "verify": 2, "repair": 1}
+        self.record["yamlHistory"].append({"stage": "gen", "sha256": "old", "itemId": "gen-testing-1"})
+        self.record["verdicts"] = [
+            {"round": 1, "verdict": "fix", "hash": "h1", "itemId": "verify-r1-testing-1", "resultKey": "k1",
+             "issues": [{"severity": "major", "field": "locales.en.answer", "problem": "old r1 problem",
+                         "suggestedFix": "f"}]},
+            {"round": 2, "verdict": "reject", "hash": "h2", "itemId": "verify-r2-testing-1", "resultKey": "k2",
+             "issues": [{"severity": "blocker", "field": "locales.en.answer", "problem": "wrong claim",
+                         "suggestedFix": "f"},
+                        {"severity": "major", "field": "links[0]", "problem": "dead source", "suggestedFix": "f"},
+                        {"severity": "minor", "field": "meta", "problem": "nit", "suggestedFix": "f"},
+                        {"severity": "unsure", "field": "x", "problem": "doubt", "suggestedFix": "f"}]}]
+        self.record["notes"].append({"stage": "repair", "text": "kept"})
+        self.record["failures"] = [{"stage": "gen", "reason": "format"}, {"stage": "gen", "reason": "format"}]
+        self.record["unverifiedRound"] = 2
+        self.record["pendingFileOp"] = {"op": "reject"}
+
+    def test_reopen_moves_rejected_to_planned_and_keeps_the_audit_trail(self):
+        wave.reopen(self.env.state, "testing-01", "owner wants one more try", *self.paths)
+        record = self.record
+        self.assertEqual("planned", record["status"])
+        self.assertEqual({"gen": 0, "verify": 0, "repair": 0}, record["attempts"])
+        self.assertEqual(2, len(record["verdicts"]))
+        self.assertEqual(1, len(record["yamlHistory"]))
+        self.assertEqual("kept", record["notes"][0]["text"])
+        self.assertEqual({"stage": "reopen", "text": "owner wants one more try"},
+                         {k: record["notes"][-1][k] for k in ("stage", "text")})
+        self.assertNotIn("pendingFileOp", record)
+        self.assertNotIn("unverifiedRound", record)
+        self.assertFalse((self.env.worktree / record["path"]).exists())
+        [entry] = record["reopened"]
+        self.assertEqual("owner wants one more try", entry["reason"])
+        self.assertEqual([{"field": "locales.en.answer", "problem": "wrong claim"},
+                          {"field": "links[0]", "problem": "dead source"}], entry["issues"])
+
+    def test_reopen_retires_the_file_of_a_pending_reject_op(self):
+        self.env.write_question(self.record, status="rejected")
+        path = self.env.worktree / self.record["path"]
+        data = path.read_bytes()
+        wave.reopen(self.env.state, "testing-01", "again", *self.paths)
+        self.assertFalse(path.exists())
+        retired = self.env.wave_dir / "rejected" / "testing" / f"{self.record['slug']}.yaml.txt"
+        self.assertEqual(data, retired.read_bytes())
+        self.assertNotIn("pendingFileOp", self.record)
+        self.assertEqual("planned", self.record["status"])
+
+    def test_reopen_refuses_while_the_rejected_file_is_still_in_content(self):
+        self.env.write_question(self.record, status="rejected")
+        self.record.pop("pendingFileOp")
+        with self.assertRaisesRegex(wave.WaveError, "the rejected file is still at .*; retire it first"):
+            wave.reopen(self.env.state, "testing-01", "again", *self.paths)
+        self.assertEqual("rejected", self.record["status"])
+        self.assertFalse(self.record.get("reopened"))
+        self.assertTrue((self.env.worktree / self.record["path"]).is_file())
+
+    def test_reopen_gives_a_fresh_retry_budget(self):
+        self.assertFalse(wave.retry_left(self.record, "gen"))
+        wave.reopen(self.env.state, "testing-01", "again", *self.paths)
+        self.assertTrue(wave.retry_left(self.record, "gen"))
+        self.assertEqual(2, len(self.record["failuresBeforeReopen"]))
+
+    def test_reopen_refusals(self):
+        with self.assertRaisesRegex(wave.WaveError, "unknown stubId"):
+            wave.reopen(self.env.state, "nope", "r", *self.paths)
+        with self.assertRaisesRegex(wave.WaveError, "a reason is required"):
+            wave.reopen(self.env.state, "testing-01", "   ", *self.paths)
+        self.record["status"] = "owner-review"
+        with self.assertRaisesRegex(wave.WaveError, "only a rejected stub can be reopened"):
+            wave.reopen(self.env.state, "testing-01", "r", *self.paths)
+        self.record["status"] = "rejected"
+        wave.reopen(self.env.state, "testing-01", "first", *self.paths)
+        self.record["status"] = "rejected"
+        with self.assertRaisesRegex(wave.WaveError, "already reopened once"):
+            wave.reopen(self.env.state, "testing-01", "second", *self.paths)
+
+    def test_gen_text_carries_the_rejection_paragraph_only_for_reopened_stubs(self):
+        other = self.env.add("testing-02")
+        plain = wave.gen_item_text([other], "2026-11-18")
+        self.assertNotIn("rejected by the fact-checker", plain)
+        wave.reopen(self.env.state, "testing-01", "again", *self.paths)
+        text = wave.gen_item_text([self.record], "2026-11-18")
+        self.assertIn("a previous draft of this question was rejected by the fact-checker", text)
+        self.assertIn("do not repeat them:", text)
+        self.assertIn("- locales.en.answer: wrong claim", text)
+        self.assertIn("- links[0]: dead source", text)
+        self.assertNotIn("nit", text)
+
+    def test_reopened_stub_is_selected_by_gen_tasks_only(self):
+        wave.reopen(self.env.state, "testing-01", "again", *self.paths)
+        outline = self.env.wave_dir / "outline"
+        outline.mkdir(parents=True)
+        (outline / "testing.json").write_text("{}", encoding="utf-8")
+        tasks, entries = wave.build_gen_tasks(self.env.state, self.env.targets, "abc", self.env.worktree,
+                                              self.env.wave_dir, {}, ["testing-01"], None, "2026-11-18",
+                                              lister=lambda *a: [])
+        self.assertEqual([["testing-01"]], [e["stubs"] for e in entries.values()])
+        self.assertIn("do not repeat them:", tasks[0]["items"][0]["text"])
+
+    def test_reopened_stub_goes_through_gen_and_round_1_ignoring_old_verdicts(self):
+        wave.reopen(self.env.state, "testing-01", "again", *self.paths)
+        self.assertFalse((self.env.worktree / self.record["path"]).exists())
+        self.env.register("gen-testing-2", ["testing-01"])
+        summary = self.env.apply(self.env.batch("msgbatch_r1", {"gen-testing-2": ok_item(self.record)}))
+        self.assertEqual(["testing-01"], summary["written"])
+        record = self.env.state["testing-01"]
+        self.assertEqual("generated", record["status"])
+        self.assertEqual({"gen": 1, "verify": 0, "repair": 0}, record["attempts"])
+        self.assertTrue((self.env.worktree / record["path"]).is_file())
+        self.env.register_verify("verify-r1-testing-2", ["testing-01"])
+        summary = self.env.verdicts(self.env.batch("msgbatch_r2", {"verify-r1-testing-2": verdict_item(
+            verdict("testing-01", "fix", ("major", "locales.en.answer", "new fix")))}))
+        self.assertEqual(["testing-01"], summary["needs-repair"])
+        record = self.env.state["testing-01"]
+        self.assertEqual(3, len(record["verdicts"]))
+        self.assertEqual("verify-r1-testing-2", wave.current_verdict(record)["itemId"])
+        self.assertEqual("verify-r1-testing-2", wave.current_verdict(record, 1)["itemId"])
+        block = wave.repair_block(record, None, self.env.worktree, self.env.wave_dir)
+        self.assertIn("new fix", block)
+        self.assertNotIn("old r1 problem", block)
+
+    def test_reopened_gen_identical_to_a_retired_draft_is_a_failure(self):
+        wave.reopen(self.env.state, "testing-01", "again", *self.paths)
+        item = ok_item(self.record)
+        raw = item[2]["questions"][0]["yaml"]
+        self.record["yamlHistory"].append({"stage": "gen", "sha256": wave.sha256_bytes(raw.encode("utf-8")),
+                                           "itemId": "gen-testing-1", "resultKey": "old"})
+        self.env.register("gen-testing-2", ["testing-01"])
+        summary = self.env.apply(self.env.batch("msgbatch_same", {"gen-testing-2": item}))
+        self.assertEqual(["testing-01: unchanged: gen returned the same YAML"], summary["failed"])
+        self.assertEqual("unchanged", self.env.state["testing-01"]["failures"][-1]["reason"])
+
+    def test_requested_change_ignores_verdicts_before_the_reopen(self):
+        issue = {"severity": "major", "field": "level", "problem": "too easy", "suggestedFix": "make it architect"}
+        self.record["verdicts"][0]["utc"] = "2026-01-01T00:00:00Z"
+        self.record["verdicts"][0]["issues"].append(issue)
+        self.record["verdicts"][1]["utc"] = "2026-01-02T00:00:00Z"
+        self.assertTrue(wave.requested_change(self.record, "level", "architect"))
+        wave.reopen(self.env.state, "testing-01", "again", *self.paths)
+        self.assertFalse(wave.requested_change(self.record, "level", "architect"))
+        # A verdict recorded after the reopen counts again; one before it still does not.
+        self.record["verdicts"].append({"round": 1, "verdict": "fix", "hash": "h3", "issues": [dict(issue)],
+                                        "utc": "2999-01-01T00:00:00Z"})
+        self.assertTrue(wave.requested_change(self.record, "level", "architect"))
+        self.record["verdicts"][-1]["issues"] = []
+        self.assertFalse(wave.requested_change(self.record, "level", "architect"))
+
+    def test_reopened_stub_carries_a_risk_flag(self):
+        self.assertNotIn("reopened", wave.risk_flags(self.record))
+        wave.reopen(self.env.state, "testing-01", "again", *self.paths)
+        self.assertIn("reopened", wave.risk_flags(self.record))
+
+    def test_round_2_block_shows_the_new_round_1_issues(self):
+        wave.reopen(self.env.state, "testing-01", "again", *self.paths)
+        self.record["verdicts"].append(
+            {"round": 1, "verdict": "fix", "hash": "h3", "itemId": "verify-r1-testing-2", "resultKey": "k3",
+             "issues": [{"severity": "major", "field": "f", "problem": "fresh r1 problem", "suggestedFix": "x"}]})
+        block = wave.verify_block(self.record, None, self.env.wave_dir, 2)
+        self.assertIn("fresh r1 problem", block)
+        self.assertNotIn("old r1 problem", block)
+
+    def test_cli_reopen_prints_and_saves(self):
+        self.env.save()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = wave.main(["--wave-dir", str(self.env.wave_dir), "--worktree", str(self.env.worktree),
+                              "reopen", "--stub", "testing-01", "--reason", "again"])
+        self.assertEqual(0, code)
+        self.assertIn("testing-01: planned (reopened)", out.getvalue())
+        self.assertEqual("planned", self.env.load()["testing-01"]["status"])
 
 
 if __name__ == "__main__":

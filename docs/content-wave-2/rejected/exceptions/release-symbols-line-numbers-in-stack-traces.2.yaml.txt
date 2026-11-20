@@ -1,0 +1,138 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPYKVAGY42NE957TDE
+slug: release-symbols-line-numbers-in-stack-traces
+stack: dotnet
+topic: exceptions
+level: lead
+type: multi
+grading: auto
+tags: [pdb, symbols, source-link, stack-trace, diagnostics, production]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: true
+  - id: d
+    correct: true
+  - id: e
+    correct: false
+  - id: f
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/compiler-options/code-generation
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/symbols
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/library-guidance/sourcelink
+    lang: en
+    kind: docs
+  - url: https://github.com/dotnet/runtime/blob/main/docs/design/specs/PortablePdb-Metadata.md
+    lang: en
+    kind: spec
+locales:
+  ru:
+    title: Как вернуть имена файлов и номера строк в стеки вызовов production-сервиса на .NET 10?
+    prompt: |
+      Команда выпускает сервис на .NET 10 в Docker-образе. В логах production стеки вызовов выглядят как
+      `at OrderService.Process(Order order)`, без `in ...:line 42`, а дамп, снятый месяц назад, отладчик
+      открывает без исходного кода. Вы отвечаете за процесс сборки и выпуска.
+
+      Выберите все практики, которые возвращают имена файлов и номера строк в стеки вызовов или сохраняют
+      возможность разбирать дампы позже.
+    hint: Где хранится соответствие IL-кода строкам исходника и как отладчик убеждается, что этот файл относится именно к этой сборке?
+    options:
+      a: "Поставлять `.pdb`-файлы сборки рядом с их сборками: не удалять `*.pdb` в Dockerfile или скрипте упаковки и не собирать с `<DebugType>none</DebugType>`."
+      b: "Собирать production в конфигурации Debug или отключить оптимизацию: Release-сборка не может дать номера строк в стеках вызовов."
+      c: "Собирать с `<DebugType>embedded</DebugType>`: переносимый PDB встраивается в `.dll`, поэтому не потеряется по пути в production, и отдельный `.pdb` не нужен."
+      d: "Архивировать символы каждой релизной сборки (сервер символов или артефакты сборки) и включить Source Link, чтобы дамп, снятый через месяцы, открывался с подходящими символами, а отладчик загружал исходники именно того коммита."
+      e: "Достаточно хранить исходный код: чтобы разобрать старый дамп, нужно пересобрать текущую голову релизной ветки и указать отладчику новый `.pdb`."
+      f: "Достаточно включить Source Link: тогда среда выполнения берёт номера строк из репозитория, и `.pdb` в production больше не нужны."
+    optionExplanations:
+      b: "Номера строк берутся из PDB, а PDB создаётся и для Release-сборки: чтобы его не было, нужно явно задать `DebugType` равным `none`. Оптимизация влияет только на точность: JIT может встроить метод, и его кадр пропадёт из стека, а строка иногда указывается приблизительно. Отказываться от оптимизации в production ради этого не нужно."
+      e: "Символы привязаны к конкретной сборке: идентификатор PDB записан в сборку, и отладчику нужен файл символов именно с этим идентификатором. Голова ветки - это другой код и другая сборка, её PDB не подойдёт к старому дампу. Нужны символы именно той сборки, которая работала в production."
+      f: "Source Link не заменяет PDB: он сохраняет в PDB соответствие путей исходных файлов адресам этих файлов на конкретном коммите, чтобы отладчик мог их скачать. Соответствие IL-смещений строкам хранится в самом PDB, и без него ни среда выполнения, ни отладчик номеров строк не получат."
+    answer: "Поставлять `.pdb` рядом со сборками или встраивать PDB через `<DebugType>embedded</DebugType>` (подходит любой из двух способов), а также архивировать символы каждого выпуска вместе с Source Link."
+    explanation: |
+      Имена файлов и номера строк не хранятся в IL-коде сборки. Их хранят символы - PDB: соответствие
+      исходного кода и скомпилированного файла. В .NET 10 среда выполнения и отладчики читают символы из
+      переносимого PDB, который лежит рядом со сборкой или встроен в неё (`DebugType` равный `embedded`
+      записывает отладочную информацию прямо в `.dll`). Документация отмечает, что только старые среды, такие
+      как .NET Framework 4.7.1 и более ранние, не умеют печатать стеки вызовов с номерами строк из переносимых
+      PDB. Если PDB нет, кадр выводится без `in ...:line N`. Частая причина - этап Dockerfile или скрипт
+      упаковки, который копирует только `*.dll`, либо сборка с `DebugType` равным `none`.
+
+      Варианты a и c - две альтернативы, а не два обязательных шага: для проекта выбирают одну из них.
+      Отдельный `.pdb` не увеличивает сборку, но его легко потерять при копировании. Встроенный PDB
+      невозможно потерять, но он увеличивает размер `.dll`. Если в процесс выпуска добавляется проверка
+      наличия символов, она должна принимать любой из двух вариантов.
+
+      Для дампов важно другое: дамп разбирают позже и на другой машине. Символы привязаны к конкретной
+      сборке через идентификатор PDB, записанный в сборку (его описывает спецификация формата Portable PDB),
+      поэтому нужны символы той самой сборки. Их сохраняют для каждого выпуска на сервере символов или в
+      артефактах сборки. Source Link добавляет в сборку и PDB метаданные системы контроля версий: соответствие
+      исходных файлов их адресам на конкретном коммите, и отладчик загружает исходники ровно той версии,
+      которая работала. Руководство по Source Link также советует детерминированные сборки: одинаковые входные
+      данные дают побайтно одинаковый результат, и можно проверить, что двоичный файл собран из указанного
+      исходного кода.
+    linkTitles:
+      - "Параметры компилятора C# для генерации кода (DebugType)"
+      - "Символы в .NET"
+      - "Source Link и библиотеки .NET"
+      - "Спецификация метаданных Portable PDB"
+  en:
+    title: How do you bring file names and line numbers back into the stack traces of a .NET 10 production service?
+    prompt: |
+      A team ships a .NET 10 service as a Docker image. In production logs the stack traces look like
+      `at OrderService.Process(Order order)`, without `in ...:line 42`, and a dump taken a month ago opens in
+      the debugger without source code. You own the build and release process.
+
+      Select all practices that bring file names and line numbers back into stack traces or keep dumps
+      debuggable later.
+    hint: Where is the mapping from IL code to source lines stored, and how does the debugger make sure that file belongs to this exact assembly?
+    options:
+      a: "Ship the `.pdb` files produced by the build next to their assemblies: do not strip `*.pdb` in the Dockerfile or packaging script, and do not build with `<DebugType>none</DebugType>`."
+      b: "Build production in the Debug configuration or turn optimization off: a Release build cannot produce line numbers in stack traces."
+      c: "Build with `<DebugType>embedded</DebugType>`: the portable PDB is embedded in the `.dll`, so it cannot be lost on the way to production, and no separate `.pdb` is needed."
+      d: "Archive the symbols of every release build (a symbol server or build artifacts) and enable Source Link, so that a dump taken months later loads matching symbols and the debugger fetches the source of the exact commit."
+      e: "Keeping the source code is enough: to analyze an old dump, rebuild the head of the release branch and point the debugger at the new `.pdb`."
+      f: "Enabling Source Link is enough: the runtime then takes line numbers from the repository, and `.pdb` files are no longer needed in production."
+    optionExplanations:
+      b: "Line numbers come from the PDB, and a PDB is produced for a Release build too: to get none, you have to set `DebugType` to `none` explicitly. Optimization only affects precision: the JIT may inline a method so its frame disappears from the stack, and a line is sometimes approximate. There is no need to give up optimization in production for this."
+      e: "Symbols are tied to a specific build: the PDB identity is recorded in the assembly, and the debugger needs the symbol file with exactly that identity. The branch head is different code and a different build, so its PDB does not match the old dump. You need the symbols of the exact build that ran in production."
+      f: "Source Link does not replace the PDB: it stores in the PDB a mapping from source file paths to the URLs of those files at a specific commit, so the debugger can download them. The mapping from IL offsets to lines lives in the PDB itself, and without it neither the runtime nor the debugger gets line numbers."
+    answer: "Ship the `.pdb` files next to the assemblies or embed the PDB with `<DebugType>embedded</DebugType>` (either of the two works), and archive the symbols of every release together with Source Link."
+    explanation: |
+      File names and line numbers are not stored in the IL of an assembly. Symbols - the PDB - store them: a
+      mapping between the source code and the compiled binary. In .NET 10 the runtime and debuggers read symbols
+      from a portable PDB that sits next to the assembly or is embedded in it (`DebugType` set to `embedded`
+      writes the debugging information into the `.dll` itself). The documentation notes that only older
+      environments, such as .NET Framework 4.7.1 and earlier, cannot print stack traces with line numbers from
+      portable PDBs. Without a PDB the frame is printed without `in ...:line N`. A common cause is a Dockerfile
+      stage or packaging script that copies only `*.dll`, or a build with `DebugType` set to `none`.
+
+      Options a and c are two alternatives, not two mandatory steps: a project picks one of them. A separate
+      `.pdb` does not make the assembly larger, but it is easy to lose while copying. An embedded PDB cannot
+      be lost, but it makes the `.dll` larger. If the release process gets a check for symbols, it must
+      accept either form.
+
+      Dumps need something else: a dump is analyzed later and on another machine. Symbols are tied to a
+      specific build through the PDB identity recorded in the assembly (the Portable PDB format specification
+      describes it), so you need the symbols of that exact build. They are kept for every release on a symbol
+      server or in build artifacts. Source Link adds source control metadata to the assembly and the PDB: a
+      mapping from source files to their URLs at a specific commit, and the debugger downloads the source of
+      exactly the version that ran. The Source Link guidance also recommends deterministic builds: identical
+      inputs give a byte-for-byte identical binary, so you can verify that a binary was built from the stated
+      source.
+    linkTitles:
+      - "C# compiler options for code generation (DebugType)"
+      - "Symbols in .NET"
+      - "Source Link and .NET libraries"
+      - "Portable PDB metadata specification"
+meta:
+  authors: [platonenkov]
+  verified: 1970-01-01
+  dotnetVersion: "10"

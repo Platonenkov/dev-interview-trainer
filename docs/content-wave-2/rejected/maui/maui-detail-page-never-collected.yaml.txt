@@ -1,0 +1,160 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPPWA8F1D47XMM7JND
+slug: maui-detail-page-never-collected
+stack: dotnet
+topic: maui
+level: senior
+type: situation
+grading: self
+tags: [maui, memory-leak, gc, dotnet-gcdump, lifecycle]
+links:
+  - url: https://github.com/dotnet/maui/wiki/Memory-Leaks
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-gcdump
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/communitytoolkit/mvvm/messenger
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Память приложения .NET MAUI растёт после каждого открытия и закрытия страницы заказа
+    prompt: |
+      Пользователи жалуются, что приложение на .NET MAUI со временем тормозит и падает на слабых
+      Android-телефонах. Вы замечаете: каждый раз, когда пользователь открывает страницу деталей заказа
+      `OrderDetailPage` и возвращается назад, память процесса вырастает на несколько мегабайт и не
+      возвращается. Страница использует `OrderDetailViewModel`, внедрённую через DI.
+
+      Как вы найдёте, что удерживает страницу, и в каком порядке будете действовать?
+    hint: Что должно произойти со страницей после возврата назад, и какой объект может жить дольше неё и при этом знать о ней?
+    answer: |
+      1. **Убедиться, что это утечка, а не отложенная сборка.** Открыть и закрыть страницу 10-20 раз в
+         Release-сборке: в Debug-сборке и под отладчиком время жизни объектов может отличаться, и замер
+         получается неточным. Затем принудительно выполнить полную сборку мусора. Рост, который исчезает после
+         полной сборки, - не утечка.
+      2. **Доказать, что страница не собирается.** В диагностическом коде сохранить `WeakReference` на
+         страницу и на модель представления при уходе со страницы, после возврата вызвать
+         `GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();` и проверить `IsAlive`. Проверять
+         отдельно страницу, модель и подозрительные дочерние элементы: так поиск сужается.
+      3. **Снять дампы кучи.** `dotnet-gcdump collect` до и после серии открытий. Перед записью дампа
+         инструмент сам запускает сборку мусора. На Windows он подключается к процессу по `--process-id`, на
+         Android и iOS - через `dotnet-dsrouter` (опция `--dsrouter`), а приложение для этого собирается с
+         включённым диагностическим портом. Сравнить дампы в Visual Studio или PerfView: растёт число
+         экземпляров `OrderDetailPage` и `OrderDetailViewModel`. Для выжившего экземпляра смотреть путь до
+         корня - он и показывает, кто держит страницу.
+      4. **Проверить типичные корни.**
+         - подписка на событие долгоживущего объекта: сервиса-синглтона, статического события
+           (`Connectivity.ConnectivityChanged`), `Application.Current`. Издатель хранит делегат, а делегат -
+           подписчика;
+         - регистрация в `StrongReferenceMessenger` без `Unregister`;
+         - страница или модель зарегистрированы как `Singleton` или сохранены в статическом поле, либо
+           синглтон хранит ссылку на модель (список колбэков, «последний открытый заказ»);
+         - таймер (`IDispatcherTimer`, `System.Threading.Timer`) или бесконечный цикл в задаче, который
+           захватил страницу и не остановлен и не отменён;
+         - собственный handler или платформенный код: подписки на события нативного контрола, не снятые в
+           `DisconnectHandler`, а на iOS и Mac Catalyst - циклы ссылок между подклассами `NSObject`,
+           например когда представление подписывает свой метод экземпляра на событие дочернего нативного
+           контрола.
+      5. **Исправить и закрепить.** Подписчик отписывается симметрично подписке (`OnAppearing` и
+         `OnDisappearing` или `OnNavigatedTo` и `OnNavigatedFrom`). Если долгоживущий сервис - ваш код, его
+         событие можно реализовать через `WeakEventManager`: тогда издатель держит подписчиков по слабым
+         ссылкам. Для сообщений использовать `WeakReferenceMessenger` или вызывать `Unregister` у
+         `StrongReferenceMessenger`. Страницу деталей и её модель регистрировать как `Transient`, таймеры
+         останавливать, фоновые задачи отменять через `CancellationToken`. На iOS и Mac Catalyst обработчики
+         событий нативных контролов делать статическими или выносить в отдельный класс, не наследующий
+         `NSObject`. Проверку через `WeakReference` оставить в автоматическом тесте, который открывает и
+         закрывает страницу, чтобы регрессия была видна сразу.
+    explanation: |
+      Страница, из которой вернулись назад, больше не достижима из визуального дерева, и сборщик мусора должен
+      её освободить. Если она жива, значит на неё ведёт цепочка ссылок от корня: статического поля, синглтона
+      или нативного объекта. Одна такая ссылка удерживает весь граф: модель, визуальное дерево страницы,
+      нативные представления и картинки. Поэтому каждое посещение и добавляет мегабайты.
+
+      Порядок важен. Сначала надо отличить утечку от отложенной сборки: старшее поколение собирается редко, и
+      рост памяти сам по себе ничего не доказывает. `WeakReference` после принудительной сборки даёт быстрый
+      ответ «собирается или нет», а дамп кучи - путь до корня, то есть конкретное место в коде, которое надо
+      исправить. Гадать по коду дольше и ненадёжнее.
+
+      Самая частая причина - события: подписка `service.Changed += OnChanged` делает долгоживущий сервис
+      владельцем подписчика, потому что делегат хранит ссылку на объект в `Target`. Сам подписчик не может
+      сделать эту ссылку слабой: либо он отписывается, либо издатель хранит обработчики через
+      `WeakEventManager`, а это возможно, только если код события ваш. `WeakReferenceMessenger` держит
+      получателей по слабым ссылкам, поэтому забытая регистрация не мешает сборке, а `StrongReferenceMessenger`
+      удерживает получателя, пока его явно не отпишут. Ответ описан для .NET MAUI в .NET 10.
+    linkTitles:
+      - "Утечки памяти в .NET MAUI (вики репозитория dotnet/maui)"
+      - "Инструмент dotnet-gcdump"
+      - "Messenger в CommunityToolkit.Mvvm"
+  en:
+    title: .NET MAUI app memory grows every time an order detail page is opened and closed
+    prompt: |
+      Users complain that a .NET MAUI app slows down over time and crashes on low-end Android phones. You
+      notice that every time a user opens the order detail page `OrderDetailPage` and goes back, process memory
+      grows by several megabytes and never comes back down. The page uses an `OrderDetailViewModel` injected
+      through DI.
+
+      How do you find what keeps the page alive, and in what order do you act?
+    hint: What should happen to the page after the user goes back, and which object can outlive it while still knowing about it?
+    answer: |
+      1. **Confirm that it is a leak, not deferred collection.** Open and close the page 10-20 times in a
+         Release build: in a Debug build and under the debugger object lifetimes can differ, which skews the
+         measurement. Then force a full garbage collection. Growth that disappears after a full collection is
+         not a leak.
+      2. **Prove that the page is not collected.** In diagnostic code keep a `WeakReference` to the page and to
+         the view model when leaving the page, and after going back call
+         `GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();` and check `IsAlive`. Check the page, the
+         view model and suspicious child elements separately: this narrows the search.
+      3. **Take heap dumps.** `dotnet-gcdump collect` before and after a series of visits. The tool triggers a
+         garbage collection itself before writing the dump. On Windows it attaches to the process with
+         `--process-id`; on Android and iOS it connects through `dotnet-dsrouter` (the `--dsrouter` option),
+         and the app must be built with the diagnostic port enabled. Compare the dumps in Visual Studio or
+         PerfView: the count of `OrderDetailPage` and `OrderDetailViewModel` instances grows. For a surviving
+         instance look at the path to the root: it shows what holds the page.
+      4. **Check the typical roots.**
+         - an event subscription on a long-lived object: a singleton service, a static event
+           (`Connectivity.ConnectivityChanged`), `Application.Current`. The publisher stores the delegate, and
+           the delegate stores the subscriber;
+         - a registration in `StrongReferenceMessenger` without `Unregister`;
+         - the page or view model registered as `Singleton` or stored in a static field, or a singleton that
+           keeps a reference to the view model (a list of callbacks, a "last opened order");
+         - a timer (`IDispatcherTimer`, `System.Threading.Timer`) or an endless loop in a task that captured
+           the page and was never stopped or cancelled;
+         - a custom handler or platform code: subscriptions to native control events not removed in
+           `DisconnectHandler`, and on iOS and Mac Catalyst reference cycles between `NSObject` subclasses,
+           for example a view that subscribes its own instance method to an event of a child native control.
+      5. **Fix it and lock it in.** The subscriber unsubscribes symmetrically to subscribing (`OnAppearing`
+         and `OnDisappearing`, or `OnNavigatedTo` and `OnNavigatedFrom`). If the long-lived service is your
+         code, implement its event with `WeakEventManager`: then the publisher holds subscribers through weak
+         references. For messages use `WeakReferenceMessenger`, or call `Unregister` on
+         `StrongReferenceMessenger`. Register the detail page and its view model as `Transient`, stop timers,
+         and cancel background tasks with a `CancellationToken`. On iOS and Mac Catalyst make native control
+         event handlers static or move them to a separate class that does not derive from `NSObject`. Keep the
+         `WeakReference` check in an automated test that opens and closes the page, so a regression shows up
+         at once.
+    explanation: |
+      A page the user went back from is no longer reachable from the visual tree, and the garbage collector
+      should free it. If it is alive, a chain of references leads to it from a root: a static field, a
+      singleton or a native object. One such reference holds the whole graph: the view model, the page's
+      visual tree, the native views and the images. That is why every visit adds megabytes.
+
+      The order matters. First tell a leak apart from deferred collection: the oldest generation is collected
+      rarely, and memory growth alone proves nothing. A `WeakReference` after a forced collection gives a quick
+      "collected or not" answer, and a heap dump gives the path to the root, that is, the exact place in the
+      code to fix. Guessing from the code is slower and less reliable.
+
+      The most common cause is events: the subscription `service.Changed += OnChanged` makes a long-lived
+      service the owner of the subscriber, because the delegate keeps a reference to the object in `Target`.
+      The subscriber cannot make that reference weak on its own: either it unsubscribes, or the publisher
+      stores handlers through `WeakEventManager`, which is possible only when you own the event code.
+      `WeakReferenceMessenger` holds recipients through weak references, so a forgotten registration does not
+      block collection, while `StrongReferenceMessenger` keeps a recipient alive until it is unregistered
+      explicitly. The answer describes .NET MAUI on .NET 10.
+    linkTitles:
+      - "Memory leaks in .NET MAUI (dotnet/maui repository wiki)"
+      - "The dotnet-gcdump tool"
+      - "Messenger in CommunityToolkit.Mvvm"
+meta:
+  authors: [platonenkov]
+  verified: 1970-01-01
+  dotnetVersion: "10"

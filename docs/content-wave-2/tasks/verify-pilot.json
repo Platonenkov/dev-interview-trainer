@@ -1,0 +1,135 @@
+{
+  "project": "dev-interview-trainer",
+  "ref": "66660fc8f82d1de64e8bdd54f933fc886ee3f626",
+  "model": "claude-sonnet-5-5",
+  "effort": "high",
+  "maxOutputTokens": 32000,
+  "instructions": "Follow docs/content-wave-2/prompts/verify.md. Fact-check every question in the item against the evidence given there (sandbox result, numbered source, fetched link excerpts). Answer with exactly one verdict per stubId.",
+  "sharedFiles": [
+    "docs/content-wave-2/prompts/verify.md",
+    "docs/content-guide.md"
+  ],
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "verdicts": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+          "type": "object",
+          "properties": {
+            "stubId": {
+              "type": "string"
+            },
+            "verdict": {
+              "type": "string",
+              "enum": [
+                "pass",
+                "fix",
+                "reject"
+              ]
+            },
+            "issues": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "severity": {
+                    "type": "string",
+                    "enum": [
+                      "blocker",
+                      "major",
+                      "minor",
+                      "unsure"
+                    ]
+                  },
+                  "field": {
+                    "type": "string"
+                  },
+                  "claim": {
+                    "type": "string"
+                  },
+                  "problem": {
+                    "type": "string"
+                  },
+                  "suggestedFix": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "severity",
+                  "field",
+                  "claim",
+                  "problem",
+                  "suggestedFix"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "stubId",
+            "verdict",
+            "issues"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": [
+      "verdicts"
+    ],
+    "additionalProperties": false
+  },
+  "items": [
+    {
+      "id": "verify-r1-architecture-1",
+      "text": "Fact-check round 1: 1 question(s). The question files and the topic outline are attached. Return exactly one verdict per stubId.\n\n## architecture-10\npath: content/dotnet/architecture/event-sourcing-proposed-for-whole-system.yaml\nstub: {\"stubId\": \"architecture-10\", \"topic\": \"architecture\", \"slug\": \"event-sourcing-proposed-for-whole-system\", \"level\": \"lead\", \"type\": \"situation\", \"subtopic\": \"CQRS and event sourcing adoption\", \"angle\": \"A senior engineer proposes storing the state of every service as an event stream starting with the next project, and the tech lead must decide and set the scope.\", \"answerHinge\": \"Event sourcing pays off only where an audit trail, temporal queries or rebuilding projections are real requirements, and it brings event schema versioning, replay and snapshot handling, eventual consistency and a learning curve, so the lead limits it to a pilot in one justified bounded context with an ADR and exit criteria rather than a system-wide mandate.\", \"sources\": [\"https://learn.microsoft.com/en-us/azure/architecture/patterns/event-sourcing\", \"https://martinfowler.com/eaaDev/EventSourcing.html\"]}\nGenerator notes: The explanation says the Azure Event Sourcing pattern page states the pattern permeates the entire architecture and that migrating to or from it is costly. I recall this wording from the page but have not re-checked its exact text.; The list of cases where the pattern is 'probably not useful' (small or simple domains, CRUD-like systems with little business logic, systems needing consistent real-time views, systems without audit, history, rollback or replay needs) is paraphrased from memory of the Azure page's 'When to use this pattern' section. Verify against the current page.; Attributed to Fowler's article: complete rebuild, temporal query and event replay as benefits, plus the need to disable or substitute external-system interactions (gateways) during replay and to handle code changes against recorded history. Confirm that the article covers both points.; Two practitioner claims are not tied to either source: personal data deletion from an immutable log needs a dedicated solution (for example crypto-shredding), and database temporal tables (such as SQL Server system-versioned temporal tables) are a cheaper alternative for change history.\nMechanical evidence:\n- not executed (no code)\n- no mechanical failures\nLinks:\n- https://learn.microsoft.com/en-us/azure/architecture/patterns/event-sourcing: status ok, title 'Event Sourcing Pattern - Azure Architecture Center | Microsoft Learn', fetched 2026-11-19T13:17:23Z\n  excerpt: [third-party text removed; sha256 cfae5aa7a9adf1a5f7a5df14aa3a678df2b5019536f1aa2c601e3c927915c39d]\n- https://martinfowler.com/eaaDev/EventSourcing.html: status ok, title 'Event Sourcing', fetched 2026-11-19T13:17:23Z\n  excerpt: [third-party text removed; sha256 2c57a3edf573939845f45a87b276d7860cc279d1a0cd7bc2cc935f122c9b5890]\n",
+      "files": [
+        "docs/content-wave-2/outline/architecture.json",
+        "content/dotnet/architecture/event-sourcing-proposed-for-whole-system.yaml"
+      ]
+    },
+    {
+      "id": "verify-r1-ef-core-1",
+      "text": "Fact-check round 1: 1 question(s). The question files and the topic outline are attached. Return exactly one verdict per stubId.\n\n## ef-core-02\npath: content/dotnet/ef-core/dbcontext-shared-across-parallel-tasks.yaml\nstub: {\"stubId\": \"ef-core-02\", \"topic\": \"ef-core\", \"slug\": \"dbcontext-shared-across-parallel-tasks\", \"level\": \"middle\", \"type\": \"find-bug\", \"subtopic\": \"change tracking and the DbContext unit of work\", \"angle\": \"Find the line where one injected DbContext runs two queries started together and awaited with Task.WhenAll, which fails at run time.\", \"answerHinge\": \"DbContext is not thread-safe and allows one operation at a time, so starting a second query before the first completes throws InvalidOperationException; each parallel operation needs its own context, for example from IDbContextFactory.\", \"sources\": [\"https://learn.microsoft.com/en-us/ef/core/dbcontext-configuration/\"]}\nGenerator notes: The exact InvalidOperationException message is quoted from memory as starting with 'A second operation was started on this context instance before a previous operation completed'; verify the wording in EF Core 10.; Claim that the exception is captured in the second task and surfaces through `await Task.WhenAll` (not thrown synchronously from line 10) relies on ToListAsync being an async method that enters the concurrency detector inside its state machine; worth confirming. Accepted line sets are [[10],[9,10]]; line 12 is deliberately not accepted.; IDbContextFactory<TContext>.CreateDbContextAsync is believed to be a default interface method added in EF Core 6 and present in EF Core 10; verify against the API reference.; The statement that concurrency detection is best-effort and that undetected concurrent use can lead to undefined behavior/corruption paraphrases the 'Avoiding DbContext threading issues' section of the dbcontext-configuration page; check the current wording.\nMechanical evidence:\n- not executed (The snippet uses EF Core types and needs a database provider, which the sandbox does not have. Not executed.)\n- warning: link unknown: https://learn.microsoft.com/en-us/ef/core/dbcontext-configuration/ (429)\nNumbered code.source (quote every line listed in bugLineSets):\n  1 | public sealed class CustomerDashboard\n  2 | {\n  3 |     private readonly ShopContext _db;\n  4 | \n  5 |     public CustomerDashboard(ShopContext db) => _db = db;\n  6 | \n  7 |     public async Task<DashboardDto> LoadAsync(int customerId)\n  8 |     {\n  9 |         var ordersTask = _db.Orders.Where(o => o.CustomerId == customerId).ToListAsync();\n 10 |         var ticketsTask = _db.Tickets.Where(t => t.CustomerId == customerId).ToListAsync();\n 11 | \n 12 |         await Task.WhenAll(ordersTask, ticketsTask);\n 13 | \n 14 |         return new DashboardDto(ordersTask.Result, ticketsTask.Result);\n 15 |     }\n 16 | }\nLinks:\n- https://learn.microsoft.com/en-us/ef/core/dbcontext-configuration/: status ok, title 'DbContext Lifetime, Configuration, and Initialization - EF Core | Microsoft Learn', fetched 2026-11-19T13:17:23Z\n  excerpt: [third-party text removed; sha256 f54cdd6807b93554097e66bf9dac6aafc5636422fce9a2db2e5eca29985aa1d2]\n- https://learn.microsoft.com/en-us/dotnet/api/microsoft.entityframeworkcore.idbcontextfactory-1: status ok, title 'IDbContextFactory<TContext> Interface (Microsoft.EntityFrameworkCore) | Microsoft Learn', fetched 2026-11-19T13:17:23Z\n  excerpt: [third-party text removed; sha256 1d3f42c2f0e769834571bbd950f51d7251f5b8cd0b0316c25b67f3cef56e9704]\n",
+      "files": [
+        "docs/content-wave-2/outline/ef-core.json",
+        "content/dotnet/ef-core/dbcontext-shared-across-parallel-tasks.yaml"
+      ]
+    },
+    {
+      "id": "verify-r1-grpc-realtime-1",
+      "text": "Fact-check round 1: 1 question(s). The question files and the topic outline are attached. Return exactly one verdict per stubId.\n\n## grpc-realtime-06\npath: content/dotnet/grpc-realtime/sse-event-missing-blank-line.yaml\nstub: {\"stubId\": \"grpc-realtime-06\", \"topic\": \"grpc-realtime\", \"slug\": \"sse-event-missing-blank-line\", \"level\": \"middle\", \"type\": \"find-bug\", \"subtopic\": \"Server-Sent Events\", \"angle\": \"A hand-written ASP.NET Core SSE endpoint sets text/event-stream and writes `data: ...\\\\n` per update, but the browser EventSource never fires onmessage; find the line.\", \"answerHinge\": \"An SSE event is dispatched only when a blank line follows it, so every event must end with `\\\\n\\\\n`; writing a single newline leaves the event unfinished in the client buffer.\", \"sources\": [\"https://html.spec.whatwg.org/multipage/server-sent-events.html\"]}\nGenerator notes: Claim that `TypedResults.ServerSentEvents(...)` taking an `IAsyncEnumerable<T>` exists in ASP.NET Core minimal APIs as of .NET 10 (added in .NET 10 previews); verify the exact method name and overloads.; Claim from the WHATWG spec that at end of stream any pending (undispatched) event data is discarded, and that after a normal close of the response EventSource reestablishes the connection (after the reconnection time) - verify wording in the 'Interpreting an event stream' and 'Processing model' sections.; Claim that a response whose Content-Type is not text/event-stream makes EventSource fail the connection (so the content type line is required and correct).; Code relies on `IHeaderDictionary.CacheControl` (strongly typed header property, available since .NET 6) and on minimal API binding of `HttpContext` and `CancellationToken` (bound to RequestAborted) as delegate parameters; the code was not compiled because harness is none.; MDN link https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events is used as the second source; confirm the URL resolves and that it describes the blank-line event terminator.\nMechanical evidence:\n- not executed (An ASP.NET Core minimal API endpoint needs the ASP.NET Core shared framework, a running host and a browser EventSource client, which the console sandbox does not provide.)\n- no mechanical failures\nNumbered code.source (quote every line listed in bugLineSets):\n  1 | var builder = WebApplication.CreateBuilder(args);\n  2 | var app = builder.Build();\n  3 | \n  4 | app.MapGet(\"/progress\", async (HttpContext context, CancellationToken ct) =>\n  5 | {\n  6 |     context.Response.ContentType = \"text/event-stream\";\n  7 |     context.Response.Headers.CacheControl = \"no-cache\";\n  8 | \n  9 |     for (int percent = 0; percent <= 100; percent += 10)\n 10 |     {\n 11 |         await context.Response.WriteAsync($\"data: {percent}\\n\", ct);\n 12 |         await context.Response.Body.FlushAsync(ct);\n 13 |         await Task.Delay(TimeSpan.FromSeconds(1), ct);\n 14 |     }\n 15 | });\n 16 | \n 17 | app.Run();\nLinks:\n- https://html.spec.whatwg.org/multipage/server-sent-events.html: status ok, title 'HTML Standard', fetched 2026-11-19T13:17:23Z\n  excerpt: [third-party text removed; sha256 a16bc0647e9d1e73d8dc8b24c84106f07a4fd4a5fcaa3dff75a64b340d505731]\n- https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events: status ok, title 'Using server-sent events - Web APIs | MDN', fetched 2026-11-19T13:17:23Z\n  excerpt: [third-party text removed; sha256 a5019e03c701dd04e02a96f7a046ea2ad8ff0619fc74089ded58fe5598bc1d99]\n",
+      "files": [
+        "docs/content-wave-2/outline/grpc-realtime.json",
+        "content/dotnet/grpc-realtime/sse-event-missing-blank-line.yaml"
+      ]
+    },
+    {
+      "id": "verify-r1-concurrency-1",
+      "text": "Fact-check round 1: 1 question(s). The question files and the topic outline are attached. Return exactly one verdict per stubId.\n\n## concurrency-03\npath: content/dotnet/concurrency/concurrentdictionary-indexer-increment-lost-updates.yaml\nstub: {\"stubId\": \"concurrency-03\", \"topic\": \"concurrency\", \"slug\": \"concurrentdictionary-indexer-increment-lost-updates\", \"level\": \"middle\", \"type\": \"find-bug\", \"subtopic\": \"Concurrent collections and race conditions\", \"angle\": \"Find the line in a Parallel.For word counter where dict[key] = dict[key] + 1 on a ConcurrentDictionary<string, int> loses counts.\", \"answerHinge\": \"ConcurrentDictionary makes each single call thread-safe, but a read through the indexer followed by a write is a compound read-modify-write that races, so the fix is an atomic AddOrUpdate call.\", \"sources\": [\"https://learn.microsoft.com/en-us/dotnet/api/system.collections.concurrent.concurrentdictionary-2.addorupdate\", \"https://learn.microsoft.com/en-us/dotnet/standard/collections/thread-safe/how-to-add-and-remove-items\"]}\nGenerator notes: The buggy snippet is not executed by run-snippets (only fixedSource is). Lost updates are likely but not guaranteed on every run, which is why the prompt says 'usually' and 'on a multi-core machine'. On a single-core sandbox the buggy version may print the correct totals.; Claim about the AddOrUpdate internals: it reads the current value, calls updateValueFactory outside the lock, then stores the result only if the stored value is still the one it read, and retries otherwise. This matches the ConcurrentDictionary source (TryUpdateInternal with a comparison value) and the Learn remark that the delegates are called outside the lock and may run more than once. It should be confirmed against the fetched docs.; The exact title of the second linked page ('How to add and remove items from a ConcurrentDictionary') was given from memory and should be checked against the live page.; Compile assumptions: the code relies on implicit usings (System.Linq for Distinct and Select, System.Threading.Tasks for Parallel) plus an explicit using of System.Collections.Concurrent. It also uses a discard lambda parameter `(_, current)`, which needs C# 9 or later. Expected fixed output: 'red=50000 green=25000 blue=25000'.\nMechanical evidence:\n- executed in the sandbox; declared {\"kind\": \"output\", \"value\": \"red=50000 green=25000 blue=25000\"}; actual {\"kind\": \"output\", \"value\": \"red=50000 green=25000 blue=25000\"}\n- warning: link unknown: https://learn.microsoft.com/en-us/dotnet/standard/collections/thread-safe/how-to-add-and-remove-items (429)\nNumbered code.source (quote every line listed in bugLineSets):\n  1 | using System.Collections.Concurrent;\n  2 | \n  3 | string[] words = { \"red\", \"green\", \"blue\", \"red\" };\n  4 | ConcurrentDictionary<string, int> counts = new();\n  5 | foreach (string word in words)\n  6 | {\n  7 |     counts.TryAdd(word, 0);\n  8 | }\n  9 | \n 10 | Parallel.For(0, 100_000, i =>\n 11 | {\n 12 |     string word = words[i % words.Length];\n 13 |     counts[word] = counts[word] + 1;\n 14 | });\n 15 | \n 16 | Console.WriteLine(string.Join(\" \", words.Distinct().Select(w => $\"{w}={counts[w]}\")));\nLinks:\n- https://learn.microsoft.com/en-us/dotnet/api/system.collections.concurrent.concurrentdictionary-2.addorupdate: status ok, title 'ConcurrentDictionary<TKey,TValue>.AddOrUpdate Method (System.Collections.Concurrent) | Microsoft Learn', fetched 2026-11-19T13:17:23Z\n  excerpt: [third-party text removed; sha256 dedd254c84b25d6908a1e1c33b97be21ac92961488baeca5bbe3f29ac0641759]\n- https://learn.microsoft.com/en-us/dotnet/standard/collections/thread-safe/how-to-add-and-remove-items: status ok, title 'Add and Remove Items from a ConcurrentDictionary - .NET | Microsoft Learn', fetched 2026-11-19T13:17:23Z\n  excerpt: [third-party text removed; sha256 c291bb2fb24a3f5848c2732d0513e8cab852c634c4941b130e9676e1d6ca87e4]\n",
+      "files": [
+        "docs/content-wave-2/outline/concurrency.json",
+        "content/dotnet/concurrency/concurrentdictionary-indexer-increment-lost-updates.yaml"
+      ]
+    },
+    {
+      "id": "verify-r1-cloud-containers-1",
+      "text": "Fact-check round 1: 2 question(s). The question files and the topic outline are attached. Return exactly one verdict per stubId.\n\n## cloud-containers-01\npath: content/dotnet/cloud-containers/aspnet-app-on-runtime-image-fails-to-start.yaml\nstub: {\"stubId\": \"cloud-containers-01\", \"topic\": \"cloud-containers\", \"slug\": \"aspnet-app-on-runtime-image-fails-to-start\", \"level\": \"junior\", \"type\": \"single\", \"subtopic\": \"Docker images for .NET\", \"angle\": \"A framework-dependent ASP.NET Core app fails to start on mcr.microsoft.com/dotnet/runtime:10.0; which official base image should the final stage use?\", \"answerHinge\": \"The runtime image contains only the .NET runtime, while the aspnet image adds the ASP.NET Core shared framework that a framework-dependent web app needs; runtime-deps fits only self-contained apps and sdk is for building.\", \"sources\": [\"https://learn.microsoft.com/en-us/dotnet/core/docker/container-images\"]}\nGenerator notes: Claim that the sdk image contains the ASP.NET Core runtime (the dotnet-docker sdk images are built on top of the aspnet images), so the app would actually start on sdk:10.0; option c is wrong only because sdk is meant for building, and the prompt says 'nothing unnecessary' to keep a single defensible answer.; The exact host error text is paraphrased as 'the framework Microsoft.AspNetCore.App was not found'; the real message reads roughly 'You must install or update .NET to run this application ... Framework: Microsoft.AspNetCore.App, version 10.0.x'. Check that the paraphrase matches.; Layering runtime-deps -> runtime -> aspnet -> sdk and the description of runtime-deps as 'only system dependencies, for self-contained apps' should be checked against the container-images page.; The second link points to the GitHub repository root https://github.com/dotnet/dotnet-docker as a general source on the image variants; a more specific page could replace it.\nMechanical evidence:\n- not executed (no code)\n- warning: link unknown: https://learn.microsoft.com/en-us/dotnet/core/docker/container-images (429)\nLinks:\n- https://learn.microsoft.com/en-us/dotnet/core/docker/container-images: status ok, title '.NET container images - .NET | Microsoft Learn', fetched 2026-11-19T13:17:23Z\n  excerpt: [third-party text removed; sha256 b457f3384397b604db73558fbcc04df749c2161f8b8e5a99a67e9fdd15a2c6b5]\n- https://github.com/dotnet/dotnet-docker: status ok, title 'GitHub - dotnet/dotnet-docker: Official container images for .NET · GitHub', fetched 2026-11-19T13:17:23Z\n  excerpt: [third-party text removed; sha256 8b7125fc401d633df28caca844ddd1e2d9b5b50dcff6e5e8a2444648c358eb14]\n\n## cloud-containers-03\npath: content/dotnet/cloud-containers/serverless-container-hosting-azure-aws.yaml\nstub: {\"stubId\": \"cloud-containers-03\", \"topic\": \"cloud-containers\", \"slug\": \"serverless-container-hosting-azure-aws\", \"level\": \"junior\", \"type\": \"multi\", \"subtopic\": \"Azure and AWS hosting choices\", \"angle\": \"Which Azure and AWS services run a .NET container image without the team managing servers or a cluster's nodes?\", \"answerHinge\": \"Azure Container Apps and Amazon ECS on AWS Fargate run containers on managed infrastructure, while Azure Virtual Machines and plain EC2 instances leave the OS and runtime host to the team.\", \"sources\": [\"https://learn.microsoft.com/en-us/azure/container-apps/overview\", \"https://docs.aws.amazon.com/AmazonECS/latest/developerguide/AWS_Fargate.html\"]}\nGenerator notes: Option e (ECS with the EC2 launch type) is marked wrong because the team manages the EC2 container instances. AWS has since added Amazon ECS Managed Instances, where AWS manages the instances; the option names the EC2 launch type specifically to avoid that ambiguity.; The statement that Azure Container Apps is built on Kubernetes internally (AKS) with the cluster hidden from users is based on the overview page wording ('powered by Kubernetes'); verify that phrasing.\nMechanical evidence:\n- not executed (no code)\n- no mechanical failures\nLinks:\n- https://learn.microsoft.com/en-us/azure/container-apps/overview: status ok, title 'Azure Container Apps overview | Microsoft Learn', fetched 2026-11-19T13:17:23Z\n  excerpt: [third-party text removed; sha256 6a5915179f137327523a0af28712d06c1ef7bffe2230182aaa860527c5b0733d]\n- https://docs.aws.amazon.com/AmazonECS/latest/developerguide/AWS_Fargate.html: status ok, title 'Architect for AWS Fargate for Amazon ECS - Amazon Elastic Container ServiceArchitect for AWS Fargate for Amazon ECS - Amazon Elastic Container Service', fetched 2026-11-19T13:17:23Z\n  excerpt: [third-party text removed; sha256 b1f16f59c6a3e10a37877ba21b34587304f385623221ce934701fd1a193335a4]\n",
+      "files": [
+        "docs/content-wave-2/outline/cloud-containers.json",
+        "content/dotnet/cloud-containers/aspnet-app-on-runtime-image-fails-to-start.yaml",
+        "content/dotnet/cloud-containers/serverless-container-hosting-azure-aws.yaml"
+      ]
+    },
+    {
+      "id": "verify-r1-csharp-1",
+      "text": "Fact-check round 1: 1 question(s). The question files and the topic outline are attached. Return exactly one verdict per stubId.\n\n## csharp-01\npath: content/dotnet/csharp/list-pattern-slice-match.yaml\nstub: {\"stubId\": \"csharp-01\", \"topic\": \"csharp\", \"slug\": \"list-pattern-slice-match\", \"level\": \"junior\", \"type\": \"output\", \"subtopic\": \"pattern matching\", \"angle\": \"What does code print that checks an int array against the list patterns [1, .., 4] and [1, 2]?\", \"answerHinge\": \"A list pattern (C# 11) must match the whole sequence length unless it has a slice `..`, so `[1, .., 4]` matches {1,2,3,4} and `[1, 2]` does not, printing `True False`.\", \"sources\": [\"https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/patterns\"]}\nGenerator notes: Claim that a list pattern may contain at most one slice pattern: matches the C# 11 list patterns rules as I recall them; please confirm on the patterns page.; Assumed the whats-new/csharp-11 page lists list patterns as a C# 11 feature, and that net10.0 projects default to C# 14.; Expected output 'True False' comes from tracing the code, not from a real run; run-snippets should confirm it. Bool interpolation prints 'True'/'False' regardless of the invariant culture.\nMechanical evidence:\n- executed in the sandbox; declared {\"kind\": \"output\", \"value\": \"True False\"}; actual {\"kind\": \"output\", \"value\": \"True False\"}\n- warning: link unknown: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/patterns (429)\n- warning: link unknown: https://learn.microsoft.com/en-us/dotnet/csharp/whats-new/csharp-11 (429)\nLinks:\n- https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/patterns: status ok, title 'Patterns - Pattern matching using the is and switch expressions. - C# reference | Microsoft Learn', fetched 2026-11-19T13:17:23Z\n  excerpt: [third-party text removed; sha256 3fa8812e87be1bf7199c97dcc217a00bca7ba64155f9f42cf21826a5f483be99]\n- https://learn.microsoft.com/en-us/dotnet/csharp/whats-new/csharp-11: status ok, title 'The history of C# | Microsoft Learn', fetched 2026-11-19T13:17:23Z, warning: redirected to a different page https://learn.microsoft.com/en-us/dotnet/csharp/whats-new/csharp-version-history#c-version-11\n  excerpt: [third-party text removed; sha256 ee3f3bfe5fa198ea4b615c18c7912edd0909bdbfde61467810fa8464ce4436a9]\n",
+      "files": [
+        "docs/content-wave-2/outline/csharp.json",
+        "content/dotnet/csharp/list-pattern-slice-match.yaml"
+      ]
+    }
+  ]
+}

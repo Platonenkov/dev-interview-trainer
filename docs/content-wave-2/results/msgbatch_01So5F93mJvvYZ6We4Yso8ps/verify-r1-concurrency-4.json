@@ -1,0 +1,72 @@
+{
+  "verdicts": [
+    {
+      "stubId": "concurrency-06",
+      "verdict": "fix",
+      "issues": [
+        {
+          "severity": "unsure",
+          "field": "locales.en.answer / locales.ru.answer",
+          "claim": "Under contention the runtime first spins for a short while ... and \u0060System.Threading.Lock\u0060 ... follows the same \u0022spin first, then block\u0022 scheme. / \u0060Monitor\u0060 already spins for a short time before blocking",
+          "problem": "This is the core of the answer, and none of the three fetched excerpts support it. The SpinLock overview, the SpinWait page and the SpinLock API page only say to prefer Monitor unless profiling shows otherwise. They do not say that Monitor or System.Threading.Lock spins before blocking. I believe it is true of the CoreCLR implementation, but the cited sources do not show it, so the question teaches an undocumented implementation detail as fact.",
+          "suggestedFix": "Add a link that supports it (dotnet/runtime source for the Monitor/AwareLock and Lock spin logic, kind: \u0060article\u0060 or \u0060spec\u0060 as appropriate), or soften the wording to \u0022in the CoreCLR implementation Monitor/Lock spins briefly before blocking (an implementation detail, not a documented guarantee)\u0022. Keep \u0060dotnetVersion\u0060 accurate."
+        },
+        {
+          "severity": "unsure",
+          "field": "locales.en.answer",
+          "claim": "a repeated \u0060Enter\u0060 on the same thread throws \u0060LockRecursionException\u0060 when owner tracking is enabled, and deadlocks when it is disabled / \u0060ManualResetEventSlim\u0060 with its \u0060SpinCount\u0060 property",
+          "problem": "The excerpts for the SpinLock pages (truncated) do not show the LockRecursionException behaviour on recursive Enter. The ManualResetEventSlim two-phase wait and SpinCount claim is not on any cited page. These claims also name a default-constructed SpinLock as tracking-enabled, which is not visible in the excerpts. I believe all of this is correct, but the cited excerpts do not demonstrate it.",
+          "suggestedFix": "Add the SpinLock.Enter API page (exceptions section) and the ManualResetEventSlim API page to \u0060links\u0060 with matching \u0060linkTitles\u0060 in both locales, or drop the ManualResetEventSlim example."
+        },
+        {
+          "severity": "minor",
+          "field": "locales.ru.answer",
+          "claim": "\u043F\u043E\u0442\u043E\u043A \u0437\u0430\u0441\u044B\u043F\u0430\u0435\u0442 \u043D\u0430 \u043E\u0431\u044A\u0435\u043A\u0442\u0435 \u043E\u0436\u0438\u0434\u0430\u043D\u0438\u044F \u041E\u0421 \u0438 \u043E\u0442\u0434\u0430\u0451\u0442 \u044F\u0434\u0440\u043E",
+          "problem": "In Russian \u0022\u044F\u0434\u0440\u043E\u0022 also means the OS kernel, so \u0022\u043E\u0442\u0434\u0430\u0451\u0442 \u044F\u0434\u0440\u043E\u0022 is ambiguous and reads oddly. The English says it gives up the core (CPU core).",
+          "suggestedFix": "\u0022...\u043F\u043E\u0442\u043E\u043A \u0437\u0430\u0441\u044B\u043F\u0430\u0435\u0442 \u043D\u0430 \u043E\u0431\u044A\u0435\u043A\u0442\u0435 \u043E\u0436\u0438\u0434\u0430\u043D\u0438\u044F \u041E\u0421 \u0438 \u043E\u0441\u0432\u043E\u0431\u043E\u0436\u0434\u0430\u0435\u0442 \u043F\u0440\u043E\u0446\u0435\u0441\u0441\u043E\u0440\u043D\u043E\u0435 \u044F\u0434\u0440\u043E\u0022."
+        },
+        {
+          "severity": "minor",
+          "field": "locales.en.answer",
+          "claim": "A waiting thread never sleeps on a kernel object: it spins, and as the number of attempts grows it yields its time slice",
+          "problem": "SpinLock\u0027s wait loop uses SpinWait and eventually Thread.Sleep(0)/Sleep(1), which is a timed sleep. The cited docs only say \u0022may yield the time slice\u0022. \u0022Never sleeps\u0022 could mislead.",
+          "suggestedFix": "Say \u0022it never blocks on a kernel wait object for the lock; as attempts grow it yields or briefly sleeps, but keeps polling the lock\u0022."
+        }
+      ]
+    },
+    {
+      "stubId": "concurrency-07",
+      "verdict": "fix",
+      "issues": [
+        {
+          "severity": "major",
+          "field": "code.harness",
+          "claim": "harness: none; noRunReason: The snippet is an illustrative class without an entry point...",
+          "problem": "The snippet uses only the BCL (Queue\u003CT\u003E, Monitor, lock). Under the executable code rule a BCL-only snippet must be runnable (harness \u0060statements\u0060 or \u0060program\u0060) whatever the topic. \u0022No entry point\u0022 is not a valid reason for \u0060none\u0060, because a Main can be added.",
+          "suggestedFix": "Change \u0060harness\u0060 to \u0060program\u0060, add a small \u0060Program\u0060 class with \u0060Main\u0060 that exercises \u0060BoundedBuffer\u003Cint\u003E\u0060 (for example one producer and one consumer, printing nothing nondeterministic), and remove \u0060meta.noRunReason\u0060."
+        },
+        {
+          "severity": "minor",
+          "field": "locales.ru.hint / locales.en.hint",
+          "claim": "\u041A\u0430\u043A \u043F\u0440\u043E\u0438\u0437\u0432\u043E\u0434\u0438\u0442\u0435\u043B\u044C \u0432\u043E\u043E\u0431\u0449\u0435 \u0441\u043C\u043E\u0433 \u0431\u044B \u0432\u043E\u0439\u0442\u0438 \u0432 \u0060lock (_gate)\u0060 \u0438 \u0432\u044B\u0437\u0432\u0430\u0442\u044C \u0060PulseAll\u0060, \u043F\u043E\u043A\u0430 \u043F\u043E\u0442\u0440\u0435\u0431\u0438\u0442\u0435\u043B\u044C \u043D\u0430\u0445\u043E\u0434\u0438\u0442\u0441\u044F \u0432\u043D\u0443\u0442\u0440\u0438 \u0060Wait\u0060?",
+          "problem": "The first sentence of the hint effectively states half of the answer (Wait must release the lock) and eliminates option b. It is stronger than a nudge.",
+          "suggestedFix": "Keep only the second sentence, as a nudge toward the real hinge: \u0022What can other threads do between the signal and the moment \u0060Wait\u0060 returns control to the woken thread?\u0022"
+        },
+        {
+          "severity": "minor",
+          "field": "options[a]",
+          "claim": "Option a is much longer and more detailed than b, c and d",
+          "problem": "The correct option is visibly the longest and most hedged, so a candidate can guess it by form.",
+          "suggestedFix": "Shorten option a or lengthen the distractors so all four options are similar in length and detail."
+        },
+        {
+          "severity": "minor",
+          "field": "locales.en.options.b / locales.ru.options.b",
+          "claim": "a \u0060Pulse\u0060 signal is sometimes lost and the wait has to be repeated",
+          "problem": "The explanation itself says Monitor does not remember a Pulse when nobody is waiting, so a Pulse can in a sense be \u0022lost\u0022. The option is still wrong because of its first clause, so this only makes the distractor slightly muddier.",
+          "suggestedFix": "Make the second clause clearly false, e.g. \u0022the \u0060while\u0060 loop is needed because \u0060Wait\u0060 randomly returns without any \u0060Pulse\u0060 (spurious wakeups are documented)\u0022, or leave it and rely on the first clause."
+        }
+      ]
+    }
+  ]
+}

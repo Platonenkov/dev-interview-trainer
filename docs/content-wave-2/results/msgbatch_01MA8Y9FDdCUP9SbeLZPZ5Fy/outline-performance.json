@@ -1,0 +1,169 @@
+{
+  "topic": "performance",
+  "stubs": [
+    {
+      "slug": "stringbuilder-capacity-vs-length",
+      "level": "junior",
+      "type": "output",
+      "subtopic": "allocations",
+      "angle": "What do Length and Capacity print for a StringBuilder created with capacity 100 after appending three characters?",
+      "answerHinge": "The constructor capacity preallocates the buffer without adding characters, so Length is 3 and Capacity stays 100; the snippet prints \u00223 100\u0022.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/api/system.text.stringbuilder.capacity",
+        "https://learn.microsoft.com/en-us/dotnet/standard/base-types/stringbuilder"
+      ]
+    },
+    {
+      "slug": "memorydiagnoser-allocated-column",
+      "level": "junior",
+      "type": "single",
+      "subtopic": "benchmarking",
+      "angle": "Which BenchmarkDotNet attribute adds the allocated bytes per operation and GC collection columns to the results?",
+      "answerHinge": "[MemoryDiagnoser] turns on the memory diagnoser, which reports Allocated per operation and the Gen0/Gen1/Gen2 collection columns; timing-only runs do not show allocations.",
+      "sources": [
+        "https://benchmarkdotnet.org/articles/configs/diagnosers.html"
+      ]
+    },
+    {
+      "slug": "params-empty-call-uses-array-empty",
+      "level": "middle",
+      "type": "output",
+      "subtopic": "allocations",
+      "angle": "What does ReferenceEquals print for the arrays received by a params int[] method called twice with no arguments and twice with one argument?",
+      "answerHinge": "For a call with no params arguments the C# compiler passes the shared Array.Empty\u003Cint\u003E() instance, while each call with arguments allocates a new array, so the snippet prints \u0022True False\u0022 on .NET 10 with C# 14.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/method-parameters",
+        "https://learn.microsoft.com/en-us/dotnet/api/system.array.empty"
+      ]
+    },
+    {
+      "slug": "pooled-stringbuilder-missing-clear",
+      "level": "middle",
+      "type": "find-bug",
+      "subtopic": "pooling",
+      "angle": "Find the line in a hand-written Stack\u003CStringBuilder\u003E pool that makes the second formatted message contain text from the first one.",
+      "answerHinge": "The pool returns the StringBuilder without calling Clear, so the next renter appends to the previous content; a pooled object must be reset on return, as StringBuilderPooledObjectPolicy does.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/api/system.text.stringbuilder.clear",
+        "https://learn.microsoft.com/en-us/aspnet/core/performance/objectpool"
+      ]
+    },
+    {
+      "slug": "sliding-expiration-hot-entry-never-expires",
+      "level": "middle",
+      "type": "single",
+      "subtopic": "caching",
+      "angle": "What happens to a frequently read IMemoryCache entry that has only SlidingExpiration set when the underlying data changes?",
+      "answerHinge": "Every read resets the sliding window, so an entry read more often than the window never expires and serves stale data indefinitely unless an absolute expiration caps its lifetime.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/aspnet/core/performance/caching/memory"
+      ]
+    },
+    {
+      "slug": "hidden-allocations-in-hot-loop",
+      "level": "middle",
+      "type": "multi",
+      "subtopic": "allocations",
+      "angle": "Which of the listed lines in a hot loop allocate on the managed heap on each execution?",
+      "answerHinge": "A foreach over a List\u003CT\u003E held in an IEnumerable\u003CT\u003E variable boxes the struct enumerator, a lambda capturing a local allocates a closure, and interpolating into a string allocates; a direct foreach over List\u003CT\u003E and a non-capturing lambda (cached delegate) do not.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.list-1.getenumerator",
+        "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/statements/iteration-statements"
+      ]
+    },
+    {
+      "slug": "getvaluereforadddefault-single-lookup-count",
+      "level": "senior",
+      "type": "output",
+      "subtopic": "allocations",
+      "angle": "What does a word counter print when it increments counts through a ref returned by CollectionsMarshal.GetValueRefOrAddDefault?",
+      "answerHinge": "GetValueRefOrAddDefault returns a ref to the value slot inside the dictionary, adding a default entry if missing, so incrementing the ref updates the stored count with a single hash lookup and the counter prints \u00222 1\u0022.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/api/system.runtime.interopservices.collectionsmarshal.getvaluereforadddefault"
+      ]
+    },
+    {
+      "slug": "memorystream-getbuffer-unused-capacity",
+      "level": "senior",
+      "type": "find-bug",
+      "subtopic": "allocations",
+      "angle": "Find the line that makes a payload serialized through MemoryStream.GetBuffer, used to avoid the ToArray copy, come out with hundreds of extra zero bytes.",
+      "answerHinge": "GetBuffer returns the whole internal array including unused capacity, so only the first Length bytes are valid; the fix slices GetBuffer to (int)stream.Length or uses TryGetBuffer.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/api/system.io.memorystream.getbuffer",
+        "https://learn.microsoft.com/en-us/dotnet/api/system.io.memorystream.trygetbuffer"
+      ]
+    },
+    {
+      "slug": "cpu-sampling-misses-blocked-time",
+      "level": "senior",
+      "type": "multi",
+      "subtopic": "profiling",
+      "angle": "An endpoint takes two seconds while CPU stays low and a CPU sampling trace shows nothing hot: which conclusions and next steps are valid?",
+      "answerHinge": "CPU sampling only records threads that are running on a CPU, so time spent waiting on I/O, locks or the thread pool is invisible in it; you need wall-clock or thread-time views, or distributed tracing, to see where the request waits.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-trace",
+        "https://learn.microsoft.com/en-us/visualstudio/profiling/cpu-usage"
+      ]
+    },
+    {
+      "slug": "benchmark-baseline-ratio-and-params",
+      "level": "senior",
+      "type": "open",
+      "subtopic": "benchmarking",
+      "angle": "How do you design a BenchmarkDotNet comparison that convincingly shows a new parser is faster than the old one across realistic inputs?",
+      "answerHinge": "Mark the old implementation as the baseline and read the Ratio column, use [Params] with realistic input sizes, and only claim a gain when the difference exceeds the reported error and standard deviation and allocations are compared too.",
+      "sources": [
+        "https://benchmarkdotnet.org/articles/features/parameterization.html",
+        "https://benchmarkdotnet.org/articles/guides/good-practices.html"
+      ]
+    },
+    {
+      "slug": "performance-goals-before-optimizing",
+      "level": "lead",
+      "type": "situation",
+      "subtopic": "profiling",
+      "angle": "Users say the product is slow, there are no performance requirements, and each developer wants to optimize a different part of the code: what do you do as the lead?",
+      "answerHinge": "First agree on a measurable goal (for example p95 latency under a stated load), then profile to find the largest contributor, fix the top item, verify against the goal and keep a regression check, instead of optimizing by guesswork.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/core/diagnostics/",
+        "https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-counters"
+      ]
+    },
+    {
+      "slug": "benchmark-regression-noisy-ci-runners",
+      "level": "lead",
+      "type": "single",
+      "subtopic": "benchmarking",
+      "angle": "Benchmark results in CI on shared runners vary by 20% between runs: which approach to catching performance regressions should the team adopt?",
+      "answerHinge": "Run the baseline and the candidate in the same job on the same dedicated machine and compare them with a statistical threshold, because absolute numbers stored from different shared machines are dominated by environment noise.",
+      "sources": [
+        "https://benchmarkdotnet.org/articles/guides/good-practices.html"
+      ]
+    },
+    {
+      "slug": "continuous-profiling-production-rollout",
+      "level": "lead",
+      "type": "open",
+      "subtopic": "profiling",
+      "angle": "How do you decide whether and how to collect profiles and traces from production services continuously or on demand?",
+      "answerHinge": "The decision weighs collection overhead and data sensitivity against time to diagnosis: start with on-demand or triggered collection (for example dotnet-monitor rules) on a subset of instances, agree who owns and reviews the data, and widen only after measuring the overhead.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-monitor",
+        "https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-trace"
+      ]
+    },
+    {
+      "slug": "cache-key-versioning-rolling-deploy",
+      "level": "architect",
+      "type": "open",
+      "subtopic": "caching",
+      "angle": "How do you keep a shared distributed cache safe across years of rolling deployments when the shape of cached objects changes?",
+      "answerHinge": "Old and new versions run side by side and read the same keys, so the serialized schema version must be part of the cache key or payload and readers must tolerate or skip incompatible entries, otherwise a deployment turns cache hits into deserialization failures or wrong data.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/aspnet/core/performance/caching/distributed",
+        "https://learn.microsoft.com/en-us/aspnet/core/performance/caching/hybrid"
+      ]
+    }
+  ]
+}

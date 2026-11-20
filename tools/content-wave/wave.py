@@ -176,19 +176,44 @@ def _outstanding(ledger: dict) -> list[dict]:
 
 
 def actual_spent(ledger: dict) -> float | None:
-    """Wave spend from the latest `review_budget` reading.
+    """Wave spend from the `review_budget` readings and the collected batches, summed over UTC days.
 
-    The server books an uncollected batch at its estimate and replaces it by the actual cost on collect, so the
-    estimates of batches that were outstanding when the reading was taken are inside the reading and are taken out
-    here; `ledger_check` adds every currently outstanding estimate back exactly once.
+    Attribution rule: the server books every batch under the UTC day it was submitted (the ledger's
+    `submits[].dayUtc`), at its estimate while uncollected and at its actual cost after collect, even when the
+    collect happens on a later day. Spend of day d:
+
+    - with a reading r (the latest of day d): `r.usd - r.baselineUsd` minus the estimates of the batches that were
+      outstanding at r (they are inside `r.usd` at their estimate), plus the actual cost of the day's collected
+      batches that were outstanding at r or submitted after r (r cannot contain their actual cost);
+    - without a reading for d: the actual cost of the day's collected batches.
+
+    Spend that is not in the ledger (a `review_now` call, an aborted batch) stays inside `r.usd`, which is why
+    this is additive instead of a maximum. Uncollected batches stay out; `ledger_check` adds their estimates.
     """
     readings = ledger.get("readings", [])
     if not readings:
         return None
-    latest = readings[-1]
-    estimates = {s.get("batchId"): float(s.get("estimateUsd", 0)) for s in ledger.get("submits", [])}
-    held = sum(estimates.get(batch_id, 0.0) for batch_id in latest.get("outstandingAtReading", []))
-    return float(latest["usd"]) - float(latest.get("baselineUsd", 0)) - held
+    submits = ledger.get("submits", [])
+    estimates = {s.get("batchId"): float(s.get("estimateUsd", 0)) for s in submits}
+    collected_by_day: dict[str, list[dict]] = {}
+    for submit in submits:
+        if submit.get("status") == "collected" and submit.get("dayUtc"):
+            collected_by_day.setdefault(submit["dayUtc"], []).append(submit)
+    latest_by_day = {reading["utc"][:10]: reading for reading in readings}
+    total = 0.0
+    for day in sorted(set(latest_by_day) | set(collected_by_day)):
+        collected = collected_by_day.get(day, [])
+        reading = latest_by_day.get(day)
+        if reading is None:
+            total += sum(float(s.get("actualUsd") or 0) for s in collected)
+            continue
+        held_ids = set(reading.get("outstandingAtReading", []))
+        held = sum(estimates.get(batch_id, 0.0) for batch_id in held_ids)
+        total += float(reading["usd"]) - float(reading.get("baselineUsd", 0)) - held
+        # A submit without `submittedUtc` cannot be placed before the reading, so it is counted (fail closed).
+        total += sum(float(s.get("actualUsd") or 0) for s in collected
+                     if s.get("batchId") in held_ids or (s.get("submittedUtc") or "9") > reading["utc"])
+    return total
 
 
 STAGES = ("outline", "dedupe", "gen", "verify", "repair")
@@ -200,8 +225,12 @@ def _stage_share(shares: dict, stage: str | None, fallback: float) -> float:
     return float(shares.get(stage, fallback)) if stage else fallback
 
 
+NO_TODAY_READING = "no budget reading for today (UTC); run review_budget and budget --record first"
+
+
 def ledger_check(ledger: dict, submit_estimate: float, forecast_remaining: float, budget: float,
-                 floor: float, limits: dict | None = None, stage: str | None = None) -> tuple[bool, str]:
+                 floor: float, limits: dict | None = None, stage: str | None = None,
+                 today: str | None = None) -> tuple[bool, str]:
     """True iff every active rule holds.
 
     envelope: actual spent + outstanding estimates + this submit + forecast of remaining stages <= budget - floor.
@@ -209,10 +238,13 @@ def ledger_check(ledger: dict, submit_estimate: float, forecast_remaining: float
     outstanding estimate and this submit at `maxActualShare` (default 0.6), `forecast` books them at the expected
     share of their stage (`expectedActualShare`, defaults above; a submit without a recorded stage counts at
     `maxActualShare`) and adds `forecast_remaining`, which covers only the stages after this submit.
+    With `today` (a UTC date, passed in so this stays pure) the latest reading must be from that day.
     """
     spent = actual_spent(ledger)
     if spent is None:
         return False, "no budget reading: run review_budget and `wave.py budget --record <usd>` first"
+    if today is not None and ledger["readings"][-1]["utc"][:10] != today:
+        return False, NO_TODAY_READING
     limits = limits or {}
     estimate = float(submit_estimate)
     forecast = float(forecast_remaining)
@@ -251,14 +283,24 @@ def submit_gate(targets: dict, ledger: dict, estimate: float, now: dt.datetime) 
         problems.append(f"past the submit cutoff {cutoff}")
     if estimate > float(targets.get("capPerSubmitUsd", math.inf)):
         problems.append(f"estimate {estimate:.2f} exceeds the per-submit cap {targets['capPerSubmitUsd']}")
-    readings = ledger.get("readings", [])
-    if readings:
+    today = now.strftime("%Y-%m-%d")
+    readings = [r for r in ledger.get("readings", []) if r["utc"][:10] == today]
+    if not readings:
+        problems.append(NO_TODAY_READING)
+    else:
         latest = readings[-1]
+        held_ids = latest.get("outstandingAtReading", [])
+        # The reading holds its outstanding batches at their estimate; later submits are in neither the reading nor
+        # (once collected) the outstanding list, so their actual cost is added from the ledger.
         day_total = float(latest["usd"]) + sum(
-            float(s.get("estimateUsd", 0)) for s in _outstanding(ledger)
-            if s.get("batchId") not in latest.get("outstandingAtReading", []))
+            float(s.get("estimateUsd", 0)) for s in _outstanding(ledger) if s.get("batchId") not in held_ids)
+        day_total += sum(
+            float(s.get("actualUsd") or 0) for s in ledger.get("submits", [])
+            if s.get("status") == "collected" and s.get("dayUtc") == today and s.get("batchId") not in held_ids
+            and (s.get("submittedUtc") or "9") > latest["utc"])
         if day_total + estimate > float(targets.get("capPerDayUsd", math.inf)):
-            problems.append(f"day total {day_total + estimate:.2f} would exceed the per-day cap {targets['capPerDayUsd']}")
+            problems.append(f"day total {day_total + estimate:.2f} would exceed the per-day cap "
+                            f"{targets['capPerDayUsd']}")
     return problems
 
 
@@ -1303,10 +1345,21 @@ def build_question_items(chunks: list[list[dict]], targets: dict, worktree: Path
 
 def gen_item_text(chunk: list[dict], today: str) -> str:
     stubs = json.dumps([stub_payload(r) for r in chunk], indent=2, ensure_ascii=False)
-    return (f"Write {len(chunk)} question(s), one per stub below. Set meta.verified to the placeholder "
+    text = (f"Write {len(chunk)} question(s), one per stub below. Set meta.verified to the placeholder "
             f"{VERIFIED_SENTINEL}: only a fact-check pass sets the real date.\n"
             f"Keep every stub's slug, level, type and topic exactly. Do not write an id line.\n\n"
             f"Stubs (JSON):\n{stubs}\n")
+    return text + "".join(reopen_paragraph(r) for r in chunk)
+
+
+def reopen_paragraph(record: dict) -> str:
+    """Tells the generator what the fact-checker rejected in an earlier draft of a reopened stub."""
+    issues = [i for entry in record.get("reopened", []) for i in entry.get("issues", [])]
+    if not issues:
+        return ""
+    bullets = "\n".join(f"- {i.get('field', '')}: {i.get('problem', '')}" for i in issues)
+    return (f"\nStub {record['stubId']}: a previous draft of this question was rejected by the fact-checker "
+            f"for these issues; do not repeat them:\n{bullets}\n")
 
 
 def base_task(model: str, instructions: str, shared: list[str], schema: dict, ref: str, effort: str = "high") -> dict:
@@ -1628,7 +1681,11 @@ def prepare_body(yaml: str) -> str:
 
 def requested_change(record: dict, field: str, value: str) -> bool:
     """A level or type change is allowed in repair only when a verdict issue on that field requested it."""
+    # Verdicts on a draft rejected before a reopen judged other text; they must not license a change now.
+    cutoff = record["reopened"][-1]["utc"] if record.get("reopened") else ""
     for verdict in record.get("verdicts", []):
+        if verdict.get("utc", "") < cutoff:
+            continue
         for issue in verdict.get("issues", []):
             if issue.get("field") == field and value in str(issue.get("suggestedFix", "")):
                 return True
@@ -1744,10 +1801,11 @@ def apply_batch(batch_path, stage: str, wave_dir: Path, worktree: Path, batch_id
             if same:
                 record["yamlHistory"].append({**history, "unchanged": True})
                 summary["warnings"].append(f"{record['stubId']}: {stage} output identical to an applied version")
-                if stage == "repair":
-                    fail_record(record, stage, batch["batchId"], item_id, "unchanged", "repair returned the same YAML",
-                                worktree, wave_dir, key)
-                    summary["failed"].append(f"{record['stubId']}: unchanged: repair returned the same YAML")
+                # A reopened stub has no file to keep: the same text as a retired draft is a failed generation.
+                if stage == "repair" or record.get("reopened"):
+                    fail_record(record, stage, batch["batchId"], item_id, "unchanged",
+                                f"{stage} returned the same YAML", worktree, wave_dir, key)
+                    summary["failed"].append(f"{record['stubId']}: unchanged: {stage} returned the same YAML")
                 continue
             try:
                 body = set_verified(prepare_body(entry["yaml"]), VERIFIED_SENTINEL)
@@ -2517,6 +2575,34 @@ def verify_instructions(wave_dir: Path, worktree: Path) -> str:
     )
 
 
+def _strip_link_blocks(text: str) -> str:
+    """Drops the top-level `links:` block and every `linkTitles:` value; the layout is fixed by the schema.
+
+    A block ends at the first non-blank line that is neither more indented than its key nor a list item at the
+    key's own indent (YAML allows `- ` at the parent indent).
+    """
+    out = []
+    skipping: int | None = None
+    for line in text.split("\n"):
+        stripped = line.strip()
+        indent = len(line) - len(line.lstrip())
+        if skipping is not None:
+            if not stripped or indent > skipping or (indent == skipping and stripped.startswith("-")):
+                continue
+            skipping = None
+        if re.match(r"^links:", line) or re.match(r"^\s+linkTitles:", line):
+            skipping = indent
+            continue
+        out.append(line)
+    return "\n".join(out)
+
+
+def content_hash_without_links(text: str) -> str:
+    """`content_hash` with the link URLs and their titles removed, so a link-only edit keeps the same value."""
+    masked = _mask_verified(normalise_text(text))
+    return hashlib.sha256(_strip_link_blocks(masked).encode("utf-8")).hexdigest()
+
+
 def verify_shared(wave_dir: Path, worktree: Path) -> list[str]:
     return [wave_rel(wave_dir, worktree, "prompts", "verify.md"), "docs/content-guide.md"]
 
@@ -2527,6 +2613,11 @@ SURVIVOR_STATUSES = {"verify-pass", "owner-review", "final", "owner-edited"}
 def file_hash(worktree: Path, record: dict) -> str | None:
     path = worktree / record["path"]
     return content_hash(path.read_text(encoding="utf-8")) if path.is_file() else None
+
+
+def file_hash_no_links(worktree: Path, record: dict) -> str | None:
+    path = worktree / record["path"]
+    return content_hash_without_links(path.read_text(encoding="utf-8")) if path.is_file() else None
 
 
 def numbered_source(source: str) -> str:
@@ -2810,6 +2901,8 @@ def apply_verdicts(batch_path, round_: int, wave_dir: Path, worktree: Path, batc
             record["attempts"]["verify"] = record["attempts"].get("verify", 0) + 1
             if entry["verdict"] == "pass" and mech_ok(record, current):
                 verdict["verifiedDate"] = today
+                # Lets owner-check tell a link-only edit after the pass from an edit of the checked content.
+                verdict["hashNoLinks"] = file_hash_no_links(worktree, record)
                 record["verdicts"].append(verdict)
                 record["pendingFileOp"] = {"op": "verify", "date": today}
                 record["status"] = "verify-pass"
@@ -3072,6 +3165,40 @@ def resolve(state: dict, stub_id: str, as_status: str, reason: str, worktree: Pa
     record["status"] = as_status
 
 
+def reopen(state: dict, stub_id: str, reason: str, worktree: Path, wave_dir: Path) -> None:
+    """Gives a rejected stub one more generation; the audit trail (verdicts, history, notes) stays.
+
+    A journalled reject op is completed first: dropping it would leave the rejected file in content/, where
+    owner-review or the final gate could publish it.
+    """
+    record = state.get(stub_id)
+    if record is None:
+        raise WaveError(f"unknown stubId {stub_id}")
+    if record["status"] != "rejected":
+        raise WaveError(f"{stub_id} is {record['status']}, only a rejected stub can be reopened")
+    if not reason.strip():
+        raise WaveError("a reason is required")
+    if record.get("reopened"):
+        raise WaveError(f"{stub_id} was already reopened once; a second failure stops for the owner")
+    if record.get("pendingFileOp"):
+        complete_file_ops({stub_id: record}, worktree, wave_dir)
+    if (worktree / record["path"]).is_file():
+        raise WaveError(f"{stub_id}: the rejected file is still at {record['path']}; retire it first")
+    last = current_verdict(record)
+    issues = [{"field": i.get("field"), "problem": i.get("problem")}
+              for i in (last or {}).get("issues", []) if i.get("severity") in ("blocker", "major")]
+    stamp = utc_stamp()
+    record.setdefault("reopened", []).append({"utc": stamp, "reason": reason, "issues": issues})
+    record["notes"].append({"stage": "reopen", "text": reason, "utc": stamp})
+    if record.get("failures"):
+        # retry_left counts failures per stage, so old ones would eat the fresh generation's retry budget.
+        record.setdefault("failuresBeforeReopen", []).extend(record["failures"])
+        record["failures"] = []
+    record["attempts"] = {"gen": 0, "verify": 0, "repair": 0}
+    record["status"] = "planned"
+    record.pop("unverifiedRound", None)
+
+
 def unresolved(state: dict) -> list[dict]:
     done = TERMINAL_STATUSES | {"final", "owner-edited"}
     return [r for r in state.values() if r["status"] not in done]
@@ -3251,24 +3378,85 @@ def owner_approve(state: dict, stub_id: str, reason: str, worktree: Path, today:
     record["notes"].append({"stage": "owner-approve", "text": reason, "utc": utc_stamp()})
 
 
+def _edited_after_pass(record: dict, worktree: Path) -> str | None:
+    """None when the file is the passed content, "links" for a link-only change, "content" for anything else."""
+    passes = [v for v in record["verdicts"] if v.get("verdict") == "pass" and not v.get("stale")
+              and not v.get("invalid")]
+    if not passes:
+        return None
+    current = file_hash(worktree, record)
+    if passes[-1]["hash"] == current:
+        return None
+    pass_no_links = passes[-1].get("hashNoLinks")
+    if current and pass_no_links and file_hash_no_links(worktree, record) == pass_no_links:
+        return "links"
+    return "content"
+
+
+def _record_edit(record: dict, kind: str, pass_hash: str, new_hash: str, text: str) -> None:
+    stamp = utc_stamp()
+    record["notes"].append({"stage": "owner-check", "text": text, "utc": stamp})
+    record["editedAfterPass"] = {"passHash": pass_hash, "hash": new_hash, "kind": kind, "utc": stamp}
+    record.setdefault("editHistory", []).append(dict(record["editedAfterPass"]))
+
+
 def owner_check(state: dict, worktree: Path, wave_dir: Path, cli, today: str) -> tuple[list[str], list[str]]:
-    """Files whose hash differs from their `final` hash: fresh mechanical evidence, `owner-edited`, new date."""
-    changed = [r for r in state.values() if (r.get("finalHash") and r["status"] == "final"
-                                             and file_hash(worktree, r) != r["finalHash"])
-               or (r["status"] == "owner-edited" and file_hash(worktree, r) != r.get("ownerEditedHash"))]
+    """Files whose hash differs from their `final` hash: fresh mechanical evidence, `owner-edited`, new date.
+
+    A verify-pass file edited before the final gate (a link that died after its pass) takes the same path, but
+    only for a link-only edit: the gate would otherwise refuse both the dead link and the fix, while any other
+    change was never fact-checked and must go through verify again. Such an edit keeps the date of its pass.
+    """
+    complete_file_ops(state, worktree, wave_dir)
+    failures: list[str] = []
+    changed: list[tuple[dict, str]] = []
+    for record in state.values():
+        status = record["status"]
+        if status == "final" and record.get("finalHash") and file_hash(worktree, record) != record["finalHash"]:
+            changed.append((record, "owner"))
+        elif status == "owner-edited" and file_hash(worktree, record) != record.get("ownerEditedHash"):
+            if (record.get("editedAfterPass") or {}).get("kind") == "links":
+                # Only a link change was ever accepted for this file without the owner reading it, so a later
+                # edit is judged against the passed content again, not waved through as an owner edit.
+                kind = _edited_after_pass(record, worktree)
+                if kind == "content":
+                    failures.append(f"{record['path']}: content changed after its pass verdict; re-verify it "
+                                    "(verify-tasks) or revert")
+                elif kind == "links":
+                    changed.append((record, "links"))
+            else:
+                changed.append((record, "owner"))
+        elif status == "verify-pass":
+            kind = _edited_after_pass(record, worktree)
+            if kind == "content":
+                failures.append(f"{record['path']}: content changed after its pass verdict; re-verify it "
+                                "(verify-tasks) or revert")
+            elif kind == "links":
+                changed.append((record, "links"))
     if not changed:
-        return [], []
+        return failures, []
     mech(state, worktree, wave_dir, cli, quarantine_read_issues=False)
-    failures, edited = [], []
-    for record in changed:
+    edited = []
+    for record, kind in changed:
         mech_evidence = record["evidence"].get("mech") or {}
         if not mech_evidence.get("ok"):
             failures.append(f"{record['path']}: " + "; ".join(mech_evidence.get("issues", [])))
             continue
-        mark_verified(record, worktree, today)
-        record["verifiedDate"] = today
+        if kind == "links":
+            passes = [v for v in record["verdicts"] if v.get("verdict") == "pass" and not v.get("stale")
+                      and not v.get("invalid")]
+            pass_hash = passes[-1]["hash"]
+            date = passes[-1].get("verifiedDate") or record.get("verifiedDate") or today
+        else:
+            pass_hash = record.get("finalHash") if record["status"] == "final" else record.get("ownerEditedHash")
+            date = today
+        mark_verified(record, worktree, date)
+        record["verifiedDate"] = date
         record["status"] = "owner-edited"
         record["ownerEditedHash"] = file_hash(worktree, record)
+        label = "link-only edit after pass" if kind == "links" else "owner edit after"
+        _record_edit(record, kind, pass_hash or "", record["ownerEditedHash"],
+                     f"{label} {pass_hash} -> {record['ownerEditedHash']}")
         edited.append(record["path"])
     return failures, edited
 
@@ -3277,8 +3465,8 @@ def owner_check(state: dict, worktree: Path, wave_dir: Path, cli, today: str) ->
 
 REPORT_COLUMNS = ["path", "level", "type", "risk", "verified", "executed", "actual_result", "links", "verdict_rounds",
                   "warnings", "owner_read"]
-RISK_PRIORITY = ["lead/architect", "situation", "owner-review", "repaired", "not executed", "link unknown",
-                 "parity warning"]
+RISK_PRIORITY = ["lead/architect", "situation", "owner-review", "edited after pass", "reopened", "repaired",
+                 "not executed", "link unknown", "parity warning"]
 CODE_BEARING_TYPES = ("output", "find-bug", "single", "multi")
 
 
@@ -3290,8 +3478,12 @@ def risk_flags(record: dict) -> list[str]:
         flags.append("lead/architect")
     if record["type"] == "situation":
         flags.append("situation")
+    if record.get("reopened"):
+        flags.append("reopened")
     if record["status"] == "owner-review":
         flags.append("owner-review")
+    if record.get("editedAfterPass"):
+        flags.append("edited after pass")
     if any(h["stage"] == "repair" and not h.get("rejected") for h in record["yamlHistory"]):
         flags.append("repaired")
     if record["type"] in CODE_BEARING_TYPES and result and not result.get("executed") \
@@ -3319,6 +3511,12 @@ def _acceptance_text(record: dict, current_hash: str | None) -> str:
     return " (acceptance stale: file changed after the gate)" if record.get("ownerReviewAccepted") else ""
 
 
+def _verified_text(record: dict) -> str:
+    verified = record.get("verifiedDate") or ""
+    edit = record.get("editedAfterPass")
+    return f"{verified} (edited {edit['utc'][:10]}: {edit['kind']})" if edit else verified
+
+
 def report_row(record: dict, current_hash: str | None = None) -> dict:
     mech_evidence = record["evidence"].get("mech") or {}
     result = mech_evidence.get("result") or {}
@@ -3329,7 +3527,7 @@ def report_row(record: dict, current_hash: str | None = None) -> dict:
     return {"path": record["path"], "level": record["level"], "type": record["type"],
             "risk": ", ".join(risk_flags(record)),
             "verified": ("UNVERIFIED" + _acceptance_text(record, current_hash))
-            if record["status"] == "owner-review" else (record.get("verifiedDate") or ""),
+            if record["status"] == "owner-review" else _verified_text(record),
             "executed": "yes" if result.get("executed") else "no",
             "actual_result": "" if not actual else f"{actual.get('kind')}: {actual.get('value')}",
             "links": links, "verdict_rounds": rounds,
@@ -3348,7 +3546,8 @@ def _mech_warnings_for_report(mech_evidence: dict, record: dict) -> list[str]:
 
 
 def build_report(state: dict, targets: dict, group: str, seed_levels: dict,
-                 seed_types: dict | None = None, worktree: Path | None = None) -> tuple[str, list[dict]]:
+                 seed_types: dict | None = None, worktree: Path | None = None,
+                 wave_name: str = "content-wave") -> tuple[str, list[dict]]:
     import random
 
     def current(record):
@@ -3369,7 +3568,7 @@ def build_report(state: dict, targets: dict, group: str, seed_levels: dict,
 
     ordered = sorted(risky, key=risk_key) + sorted(sample, key=lambda r: r["path"])
     rows = [report_row(r, current(r)) for r in ordered]
-    lines = [f"# Wave 1 review sheet: {group}", "",
+    lines = [f"# {wave_name} review sheet: {group}", "",
              f"Questions shipped: {len(shipped)}; rows below: {len(risky)} flagged by risk plus a seeded 10% sample "
              f"({len(sample)}) of the other {len(others)}.", "",
              "| " + " | ".join(REPORT_COLUMNS) + " |", "|" + "---|" * len(REPORT_COLUMNS)]
@@ -3499,8 +3698,15 @@ def cmd_budget(args, wave_dir: Path) -> int:
     targets = load_targets(wave_dir)
     ledger = load_ledger(wave_dir)
     if args.record is not None:
-        reading = {"utc": utc_stamp(), "usd": args.record,
-                   "baselineUsd": args.record if args.baseline else _last_baseline(ledger),
+        stamp = utc_stamp()
+        if args.baseline and not getattr(args, "force_baseline", False) and any(
+                s.get("dayUtc") == stamp[:10] for s in ledger.get("submits", [])):
+            # A baseline reading discards the day's spend so far, so it would hide the wave's own batches.
+            print("refused: --baseline would erase today's wave spend, the ledger already has a submit of this "
+                  "UTC day; pass --force-baseline to override")
+            return 1
+        reading = {"utc": stamp, "usd": args.record,
+                   "baselineUsd": args.record if args.baseline else _last_baseline(ledger, stamp[:10]),
                    "outstandingAtReading": [s["batchId"] for s in _outstanding(ledger)]}
         ledger.setdefault("readings", []).append(reading)
         write_json_atomic(wave_dir / "ledger.json", ledger)
@@ -3510,8 +3716,10 @@ def cmd_budget(args, wave_dir: Path) -> int:
     floor = targets["budgetFloorUsd"]
     forecast = float(ledger.get("forecastRemainingUsd") or 0)
     estimate = args.estimate or 0.0
-    ok, message = ledger_check(ledger, estimate, forecast, budget, floor, targets, args.stage)
-    gate = submit_gate(targets, ledger, estimate, utc_now()) if args.estimate is not None else []
+    now = utc_now()
+    ok, message = ledger_check(ledger, estimate, forecast, budget, floor, targets, args.stage,
+                               now.strftime("%Y-%m-%d"))
+    gate = submit_gate(targets, ledger, estimate, now) if args.estimate is not None else []
     print(message)
     for problem in gate:
         print(f"refused: {problem}")
@@ -3522,8 +3730,9 @@ def cmd_budget(args, wave_dir: Path) -> int:
     return 0 if ok or actual_spent(ledger) is not None else 1
 
 
-def _last_baseline(ledger: dict) -> float:
-    readings = ledger.get("readings", [])
+def _last_baseline(ledger: dict, day: str) -> float:
+    """The pre-wave baseline is spend of the day it was taken on; a new UTC day starts from zero."""
+    readings = [r for r in ledger.get("readings", []) if r["utc"][:10] == day]
     return float(readings[-1].get("baselineUsd", 0)) if readings else 0.0
 
 
@@ -3831,6 +4040,17 @@ def cmd_resolve(args, wave_dir: Path) -> int:
     return 0
 
 
+def cmd_reopen(args, wave_dir: Path) -> int:
+    state = load_state(wave_dir / "state.json")
+    try:
+        reopen(state, args.stub, args.reason, Path(args.worktree), wave_dir)
+    finally:
+        # complete_file_ops may have retired the file before a later check refused; keep the journal in step.
+        save_state(wave_dir / "state.json", state)
+    print(f"{args.stub}: planned (reopened)")
+    return 0
+
+
 def cmd_finalize(args, wave_dir: Path) -> int:
     state = load_state(wave_dir / "state.json")
     open_records = unresolved(state)
@@ -3874,7 +4094,7 @@ def cmd_report(args, wave_dir: Path) -> int:
     state = load_state(wave_dir / "state.json")
     _, seed_levels, seed_types = _docs_and_seeds(Path(args.worktree), args, state)
     markdown, rows = build_report(state, load_targets(wave_dir), args.group, seed_levels, seed_types,
-                                  Path(args.worktree))
+                                  Path(args.worktree), wave_dir.name)
     md_path, csv_path = write_report(wave_dir, args.group, markdown, rows)
     print(f"wrote {md_path} and {csv_path} ({len(rows)} rows)")
     return 0
@@ -3913,6 +4133,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     budget = sub.add_parser("budget", help="record a review_budget reading and check the ledger rule")
     budget.add_argument("--record", type=float, help="spend today in USD as reported by review_budget")
+    budget.add_argument("--force-baseline", action="store_true",
+                        help="allow --baseline although the ledger already has a submit of today (UTC)")
     budget.add_argument("--baseline", action="store_true",
                         help="mark this reading as the pre-wave baseline (spend not attributed to the wave)")
     budget.add_argument("--estimate", type=float, help="estimate of the next submit; exit 1 if it may not go")
@@ -3986,6 +4208,10 @@ def build_parser() -> argparse.ArgumentParser:
     resolve_step.add_argument("--as", dest="as_status", required=True, choices=["owner-review", "shortfall"])
     resolve_step.add_argument("--reason", required=True)
 
+    reopen_step = sub.add_parser("reopen", help="give a rejected stub one more generation")
+    reopen_step.add_argument("--stub", required=True)
+    reopen_step.add_argument("--reason", required=True)
+
     shortfall = sub.add_parser("shortfall", help="pick (and with --apply mark) stubs to drop for budget reasons")
     shortfall.add_argument("--count", type=int, required=True)
     shortfall.add_argument("--apply", action="store_true", help="mark the stubs shortfall; a dry run otherwise")
@@ -4024,6 +4250,7 @@ COMMANDS = {
     "verdicts": cmd_verdicts,
     "repair-tasks": cmd_repair_tasks,
     "resolve": cmd_resolve,
+    "reopen": cmd_reopen,
     "shortfall": cmd_shortfall,
     "plan-counts": cmd_plan_counts,
     "finalize": cmd_finalize,

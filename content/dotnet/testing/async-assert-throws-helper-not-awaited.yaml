@@ -1,0 +1,138 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RRTS2MGKS3BGDPYP92
+slug: async-assert-throws-helper-not-awaited
+stack: dotnet
+topic: testing
+level: middle
+type: find-bug
+grading: auto
+tags: [async, exceptions, test-design]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    // Test: ParseAgeAsync("-5") must throw ArgumentException.
+    await ExpectThrows<ArgumentException>(() => ParseAgeAsync("-5"));
+
+    static async Task ExpectThrows<TException>(Func<Task> action) where TException : Exception
+    {
+        try
+        {
+            action();
+            Console.WriteLine("FAIL: no exception");
+        }
+        catch (TException)
+        {
+            Console.WriteLine("PASS");
+        }
+    }
+
+    static async Task<int> ParseAgeAsync(string text)
+    {
+        int age = int.Parse(text);
+        if (age < 0)
+        {
+            throw new ArgumentException("Age must not be negative.", nameof(text));
+        }
+        await Task.Yield();
+        return age;
+    }
+bugLineSets: [[8]]
+fixedSource: |
+  // Test: ParseAgeAsync("-5") must throw ArgumentException.
+  await ExpectThrows<ArgumentException>(() => ParseAgeAsync("-5"));
+
+  static async Task ExpectThrows<TException>(Func<Task> action) where TException : Exception
+  {
+      try
+      {
+          await action();
+          Console.WriteLine("FAIL: no exception");
+      }
+      catch (TException)
+      {
+          Console.WriteLine("PASS");
+      }
+  }
+
+  static async Task<int> ParseAgeAsync(string text)
+  {
+      int age = int.Parse(text);
+      if (age < 0)
+      {
+          throw new ArgumentException("Age must not be negative.", nameof(text));
+      }
+      await Task.Yield();
+      return age;
+  }
+fixedExpect: { kind: output, value: "PASS" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/asynchronous-programming-patterns/task-based-asynchronous-pattern-tap
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/asynchronous-programming/async-return-types
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему самописная проверка исключения не видит ошибку асинхронного метода?
+    prompt: |
+      Самописный помощник `ExpectThrows` должен убедиться, что асинхронный метод `ParseAgeAsync("-5")` выбрасывает
+      `ArgumentException`. Метод действительно выбрасывает это исключение, но программа печатает
+      `FAIL: no exception`. Щёлкните по строке помощника, из-за которой исключение остаётся незамеченным.
+    hint: Что возвращает вызов `async`-метода и в какой момент вызывающий код узнаёт, чем этот метод закончился?
+    answer: |
+      Строка 8, `action();`: помощник вызывает делегат и не ожидает возвращённую задачу, поэтому исключение,
+      сохранённое в задаче, никто не наблюдает.
+    explanation: |
+      Метод `async`, который возвращает `Task` или `Task<TResult>`, не выбрасывает исключение вызывающему коду
+      напрямую: исключение сохраняется в задаче, которую возвращает метод, и задача переходит в состояние
+      `Faulted`. Это верно даже здесь, где `throw` выполняется до первого `await`: вызов `ParseAgeAsync("-5")`
+      нормально возвращает уже упавшую задачу. В этом отличие от метода `async void`: его исключение вызывающий
+      код перехватить не может вообще, а исключение метода, возвращающего задачу, получить можно, но только
+      через саму задачу.
+
+      В строке 8 помощник вызывает `action()` и отбрасывает задачу. Блок `try` не видит никакого исключения,
+      следующая строка печатает `FAIL: no exception`, а упавшая задача просто остаётся без наблюдения.
+
+      Исключение выбрасывается повторно, когда задачу ожидают через `await` или иначе наблюдают её результат:
+      `Wait()` и `Result` оборачивают его в `AggregateException`, а `GetAwaiter().GetResult()` выбрасывает
+      исходное исключение. Исправление - `await action();`: `await` выбрасывает исходное `ArgumentException`,
+      блок `catch (TException)` его перехватывает, и программа печатает `PASS`. Так же устроен
+      `Assert.ThrowsAsync<T>` в xUnit: он сам ожидает задачу, а тест должен ожидать результат
+      `Assert.ThrowsAsync`, иначе провал проверки так же потеряется.
+    linkTitles:
+      - "Асинхронный шаблон на основе задач (TAP)"
+      - "Асинхронные типы возвращаемых значений (C#)"
+  en:
+    title: Why does a hand-written exception check miss the error of an async method?
+    prompt: |
+      A hand-written helper `ExpectThrows` must make sure that the async method `ParseAgeAsync("-5")` throws
+      `ArgumentException`. The method does throw that exception, but the program prints `FAIL: no exception`.
+      Click the line of the helper that lets the exception go unnoticed.
+    hint: What does a call to an `async` method return, and when does the caller learn how that method ended?
+    answer: |
+      Line 8, `action();`: the helper invokes the delegate and does not await the returned task, so nobody observes
+      the exception stored in the task.
+    explanation: |
+      An `async` method that returns `Task` or `Task<TResult>` does not throw an exception directly to its caller:
+      the exception is stored in the task the method returns, and the task moves to the `Faulted` state. This holds
+      even here, where `throw` runs before the first `await`: the call `ParseAgeAsync("-5")` returns normally with
+      an already faulted task. This is the difference from an `async void` method: its caller cannot catch its
+      exception at all, while the exception of a task-returning method can be obtained, but only through the task.
+
+      On line 8 the helper calls `action()` and discards the task. The `try` block sees no exception, the next line
+      prints `FAIL: no exception`, and the faulted task is simply left unobserved.
+
+      The exception is rethrown when the task is awaited with `await` or its result is observed in another way: `Wait()` and
+      `Result` wrap it in an `AggregateException`, while `GetAwaiter().GetResult()` throws the original exception.
+      The fix is `await action();`: `await` throws the original `ArgumentException`, the `catch (TException)` block
+      catches it, and the program prints `PASS`. xUnit's `Assert.ThrowsAsync<T>` works the same way: it awaits the
+      task itself, and the test must await the result of `Assert.ThrowsAsync`, otherwise a failed check is lost in
+      the same way.
+    linkTitles:
+      - "Task-based asynchronous pattern (TAP)"
+      - "Async return types (C#)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

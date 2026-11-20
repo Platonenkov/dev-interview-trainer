@@ -1,0 +1,113 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQW84F1J6CECKE0W5N
+slug: cache-candidate-data-selection
+stack: dotnet
+topic: system-design
+level: middle
+type: multi
+grading: auto
+tags: [caching, distributed-cache, consistency, staleness]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: true
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/azure/architecture/patterns/cache-aside
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/performance/caching/distributed
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какие данные интернет-магазина стоит класть в общий кэш, а какие нет?
+    prompt: |
+      Интернет-магазин работает на нескольких экземплярах и использует общий распределённый кэш (например,
+      Redis через `IDistributedCache`). Команда решает, какие данные в него класть. Какие из перечисленных
+      наборов данных - хорошие кандидаты для кэширования? Выберите все подходящие варианты.
+    hint: |
+      Для каждого набора оцените, как часто его читают и как часто меняют, сколько стоит его получить и что
+      случится, если читатель увидит значение, устаревшее на несколько минут.
+    options:
+      a: "Карточки товаров (название, описание, характеристики): их открывают тысячи раз в минуту, а редакторы меняют несколько раз в день"
+      b: "Блок «Топ-20 бестселлеров» на главной странице: его строит тяжёлый агрегирующий запрос по заказам, и бизнес согласен, что блок обновляется раз в 10 минут"
+      c: "Справочник регионов доставки и тарифов: его читает каждая страница оформления заказа, а меняется он раз в месяц"
+      d: "Остаток на подарочной карте покупателя, по которому шаг оплаты решает, можно ли провести покупку"
+      e: "Итоговый расчёт цены конкретной корзины с персональной скидкой при оформлении заказа: он считается один раз на запрос и больше никогда не запрашивается"
+    optionExplanations:
+      d: "Решению об оплате нужно актуальное значение, то есть эти данные не допускают устаревания. Устаревший остаток из кэша позволит провести покупку на сумму, которой на карте уже нет, или две покупки подряд по одному остатку. Данные, которым нужна строгая согласованность, читают из источника истины внутри операции, которая их меняет, а не из кэша."
+      e: "Значение уникально для запроса и повторно не читается, поэтому попаданий в кэш не будет. Запись в кэш только добавит сетевой вызов и займёт память, ничего не сэкономив."
+    answer: "Карточки товаров, блок бестселлеров и справочник регионов доставки."
+    explanation: |
+      Кэш окупается, когда одно сохранённое значение отдают много раз. Руководство по паттерну Cache-Aside
+      формулирует это так: кэширование повышает производительность для данных, которые часто читают, редко
+      меняют и которые допускают некоторое устаревание. На практике добавляется ещё один признак: получить
+      значение из источника дорого (запрос к базе, агрегация, вызов другого сервиса), иначе экономить нечего.
+
+      - **Карточки товаров** читают на порядки чаще, чем редактируют. При изменении запись инвалидируют, а
+        срок жизни ограничивает окно рассогласования.
+      - **Бестселлеры** дорого считать, а допустимая задержка в 10 минут прямо задаёт срок жизни записи.
+      - **Справочник доставки** почти статичен и нужен на каждом оформлении заказа - классические справочные
+        данные для кэша.
+
+      Плохие кандидаты - данные, которые не допускают устаревания, и данные, которые никогда не читаются
+      повторно. Копия в кэше отстаёт от источника: в том же руководстве записям задают срок жизни именно для
+      того, чтобы они не оставались устаревшими после изменения данных другим процессом, и даже при
+      инвалидации при записи остаётся короткое окно, в котором кэш отдаёт старое значение. Значение, по
+      которому принимается решение, требующее строгой согласованности (например, одобрить оплату по остатку
+      подарочной карты), читают из источника истины. Уникальное для каждого запроса значение не даёт ни
+      одного попадания, поэтому его кэширование - чистые накладные расходы.
+    linkTitles:
+      - "Паттерн Cache-Aside"
+      - "Распределённое кэширование в ASP.NET Core"
+  en:
+    title: Which online shop data belongs in a shared cache, and which does not?
+    prompt: |
+      An online shop runs as several instances and uses a shared distributed cache (for example Redis through
+      `IDistributedCache`). The team is deciding what to put in it. Which of the following data sets are good
+      candidates for caching? Select all that apply.
+    hint: |
+      For each data set estimate how often it is read and how often it changes, how much it costs to produce,
+      and what happens if a reader sees a value that is a few minutes old.
+    options:
+      a: "Product pages (name, description, specifications): they are opened thousands of times a minute, and editors change them a few times a day"
+      b: "The Top 20 bestsellers block on the home page: a heavy aggregate query over orders builds it, and the business accepts that it refreshes every 10 minutes"
+      c: "The reference list of delivery regions and rates: every checkout page reads it, and it changes once a month"
+      d: "The remaining balance of a customer's gift card, which the payment step uses to decide whether to approve a purchase"
+      e: "The final price calculation for a specific cart with a personal discount at checkout: it is computed once per request and never requested again"
+    optionExplanations:
+      d: "A payment decision needs the current value, so this data does not tolerate staleness. A stale balance from the cache can approve a purchase for money that is no longer on the card, or two purchases in a row against the same balance. Data that needs strong consistency is read from the source of truth, inside the operation that changes it, not from a cache."
+      e: "The value is unique to the request and is never read again, so there will be no cache hits. Writing it to the cache only adds a network call and uses memory without saving anything."
+    answer: "The product pages, the bestsellers block and the delivery regions reference list."
+    explanation: |
+      A cache pays off when one stored value is served many times. The Cache-Aside pattern guidance puts it
+      this way: caching improves performance for data that is read heavily, changes infrequently and tolerates
+      some staleness. In practice one more property is added: producing the value from the source is expensive
+      (a database query, an aggregation, a call to another service), otherwise there is nothing to save.
+
+      - **Product pages** are read orders of magnitude more often than they are edited. On a change the entry is
+        invalidated, and the expiration bounds the window of inconsistency.
+      - **Bestsellers** are expensive to compute, and the accepted 10 minute delay directly sets the entry
+        expiration.
+      - **The delivery reference list** is almost static and needed on every checkout - classic reference data
+        for a cache.
+
+      Poor candidates are data that does not tolerate staleness and data that is never read twice. A cached
+      copy lags behind the source: the same guidance gives entries an expiration precisely so that they do not
+      stay stale after another process updates the data, and even with invalidation on write there is a short
+      window in which the cache serves the old value. A value that drives a decision needing strong consistency
+      (for example, approving a payment against a gift card balance) is read from the source of truth. A value
+      unique to each request produces no hits, so caching it is pure overhead.
+    linkTitles:
+      - "Cache-Aside pattern"
+      - "Distributed caching in ASP.NET Core"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

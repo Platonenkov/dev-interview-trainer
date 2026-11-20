@@ -1,0 +1,208 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQJQFS8DHFDH5N182X
+slug: state-pattern-vs-enum-switch-transitions
+stack: dotnet
+topic: patterns
+level: senior
+type: open
+grading: self
+tags: [state, gof, state-machine, switch-expression, enum]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    Console.WriteLine(OrderWorkflow.Next(OrderStatus.Draft, OrderTrigger.Place)); // Placed
+
+    try
+    {
+        OrderWorkflow.Next(OrderStatus.Shipped, OrderTrigger.Cancel);
+    }
+    catch (InvalidOperationException ex)
+    {
+        Console.WriteLine(ex.Message); // Cannot Cancel an order in status Shipped.
+    }
+
+    public enum OrderStatus { Draft, Placed, Paid, Shipped, Delivered, Cancelled }
+    public enum OrderTrigger { Place, Pay, Ship, Deliver, Cancel }
+
+    public static class OrderWorkflow
+    {
+        // Explicit transition table: (current status, trigger) -> next status.
+        public static OrderStatus Next(OrderStatus status, OrderTrigger trigger) => (status, trigger) switch
+        {
+            (OrderStatus.Draft, OrderTrigger.Place) => OrderStatus.Placed,
+            (OrderStatus.Draft or OrderStatus.Placed, OrderTrigger.Cancel) => OrderStatus.Cancelled,
+            (OrderStatus.Placed, OrderTrigger.Pay) => OrderStatus.Paid,
+            (OrderStatus.Paid, OrderTrigger.Ship) => OrderStatus.Shipped,
+            (OrderStatus.Shipped, OrderTrigger.Deliver) => OrderStatus.Delivered,
+            _ => throw new InvalidOperationException($"Cannot {trigger} an order in status {status}.")
+        };
+    }
+links:
+  - url: https://refactoring.guru/design-patterns/state
+    lang: en
+    kind: article
+  - url: https://refactoring.guru/ru/design-patterns/state
+    lang: ru
+    kind: article
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/switch-expression
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Когда для процесса заказа стоит выбрать паттерн State вместо enum и switch-выражений?
+    prompt: |
+      Сервис заказов хранит статус заказа как enum, а переходы описаны в одном switch-выражении
+      `OrderWorkflow.Next` (код выше). Продукт просит добавить возвраты, частичную отгрузку и тайм-аут оплаты, и
+      от статуса начинает зависеть всё больше операций: изменение адреса, добавление позиций, расчёт платы за
+      отмену, выбор уведомлений. Коллега предлагает заменить enum паттерном State: интерфейс `IOrderState` и по
+      классу на каждое состояние.
+
+      Когда процесс заказа оправдывает паттерн State вместо enum со switch-выражениями и чего стоит каждый подход?
+    hint: Посчитайте, сколько мест придётся менять при добавлении нового статуса и сколько - при добавлении новой операции, которая зависит от статуса.
+    answer: |
+      **Enum с явной таблицей переходов достаточно, когда:**
+
+      - состояний немного и их набор стабилен, а для большинства операций статус отвечает только на вопросы
+        «разрешено или нет» и «какой статус следующий»;
+      - от статуса зависят одна-две операции, а не десяток.
+
+      Сильные стороны: весь граф переходов виден в одном месте (его можно показать продукту и нарисовать
+      диаграмму), в базе это обычный столбец с enum, каждую пару (статус, событие) легко покрыть табличным
+      тестом, а все запрещённые переходы - это одна ветка `_ => throw`.
+
+      **Цена enum по мере роста процесса:**
+
+      - у каждой зависящей от статуса операции свой `status switch`, поэтому правила одного состояния (например,
+        `Shipped`) размазаны по многим методам, и изменение одного состояния означает поиск по всем switch;
+      - новый статус затрагивает все switch: switch-выражение без ветки `_` получит предупреждение компилятора
+        CS8509 о необработанном значении, а switch с веткой `_` молча отправит новый статус в неё;
+      - данные, которые имеют смысл только в некоторых состояниях (номер отправления, сумма возврата), живут
+        nullable-полями заказа, а инварианты вида «заполнено только в `Shipped`» проверяются вручную.
+
+      **State окупается, когда:**
+
+      - многие операции не просто разрешены или запрещены, а ведут себя по-разному во многих состояниях, и
+        одинаковый switch по статусу встречается во многих местах и меняется синхронно;
+      - у состояний есть свои условия и данные: отмена из `Paid` считает плату и запускает возврат, а из
+        `Placed` бесплатна;
+      - набор состояний продолжает расти: новое состояние - это новый класс, и компилятор требует реализовать в
+        нём все операции интерфейса.
+
+      **Цена State:**
+
+      - граф переходов распределён по классам: каждое состояние знает своих преемников, и ни одно место не
+        показывает процесс целиком;
+      - больше типов и косвенности; контекст должен открыть состояниям методы для своего изменения, либо каждая
+        операция возвращает следующее состояние;
+      - в базе всё равно хранится значение статуса, поэтому при загрузке заказа нужна фабрика, которая
+        превращает сохранённый статус в объект состояния;
+      - новая операция теперь затрагивает все классы состояний: баланс подхода с enum переворачивается.
+
+      **Практическое решение:** начать с enum и явной таблицы переходов и переходить к State, когда число
+      switch по статусу и история их изменений показывают, что правила одного состояния размазаны по коду. Даже
+      тогда полезно держать переходы в одной таблице (или в библиотеке конечных автоматов), а в классах состояний -
+      только поведение, чтобы граф оставался проверяемым. В обоих вариантах нужны табличные тесты по всем парам
+      (статус, событие).
+    explanation: |
+      Выбор - это разновидность «проблемы выражений» (expression problem). При enum и switch новая операция
+      стоит дёшево (ещё один метод со своим switch), а новое состояние - дорого (правка всех switch). В State
+      наоборот: новое состояние - один класс, а новая операция - правка всех классов состояний. Поэтому решающий
+      вопрос - что в этом процессе будет меняться чаще.
+
+      Вторая ось - где живёт знание о переходах. Таблица переходов собирает его в одном месте: её легко читать,
+      проверять и тестировать. В классическом State переходы распределены по классам, что удобно для поведения
+      конкретного состояния, но скрывает общую картину. Refactoring.Guru описывает обе стороны: машина состояний
+      на условных операторах превращается в громоздкие условия в каждом методе по мере роста числа состояний, а
+      сам паттерн может быть избыточным, если состояний мало или они редко меняются.
+
+      В коде выше ветка `_ => throw` в таблице переходов намеренная: любая не описанная пара - запрещённый
+      переход, и вызов `Next(OrderStatus.Shipped, OrderTrigger.Cancel)` выбрасывает `InvalidOperationException`.
+      Но в switch-выражениях, где решается поведение по статусу, такая ветка опасна: она лишает вас
+      предупреждения компилятора при добавлении нового значения enum, и новый статус молча получает поведение
+      по умолчанию.
+    linkTitles:
+      - "State (Refactoring.Guru, английская версия)"
+      - "Состояние (Refactoring.Guru)"
+      - "Выражение switch"
+  en:
+    title: When should an order workflow use the State pattern instead of an enum with switch expressions?
+    prompt: |
+      An order service stores the order status as an enum and describes the transitions in one switch
+      expression, `OrderWorkflow.Next` (code above). Product asks for refunds, partial shipments and payment
+      timeouts, and more operations depend on the status: changing the address, adding items, calculating the
+      cancellation fee, choosing notifications. A colleague proposes replacing the enum with the State pattern: an
+      `IOrderState` interface and one class per state.
+
+      When does an order workflow justify the State pattern instead of an enum with switch expressions, and what
+      does each approach cost?
+    hint: Count how many places change when you add a new status, and how many change when you add a new operation that depends on the status.
+    answer: |
+      **An enum with an explicit transition table is enough when:**
+
+      - there are few states and the set is stable, and for most operations the status answers only "allowed or
+        not" and "what is the next status";
+      - one or two operations depend on the status, not ten.
+
+      Strengths: the whole transition graph is visible in one place (you can show it to product and draw a
+      diagram from it), the database stores a plain enum column, every (status, trigger) pair is easy to cover with
+      a table-driven test, and all forbidden transitions are a single `_ => throw` arm.
+
+      **What the enum costs as the workflow grows:**
+
+      - every status-dependent operation gets its own `status switch`, so the rules of one state (say `Shipped`)
+        are scattered over many methods, and changing one state means hunting through every switch;
+      - a new status touches every switch: a switch expression without a `_` arm gets compiler warning CS8509
+        about the unhandled value, while a switch with a `_` arm silently sends the new status into it;
+      - data that makes sense only in some states (tracking number, refund amount) lives in nullable fields of
+        the order, and invariants such as "set only in `Shipped`" are checked by hand.
+
+      **State pays off when:**
+
+      - many operations are not just allowed or forbidden but behave differently in many states, and the same
+        switch over the status appears in many places and changes in lockstep;
+      - states have their own conditions and data: cancelling from `Paid` calculates a fee and starts a refund,
+        while cancelling from `Placed` is free;
+      - the set of states keeps growing: a new state is a new class, and the compiler requires it to implement
+        every operation of the interface.
+
+      **What State costs:**
+
+      - the transition graph is spread across classes: each state knows its successors, and no single place shows
+        the whole workflow;
+      - more types and indirection; the context has to expose methods that let states change it, or every
+        operation returns the next state;
+      - the database still stores a status value, so loading an order needs a factory that turns the stored status
+        into a state object;
+      - a new operation now touches every state class: the balance of the enum approach is reversed.
+
+      **Practical decision:** start with an enum and an explicit transition table, and move to State when the
+      number of switches over the status and their change history show that the rules of one state are smeared
+      across the code. Even then it helps to keep the transitions in one table (or in a state machine library) and
+      only the behaviour in the state classes, so the graph stays reviewable. Either way, write table-driven tests
+      over all (status, trigger) pairs.
+    explanation: |
+      The choice is a form of the expression problem. With an enum and switches a new operation is cheap (one
+      more method with its own switch) and a new state is expensive (edit every switch). With State it is the
+      other way round: a new state is one class, and a new operation means editing every state class. So the
+      deciding question is which of the two will change more often in this workflow.
+
+      The second axis is where the knowledge of transitions lives. A transition table gathers it in one place:
+      it is easy to read, review and test. In the classic State pattern transitions are distributed across the
+      classes, which suits the behaviour of a specific state but hides the overall picture. Refactoring.Guru
+      describes both sides: a state machine built on conditionals turns into bulky conditionals in every method
+      as states are added, while the pattern itself can be overkill when there are only a few states or they
+      rarely change.
+
+      In the code above the `_ => throw` arm of the transition table is deliberate: any pair that is not listed
+      is a forbidden transition, and `Next(OrderStatus.Shipped, OrderTrigger.Cancel)` throws
+      `InvalidOperationException`. In switch expressions that decide behaviour by status, though, such an arm is
+      dangerous: it removes the compiler warning when a new enum value is added, and the new status silently
+      gets the default behaviour.
+    linkTitles:
+      - "State (Refactoring.Guru)"
+      - "State (Refactoring.Guru, Russian version)"
+      - "switch expression"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

@@ -1,0 +1,164 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNNF6C25GBWE1E3N2C
+slug: kafka-parallel-processing-offset-commit
+stack: dotnet
+topic: distributed
+level: senior
+type: open
+grading: self
+tags: [kafka, offset-commit, consumer-lag, parallel-processing, at-least-once]
+links:
+  - url: https://kafka.apache.org/39/javadoc/org/apache/kafka/clients/consumer/KafkaConsumer.html
+    lang: en
+    kind: docs
+  - url: https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Что может пойти не так, если обрабатывать записи одной партиции Kafka параллельно и фиксировать смещение последней завершённой записи?"
+    prompt: |
+      Чтобы справиться с растущим отставанием потребителя (consumer lag), команда получает записи одной партиции
+      через `poll`, раздаёт их параллельным задачам и после завершения каждой задачи фиксирует смещение той записи,
+      которая завершилась последней.
+
+      Что может пойти не так в такой схеме? Как правильно фиксировать смещения, если записи одной партиции
+      обрабатываются параллельно, и какие ещё последствия у параллельной обработки нужно учесть?
+    hint: "Сколько чисел на партицию хранит группа потребителей и что это число подразумевает для записей до него?"
+    answer: |
+      1. **Смысл зафиксированного смещения.** Зафиксированное смещение партиции - позиция, с которой группа
+         продолжит чтение после падения или ребалансировки. По соглашению фиксируется смещение *следующей*
+         записи, то есть номер последней обработанной плюс один. Всё, что меньше этой позиции, группа считает
+         обработанным и больше не доставит.
+      2. **Потеря записей.** Записи 100-109 обрабатываются параллельно. Запись 107 завершилась, команда
+         фиксирует 108, а 101 и 104 ещё в работе. Процесс падает или партиция уходит другому потребителю:
+         чтение продолжается с 108, и записи 101 и 104 не будут обработаны никогда. Для них гарантия
+         превращается в at-most-once, и это молчаливая потеря без ошибок в логах.
+      3. **Смещение может откатываться назад.** Если следующей завершится 103, а команда зафиксирует 104,
+         позиция сдвинется назад: после перезапуска чтение начнётся с 104, и уже обработанная 107 (как и любая
+         другая завершённая запись после 104) придёт снова, а 101 всё равно потеряна. Поведение зависит от того,
+         в каком порядке завершились задачи, поэтому его трудно воспроизвести.
+      4. **Нарушается порядок.** Kafka гарантирует порядок внутри партиции, а параллельные задачи его
+         разрушают: событие `OrderCancelled` может примениться раньше `OrderCreated` того же заказа.
+      5. **Потокобезопасность клиента.** Java-класс `KafkaConsumer` не потокобезопасен: при несинхронизированном
+         обращении из нескольких потоков он выбрасывает `ConcurrentModificationException`. Поэтому рабочие задачи
+         не обращаются к потребителю, а только сообщают о завершении потоку цикла `poll`, и смещения фиксирует он.
+      6. **Правильная фиксация: по непрерывному префиксу.** Для каждой партиции хранить множество
+         выданных и завершённых смещений. Фиксировать можно только водяную отметку: наибольшее смещение, до
+         которого *все* записи завершены без пропусков, плюс один (то есть наименьшее незавершённое смещение).
+         В примере выше, пока 101 в работе, фиксируется 101, даже если 102-109 уже готовы. В .NET-клиенте
+         `Confluent.Kafka` (обёртка над librdkafka) для этого обычно выключают `EnableAutoOffsetStore` и
+         сохраняют отметку методом `StoreOffset`, а автофиксация отправляет сохранённые смещения. Отметка уже
+         равна последнему завершённому смещению плюс один, поэтому её передают через перегрузку с
+         `TopicPartitionOffset`: перегрузка с `ConsumeResult` сама добавляет единицу к смещению записи.
+      7. **Ограничить объём в работе.** Держать верхнюю границу числа записей в обработке. Когда буфер полон,
+         приостанавливать партиции (`pause` в Java, `Pause` в Confluent.Kafka) и продолжать цикл чтения, чтобы не
+         превысить `max.poll.interval.ms` и не выпасть из группы, затем возобновлять их (`resume`, `Resume`).
+      8. **Ребалансировка.** В обработчике отзыва партиций (`onPartitionsRevoked` в Java,
+         `SetPartitionsRevokedHandler` в Confluent.Kafka) дождаться завершения записей отзываемых партиций и
+         зафиксировать их отметку либо отказаться от них, понимая, что они будут обработаны повторно.
+      9. **Медленная или ядовитая запись.** Одна зависшая запись держит отметку, и после падения повторно
+         придёт всё, что за ней. Нужны таймауты, ограниченные повторы и dead-letter топик, а обработчики
+         обязаны быть идемпотентными: доставка по-прежнему at-least-once.
+      10. **Порядок по ключу.** Параллелить не по записям, а по ключам: записи с одним ключом идут в одну
+          последовательную очередь (по хешу ключа), разные ключи обрабатываются параллельно. Отметку смещения
+          это не отменяет.
+      11. **Сначала более простой вариант.** Если порядок и простота важнее, увеличить число партиций и
+          экземпляров потребителя, ускорить обработку или обрабатывать пачками. Это сохраняет стандартную
+          модель фиксации, но меняет распределение ключей по партициям, и это надо планировать.
+    explanation: |
+      В Kafka у потребителя нет подтверждения отдельной записи: у группы есть только одно число на партицию,
+      позиция. Это число неявно утверждает, что все записи до него обработаны. Последовательный потребитель
+      соблюдает это утверждение автоматически, потому что записи завершаются по порядку. Параллельная
+      обработка ломает эту связь: завершение записи с большим смещением ничего не говорит о записях с
+      меньшими.
+
+      Документация `KafkaConsumer` описывает это в разделе о многопоточной обработке: если отделить чтение
+      от обработки, ручная фиксация смещений усложняется, потому что нужно знать, что обработка для партиции
+      действительно завершена. Документация librdkafka описывает хранилище смещений (offset store) как
+      хранящееся в памяти следующее смещение для фиксации по каждой партиции: именно туда и кладут водяную
+      отметку. Отметка по непрерывному префиксу - единственная позиция, которую безопасно фиксировать: при
+      падении ничего не теряется, повторно приходит только то, что было в работе, и эти повторы закрывает
+      идемпотентность обработчика.
+
+      Цена схемы - сложность: учёт смещений, обратное давление через приостановку партиций, аккуратная
+      ребалансировка и рост повторной обработки, если одна запись зависла. Поэтому сильный ответ сначала
+      спрашивает, нельзя ли просто добавить партиции и экземпляры, и только затем строит параллелизм внутри
+      партиции.
+    linkTitles:
+      - "Apache Kafka 3.9: класс KafkaConsumer"
+      - "librdkafka: параметры конфигурации"
+  en:
+    title: "What can go wrong if you process the records of one Kafka partition in parallel and commit the offset of the last finished record?"
+    prompt: |
+      To deal with growing consumer lag, a team receives the records of one partition with `poll`, hands them
+      to parallel tasks and, whenever a task finishes, commits the offset of the record that finished last.
+
+      What can go wrong in this design? How should offsets be committed when the records of one partition are
+      processed in parallel, and what other consequences of parallel processing do you need to handle?
+    hint: "How many numbers per partition does a consumer group store, and what does that number imply for the records before it?"
+    answer: |
+      1. **What a committed offset means.** The committed offset of a partition is the position from which
+         the group continues reading after a crash or a rebalance. By convention you commit the offset of the
+         *next* record, that is the last processed offset plus one. The group treats everything below that
+         position as processed and will not deliver it again.
+      2. **Lost records.** Records 100-109 are processed in parallel. Record 107 finishes, the team commits
+         108, while 101 and 104 are still running. The process crashes or the partition moves to another
+         consumer: reading resumes at 108, and records 101 and 104 are never processed. For them the guarantee
+         becomes at-most-once, and the loss is silent, with no errors in the logs.
+      3. **The offset can move backwards.** If 103 finishes next and the team commits 104, the position moves
+         back: after a restart reading resumes at 104, and record 107, already processed, arrives again (as does
+         any other finished record after 104), while 101 is still lost. The behaviour depends on the order in
+         which tasks happened to finish, so it is hard to reproduce.
+      4. **Ordering breaks.** Kafka guarantees order within a partition, and parallel tasks destroy it: an
+         `OrderCancelled` event can be applied before `OrderCreated` of the same order.
+      5. **Client thread safety.** The Java `KafkaConsumer` is not thread-safe: unsynchronized access from
+         several threads makes it throw `ConcurrentModificationException`. So worker tasks do not touch the
+         consumer; they only report completion to the thread running the `poll` loop, and that thread commits.
+      6. **Correct commits: by the contiguous prefix.** For each partition, track the dispatched and the
+         completed offsets. You may commit only the watermark: the highest offset up to which *all* records
+         are complete with no gaps, plus one (that is, the lowest unfinished offset). In the example above,
+         while 101 is running you commit 101, even if 102-109 are done. In the `Confluent.Kafka` .NET client
+         (a wrapper over librdkafka) this is usually done by turning off `EnableAutoOffsetStore` and storing the
+         watermark with `StoreOffset`, while auto-commit sends the stored offsets. The watermark is already the
+         last finished offset plus one, so pass it through the `TopicPartitionOffset` overload: the
+         `ConsumeResult` overload adds one to the record's offset itself.
+      7. **Bound the work in flight.** Keep an upper limit on the number of records being processed. When the
+         buffer is full, pause the partitions (`pause` in Java, `Pause` in Confluent.Kafka) and keep the read
+         loop running, so that `max.poll.interval.ms` is not exceeded and the consumer stays in the group, then
+         resume them (`resume`, `Resume`).
+      8. **Rebalancing.** In the partition revocation handler (`onPartitionsRevoked` in Java,
+         `SetPartitionsRevokedHandler` in Confluent.Kafka), wait for the in-flight records of the revoked
+         partitions and commit their watermark, or abandon them knowing they will be processed again.
+      9. **A slow or poison record.** One stuck record holds the watermark back, and after a crash everything
+         behind it is redelivered. You need timeouts, bounded retries and a dead-letter topic, and handlers
+         must be idempotent: delivery is still at-least-once.
+      10. **Ordering per key.** Parallelise by key rather than by record: records with the same key go to one
+          sequential queue (by key hash), different keys run in parallel. This does not replace the offset
+          watermark.
+      11. **Try the simpler option first.** If ordering and simplicity matter more, increase the number of
+          partitions and consumer instances, speed up processing, or process in batches. This keeps the
+          standard commit model, but it changes how keys map to partitions, which has to be planned.
+    explanation: |
+      A Kafka consumer has no per-record acknowledgement: the group has only one number per partition, the
+      position. That number implicitly states that every record before it is processed. A sequential consumer
+      keeps that promise automatically, because records finish in order. Parallel processing breaks the link:
+      the completion of a record with a higher offset says nothing about records with lower offsets.
+
+      The `KafkaConsumer` documentation covers this in its section on multi-threaded processing: once you
+      decouple consumption from processing, committing offsets manually becomes harder, because you have to
+      know that processing for the partition is really complete. The librdkafka documentation describes the
+      offset store as an in-memory store of the next offset to commit for each partition: that is where the
+      watermark goes. The watermark of the contiguous prefix is the only position that is safe to commit: a
+      crash loses nothing, it only redelivers what was in flight, and the idempotent handler absorbs those
+      repeats.
+
+      The price of the design is complexity: offset tracking, backpressure by pausing partitions, careful
+      rebalancing, and more reprocessing when one record gets stuck. That is why a strong answer first asks
+      whether adding partitions and instances is enough, and only then builds parallelism inside a partition.
+    linkTitles:
+      - "Apache Kafka 3.9: KafkaConsumer class"
+      - "librdkafka configuration properties"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

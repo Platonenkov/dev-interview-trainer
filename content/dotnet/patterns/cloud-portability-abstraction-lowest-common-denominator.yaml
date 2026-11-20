@@ -1,0 +1,172 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQ3VA6MKCQZ0V5TQZF
+slug: cloud-portability-abstraction-lowest-common-denominator
+stack: dotnet
+topic: patterns
+level: architect
+type: open
+grading: self
+tags: [abstract-factory, adapter, cloud, vendor-lock-in, leaky-abstraction, yagni]
+links:
+  - url: https://refactoring.guru/design-patterns/abstract-factory
+    lang: en
+    kind: article
+  - url: https://refactoring.guru/ru/design-patterns/abstract-factory
+    lang: ru
+    kind: article
+  - url: https://martinfowler.com/articles/oss-lockin.html
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Чем оборачивается общий слой переносимости между облаками на Abstract Factory и Adapter?
+    prompt: |
+      Платформенная команда предлагает обернуть все облачные сервисы (очереди, объектное хранилище, хранилище
+      секретов) в общий слой: Abstract Factory создаёт семейство реализаций под конкретное облако, а адаптеры
+      приводят SDK провайдеров к общим интерфейсам `IQueue`, `IBlobStorage`, `ISecretStore`. Цель - чтобы
+      любой из нескольких десятков сервисов можно было перенести в другое облако без правки кода.
+
+      Какие долгосрочные компромиссы у такого решения? Когда оно оправдано и что вы предложите вместо него
+      в остальных случаях?
+    hint: |
+      Подумайте, что может обещать интерфейс, который обязан работать одинаково у всех провайдеров, и кто
+      будет платить за этот слой каждый день, пока переезд так и не случился.
+    answer: |
+      **Долгосрочная цена сплошного слоя переносимости.**
+
+      1. **Наименьший общий знаменатель.** Общий интерфейс может обещать только то, что есть у всех
+         провайдеров. Сессии, отложенные сообщения и обнаружение дубликатов в Azure Service Bus, группы
+         сообщений в FIFO-очередях SQS, условная запись по ETag, версии секретов либо выпадают, либо
+         интерфейс обрастает флагами под конкретного провайдера и перестаёт быть нейтральным. Команды
+         живут без возможностей, за которые платят, или обходят слой.
+      2. **Семантика всё равно протекает.** Одинаковая сигнатура не означает одинаковое поведение: гарантии
+         доставки и порядок, сколько полученное сообщение остаётся заблокированным или невидимым (lock
+         duration против visibility timeout), ошибки троттлинга и повторы, лимиты размеров, модель
+         аутентификации (managed identity против ролей IAM), задержки и цена за операцию. Код, настроенный
+         под одного провайдера, на другом ломается незаметно, поэтому переезд всё равно требует доработок
+         и тестирования.
+      3. **Непроверенная переносимость.** Если в production работает одно облако, вторая реализация либо не
+         написана, либо устаревает. Переносимость, которую CI не проверяет на каждом провайдере, - это
+         обещание, а не свойство системы.
+      4. **Владение и узкое горлышко.** Слой становится продуктом платформенной команды: обновления SDK всех
+         провайдеров, исправления, документация, запросы на новые возможности. Каждая новая функция облака
+         ждёт очереди в этой команде, команды начинают ходить в SDK напрямую, и в итоге в системе есть и
+         слой, и прямые вызовы.
+      5. **Abstract Factory без второго семейства.** Паттерн нужен, чтобы согласованно создавать семейства
+         связанных объектов и выбирать семейство. Если облако одно, семейство тоже одно, и фабрика - это
+         спекулятивная общность (YAGNI).
+
+      **Когда слой оправдан:** смена провайдера - реальное требование, а не страх. Продукт устанавливается в
+      облако клиента или on-premises, регулятор требует проверенного плана выхода, система уже работает в
+      двух облаках. Тогда абстрагируются конкретные возможности, контракт описывает реальные потребности,
+      каждая реализация проверяется в CI на своём провайдере, а потерянные возможности принимаются осознанно.
+
+      **Что делать по умолчанию:**
+
+      - порт в терминах сервиса (`IOrderEventPublisher`, `IInvoiceArchive`), а не универсальный `IQueue`, и
+        один тонкий адаптер на границе сервиса, который в полную силу использует родной SDK. Привязка к облаку
+        локализована в одном классе, а замена - ограниченная по объёму работа;
+      - готовые нейтральные контракты там, где они ничего не стоят: `IConfiguration` с провайдером
+        конфигурации для хранилища секретов, OpenTelemetry, контейнеры, инфраструктура как код, управляемые
+        версии открытых движков (PostgreSQL, Kafka);
+      - переносимые данные (форматы, выгрузка): при уходе из облака дороже всего обычно перенос данных, а не
+        кода;
+      - решение в ADR с оценкой стоимости переезда и датой пересмотра.
+    explanation: |
+      Это выбор между двумя ценами. Слой переносимости оплачивается сразу и постоянно: каждой командой,
+      каждой фичей, каждым обновлением SDK. Стоимость переезда платится один раз и только если переезд
+      состоится. Грегор Хохпе называет это так: избегание привязки к поставщику само создаёт затраты и свою
+      привязку, теперь уже к собственному слою. Разумно сравнивать стоимость слоя с вероятностью переезда,
+      умноженной на его стоимость, а не с худшим сценарием.
+
+      Кроме того, слой не выполняет главного обещания. Абстракция скрывает различия API, но не различия
+      поведения: порядок сообщений, тайм-ауты блокировки, троттлинг и лимиты проявятся при переезде так же,
+      как без слоя. Значит, «перенос без правки кода» всё равно потребует аудита и тестов, а за годы до этого
+      система работала на урезанных возможностях.
+
+      Тонкий адаптер на границе сервиса даёт большую часть пользы паттерна Adapter без этих потерь. Код
+      предметной области зависит от своего узкого контракта и тестируется с фейком, SDK живёт в одном классе,
+      а контракт описывает только то, что нужно этому сервису, поэтому ему не нужно совпадать с
+      возможностями всех облаков. Если переезд всё же случится, переписываются небольшие адаптеры, и
+      изменения контракта видны явно, а не спрятаны в общей библиотеке.
+    linkTitles:
+      - "Абстрактная фабрика (Refactoring.Guru, английская версия)"
+      - "Абстрактная фабрика (Refactoring.Guru)"
+      - "Don't get locked up into avoiding lock-in (Gregor Hohpe, martinfowler.com)"
+  en:
+    title: What are the long-term trade-offs of wrapping every cloud service in an Abstract Factory and Adapter portability layer?
+    prompt: |
+      A platform team proposes wrapping every cloud service (queues, object storage, the secret store) in a
+      shared layer: an Abstract Factory creates the family of implementations for a given cloud, and adapters
+      map the provider SDKs to common interfaces `IQueue`, `IBlobStorage` and `ISecretStore`. The goal is that
+      any of several dozen services can move to another cloud without code changes.
+
+      What are the long-term trade-offs of this decision? When is it justified, and what do you propose
+      instead in the other cases?
+    hint: |
+      Think about what an interface can promise when it has to behave the same for every provider, and who
+      pays for the layer every day while the migration never happens.
+    answer: |
+      **The long-term cost of a blanket portability layer.**
+
+      1. **Lowest common denominator.** A common interface can promise only what every provider supports.
+         Sessions, scheduled messages and duplicate detection in Azure Service Bus, message groups in SQS FIFO
+         queues, conditional writes by ETag, secret versions either drop out, or the interface grows
+         provider-specific flags and stops being neutral. Teams live without features they pay for, or go
+         around the layer.
+      2. **Semantics leak anyway.** The same signature does not mean the same behaviour: delivery guarantees
+         and ordering, how long a received message stays locked or invisible (lock duration versus visibility
+         timeout), throttling errors and retries, size limits, the authentication model (managed identity
+         versus IAM roles), latency and price per operation. Code tuned for one provider breaks subtly on
+         another, so a migration still needs rework and testing.
+      3. **Untested portability.** If production runs on one cloud, the second implementation either is not
+         written or rots. Portability that CI does not exercise against each provider is a promise, not a
+         property of the system.
+      4. **Ownership and a bottleneck.** The layer becomes a product of the platform team: SDK upgrades for
+         every provider, fixes, documentation, feature requests. Every new cloud capability waits in that
+         team's queue, teams start calling SDKs directly, and the system ends up with both the layer and direct
+         calls.
+      5. **Abstract Factory without a second family.** The pattern exists to create families of related
+         objects consistently and to choose between families. With one cloud there is one family, and the
+         factory is speculative generality (YAGNI).
+
+      **When the layer is justified:** switching providers is a real requirement, not a fear. The product is
+      installed in the customer's cloud or on-premises, a regulator demands a tested exit plan, or the system
+      already runs on two clouds. Then you abstract specific capabilities, the contract describes real needs,
+      each implementation is tested in CI against its provider, and the lost features are accepted
+      consciously.
+
+      **The default instead:**
+
+      - a port in the service's own terms (`IOrderEventPublisher`, `IInvoiceArchive`), not a generic
+        `IQueue`, and one thin adapter at the service edge that uses the native SDK fully. The cloud lock-in is
+        confined to one class, and replacing it is bounded work;
+      - existing neutral contracts where they cost nothing: `IConfiguration` with a configuration provider for
+        the secret store, OpenTelemetry, containers, infrastructure as code, managed versions of open engines
+        (PostgreSQL, Kafka);
+      - portable data (formats, export): leaving a cloud is usually most expensive for data, not for code;
+      - the decision recorded in an ADR with an estimated migration cost and a review date.
+    explanation: |
+      This is a choice between two costs. A portability layer is paid up front and continuously: by every
+      team, for every feature, on every SDK upgrade. The migration cost is paid once, and only if the
+      migration happens. Gregor Hohpe puts it this way: avoiding vendor lock-in has its own costs and creates
+      its own lock-in, now to your in-house layer. Compare the cost of the layer with the probability of a
+      migration multiplied by its cost, not with the worst case.
+
+      Besides, the layer does not deliver its main promise. The abstraction hides API differences but not
+      behaviour differences: message ordering, lock timeouts, throttling and limits will surface during a
+      migration just as they would without the layer. So "moving without code changes" still needs an audit
+      and tests, and for years before that the system ran on a reduced feature set.
+
+      A thin adapter at the service edge gives most of the benefit of the Adapter pattern without these
+      losses. Domain code depends on its own narrow contract and is tested with a fake, the SDK lives in one
+      class, and the contract describes only what this service needs, so it does not have to match the
+      capabilities of every cloud. If a migration does happen, you rewrite small adapters, and changes to the
+      contract are explicit instead of hidden in a shared library.
+    linkTitles:
+      - "Abstract Factory (Refactoring.Guru)"
+      - "Abstract Factory (Refactoring.Guru, Russian version)"
+      - "Don't get locked up into avoiding lock-in (Gregor Hohpe, martinfowler.com)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

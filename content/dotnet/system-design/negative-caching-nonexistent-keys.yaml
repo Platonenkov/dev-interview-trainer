@@ -1,0 +1,144 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQPMZWWJAT6MNPM0CC
+slug: negative-caching-nonexistent-keys
+stack: dotnet
+topic: system-design
+level: middle
+type: situation
+grading: self
+tags: [caching, cache-aside, negative-caching, cache-penetration, rate-limiting]
+links:
+  - url: https://learn.microsoft.com/en-us/azure/architecture/best-practices/caching
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/azure/architecture/patterns/cache-aside
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/performance/rate-limit
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Скрейпер запрашивает миллионы несуществующих id товаров, и каждый запрос проходит мимо кэша в базу: что делать?"
+    prompt: |
+      Каталог товаров на ASP.NET Core читает карточки по схеме cache-aside: сначала Redis, при промахе база
+      данных, найденный товар кладётся в кэш. Доля попаданий в кэш обычно выше 95%. Сегодня нагрузка на базу
+      выросла в несколько раз, а доля попаданий упала. В логах видно, что скрейпер перебирает
+      `GET /api/products/{id}` с миллионами id, которых нет в каталоге, и почти все ответы - 404.
+      Что происходит и что вы будете делать?
+    hint: |
+      Что схема cache-aside кладёт в кэш, когда база ничего не нашла?
+    answer: |
+      1. **Подтвердить причину.** Сравнить метрики: долю ответов 404, долю промахов кэша, число запросов к базе
+         по первичному ключу с пустым результатом. Посмотреть, откуда идут запросы (IP, подсети, User-Agent) и
+         как устроены id: последовательный перебор, случайные значения, повторы одних и тех же id.
+      2. **Понять механизм.** В базовом виде cache-aside кладёт в кэш только найденные значения. Для
+         отсутствующего ключа хранить нечего, поэтому каждый такой запрос - промах и запрос к базе. Кэш защищает
+         базу только от повторного чтения существующих данных; такую ситуацию называют проникновением сквозь кэш
+         (cache penetration).
+      3. **Отсечь заведомо неверные id до кэша и базы.** Проверить формат и диапазон: id должен быть
+         положительным числом в допустимых пределах или корректным GUID. Ограничение маршрута (например,
+         `{id:int}`: если значение не подходит, маршрут не совпадает и клиент получает 404) или валидация в
+         обработчике (ответ 400) отклоняют запрос, не обращаясь к хранилищам.
+      4. **Кэшировать отрицательный результат.** Если база ничего не нашла, класть в кэш специальный маркер
+         «не найдено» с коротким TTL (например, 1-5 минут), отдельным от обычного TTL товаров, и отвечать 404
+         прямо из кэша. Маркер должен отличаться от отсутствия ключа. При создании товара сервис удаляет или
+         перезаписывает маркер, а короткий TTL ограничивает устарелость, если удаление не сработало. Для кэша
+         задать лимит памяти и политику вытеснения, чтобы миллионы маркеров не вытеснили настоящие карточки.
+      5. **Ограничить частоту запросов.** Rate limiting по клиенту или IP на шлюзе, в WAF или в middleware
+         ограничения частоты ASP.NET Core (.NET 7 и новее), более жёсткий лимит для клиентов с высокой долей
+         ответов 404, блокировка явных ботов. Скрейпер может менять IP, поэтому это дополнение к кэшированию,
+         а не замена.
+      6. **Если перебираются уникальные id.** Отрицательный кэш помогает, только когда отсутствующие ключи
+         повторяются. Если каждый id запрашивается один раз, перед базой можно держать фильтр Блума по
+         существующим id: он отвечает «точно нет» или «возможно, есть», поэтому отсутствующие id отсекаются
+         без базы. Фильтр пополняют при создании товаров, а из обычного фильтра Блума удалить элемент нельзя,
+         поэтому после удалений его периодически перестраивают.
+      7. **Закрепить.** Метрики доли 404, доли попаданий и числа отрицательных записей в кэше, алерты на их
+         рост. Поиск по первичному ключу должен идти по индексу, чтобы даже пропущенные в базу запросы были
+         дешёвыми.
+    explanation: |
+      Cache-aside в базовом виде снижает нагрузку только для ключей, значения которых есть в источнике и
+      попадают в кэш. Запрос несуществующего ключа - всегда промах, поэтому бот или неудачный клиент обходит
+      кэш, просто запрашивая то, чего нет. Отрицательное кэширование превращает «данных нет» в обычное
+      значение, которое тоже кэшируется, и повторные запросы того же id больше не доходят до базы.
+
+      У решения есть цена, которую нужно назвать:
+
+      - **свежесть**: новый товар может некоторое время отвечать 404, если маркер не удалили при создании,
+        поэтому TTL маркера короткий, а создание товара инвалидирует его;
+      - **память**: при переборе миллионов случайных id отрицательные записи занимают кэш и могут вытеснить
+        полезные данные;
+      - **эффективность**: при однократном переборе уникальных id отрицательный кэш почти не даёт попаданий,
+        и работу делают валидация входа, фильтр Блума и ограничение частоты.
+
+      Сильный ответ сочетает несколько уровней: дешёвая проверка на входе, отрицательный кэш для
+      повторяющихся промахов и ограничение частоты против самого источника нагрузки.
+    linkTitles:
+      - "Рекомендации по кэшированию"
+      - "Паттерн Cache-Aside"
+      - "Middleware ограничения частоты запросов в ASP.NET Core"
+  en:
+    title: "A scraper requests millions of non-existent product ids and every request goes past the cache to the database: what do you do?"
+    prompt: |
+      A product catalog built on ASP.NET Core reads product cards with the cache-aside pattern: Redis first, the
+      database on a miss, and a found product is put into the cache. The cache hit ratio is usually above 95%.
+      Today the database load has grown several times and the hit ratio has dropped. The logs show a scraper
+      iterating over `GET /api/products/{id}` with millions of ids that do not exist in the catalog, and almost
+      every response is a 404. What is happening, and what do you do?
+    hint: |
+      What does the cache-aside pattern put into the cache when the database finds nothing?
+    answer: |
+      1. **Confirm the cause.** Compare the metrics: the share of 404 responses, the share of cache misses, the
+         number of primary key queries that return nothing. Check where the requests come from (IPs, subnets,
+         User-Agent) and what the ids look like: sequential enumeration, random values, repeats of the same ids.
+      2. **Understand the mechanism.** In its basic form cache-aside stores only values that were found. For a
+         missing key there is nothing to store, so every such request is a miss and a database query. The cache
+         protects the database only from repeated reads of existing data; this situation is called cache
+         penetration.
+      3. **Reject obviously invalid ids before the cache and the database.** Check the format and range: an id
+         must be a positive number within allowed bounds or a valid GUID. A route constraint (for example
+         `{id:int}`: when the value does not fit, the route does not match and the client gets 404) or
+         validation in the endpoint (a 400 response) rejects the request without touching any store.
+      4. **Cache the negative result.** When the database finds nothing, put a special "not found" marker into
+         the cache with a short TTL (for example, 1-5 minutes), separate from the normal product TTL, and answer
+         404 straight from the cache. The marker must be distinguishable from an absent key. When a product is
+         created, the service deletes or overwrites the marker, and the short TTL bounds staleness if the delete
+         fails. Give the cache a memory limit and an eviction policy so that millions of markers cannot evict
+         real product cards.
+      5. **Limit the request rate.** Rate limiting per client or IP at the gateway, in a WAF or in the ASP.NET
+         Core rate limiting middleware (.NET 7 and later), a stricter limit for clients with a high share of 404
+         responses, blocking obvious bots. A scraper can rotate IPs, so this complements caching rather than
+         replacing it.
+      6. **If unique ids are being enumerated.** A negative cache helps only when missing keys repeat. If every
+         id is requested once, a Bloom filter of existing ids can sit in front of the database: it answers
+         "definitely not" or "maybe present", so missing ids are rejected without the database. The filter is
+         updated when products are created, and an element cannot be removed from a standard Bloom filter, so
+         after deletions it is rebuilt periodically.
+      7. **Lock it in.** Metrics for the 404 share, the hit ratio and the number of negative cache entries, with
+         alerts on their growth. The primary key lookup must use an index so that even the queries that do reach
+         the database stay cheap.
+    explanation: |
+      In its basic form cache-aside reduces load only for keys that exist in the source and end up in the
+      cache. A request for a non-existent key is always a miss, so a bot or a misbehaving client bypasses the
+      cache simply by asking for what is not there. Negative caching turns "no data" into an ordinary value
+      that is cached too, so repeated requests for the same id no longer reach the database.
+
+      The solution has costs that should be named:
+
+      - **freshness**: a new product may answer 404 for a while if its marker was not removed on creation, so
+        the marker TTL is short and creating a product invalidates it;
+      - **memory**: when millions of random ids are enumerated, negative entries take cache space and can evict
+        useful data;
+      - **effectiveness**: when unique ids are enumerated once, a negative cache gets almost no hits, and the
+        work is done by input validation, a Bloom filter and rate limiting.
+
+      A strong answer combines several layers: cheap checks at the edge, a negative cache for repeated
+      misses, and rate limiting against the source of the load itself.
+    linkTitles:
+      - "Caching guidance"
+      - "Cache-Aside pattern"
+      - "Rate limiting middleware in ASP.NET Core"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

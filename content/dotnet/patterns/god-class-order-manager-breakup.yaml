@@ -1,0 +1,147 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQXG5EN0BNHKW0V64P
+slug: god-class-order-manager-breakup
+stack: dotnet
+topic: patterns
+level: lead
+type: situation
+grading: self
+tags: [god-object, large-class, refactoring, technical-debt, anti-patterns, characterization-tests]
+links:
+  - url: https://refactoring.guru/smells/large-class
+    lang: en
+    kind: article
+  - url: https://refactoring.guru/ru/smells/large-class
+    lang: ru
+    kind: article
+  - url: https://martinfowler.com/bliki/BranchByAbstraction.html
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: "Как техлиду разобрать класс OrderManager на 6000 строк, не останавливая разработку новых функций?"
+    prompt: |
+      В сервисе заказов есть класс `OrderManager` размером около 6000 строк. В нём расчёт цены, скидки,
+      резервирование товара, оплата, смена статусов и отправка уведомлений. Его правит каждый разработчик
+      команды почти в каждой задаче, поэтому в pull request постоянно возникают конфликты слияния, а каждый
+      релиз приносит регрессии в местах, которые никто не трогал намеренно. Остановить работу над новыми
+      функциями ради рефакторинга бизнес не готов.
+
+      Вы техлид команды. Как вы спланируете и проведёте разбор этого класса?
+    hint: |
+      Что защитит от регрессий при переносе кода, поведение которого никто полностью не знает? И что помешает
+      классу расти быстрее, чем вы успеваете из него выносить код?
+    answer: |
+      1. **Отказаться от переписывания с нуля и заморозки.** Большой рефакторинг в отдельной долгоживущей ветке
+         сам станет источником конфликтов и не доживёт до слияния, а полное переписывание теряет поведение,
+         которое нигде не записано. План - много маленьких шагов, каждый из которых можно выпустить.
+      2. **Собрать данные, а не резать по строкам.** По истории git найти горячие точки: какие методы меняются
+         чаще всего, какие меняются вместе, где были регрессии. По полям и вызовам внутри класса выделить
+         связные группы ответственности (ценообразование, скидки, резервирование, оплата, статусы,
+         уведомления). Границы будущих классов проходят по этим группам, а не по размеру файла.
+      3. **Остановить рост.** Записать правило команды: новая логика в `OrderManager` не добавляется, она
+         пишется в отдельных классах, а `OrderManager` при необходимости только вызывает их. Правило проверяется
+         на code review; можно закрепить его владельцами файла в `CODEOWNERS` и архитектурными тестами. Без
+         этого шага класс растёт быстрее, чем из него выносят код.
+      4. **Договориться о бюджете и назначить владельца.** Показать владельцу продукта цену проблемы в его
+         терминах: конфликты, регрессии, время на исправления. Договориться о постоянной доле ёмкости в каждом
+         спринте. Назначить одного ответственного за план и порядок шагов (не единственного исполнителя), чтобы
+         работа не распадалась на случайные правки.
+      5. **Сначала страховочная сетка.** Перед выносом очередной группы покрыть её характеризационными
+         тестами: они фиксируют то, что код делает сейчас, включая странности, через публичные методы
+         `OrderManager`. Найденные ошибки не чинить по ходу переноса, а заводить отдельные задачи.
+      6. **Выносить по одной ответственности.** Выделить класс (например, `DiscountCalculator`), оставить в
+         `OrderManager` делегирующие методы, чтобы вызывающий код не менялся, затем постепенно перевести
+         вызывающих на новый сервис через DI и удалить делегаты. Перенос кода и изменение поведения - в разных
+         небольших PR. Начинать с горячих точек: там выигрыш наибольший.
+      7. **Связать с потоком задач.** Выносить ту часть, которую скоро затронет новая функция: сначала
+         рефакторинг, облегчающий изменение, затем само изменение. Заранее объявлять, какой участок переносится,
+         чтобы другие не начинали в нём параллельную работу.
+      8. **Измерять и пересматривать.** Следить за размером класса, частотой его изменений, числом конфликтов
+         и регрессий, связанных с ним. Регулярно сверять план с результатом и заранее определить, когда
+         работа считается законченной: например, когда от класса остался тонкий координатор.
+    explanation: |
+      Это антипаттерн God object, на уровне кода - запах Large Class: класс собрал много не связанных между
+      собой обязанностей. У него много причин для изменения, поэтому его правят все, и любая правка рискует
+      задеть соседнюю логику через общие поля. Конфликты слияния и регрессии - прямое следствие этого, а не
+      невнимательности разработчиков.
+
+      Ключевые решения плана объясняются ограничениями. Работа над функциями не останавливается, значит,
+      каждый шаг должен быть маленьким, проверенным на review и пригодным к выпуску; ветка основной разработки
+      всё время остаётся рабочей. Этому соответствует приём Branch by Abstraction: старый код прячется за
+      новой границей, вызывающие переводятся на неё постепенно, и только потом старая реализация удаляется.
+      Поведение класса никто полностью не знает, поэтому тесты пишутся на текущее поведение, а не на
+      ожидаемое, иначе рефакторинг незаметно меняет то, на что уже полагаются пользователи.
+
+      Роль лида здесь организационная не меньше, чем техническая: договориться о бюджете с бизнесом, дать
+      работе владельца и превратить запрет на рост класса в правило команды, которое проверяется на review, а
+      не держится на личном контроле лида.
+    linkTitles:
+      - "Запах кода Large Class (Refactoring.Guru, английская версия)"
+      - "Большой класс (Refactoring.Guru)"
+      - "Мартин Фаулер: Branch By Abstraction"
+  en:
+    title: "How does a tech lead break up a 6,000-line OrderManager class without stopping feature work?"
+    prompt: |
+      The order service has an `OrderManager` class of about 6,000 lines. It holds price calculation,
+      discounts, stock reservation, payment, status transitions and notifications. Every developer on the
+      team edits it in almost every task, so pull requests keep hitting merge conflicts, and every release
+      brings regressions in places nobody meant to touch. The business is not willing to stop feature work
+      for a refactoring.
+
+      You are the tech lead of the team. How do you plan and run the breakup of this class?
+    hint: |
+      What protects you from regressions when you move code whose behaviour nobody fully knows? And what
+      keeps the class from growing faster than you can move code out of it?
+    answer: |
+      1. **Reject a rewrite and a freeze.** A big refactoring in a separate long-lived branch becomes a source
+         of conflicts itself and never gets merged, and a full rewrite loses behaviour that is written down
+         nowhere. The plan is many small steps, each of which can be released.
+      2. **Gather data instead of cutting by lines.** Use the git history to find hotspots: which methods change
+         most often, which change together, where regressions happened. Use the fields and calls inside the class
+         to find cohesive groups of responsibility (pricing, discounts, reservation, payment, statuses,
+         notifications). The boundaries of the future classes follow these groups, not the file size.
+      3. **Stop the growth.** Record a team rule: no new logic goes into `OrderManager`; it is written in
+         separate classes, and `OrderManager` at most calls them. The rule is checked in code review; it can be
+         backed by file owners in `CODEOWNERS` and by architecture tests. Without this step the class grows faster
+         than code is moved out.
+      4. **Agree on a budget and name an owner.** Show the product owner the cost of the problem in their terms:
+         conflicts, regressions, time spent on fixes. Agree on a steady share of capacity in every sprint. Name one
+         person responsible for the plan and the order of steps (not the only one doing the work), so the effort
+         does not fall apart into random edits.
+      5. **Safety net first.** Before moving out the next group, cover it with characterization tests: they pin
+         down what the code does today, oddities included, through the public methods of `OrderManager`. Bugs
+         found along the way are not fixed during the move; they get separate tasks.
+      6. **Extract one responsibility at a time.** Extract a class (for example `DiscountCalculator`), keep
+         delegating methods in `OrderManager` so callers do not change, then move callers to the new service
+         through DI step by step and delete the delegates. Moving code and changing behaviour go into different
+         small PRs. Start with the hotspots: that is where the payoff is largest.
+      7. **Tie it to the feature flow.** Extract the part that an upcoming feature will touch: first the
+         refactoring that makes the change easy, then the change itself. Announce in advance which area is being
+         moved, so nobody starts parallel work in it.
+      8. **Measure and review.** Track the size of the class, how often it changes, and the number of conflicts
+         and regressions tied to it. Compare the plan with the results regularly, and define up front when the
+         work is done: for example, when only a thin coordinator is left of the class.
+    explanation: |
+      This is the God object anti-pattern, at the code level the Large Class smell: a class has collected many
+      unrelated responsibilities. It has many reasons to change, so everyone edits it, and any edit risks
+      affecting neighbouring logic through shared fields. Merge conflicts and regressions are a direct
+      consequence of this, not of careless developers.
+
+      The key decisions of the plan follow from the constraints. Feature work does not stop, so every step must
+      be small, reviewed and releasable; the main branch stays working all the time. The Branch by Abstraction
+      technique fits this: the old code is hidden behind a new boundary, callers move to it gradually, and only
+      then is the old implementation removed. Nobody fully knows the behaviour of the class, so the tests
+      capture current behaviour rather than intended behaviour; otherwise the refactoring silently changes
+      something that users already rely on.
+
+      The lead's role here is as much organisational as technical: agree on a budget with the business, give
+      the work an owner, and turn the ban on growing the class into a team rule that is checked in review rather
+      than held together by the lead's personal control.
+    linkTitles:
+      - "Large Class code smell (Refactoring.Guru)"
+      - "Large Class (Refactoring.Guru, Russian version)"
+      - "Martin Fowler: Branch By Abstraction"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

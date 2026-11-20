@@ -1,0 +1,117 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQA3AFH9XENEJFWHYD
+slug: cache-ttl-jitter-synchronized-expiry
+stack: dotnet
+topic: system-design
+level: middle
+type: single
+grading: auto
+tags: [caching, expiration, ttl, jitter, cache-stampede]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/azure/architecture/best-practices/caching
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/azure/architecture/patterns/cache-aside
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему после прогрева кэша база получает всплески нагрузки через равные интервалы и как их убрать?
+    prompt: |
+      При запуске сервис прогревает кэш: загружает из базы около 10 000 записей о товарах и кладёт их в
+      распределённый кэш с одинаковым абсолютным сроком жизни 30 минут. Дальше сервис работает по паттерну
+      cache-aside, трафик ровный. Мониторинг показывает, что каждые 30 минут нагрузка на базу резко
+      подскакивает, а в промежутках почти нулевая. Какое изменение убирает эти периодические всплески?
+    hint: Когда истекают записи, которые записали в один момент с одним и тем же сроком жизни, и когда они будут записаны снова?
+    options:
+      a: "Добавить к сроку жизни каждой записи случайную добавку (jitter), например 30 минут плюс случайные 0-5 минут"
+      b: "Уменьшить срок жизни всех записей до 5 минут, чтобы данные обновлялись чаще"
+      c: "Увеличить срок жизни всех записей до 6 часов"
+      d: "Добавить блокировку на ключ, чтобы при промахе одну и ту же запись загружал из базы только один запрос"
+      e: "Незадолго до истечения срока жизни перезагружать все записи фоновой задачей одним пакетом"
+    optionExplanations:
+      b: "Записи по-прежнему истекают одновременно, поэтому всплески останутся примерно той же высоты, только станут в шесть раз чаще."
+      c: "Всплески станут реже, но не меньше: все записи всё так же истекут в один момент. Заодно вырастет время, в течение которого кэш отдаёт устаревшие данные."
+      d: "Блокировка на ключ защищает от множества одновременных загрузок одной записи. Здесь же одновременно истекают тысячи разных ключей, и каждый из них всё равно загружается из базы в один и тот же момент."
+      e: "Фоновая задача читает из базы все 10 000 записей разом по расписанию: всплеск никуда не девается, он просто становится запланированным."
+    answer: "Добавить к сроку жизни каждой записи случайную добавку (jitter), чтобы записи истекали в разное время и перезагрузки распределялись во времени."
+    explanation: |
+      Все записи легли в кэш почти в одну секунду с одинаковым сроком жизни, значит, и истекут они почти в
+      одну секунду. В cache-aside после этого каждый запрос к любому товару промахивается и идёт в базу, и
+      тысячи загрузок происходят разом. При ровном трафике загруженные значения снова записываются в кэш почти
+      одновременно с тем же сроком жизни, поэтому синхронизация сохраняется, и всплеск повторяется каждые
+      30 минут.
+
+      Случайная добавка к сроку жизни разносит моменты истечения по интервалу: при 30 минутах плюс 0-5 минут
+      промахи распределяются по пяти минутам, и нагрузка на базу сглаживается. Всплески не исчезают
+      бесследно, но пропадает их периодичность и пиковая высота. После нескольких циклов записи расходятся
+      ещё сильнее, потому что каждая перезагружается в свой момент. В .NET это одна строка при записи: срок
+      жизни для `DistributedCacheEntryOptions.AbsoluteExpirationRelativeToNow` считают как базовое значение
+      плюс `TimeSpan` из `Random.Shared`.
+
+      Связанные страницы описывают срок жизни отдельно для каждого ключа в Redis и поток чтения cache-aside, в
+      котором записи истекают, чтобы не устаревать. Случайная добавка к сроку жизни - распространённый
+      инженерный приём поверх этих механизмов, а не отдельная функция какого-то API.
+
+      Изменение одного общего срока жизни меняет только частоту всплесков, а блокировка на ключ решает другую
+      задачу - одновременные промахи по одному ключу.
+    linkTitles:
+      - "Рекомендации по кэшированию"
+      - "Паттерн Cache-Aside"
+  en:
+    title: Why does the database get load spikes at regular intervals after a cache warm-up, and how do you remove them?
+    prompt: |
+      At startup a service warms its cache: it loads about 10,000 product records from the database and puts
+      them into a distributed cache with the same absolute expiration of 30 minutes. After that the service uses
+      the cache-aside pattern, and traffic is steady. Monitoring shows that every 30 minutes the database load
+      spikes sharply and is almost zero in between. Which change removes these periodic spikes?
+    hint: When do entries that were written at the same moment with the same expiration expire, and when are they written again?
+    options:
+      a: "Add a random offset (jitter) to each entry's expiration, for example 30 minutes plus a random 0-5 minutes"
+      b: "Shorten the expiration of all entries to 5 minutes so that the data refreshes more often"
+      c: "Lengthen the expiration of all entries to 6 hours"
+      d: "Add a per-key lock so that on a miss only one request loads the same entry from the database"
+      e: "Shortly before the expiration, reload all entries in one batch from a background job"
+    optionExplanations:
+      b: "The entries still expire at the same moment, so the spikes stay about as high and only become six times more frequent."
+      c: "The spikes become rarer but not smaller: all entries still expire at the same moment. It also lengthens the time during which the cache serves stale data."
+      d: "A per-key lock protects against many simultaneous loads of one entry. Here thousands of different keys expire at once, and each of them is still loaded from the database at the same moment."
+      e: "The background job reads all 10,000 records from the database at once on a schedule: the spike does not go away, it just becomes scheduled."
+    answer: "Add a random offset (jitter) to each entry's expiration so that the entries expire at different times and the reloads are spread over time."
+    explanation: |
+      All entries were written to the cache within about one second with the same expiration, so they also
+      expire within about one second. With cache-aside every request for any product then misses and goes to
+      the database, and thousands of loads happen at once. Under steady traffic the loaded values are written
+      back almost simultaneously with the same expiration, so the synchronization persists and the spike repeats
+      every 30 minutes.
+
+      A random offset on the expiration spreads the expiry moments over an interval: with 30 minutes plus
+      0-5 minutes the misses are spread over five minutes, and the database load is smoothed out. The load does
+      not vanish, but the periodicity and the peak height go away. After a few cycles the entries drift apart
+      even further, because each one is reloaded at its own moment. In .NET this is one line at write time: the
+      value for `DistributedCacheEntryOptions.AbsoluteExpirationRelativeToNow` is computed as a base value plus
+      a `TimeSpan` from `Random.Shared`.
+
+      The linked pages describe per-key expiration in Redis and the cache-aside read flow, in which entries
+      expire so that they do not become stale. A random offset on the expiration is a common engineering
+      technique on top of these mechanisms, not a feature of a particular API.
+
+      Changing one shared expiration only changes how often the spikes come, and a per-key lock solves a
+      different problem - simultaneous misses on one key.
+    linkTitles:
+      - "Caching guidance"
+      - "Cache-Aside pattern"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

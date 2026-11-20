@@ -1,0 +1,165 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQ0G9GC30MTFTAWV96
+slug: url-shortener-short-code-generation
+stack: dotnet
+topic: system-design
+level: middle
+type: open
+grading: self
+tags: [url-shortener, id-generation, base62, hashing, collisions]
+links:
+  - url: https://www.rfc-editor.org/rfc/rfc4648
+    lang: en
+    kind: spec
+  - url: https://learn.microsoft.com/en-us/azure/well-architected/design-guides/partition-data
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как генерировать короткие коды для сервиса сокращения ссылок, работающего в нескольких экземплярах?
+    prompt: |
+      Вы проектируете сервис сокращения ссылок: по длинному URL он выдаёт короткий код вида `/aZ3k9Qx`, а по
+      коду перенаправляет на исходный адрес. Сервис работает в нескольких экземплярах за балансировщиком.
+      Как вы будете генерировать короткие коды и какие компромиссы есть у основных подходов?
+    hint: |
+      Откуда в каждом подходе берётся уникальность кода: из способа его построения или из проверки в хранилище?
+    answer: |
+      1. **Уточнить требования.** Ожидаемое число ссылок, желаемая длина кода, допустима ли предсказуемость
+         кодов, должен ли один и тот же URL всегда получать один код, нужны ли пользовательские алиасы.
+      2. **Выбрать алфавит и длину.** Обычно base62 (`0-9`, `a-z`, `A-Z`) или base64url из RFC 4648 (те же
+         символы плюс `-` и `_`, без `+` и `/`, которые небезопасны в URL). Семь символов base62 дают
+         62^7 ≈ 3,5 трлн кодов. Если коды будут вводить вручную, лучше алфавит без похожих символов (`0` и `O`,
+         `1` и `l`).
+      3. **Подход A: уникальное число и кодирование.** Каждой ссылке выдаётся уникальный целочисленный
+         идентификатор, а код - это его запись в выбранном алфавите.
+         - Несколько экземпляров: каждый экземпляр атомарно забирает у координатора (например, строки в базе,
+           которую увеличивают одним `UPDATE`) диапазон, скажем, из 10 000 номеров и выдаёт их из памяти. Одно
+           обращение к базе на 10 000 кодов. Если экземпляр упал, остаток диапазона пропадает: в номерах появятся
+           пропуски, это безвредно.
+         - Альтернативы: последовательность или identity в базе на каждую вставку (просто, но база становится
+           точкой сериализации), идентификаторы в стиле Snowflake (время + номер экземпляра + счётчик) без
+           координатора, но с более длинными кодами и требованием уникальных номеров экземпляров и аккуратной
+           работы с часами.
+         - Плюсы: коллизий нет по построению, проверка перед вставкой не нужна, коды короткие и растут медленно.
+         - Минусы: коды предсказуемы, их можно перебрать и по ним видно объём сервиса. Обратимая перестановка
+           номера перед кодированием (например, маленький блочный шифр над пространством номеров) сохраняет
+           уникальность и скрывает порядок, но это маскировка, а не защита: приватным ссылкам нужен длинный
+           случайный токен или авторизация.
+      4. **Подход B: обрезанный хеш URL.** Код - первые символы хеша (например, SHA-256) URL в выбранном
+         алфавите.
+         - Плюсы: не нужна координация, один URL детерминированно даёт один код.
+         - Минусы: обрезка создаёт коллизии. По парадоксу дней рождения при семи символах base62 вероятность хотя
+           бы одной коллизии достигает примерно 50% уже около 2,2 млн ссылок. Поэтому каждая вставка - это вставка
+           с уникальным ограничением на код, а при конфликте - чтение существующей записи: тот же URL - вернуть его
+           код, другой URL - изменить вход (добавить соль или счётчик) и повторить. Чем больше занято
+           пространство, тем больше повторов.
+         - Дедупликация нужна не всегда: у одного URL могут быть разные владельцы, статистика и сроки жизни.
+      5. **Подход C: случайный код.** Код из криптографически стойкого генератора (`RandomNumberGenerator`, а
+         не `Random`), вставка с уникальным ограничением и повтор при конфликте. Коды непредсказуемы, координация
+         не нужна, обработка коллизий та же, что в подходе B. Пока пространство заполнено слабо, вероятность
+         конфликта на одну вставку примерно равна доле занятых кодов.
+      6. **Общее для всех подходов.**
+         - Уникальный индекс по коду в хранилище - последняя гарантия всегда, даже при подходе A.
+         - Пользовательские алиасы живут в том же пространстве кодов: их нужно проверять и отделять от
+           сгенерированных (другая длина, зарезервированные значения).
+         - Хранилище - это поиск ключ-значение по коду. При секционировании по диапазонам последовательные коды
+           все попадают в последнюю секцию, поэтому секционировать лучше по хешу кода. Чтения перенаправлений
+           преобладают, их стоит кэшировать.
+      7. **Выбор по умолчанию.** Счётчик с выдачей диапазонов, при необходимости с обратимой перестановкой;
+         случайные коды, если важна непредсказуемость; хеш - только если дедупликация одинаковых URL является
+         требованием и повторы при вставке приемлемы.
+    explanation: |
+      Главное различие подходов - откуда берётся уникальность. В подходе A она обеспечивается построением:
+      разные номера дают разные коды, поэтому вставка не требует проверки, а стоимость координации амортизируется
+      выдачей номеров диапазонами. В подходах B и C уникальность проверяется в хранилище при каждой вставке, и
+      код без этой проверки может молча перезаписать или перепутать чужую ссылку.
+
+      Коллизии обрезанного хеша наступают гораздо раньше, чем кажется: по парадоксу дней рождения они становятся
+      вероятными при числе записей порядка квадратного корня из размера пространства, а не при его заполнении.
+      Поэтому «хеш достаточно длинный» - не аргумент, если хеш обрезан до нескольких символов.
+
+      RFC 4648 описывает base64url именно для таких случаев: стандартный base64 использует `+` и `/`, которые
+      имеют особый смысл в URL. Base62 избегает знаков препинания вообще, ценой нестандартной, но простой
+      реализации.
+
+      Секционирование хранилища тоже зависит от способа генерации: последовательные ключи при секционировании по
+      диапазонам создают горячую секцию, а ключ, по которому данные равномерно распределяются, снимает эту
+      проблему.
+    linkTitles:
+      - "RFC 4648: кодировки Base16, Base32 и Base64"
+      - "Рекомендации по секционированию данных (Azure Well-Architected Framework)"
+  en:
+    title: How do you generate short codes for a URL shortener that runs on several instances?
+    prompt: |
+      You are designing a URL shortener: for a long URL it returns a short code such as `/aZ3k9Qx`, and for a
+      code it redirects to the original address. The service runs as several instances behind a load balancer.
+      How would you generate the short codes, and what are the trade-offs of the main approaches?
+    hint: |
+      In each approach, where does the uniqueness of a code come from: from the way it is built, or from a check
+      in the store?
+    answer: |
+      1. **Clarify the requirements.** The expected number of links, the desired code length, whether predictable
+         codes are acceptable, whether the same URL must always get the same code, and whether custom aliases are
+         needed.
+      2. **Choose the alphabet and length.** Usually base62 (`0-9`, `a-z`, `A-Z`) or base64url from RFC 4648 (the
+         same characters plus `-` and `_`, without `+` and `/`, which are unsafe in URLs). Seven base62
+         characters give 62^7 ≈ 3.5 trillion codes. If people will type codes by hand, prefer an alphabet without
+         look-alike characters (`0` and `O`, `1` and `l`).
+      3. **Approach A: a unique number, encoded.** Every link gets a unique integer id, and the code is that id
+         written in the chosen alphabet.
+         - Several instances: each instance atomically takes a range of, say, 10,000 numbers from a coordinator
+           (for example a database row incremented with a single `UPDATE`) and hands them out from memory. One
+           database call per 10,000 codes. If an instance crashes, the rest of its range is lost: the numbers get
+           gaps, which is harmless.
+         - Alternatives: a database sequence or identity per insert (simple, but the database becomes a
+           serialization point), or Snowflake-style ids (time + instance number + counter) with no coordinator, but
+           with longer codes and a need for unique instance numbers and careful clock handling.
+         - Pros: no collisions by construction, no check before insert, codes are short and grow slowly.
+         - Cons: codes are predictable, can be enumerated and reveal the volume of the service. A reversible
+           permutation of the number before encoding (for example a small block cipher over the id space) keeps
+           uniqueness and hides the order, but it is obfuscation, not protection: private links need a long random
+           token or authorization.
+      4. **Approach B: a truncated hash of the URL.** The code is the first characters of a hash (for example
+         SHA-256) of the URL in the chosen alphabet.
+         - Pros: no coordination, and the same URL deterministically gives the same code.
+         - Cons: truncation causes collisions. By the birthday paradox, with seven base62 characters the chance of
+           at least one collision reaches about 50% at only around 2.2 million links. So every insert is an insert
+           with a unique constraint on the code, and on conflict the existing record is read: the same URL means
+           return its code, a different URL means change the input (add a salt or counter) and retry. The fuller
+           the space, the more retries.
+         - Deduplication is not always wanted: the same URL can have different owners, statistics and expiry.
+      5. **Approach C: a random code.** A code from a cryptographically secure generator (`RandomNumberGenerator`,
+         not `Random`), an insert with a unique constraint and a retry on conflict. Codes are unpredictable, no
+         coordination is needed, and collision handling is the same as in approach B. While the space is sparsely
+         filled, the chance of a conflict per insert is roughly the share of codes already taken.
+      6. **Common to all approaches.**
+         - A unique index on the code in the store is always the final guarantee, even with approach A.
+         - Custom aliases live in the same code space: they must be checked and kept apart from generated codes
+           (a different length, reserved values).
+         - The store is a key-value lookup by code. With range partitioning, sequential codes all land in the last
+           partition, so partitioning by a hash of the code is better. Redirect reads dominate, so cache them.
+      7. **Default choice.** A counter with range allocation, optionally with a reversible permutation; random
+         codes when unpredictability matters; a hash only if deduplicating identical URLs is a requirement and
+         retries on insert are acceptable.
+    explanation: |
+      The key difference between the approaches is where uniqueness comes from. In approach A it comes from
+      construction: different numbers give different codes, so an insert needs no check, and the cost of
+      coordination is amortized by handing out numbers in ranges. In approaches B and C uniqueness is checked in the
+      store on every insert, and without that check a code can silently overwrite or mix up someone else's link.
+
+      Collisions of a truncated hash arrive much earlier than intuition suggests: by the birthday paradox they
+      become likely once the number of records is on the order of the square root of the space size, not when the
+      space fills up. So "the hash is long enough" is no argument if the hash is cut down to a few characters.
+
+      RFC 4648 defines base64url for exactly this kind of use: standard base64 uses `+` and `/`, which have special
+      meaning in URLs. Base62 avoids punctuation altogether, at the price of a non-standard but simple
+      implementation.
+
+      Partitioning of the store also depends on how codes are generated: sequential keys with range partitioning
+      create a hot partition, while a key that spreads data evenly removes the problem.
+    linkTitles:
+      - "RFC 4648: The Base16, Base32, and Base64 Data Encodings"
+      - "Data partitioning recommendations (Azure Well-Architected Framework)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

@@ -1,0 +1,149 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNWQVTW447DMABDG2S
+slug: rabbitmq-prefetch-count-tuning
+stack: dotnet
+topic: distributed
+level: middle
+type: open
+grading: self
+tags: [rabbitmq, prefetch, flow-control, acknowledgements, competing-consumers]
+links:
+  - url: https://www.rabbitmq.com/docs/consumer-prefetch
+    lang: en
+    kind: docs
+  - url: https://www.rabbitmq.com/docs/confirms
+    lang: en
+    kind: docs
+  - url: https://www.rabbitmq.com/tutorials/tutorial-two-dotnet
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что ограничивает prefetch count в RabbitMQ и что ломается, если он слишком большой или слишком маленький?
+    prompt: |
+      Несколько экземпляров сервиса читают одну очередь RabbitMQ с ручными подтверждениями (manual acknowledgements).
+      Время обработки сообщений сильно различается: большинство обрабатывается за миллисекунды, но некоторые - за
+      десятки секунд.
+
+      Что контролирует prefetch count, который задаёт `basic.qos`? Что пойдёт не так при слишком большом значении
+      (или без ограничения) и при слишком маленьком, и как вы будете подбирать значение?
+    hint: "Где находятся сообщения, которые брокер уже отправил потребителю, но тот их ещё не подтвердил, и может ли их забрать другой потребитель?"
+    answer: |
+      1. **Что ограничивает prefetch.** `basic.qos` с `prefetch_count` задаёт, сколько доставленных, но ещё не
+         подтверждённых сообщений может одновременно держать потребитель. Когда лимит достигнут, брокер перестаёт
+         отправлять ему сообщения, пока не придёт подтверждение (`ack` или `nack`). Значение `0` означает
+         отсутствие лимита, хотя источник может ограничить и его: quorum-очереди ограничивают prefetch
+         потребителя 2000 сообщениями.
+         - В клиенте .NET это `BasicQosAsync(prefetchSize: 0, prefetchCount: 10, global: false)` в
+           `RabbitMQ.Client` 7.x (`BasicQos` в 6.x), вызванный до начала чтения.
+         - В RabbitMQ `global: false` означает лимит на каждого потребителя канала (в спецификации AMQP 0-9-1
+           тот же параметр задаёт общий лимит канала). Глобальный prefetch на канал (`global: true`) устарел и
+           начиная с RabbitMQ 4.3 по умолчанию отключён, поэтому используйте лимит на потребителя.
+      2. **Слишком большое значение или без лимита.**
+         - Брокер раздаёт сообщения всем потребителям, у которых в окне prefetch есть свободные слоты. Экземпляр,
+           застрявший на медленном сообщении, держит в своём буфере ещё сотни сообщений, а другие экземпляры
+           простаивают: в очереди для них ничего нет.
+         - Сообщения из буфера ждут медленного соседа, и задержка их обработки растёт, хотя свободные
+           обработчики есть.
+         - В очереди такие сообщения числятся как unacked, а не ready. Масштабирование по длине очереди не
+           срабатывает, а новые экземпляры получают только то, что придёт позже.
+         - Буфер расходует память потребителя, при большом потоке её может не хватить.
+         - Если экземпляр упадёт или закроет канал, все его неподтверждённые сообщения разом вернутся в очередь
+           и будут доставлены повторно с флагом `redelivered`: больше дублей и нарушенный порядок.
+      3. **Слишком маленькое значение (1).** Распределение самое честное: потребитель получает следующее
+         сообщение только после подтверждения предыдущего, и работа не копится у медленного экземпляра. Цена -
+         пропускная способность: между подтверждением и следующей доставкой проходит сетевой круг, и на быстрых
+         сообщениях потребитель большую часть времени ждёт, особенно при большой задержке сети. Если потребитель
+         обрабатывает сообщения параллельно, prefetch меньше степени параллелизма оставляет часть обработчиков
+         без работы.
+      4. **Как подбирать.**
+         - Длинные и неравномерные задачи (секунды и больше): 1 или единицы, но не меньше числа параллельных
+           обработчиков в экземпляре.
+         - Быстрые однородные сообщения: десятки или сотни, чтобы буфер покрывал задержку сети. По документации
+           RabbitMQ prefetch 2000 по пропускной способности потребителя почти не отличается от 300, поэтому
+           нескольких сотен обычно достаточно.
+         - Смешанный поток лучше разделить на разные очереди со своими потребителями и своим prefetch.
+         - Подтверждения пачкой (`multiple: true`) отправлять раньше, чем потребитель наберёт лимит prefetch:
+           если ждать пачку больше лимита, новые сообщения не придут, и потребитель остановится.
+         - Проверять на реальной нагрузке: число unacked на потребителя, скорость подтверждений, задержку
+           обработки и простой экземпляров.
+    explanation: |
+      Prefetch - это окно управления потоком между брокером и потребителем. Сообщение, отправленное потребителю,
+      принадлежит ему до подтверждения: другие потребители той же очереди его не получат, даже если простаивают.
+      Поэтому размер окна определяет, сколько работы может застрять у одного экземпляра.
+
+      При неравномерном времени обработки большое окно ломает идею конкурирующих потребителей: работа
+      распределяется в момент доставки, а не в момент, когда обработчик освободился. Маленькое окно распределяет
+      работу по фактической готовности, но каждый экземпляр платит сетевым кругом за каждое сообщение.
+
+      Подходящее значение - самое маленькое, при котором потребитель не ждёт новых сообщений. Оно зависит от
+      времени обработки, задержки сети и параллелизма внутри экземпляра, поэтому его измеряют, а не угадывают.
+    linkTitles:
+      - "Consumer prefetch в RabbitMQ"
+      - "Подтверждения потребителей и издателей в RabbitMQ"
+      - "Учебник RabbitMQ для .NET: work queues"
+  en:
+    title: What does the RabbitMQ prefetch count limit, and what breaks when it is too high or too low?
+    prompt: |
+      Several instances of a service read one RabbitMQ queue with manual acknowledgements. Processing times vary
+      a lot: most messages take milliseconds, but some take tens of seconds.
+
+      What does the prefetch count set by `basic.qos` control? What goes wrong with a value that is too high (or
+      unlimited) and with one that is too low, and how would you choose the value?
+    hint: "Where are the messages that the broker has already sent to a consumer but the consumer has not acknowledged yet, and can another consumer take them?"
+    answer: |
+      1. **What prefetch limits.** `basic.qos` with `prefetch_count` sets how many delivered but not yet
+         acknowledged messages a consumer may hold at once. When the limit is reached, the broker stops sending
+         messages to it until an acknowledgement (`ack` or `nack`) arrives. A value of `0` means no limit, although
+         the message source can still cap it: quorum queues cap consumer prefetch at 2,000 messages.
+         - In the .NET client this is `BasicQosAsync(prefetchSize: 0, prefetchCount: 10, global: false)` in
+           `RabbitMQ.Client` 7.x (`BasicQos` in 6.x), called before consuming starts.
+         - In RabbitMQ `global: false` means a limit per consumer on the channel (in the AMQP 0-9-1 specification
+           the same setting is a shared channel limit). Global per-channel prefetch (`global: true`) is deprecated
+           and disabled by default starting with RabbitMQ 4.3, so use per-consumer prefetch.
+      2. **Too high or unlimited.**
+         - The broker hands messages to every consumer that has free slots in its prefetch window. An instance
+           stuck on a slow message holds hundreds more in its buffer while other instances sit idle: the queue has
+           nothing left for them.
+         - Messages in the buffer wait for the slow neighbour, and their latency grows although free workers
+           exist.
+         - The queue counts these messages as unacked, not ready. Scaling on queue length does not trigger, and
+           new instances only get what arrives later.
+         - The buffer costs consumer memory, and under a heavy flow it may run out.
+         - If the instance crashes or closes its channel, all its unacknowledged messages return to the queue at
+           once and are redelivered with the `redelivered` flag: more duplicates and broken ordering.
+      3. **Too low (1).** Distribution is as fair as it gets: a consumer receives the next message only after
+         acknowledging the previous one, and work does not pile up at a slow instance. The price is throughput:
+         a network round trip passes between an acknowledgement and the next delivery, so with fast messages the
+         consumer spends most of its time waiting, especially when network latency is high. If the consumer
+         processes messages in parallel, a prefetch below the degree of parallelism leaves some workers without
+         work.
+      4. **How to choose.**
+         - Long, uneven tasks (seconds or more): 1 or a few, but not less than the number of parallel workers in
+           an instance.
+         - Fast, uniform messages: tens or hundreds, so that the buffer covers network latency. The RabbitMQ
+           documentation notes that a prefetch of 2,000 is not meaningfully different from 300 in consumer
+           throughput, so a few hundred is usually enough.
+         - A mixed workload is better split into separate queues with their own consumers and their own prefetch.
+         - Send batched acknowledgements (`multiple: true`) before the consumer reaches the prefetch limit: if you
+           wait for a batch larger than the limit, no new messages arrive and the consumer stalls.
+         - Verify under real load: unacked messages per consumer, acknowledgement rate, processing latency and
+           idle instances.
+    explanation: |
+      Prefetch is a flow control window between the broker and the consumer. A message sent to a consumer belongs
+      to it until acknowledged: other consumers of the same queue will not get it, even if they are idle. So the
+      window size decides how much work can get stuck at one instance.
+
+      With uneven processing times a large window breaks the idea of competing consumers: work is assigned at
+      delivery time, not when a worker becomes free. A small window assigns work by actual readiness, but every
+      instance pays a network round trip for every message.
+
+      The right value is the smallest one at which the consumer never waits for new messages. It depends on
+      processing time, network latency and parallelism inside the instance, so it is measured, not guessed.
+    linkTitles:
+      - "Consumer prefetch in RabbitMQ"
+      - "Consumer acknowledgements and publisher confirms in RabbitMQ"
+      - "RabbitMQ tutorial for .NET: work queues"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

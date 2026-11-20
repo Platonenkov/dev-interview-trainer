@@ -1,0 +1,170 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNX24EDBZV2SJVW05K
+slug: event-contract-evolution-across-teams
+stack: dotnet
+topic: distributed
+level: lead
+type: open
+grading: self
+tags: [event-contracts, schema-evolution, schema-registry, tolerant-reader, versioning, integration-events]
+links:
+  - url: https://docs.confluent.io/platform/current/schema-registry/fundamentals/schema-evolution.html
+    lang: en
+    kind: docs
+  - url: https://martinfowler.com/bliki/TolerantReader.html
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/dotnet/architecture/microservices/multi-container-microservice-net-applications/integration-event-based-microservice-communications
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как переименовать поле интеграционного события и изменить его смысл, не сломав потребителей из других команд?
+    prompt: |
+      Ваша команда публикует интеграционные события, которые читают сервисы нескольких других команд. В событии
+      нужно переименовать поле и одновременно изменить его смысл (например, `amount` превращается в сумму с
+      налогом вместо суммы без налога). Как вы будете менять контракт события, чтобы не сломать потребителей,
+      и какой процесс выстроите, чтобы такие изменения были безопасными и в будущем?
+    hint: |
+      Какое из двух изменений способна заметить проверка схемы, а какое нет? И кто выкатывается первым - издатель или потребители?
+    answer: |
+      1. **Разделить два изменения.** Переименование - изменение формы, смена смысла - изменение семантики.
+         Инструменты проверки схем ловят только первое. Самый опасный вариант - новый смысл под именем, которое
+         потребители уже читают: всё десериализуется, ошибок нет, а потребители молча считают неправильно.
+         Поэтому старое поле никогда не получает новый смысл.
+      2. **Сначала расширить, потом сузить (expand and contract).**
+         - Добавить поле с новым именем и новым смыслом как необязательное (со значением по умолчанию), а старое
+           поле продолжать заполнять со старым смыслом, без изменений. Старые потребители ничего не замечают,
+           перешедшие читают новое поле.
+         - Если меняется смысл всего события, а не одного поля, или старое значение уже нельзя вычислить, ввести
+           новый тип события или мажорную версию (`OrderPlacedV2` или отдельный топик) и публиковать обе версии
+           параллельно. Обе записи outbox пишутся в одной транзакции, чтобы версии не разошлись.
+         - Удалить старое поле или остановить v1 только после того, как перешли все потребители и истёк срок
+           устаревания. Это ломающее изменение, и оно делается осознанно и по плану.
+      3. **Правила совместимости проверяет машина.** Схемы событий хранятся в schema registry (или в общем
+         репозитории контрактов), и при каждой регистрации схемы или в CI проверяется режим совместимости. В
+         терминах Confluent Schema Registry: `BACKWARD` (по умолчанию) - потребитель с новой схемой читает данные,
+         записанные предыдущей, и первыми обновляются потребители; `FORWARD` - старые потребители читают данные,
+         записанные новой схемой, и первым обновляется издатель; `FULL` - оба условия. Издателя с многими
+         независимыми командами-потребителями выкатывают раньше потребителей, поэтому ему нужна прямая
+         совместимость, а надёжнее всего `FULL`. Варианты `_TRANSITIVE` проверяют совместимость со всеми прошлыми
+         версиями, а не только с последней, и это важно: из-за retention и повторного чтения потребители
+         встречают старые события. В таком режиме разрешено добавлять необязательные поля со значением по
+         умолчанию, а переименование, удаление обязательного поля и смена типа отклоняются.
+      4. **Толерантные потребители (Tolerant Reader).** Потребитель игнорирует незнакомые поля, проверяет только
+         то, что использует, имеет значения по умолчанию для отсутствующих необязательных полей и не падает на
+         незнакомом значении перечисления. `System.Text.Json` в .NET 10 по умолчанию пропускает незнакомые
+         свойства JSON; для интеграционных событий не стоит включать `JsonUnmappedMemberHandling.Disallow`.
+         Потребитель со строгой десериализацией превращает любое добавление поля в инцидент.
+      5. **Процесс.**
+         - У каждого события есть команда-владелец и каталог: схема, смысл каждого поля, политика версий,
+           список известных потребителей (по группам потребителей, подпискам, правам доступа к топику).
+         - Ломающие изменения проходят через RFC или ADR, о них заранее сообщают командам-потребителям с
+           инструкцией по миграции и сроком; устаревшие поля помечены в схеме и документации.
+         - Контрактные тесты, управляемые потребителями (например, message pacts в Pact), запускаются в CI
+           издателя и ловят ожидания, которые схема выразить не может.
+         - Миграцию отслеживают по данным: кто ещё читает v1 (группы потребителей и их отставание на старом
+           топике). v1 отключают, когда читателей не осталось, а не просто по дате; при срыве срока есть
+           понятная эскалация.
+         - В метаданных сообщения есть тип события, версия или идентификатор схемы, чтобы потребитель мог
+           выбрать обработчик.
+      6. **Назвать цену.** Две версии - это двойная публикация, больше хранения и тестов, риск, что сроки
+         миграции поползут, и необходимость вычислять старое поле из новых данных. Если старое значение
+         вычислить нельзя, это довод в пользу отдельного типа события, а не тихой подмены.
+    explanation: |
+      Интеграционное событие - публичный API с потребителями, которых издатель не контролирует: они
+      выкатываются по своему графику, и одного согласованного деплоя всех сервисов не бывает. К тому же журнал
+      брокера хранит старые сообщения, и даже после миграции история остаётся в старом формате. Поэтому
+      совместимость должна сохраняться во времени, между версиями, а не только в момент выката.
+
+      Проверка схемы защищает форму данных, но не смысл. Переименование для сериализатора выглядит как удаление
+      одного поля и добавление другого, и режим совместимости его отклонит. А смену смысла под прежним именем
+      никакой реестр не заметит. Отсюда главное правило: новый смысл получает новое имя или новый тип события,
+      а старое поле живёт с прежним смыслом до конца миграции. Tolerant Reader - вторая половина договора:
+      издатель меняет контракт только добавлениями, а потребители не ломаются от добавлений.
+
+      Для уровня lead основная часть ответа - процесс: владелец события, автоматическая проверка совместимости
+      в CI, объявленный срок устаревания, наблюдение за тем, кто ещё читает старую версию, и решение об
+      отключении по данным. Без этого техника expand and contract застревает на шаге «расширить» навсегда.
+    linkTitles:
+      - "Эволюция схем и совместимость в Schema Registry"
+      - "Tolerant Reader (Мартин Фаулер)"
+      - "Взаимодействие микросервисов на основе интеграционных событий"
+  en:
+    title: How do you rename a field of an integration event and change its meaning without breaking consumers in other teams?
+    prompt: |
+      Your team publishes integration events that services of several other teams consume. You need to rename
+      a field of an event and at the same time change its meaning (for example, `amount` becomes the amount
+      including tax instead of the amount before tax). How do you evolve the event contract without breaking
+      consumers, and what process do you set up so that such changes stay safe in the future?
+    hint: |
+      Which of the two changes can a schema check detect, and which can it not? And who is deployed first - the publisher or the consumers?
+    answer: |
+      1. **Separate the two changes.** A rename changes the shape, a change of meaning changes the semantics.
+         Schema tooling catches only the first. The most dangerous option is a new meaning under a name that
+         consumers already read: everything deserializes, nothing fails, and consumers silently compute wrong
+         results. So the old field never gets a new meaning.
+      2. **Expand, then contract.**
+         - Add a field with the new name and the new meaning as optional (with a default), and keep filling the
+           old field with its old meaning, unchanged. Old consumers notice nothing, migrated consumers read the
+           new field.
+         - If the meaning of the whole event changes rather than one field, or the old value can no longer be
+           computed, introduce a new event type or major version (`OrderPlacedV2` or a separate topic) and
+           publish both versions side by side. Both outbox rows are written in one transaction so the versions
+           cannot diverge.
+         - Remove the old field or stop v1 only after every consumer has migrated and the deprecation period has
+           passed. This is a breaking change, and it is done deliberately and on schedule.
+      3. **A machine enforces the compatibility rules.** Event schemas live in a schema registry (or a shared
+         contracts repository), and the compatibility mode is checked on every schema registration or in CI. In
+         Confluent Schema Registry terms: `BACKWARD` (the default) means a consumer on the new schema reads data
+         written with the previous one, and consumers are upgraded first; `FORWARD` means old consumers read data
+         written with the new schema, and the publisher is upgraded first; `FULL` means both. A publisher with
+         many independent consumer teams is deployed before its consumers, so it needs forward compatibility,
+         and `FULL` is the safest. The `_TRANSITIVE` variants check against all earlier versions, not only the
+         last one, which matters because retention and replay make consumers read old events. In such a mode
+         adding optional fields with defaults is allowed, while a rename, removing a required field or changing
+         a type is rejected.
+      4. **Tolerant readers on the consumer side.** A consumer ignores unknown fields, validates only what it
+         uses, has defaults for missing optional fields and does not crash on an unknown enum value.
+         `System.Text.Json` in .NET 10 skips unknown JSON properties by default; for integration events do not
+         turn on `JsonUnmappedMemberHandling.Disallow`. A consumer with strict deserialization turns any added
+         field into an incident.
+      5. **Process.**
+         - Every event has an owning team and a catalog entry: the schema, the meaning of each field, the
+           versioning policy and the list of known consumers (from consumer groups, subscriptions, topic access
+           rights).
+         - Breaking changes go through an RFC or an ADR and are announced to consumer teams in advance with a
+           migration guide and a deadline; deprecated fields are marked in the schema and the documentation.
+         - Consumer-driven contract tests (for example message pacts in Pact) run in the publisher's CI and catch
+           expectations that a schema cannot express.
+         - Migration is tracked with data: who still reads v1 (consumer groups and their lag on the old topic).
+           v1 is switched off when no readers are left, not just on a date, and a slipped deadline has a clear
+           escalation path.
+         - Message metadata carries the event type and the version or schema id, so a consumer can pick a handler.
+      6. **Name the cost.** Two versions mean double publishing, more storage and tests, the risk that migration
+         deadlines slip, and the need to compute the old field from the new data. If the old value cannot be
+         computed, that is an argument for a separate event type rather than a silent swap.
+    explanation: |
+      An integration event is a public API whose consumers the publisher does not control: they deploy on their
+      own schedule, and there is never one coordinated deployment of all services. On top of that, the broker
+      log keeps old messages, so even after the migration the history stays in the old format. Compatibility
+      therefore has to hold over time, across versions, not only at the moment of a deployment.
+
+      A schema check protects the shape of the data, not its meaning. To a serializer a rename looks like
+      removing one field and adding another, and the compatibility mode rejects it. A change of meaning under
+      the same name, however, no registry will notice. Hence the main rule: a new meaning gets a new name or a
+      new event type, and the old field keeps its old meaning until the migration ends. Tolerant Reader is the
+      other half of the deal: the publisher changes the contract only by adding, and consumers do not break on
+      additions.
+
+      At lead level most of the answer is the process: an owner for the event, an automated compatibility check
+      in CI, an announced deprecation period, visibility into who still reads the old version, and a data-driven
+      decision to switch it off. Without that, expand and contract gets stuck at the expand step forever.
+    linkTitles:
+      - "Schema evolution and compatibility in Schema Registry"
+      - "Tolerant Reader (Martin Fowler)"
+      - "Event-based communication between microservices (integration events)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

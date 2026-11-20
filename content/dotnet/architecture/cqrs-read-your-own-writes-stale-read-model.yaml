@@ -1,0 +1,125 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RKDCNA0GJRBV7NJKVV
+slug: cqrs-read-your-own-writes-stale-read-model
+stack: dotnet
+topic: architecture
+level: senior
+type: open
+grading: self
+tags: [cqrs, read-model, eventual-consistency, read-your-writes]
+links:
+  - url: https://learn.microsoft.com/en-us/azure/architecture/patterns/cqrs
+    lang: en
+    kind: docs
+  - url: https://martinfowler.com/bliki/CQRS.html
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Что делать, если после команды пользователь видит устаревшие данные из асинхронной модели чтения CQRS?
+    prompt: |
+      Сервис построен по CQRS с отдельным хранилищем для чтения: команда меняет модель записи, а обработчик
+      события асинхронно обновляет проекцию, из которой читают экраны. Пользователь переименовывает проект,
+      страница перезагружается и показывает старое имя; если обновить её через секунду, имя уже новое.
+
+      Почему так происходит, какие есть способы решения и чем приходится платить за каждый из них?
+    hint: Что клиент уже знает сразу после успешной команды и с чем это можно сравнить на стороне чтения?
+    answer: |
+      1. **Причина.** Проекция обновляется после фиксации команды, через очередь или обработчик событий, а запрос
+         сразу после записи может прийти раньше. Это свойство согласованности в конечном счёте, а не случайная
+         ошибка, и лечить его задержкой вроде `Task.Delay` перед перечитыванием нельзя.
+      2. **Решать по экранам.** Обычно достаточно гарантии «читаю свои записи» (read-your-own-writes) для автора
+         изменения, а остальные пользователи, списки и отчёты могут отставать. Допустимое отставание согласуется с
+         бизнесом.
+      3. **Вернуть результат из команды и обновить UI оптимистично.** Команда возвращает идентификатор, новую
+         версию или итоговое состояние, и клиент показывает новое имя сам, не перечитывая проекцию. Цена: клиент
+         дублирует часть логики отображения, при перезагрузке страницы или на другом устройстве проблема
+         возвращается, а при асинхронном отказе нужен откат интерфейса.
+      4. **Дождаться, пока проекция догонит версию.** Команда возвращает версию агрегата или позицию события,
+         запрос передаёт минимальную нужную версию, и сторона чтения ждёт (или клиент опрашивает) с таймаутом,
+         пока проекция её не обработает. Цена: проекция должна хранить версию или контрольную точку, растёт
+         задержка ответа, а при сильном отставании нужен запасной путь.
+      5. **Читать это одно представление со стороны записи.** Например, страница сразу после сохранения
+         загружает агрегат из модели записи. Цена: дополнительная нагрузка на хранилище записи, две реализации
+         одного представления и частичный отказ от смысла разделения, поэтому только для узких сценариев.
+      6. **Честно показать, что изменение обрабатывается.** Статус «сохраняется» и обновление по push-уведомлению
+         (SignalR, WebSocket), когда проекция готова. Цена: другой UX и инфраструктура уведомлений.
+      7. **Синхронная проекция**, если модель чтения в той же базе: обновлять её в той же транзакции. Цена:
+         запись медленнее, хранилища связаны, независимое масштабирование и перестройка проекций усложняются.
+      8. **Наблюдать отставание.** Метрика лага проекции и алерт при превышении бюджета: иначе любое решение
+         держится на предположении, что лаг всегда маленький.
+    explanation: |
+      Когда модели записи и чтения живут в разных хранилищах, их синхронизация занимает время. Документация
+      Microsoft подчёркивает, что у способов разделить модели чтения и записи есть свои сложности, в том числе
+      синхронизация и управление согласованностью. Фаулер уточняет: если модели используют разные базы, между
+      ними нужен механизм передачи изменений, а раздельные модели ставят вопрос о том, насколько жёстко держать
+      их согласованными, и повышают вероятность согласованности в конечном счёте. Окно рассогласования нельзя
+      убрать, не отказавшись от асинхронности, поэтому выбирают, кто и где его заметит.
+
+      Ключевое наблюдение: строгая согласованность для всех обычно не нужна. Пользователя раздражает именно то,
+      что он не видит **свою** правку, поэтому решения нацелены на сессию автора: клиент уже знает результат
+      (оптимистичное обновление), знает версию (ожидание проекции) или временно читает из источника истины
+      (модель записи). Каждый способ переносит цену в своё место: на клиент, на задержку ответа или на нагрузку
+      стороны записи.
+
+      Сильный ответ не предлагает одно универсальное средство, а выбирает его для конкретного экрана и называет
+      цену. Слабый ответ - «добавить задержку» или «сделать всё синхронным», не заметив, что второе отменяет
+      причину, по которой хранилища разделяли.
+    linkTitles:
+      - "Паттерн CQRS"
+      - "Мартин Фаулер: CQRS"
+  en:
+    title: What do you do when a user sees stale data from an asynchronously updated CQRS read model right after a command?
+    prompt: |
+      A service uses CQRS with a separate read store: a command changes the write model, and an event handler
+      asynchronously updates the projection that screens read from. A user renames a project, the page reloads and
+      shows the old name; if they refresh a second later, the new name is there.
+
+      Why does this happen, what are the ways to handle it, and what does each of them cost?
+    hint: What does the client already know right after a successful command, and what could it compare against the read side?
+    answer: |
+      1. **The cause.** The projection is updated after the command commits, through a queue or an event handler,
+         and a query right after the write can arrive first. This is a property of eventual consistency, not a
+         random bug, and it cannot be fixed with a delay such as `Task.Delay` before re-reading.
+      2. **Decide per screen.** Usually the read-your-own-writes guarantee for the author of the change is enough,
+         while other users, lists and reports may lag. The acceptable lag is agreed with the business.
+      3. **Return the result from the command and update the UI optimistically.** The command returns the id, the
+         new version or the resulting state, and the client shows the new name itself without re-reading the
+         projection. Cost: the client duplicates part of the display logic, the problem returns on a page reload or
+         another device, and an asynchronous failure needs a UI rollback.
+      4. **Wait until the projection reaches the version.** The command returns the aggregate version or the event
+         position, the query passes the minimum required version, and the read side waits (or the client polls)
+         with a timeout until the projection has processed it. Cost: the projection must store a version or a
+         checkpoint, response latency grows, and a large lag needs a fallback path.
+      5. **Read that one view from the write side.** For example, the page shown right after saving loads the
+         aggregate from the write model. Cost: extra load on the write store, two implementations of one view and a
+         partial step back from the split, so only for narrow scenarios.
+      6. **Tell the user the change is processing.** A "saving" status and a push notification (SignalR,
+         WebSocket) when the projection is ready. Cost: a different UX and notification infrastructure.
+      7. **Synchronous projection** when the read model is in the same database: update it in the same
+         transaction. Cost: slower writes, coupled stores, and harder independent scaling and projection rebuilds.
+      8. **Monitor the lag.** A projection lag metric and an alert when it exceeds the budget: otherwise every
+         option rests on the assumption that the lag is always small.
+    explanation: |
+      When the write and read models live in different stores, synchronizing them takes time. The Microsoft
+      documentation stresses that the approaches to separating the read and write models bring their own
+      challenges, including synchronization and consistency management. Fowler adds that when the models use
+      separate databases, some communication mechanism between them is needed, and that separate models raise the
+      question of how hard to keep them consistent, which raises the likelihood of eventual consistency. The
+      inconsistency window cannot be removed without giving up asynchrony, so you choose who notices it and where.
+
+      The key observation: strong consistency for everyone is usually not required. What annoys the user is not
+      seeing **their own** change, so the options target the author's session: the client already knows the
+      result (optimistic update), knows the version (waiting for the projection) or temporarily reads from the
+      source of truth (the write model). Each option moves the cost somewhere: to the client, to response latency
+      or to load on the write side.
+
+      A strong answer does not offer one universal fix; it picks one per screen and names its cost. A weak answer
+      is "add a delay" or "make everything synchronous", missing that the latter cancels the reason the stores
+      were split.
+    linkTitles:
+      - "CQRS pattern"
+      - "Martin Fowler: CQRS"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

@@ -1,0 +1,134 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RR72TF4VZ1N7X9BD4T
+slug: slow-ui-e2e-suite-gating-every-merge
+stack: dotnet
+topic: testing
+level: lead
+type: situation
+grading: self
+tags: [end-to-end-tests, test-pyramid, ci, feedback-loop]
+links:
+  - url: https://martinfowler.com/articles/practical-test-pyramid.html
+    lang: en
+    kind: article
+  - url: https://martinfowler.com/bliki/TestPyramid.html
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Браузерные сквозные тесты идут два часа и блокируют каждый pull request. Что делать техлиду?
+    prompt: |
+      За последние годы набор браузерных сквозных (end-to-end) тестов продукта вырос до нескольких сотен сценариев.
+      Теперь он идёт около двух часов и обязателен для каждого pull request. Разработчики копят изменения, чтобы
+      реже ждать прогона, pull request стали большими, их тяжело ревьюить, а конфликты слияния случаются всё чаще.
+      Тестировщики против того, чтобы убирать тесты с проверки: «они ловят баги». Вы техлид команды.
+      Что вы будете делать и в каком порядке?
+    hint: Что именно проверяет каждый сквозной тест, и мог бы то же правило проверить более дешёвый тест?
+    answer: |
+      1. **Измерить, а не спорить.** Собрать данные по набору: время каждого теста, доля нестабильных падений,
+         какие тесты за последние месяцы ловили настоящие дефекты и какие правила они проверяют. Договориться с
+         командой и тестировщиками о целевом времени обратной связи для pull request (например, 10-15 минут) и
+         о том, что цель - не меньше тестов, а та же защита дешевле.
+      2. **Дать быстрое облегчение, не теряя защиты.** Распараллелить и разбить набор на несколько агентов,
+         дать каждому тесту свои данные, готовить состояние через API или базу, а не прокликивать вход и
+         предварительные шаги в каждом сценарии, убрать фиксированные ожидания. Это сокращает время, пока идёт
+         основная работа.
+      3. **Разобрать тесты по тому, что они проверяют.**
+         - Бизнес-правила (валидация, расчёт скидок, матрица прав, граничные значения) переписать как модульные
+           тесты, а работу API с базой и авторизацией - как интеграционные (для ASP.NET Core, например, через
+           `WebApplicationFactory`). Сквозной дубль удалять только после того, как появилась замена ниже.
+         - Тесты, которые ничего уникального не проверяют или годами не падали по делу, удалить.
+         - На проверке pull request оставить тонкий набор критических пользовательских путей (вход, оформление
+           заказа, оплата), который укладывается в бюджет времени.
+      4. **Перестроить пайплайн по стадиям.** Pull request: сборка, модульные и интеграционные тесты и
+         smoke-набор сквозных. Полный сквозной набор - после слияния в основную ветку, по расписанию (например,
+         ночью) и перед релизом. У упавшего прогона по расписанию есть дежурный владелец, а найденный дефект
+         закрывается вместе с тестом нижнего уровня, который его воспроизводит.
+      5. **Закрепить правила.** Новое правило проверяется на самом нижнем уровне, где его можно поймать.
+         Новый сквозной тест добавляется только для нового критического пути и обсуждается на code review.
+         Время проверки pull request отслеживается как метрика с бюджетом, нестабильные сквозные тесты сразу
+         уходят в карантин с владельцем.
+      6. **Управлять риском и проверить результат.** Переходить постепенно, по областям продукта. Следить за
+         дефектами, найденными после слияния и после релиза, временем до слияния и размером pull request.
+         Если какой-то класс дефектов начал проходить мимо проверки, вернуть соответствующий сценарий на неё
+         или добавить тест ниже.
+    explanation: |
+      Сквозной тест поднимает всю систему: браузер, фронтенд, бэкенд, базу и внешние зависимости. Поэтому он
+      самый медленный, самый нестабильный и хуже всех указывает на причину: по красному сценарию непонятно,
+      какой компонент и какое правило сломались. Это самый дорогой способ найти дефект, и когда на нём держится
+      вся проверка, набор превращается в «рожок мороженого» - перевёрнутую пирамиду тестов.
+
+      Двухчасовой обязательный прогон бьёт по самой разработке: изменения копятся, pull request растут, ревью
+      становится поверхностным, конфликты и откаты дороже. Медленная проверка в итоге увеличивает риск, который
+      должна снижать. Пирамида тестов предлагает обратную форму: много быстрых модульных тестов, меньше
+      интеграционных и немного сквозных. Тест стоит опускать как можно ниже по пирамиде, а если дефект поймал
+      только сквозной тест, это сигнал, что внизу не хватает теста.
+
+      Компромисс нужно назвать явно: полный набор по расписанию находит часть дефектов на часы позже, уже в
+      основной ветке. Это приемлемо, если есть владелец красного прогона, быстрый откат и тест нижнего уровня
+      на каждый такой дефект. Цена двухчасового ожидания, напротив, платится всей командой на каждом pull
+      request. Ответ уровня lead - это не только техническая схема, но и договорённость с тестировщиками:
+      защита переносится ниже и измеряется по исходам, а не отключается.
+    linkTitles:
+      - "Практическая пирамида тестов"
+      - "Мартин Фаулер: TestPyramid"
+  en:
+    title: A browser end-to-end suite takes two hours and gates every pull request. What does the tech lead do?
+    prompt: |
+      Over the years the product's browser end-to-end test suite has grown to several hundred scenarios. It now
+      runs for about two hours and is required for every pull request. Developers batch changes to wait less
+      often, pull requests have become large and hard to review, and merge conflicts are more and more frequent.
+      The testers object to taking tests off the gate: "they catch bugs". You are the tech lead of the team.
+      What do you do, and in what order?
+    hint: What exactly does each end-to-end test check, and could a cheaper test check the same rule?
+    answer: |
+      1. **Measure instead of arguing.** Collect data on the suite: the duration of each test, the flaky failure
+         rate, which tests caught real defects in recent months and which rules they check. Agree with the team
+         and the testers on a target feedback time for a pull request (for example, 10-15 minutes), and on the
+         goal: not fewer tests, but the same protection at a lower cost.
+      2. **Give quick relief without losing protection.** Parallelise and shard the suite across several agents,
+         give every test its own data, set up state through the API or the database instead of clicking through
+         sign-in and preliminary steps in every scenario, remove fixed waits. This buys time while the main work
+         goes on.
+      3. **Sort the tests by what they check.**
+         - Business rules (validation, discount calculation, the permission matrix, boundary values) are rewritten
+           as unit tests, and the API working with the database and authorization as integration tests (for
+           ASP.NET Core, for example, with `WebApplicationFactory`). The end-to-end duplicate is deleted only once
+           a replacement exists lower down.
+         - Tests that check nothing unique, or have not failed for a real reason in years, are deleted.
+         - The pull request gate keeps a thin set of critical user journeys (sign-in, checkout, payment) that
+           fits the time budget.
+      4. **Restructure the pipeline into stages.** Pull request: build, unit and integration tests and the
+         end-to-end smoke set. The full end-to-end suite runs after merging to the main branch, on a schedule
+         (for example, nightly) and before a release. A failed scheduled run has an on-duty owner, and a defect
+         it finds is closed together with a lower-level test that reproduces it.
+      5. **Lock in the rules.** A new rule is tested at the lowest level that can catch it. A new end-to-end test
+         is added only for a new critical journey and is discussed in code review. The pull request check time is
+         tracked as a metric with a budget, and flaky end-to-end tests go to quarantine with an owner at once.
+      6. **Manage the risk and check the result.** Move gradually, area by area of the product. Watch defects
+         found after merge and after release, time to merge and pull request size. If some class of defects starts
+         slipping past the gate, put the matching scenario back on it or add a test lower down.
+    explanation: |
+      An end-to-end test brings up the whole system: the browser, the front end, the back end, the database and
+      external dependencies. That makes it the slowest and the flakiest test, and the worst at pointing to the
+      cause: a red scenario does not say which component or which rule broke. It is the most expensive way to
+      find a defect, and when the whole gate rests on it, the suite becomes an "ice-cream cone", an inverted
+      test pyramid.
+
+      A mandatory two-hour run hurts development itself: changes pile up, pull requests grow, review becomes
+      shallow, conflicts and rollbacks cost more. In the end the slow check increases the risk it is meant to
+      reduce. The test pyramid suggests the opposite shape: many fast unit tests, fewer integration tests and a
+      few end-to-end tests. A test should be pushed as far down the pyramid as possible, and a defect that only
+      an end-to-end test caught is a sign that a test is missing lower down.
+
+      The trade-off must be named explicitly: a scheduled full run finds some defects hours later, already in the
+      main branch. That is acceptable when a red run has an owner, rollback is fast and every such defect gets a
+      lower-level test. The cost of a two-hour wait, by contrast, is paid by the whole team on every pull request.
+      A lead-level answer is not only a technical design but also an agreement with the testers: the protection
+      moves lower and is judged by outcomes, it is not switched off.
+    linkTitles:
+      - "The Practical Test Pyramid"
+      - "Martin Fowler: TestPyramid"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

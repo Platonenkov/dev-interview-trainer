@@ -1,0 +1,162 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RK6CNRFAVKKW2Q25JM
+slug: event-sourcing-proposed-for-whole-system
+stack: dotnet
+topic: architecture
+level: lead
+type: situation
+grading: self
+tags: [event-sourcing, cqrs, adr, bounded-context, pilot]
+links:
+  - url: https://learn.microsoft.com/en-us/azure/architecture/patterns/event-sourcing
+    lang: en
+    kind: docs
+  - url: https://martinfowler.com/eaaDev/EventSourcing.html
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Senior-разработчик предлагает хранить состояние всех сервисов как поток событий. Что решит техлид?
+    prompt: |
+      Senior-разработчик в вашей команде предлагает начиная со следующего проекта хранить состояние каждого
+      сервиса как поток событий (event sourcing), а не как таблицы с текущим состоянием. Его аргументы: полная
+      история изменений, простая отладка и модели чтения «бесплатно». Следующий проект - платформа обработки
+      заказов из нескольких сервисов: каталог, цены, профили клиентов, заказы, платежи, уведомления и пара
+      внутренних справочников. Большая часть команды никогда не строила систему на event sourcing.
+
+      Вы - техлид. Какое решение вы примете и как определите его границы?
+    hint: |
+      Какие конкретные требования оправдывают цену event sourcing и у каких сервисов этого проекта они
+      действительно есть?
+    answer: |
+      1. **Начать с проблемы, а не с паттерна.** Выяснить, что именно стоит за предложением: требования аудита,
+         разбор спорных ситуаций, отладка, аналитика по истории. Разделить, что из этого - реальные требования
+         бизнеса или регулятора, а что - удобство разработчиков.
+      2. **Пройти по ограниченным контекстам.** Event sourcing окупается там, где нужны полный журнал изменений
+         как источник истины, запросы к состоянию на прошлую дату (temporal queries), воспроизведение событий и
+         пересборка новых проекций. Здесь кандидаты - заказы и платежи с их жизненным циклом и спорами. Каталог,
+         справочники, профили клиентов и уведомления - в основном CRUD с минимумом правил, им хватит обычного
+         хранения текущего состояния.
+      3. **Назвать цену открыто.** События неизменяемы и хранятся годами, поэтому нужна стратегия
+         версионирования схемы событий (новые типы, преобразование старых версий при чтении). Длинные потоки
+         требуют снимков (snapshots), проекции нужно уметь пересобирать с нуля и следить за их отставанием.
+         Модели чтения согласованы в конечном счёте, текущее состояние нельзя просто выбрать запросом SQL.
+         При повторном воспроизведении нельзя заново вызывать внешние системы. Удаление персональных данных из
+         неизменяемого журнала требует отдельного решения. Добавляются выбор и эксплуатация хранилища событий и
+         кривая обучения команды. Отказаться от подхода потом дорого.
+      4. **Предложить дешёвые альтернативы для остального.** История изменений - таблица аудита или темпоральные
+         таблицы базы данных. Интеграция между сервисами - интеграционные события через outbox, которые
+         публикуются и без event sourcing. Отдельные модели чтения - CQRS поверх обычного хранилища.
+      5. **Ограничить решение пилотом.** Один обоснованный контекст (например, заказы), остальные сервисы
+         хранят текущее состояние. Решение записано в ADR: контекст и требования, решение и его границы,
+         последствия, критерии успеха (скорость изменений, отставание проекций, время пересборки, число
+         дефектов) и критерии выхода, а также план отступления - перейти на хранение текущего состояния,
+         спроецировав его из событий.
+      6. **Подготовить пилот.** Автор предложения становится его владельцем. До начала работ договориться о
+         соглашениях по именованию и версионированию событий, политике снимков, процедуре пересборки проекций
+         (и проверить её на тестовом окружении), мониторинге отставания. Провести обучение команды и проводить
+         ревью первых агрегатов в паре.
+      7. **Пересмотреть по фактам.** Через оговорённый срок сверить результаты с критериями. Расширять подход
+         только по одному контексту за раз и только с собственным обоснованием, а не общим правилом для всех
+         сервисов.
+    explanation: |
+      Event sourcing меняет модель хранения: источником истины становится последовательность событий, а
+      текущее состояние выводится из неё воспроизведением событий. Фаулер перечисляет возможности, которые даёт
+      журнал событий: полную пересборку состояния приложения, запросы к состоянию на любой момент времени и
+      воспроизведение событий, чтобы исправить ошибочное прошлое событие. Там же он отмечает, что сам по себе
+      журнал изменений - небольшой выигрыш: достаточную историю дают и хранение прошлых значений, и запись в
+      журнал при каждом изменении.
+
+      Руководство Microsoft по паттерну начинается с предупреждения: event sourcing - сложный паттерн со
+      значительными компромиссами, он меняет то, как хранятся данные, обрабатывается конкурентный доступ,
+      развиваются схемы и запрашивается состояние. Там же предупреждается, что перейти на event sourcing или
+      уйти с него дорого, что после внедрения он ограничивает будущие проектные решения в тех частях системы,
+      где применяется, и что для большинства систем и их частей достаточно обычного хранения данных. Применять
+      его стоит, когда выгоды вроде аудита и восстановления истории оправдывают сложность. Руководство также
+      отмечает, что читать и воспроизводить события дорого, поэтому приложения обычно поддерживают
+      материализованные представления - проекции только для чтения, оптимизированные под запросы.
+
+      Остальные практические издержки пилота - из опыта применения паттерна, а не из этих двух страниц: при
+      воспроизведении нельзя повторять вызовы внешних систем, а старые версии событий остаются в журнале, и код
+      обязан уметь их читать.
+
+      Поэтому обязательное правило для всей системы плохо по двум причинам. Технически большинство сервисов
+      заплатят за сложность, не получив выгоды. Организационно команда без опыта осваивает самый дорогой в
+      ошибках подход сразу везде, а ошибки в схеме событий остаются в журнале навсегда. Пилот в одном контексте
+      с ADR и критериями выхода превращает спор вкусов в проверяемую гипотезу, сохраняет вклад инженера и
+      ограничивает риск одним контекстом.
+    linkTitles:
+      - "Паттерн Event Sourcing"
+      - "Event Sourcing (Мартин Фаулер)"
+  en:
+    title: A senior engineer proposes storing the state of every service as an event stream. What does the tech lead decide?
+    prompt: |
+      A senior engineer on your team proposes that, starting with the next project, every service stores its
+      state as an event stream (event sourcing) instead of current-state tables. The arguments: a full history of
+      changes, easy debugging and read models "for free". The next project is an order processing platform with
+      several services: catalog, pricing, customer profiles, orders, payments, notifications and a couple of
+      internal reference-data services. Most of the team has never built an event-sourced system.
+
+      You are the tech lead. What do you decide, and how do you set its scope?
+    hint: |
+      Which concrete requirements justify the cost of event sourcing, and which services of this project
+      actually have them?
+    answer: |
+      1. **Start from the problem, not the pattern.** Find out what is behind the proposal: audit requirements,
+         resolving disputes, debugging, analytics over history. Separate real business or regulatory requirements
+         from developer convenience.
+      2. **Go through the bounded contexts.** Event sourcing pays off where you need a full change log as the
+         source of truth, queries about the state at a past date (temporal queries), event replay and rebuilding
+         new projections. Here the candidates are orders and payments, with their lifecycle and disputes. Catalog,
+         reference data, customer profiles and notifications are mostly CRUD with few rules, and ordinary
+         current-state storage is enough for them.
+      3. **Name the cost openly.** Events are immutable and kept for years, so you need an event schema versioning
+         strategy (new event types, upgrading old versions on read). Long streams need snapshots, projections must
+         be rebuildable from scratch and their lag monitored. Read models are eventually consistent, and the
+         current state cannot simply be selected with SQL. Replay must not call external systems again. Deleting
+         personal data from an immutable log needs its own solution. On top come choosing and operating an event
+         store and the team's learning curve. Backing out later is expensive.
+      4. **Offer cheaper alternatives for the rest.** Change history: an audit table or database temporal
+         tables. Integration between services: integration events through an outbox, which works without event
+         sourcing. Separate read models: CQRS over an ordinary store.
+      5. **Limit the decision to a pilot.** One justified context (for example orders); the other services store
+         current state. The decision is recorded in an ADR: context and requirements, the decision and its scope,
+         consequences, success criteria (change speed, projection lag, rebuild time, defect count) and exit
+         criteria, plus a fallback plan: move to current-state storage by projecting it from the events.
+      6. **Prepare the pilot.** The author of the proposal becomes its owner. Before the work starts, agree on
+         event naming and versioning conventions, a snapshot policy, a projection rebuild procedure (tested in a
+         test environment) and projection lag monitoring. Train the team and review the first aggregates in pairs.
+      7. **Review against facts.** After the agreed period compare the results with the criteria. Extend the
+         approach one context at a time and only with its own justification, never as a blanket rule for every
+         service.
+    explanation: |
+      Event sourcing changes the storage model: the sequence of events becomes the source of truth, and the
+      current state is derived from it by replaying the events. Fowler lists the facilities that the event log
+      enables: complete rebuild of the application state, temporal queries about the state at any point in time,
+      and event replay to correct a past event that was wrong. He also notes that a change log by itself is a
+      small gain: keeping past values or writing to a log on every change also gives an adequate history.
+
+      The Microsoft guidance on the pattern opens with a warning: event sourcing is a complex pattern with
+      significant trade-offs, and it changes how you store data, handle concurrency, evolve schemas and query
+      state. It also warns that event sourcing is costly to migrate to or away from, that once adopted it
+      constrains future design decisions in the parts of the system that use it, and that for most systems and
+      most parts of a system traditional data management is sufficient. It should be adopted when benefits such
+      as auditability and historical reconstruction justify the complexity. The guidance also notes that reading
+      and replaying events is costly, so applications usually maintain materialized views, read-only projections
+      optimized for querying.
+
+      The other practical costs of a pilot come from experience with the pattern rather than from these two
+      pages: replay must not repeat calls to external systems, and old event versions stay in the log, so the
+      code must keep reading them.
+
+      So a mandatory rule for the whole system is bad for two reasons. Technically, most services pay for the
+      complexity without getting the benefit. Organisationally, a team without experience adopts the approach
+      where mistakes are most expensive everywhere at once, and mistakes in the event schema stay in the log
+      forever. A pilot in one context with an ADR and exit criteria turns a matter of taste into a testable
+      hypothesis, keeps the engineer's contribution and limits the risk to one context.
+    linkTitles:
+      - "Event Sourcing pattern"
+      - "Event Sourcing (Martin Fowler)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

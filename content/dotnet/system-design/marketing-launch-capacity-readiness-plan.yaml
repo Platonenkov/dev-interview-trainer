@@ -1,0 +1,164 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RR4DPVDR410FFAQVCB
+slug: marketing-launch-capacity-readiness-plan
+stack: dotnet
+topic: system-design
+level: lead
+type: situation
+grading: self
+tags: [capacity-planning, load-testing, feature-flags, runbook, technical-leadership]
+links:
+  - url: https://learn.microsoft.com/en-us/azure/well-architected/performance-efficiency/capacity-planning
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/azure/architecture/patterns/throttling
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Через шесть недель маркетинговая кампания принесёт в 10 раз больше трафика: как техлиду подготовить сервис и команду?"
+    prompt: |
+      Маркетинг сообщает, что через шесть недель стартует рекламная кампания и ожидается примерно в 10 раз больше
+      трафика, чем обычно. Сервис - API на ASP.NET Core с реляционной базой данных, кэшем и несколькими внешними
+      интеграциями (платежи, рассылки). Под такой нагрузкой его никто не проверял.
+
+      Вы техлид команды. Как вы подготовите сервис и команду к запуску кампании и в каком порядке?
+    hint: |
+      Какие свойства системы нельзя угадать, а можно только измерить, и когда вам выгоднее об этом узнать?
+    answer: |
+      1. **Перевести «в 10 раз» в числа.** Узнать у маркетинга каналы, даты и форму трафика: реклама на ТВ или
+         push-уведомление дают всплеск за минуты, рассылка - волны, месячная акция поднимает суточное плато.
+         Выяснить, какие пользовательские сценарии затронет кампания (посадочная страница, регистрация, оформление
+         заказа), и взять из телеметрии текущий пик по каждому сценарию, а не среднее за сутки. Цель - ожидаемый
+         пик по сценарию, умноженный на 10, плюс запас, и цели на день запуска: допустимые задержка и доля ошибок
+         для критичных сценариев.
+      2. **Составить план на шесть недель с владельцами.** Еженедельные контрольные точки, список рисков с
+         владельцем у каждого пункта и решение go/no-go примерно за неделю до запуска. Договориться с владельцем
+         продукта, что подготовка вытесняет часть задач из бэклога, иначе её не сделают.
+      3. **Провести нагрузочный тест как можно раньше.** В первые две недели прогнать тест с реалистичной смесью
+         сценариев в окружении, близком к production, и поднимать нагрузку до ожидаемого пика и выше, пока что-то
+         не сломается. Цель - найти первое узкое место: часто это не CPU экземпляров API, а база данных, пул
+         соединений, блокировки, лимит внешнего провайдера или квота облака. После каждого исправления тест
+         повторяется: следующее узкое место проявится, только когда уберут предыдущее.
+      4. **Приоритизировать исправления по результатам теста.** Чинить то, что ломается первым на целевой
+         нагрузке, а не то, что команда давно хотела переписать. Каждое исправление ограничить по времени, а
+         примерно за неделю до запуска заморозить рискованные изменения, чтобы в день запуска работала именно
+         проверенная конфигурация.
+      5. **Заранее нарастить мощности.** Автомасштабирование реагирует с задержкой и не спасает от всплеска за
+         минуты, а классическую реляционную базу данных оно, как правило, не масштабирует автоматически. До
+         запуска поднять минимальное число экземпляров, перевести базу и кэш на уровень, подтверждённый тестом,
+         прогреть кэши, заранее запросить увеличение квот облака, проверить лимиты и договоры с внешними
+         провайдерами (платежи, почта, SMS) и предупредить их о кампании.
+      6. **Подготовить деградацию заранее.** Флаги функций для дорогих второстепенных возможностей
+         (рекомендации, персонализация, отчёты, выгрузки), ограничение частоты запросов на дорогих эндпоинтах,
+         статическая или закэшированная в CDN посадочная страница, при необходимости очередь ожидания для
+         критичного сценария. Для каждого флага записать, кто его переключает и при каком значении метрики, и
+         проверить флаги под нагрузкой.
+      7. **Подготовить день запуска.** Runbook: дашборды и алерты по критичным сценариям, ответственный за
+         инциденты, владелец каждого компонента и зависимости, канал связи с маркетингом (он может приостановить
+         показ рекламы или отправить рассылку частями) и план отката. Дежурные отдохнувшие и знают план.
+      8. **Замкнуть цикл.** После кампании сравнить прогноз с фактической нагрузкой, вернуть мощности к обычному
+         уровню, чтобы не платить за простаивающие ресурсы, и провести ретроспективу: что оказалось настоящим
+         узким местом и что из подготовки стоит сделать постоянной практикой.
+    explanation: |
+      Трафик не проходит через систему линейно: в 10 раз больше запросов может означать, что нагрузка на общий
+      ресурс вырастет намного больше чем в 10 раз, а первым обычно отказывает не тот компонент, на который думает
+      команда. Поэтому единственный надёжный источник плана - измерение. Нагрузочный тест превращает смутное
+      опасение в упорядоченный список конкретных узких мест. Шести недель хватает на два-три цикла «тест -
+      исправление» только при условии, что первый тест проходит в первые недели, а не за неделю до запуска.
+
+      Руководство Azure Well-Architected по планированию ёмкости поддерживает этот подход: оценить спрос по
+      историческим данным, рыночным тенденциям и прогнозам бизнеса, а затем рассчитать нужные ресурсы, включая
+      людей. Пример из самого руководства - промоакция, ради которой может понадобиться выделить больше облачных
+      экземпляров или изменить параметры автомасштабирования. Там же сказано, что достижимые пределы (например,
+      число одновременных соединений с базой) нужно найти и изменить систему до того, как они вызовут проблему с
+      производительностью, а проверяют эти пределы базовые показатели производительности, мониторинг и
+      тестирование. Ранний нагрузочный тест и заблаговременное наращивание мощностей - это то, как план применяет
+      эти рекомендации к фиксированной дате запуска.
+
+      Паттерн Throttling добавляет страховку: когда спрос приближается к пределу мощностей, система продолжает
+      работать, ограничивая лишние запросы и временно отключая менее важные функции, чтобы основным хватало
+      ресурсов. Ограничение также закрывает время, пока автомасштабирование добавляет мощности.
+
+      Задача техлида здесь - не лично оптимизировать код, а превратить неопределённость в расписание с
+      владельцами, точками принятия решений и согласованным с бизнесом компромиссом: какие функции можно
+      отключить, какой уровень сервиса обещан и какой остаточный риск принимается. План, который заканчивается
+      словами «если что, отмасштабируемся», держится на надежде. План с проверенными числами, подготовленными
+      переключателями и названными владельцами держится на фактах.
+    linkTitles:
+      - "Стратегии архитектуры для планирования ёмкости"
+      - "Паттерн Throttling"
+  en:
+    title: "A marketing campaign in six weeks will bring 10 times the usual traffic: how does a tech lead prepare the service and the team?"
+    prompt: |
+      Marketing announces that an advertising campaign starts in six weeks and is expected to bring about 10
+      times the usual traffic. The service is an ASP.NET Core API with a relational database, a cache and several
+      external integrations (payments, mailings). Nobody has ever tested it under such a load.
+
+      You are the team's tech lead. How do you prepare the service and the team for the campaign launch, and in
+      what order?
+    hint: |
+      Which properties of the system cannot be guessed, only measured, and when is it cheaper for you to find them out?
+    answer: |
+      1. **Turn "10 times" into numbers.** Ask marketing for the channels, dates and shape of the traffic: a TV
+         ad or a push notification gives a spike within minutes, a mailing gives waves, a month-long promotion
+         raises the daily plateau. Find out which user flows the campaign drives (landing page, sign-up,
+         checkout), and take the current peak per flow from telemetry, not the daily average. The target is the
+         expected peak per flow times 10 plus headroom, together with launch-day goals: acceptable latency and
+         error rate for the critical flows.
+      2. **Make a six-week plan with owners.** Weekly checkpoints, a risk list with an owner for each item, and
+         a go/no-go decision about a week before the launch. Agree with the product owner that readiness work
+         displaces part of the backlog, otherwise it will not get done.
+      3. **Load test early.** In the first two weeks run a test with a realistic mix of scenarios in an
+         environment close to production, and raise the load to the expected peak and beyond until something
+         breaks. The goal is to find the first bottleneck: often it is not the CPU of the API instances but the
+         database, a connection pool, locks, an external provider's limit or a cloud quota. Repeat the test after
+         every fix: the next bottleneck only shows up once the previous one is removed.
+      4. **Prioritize fixes by the test results.** Fix what breaks first at the target load, not what the team
+         has long wanted to rewrite. Time-box every fix, and about a week before the launch freeze risky changes,
+         so that the configuration running on launch day is the one that was tested.
+      5. **Scale out in advance.** Autoscaling reacts with a delay and does not save you from a spike that grows
+         within minutes, and it usually does not scale a classic relational database automatically. Before the
+         launch raise the minimum instance count, move the database and the cache to the tier confirmed by the
+         test, warm the caches, request cloud quota increases early, check limits and contracts with external
+         providers (payments, email, SMS) and warn them about the campaign.
+      6. **Prepare degradation in advance.** Feature flags for expensive non-essential features
+         (recommendations, personalization, reports, exports), rate limits on expensive endpoints, a static or
+         CDN-cached landing page, and if needed a waiting queue for the critical flow. For every flag write down
+         who flips it and at which metric value, and test the flags under load.
+      7. **Prepare launch day.** A runbook: dashboards and alerts for the critical flows, an incident lead, an
+         owner for every component and dependency, a communication channel with marketing (they can pause the
+         ads or send the mailing in batches), and a rollback plan. The on-call engineers are rested and know the
+         plan.
+      8. **Close the loop.** After the campaign compare the forecast with the actual load, scale back to the
+         usual level so as not to pay for idle resources, and hold a retrospective: what turned out to be the
+         real bottleneck, and which parts of the preparation should become regular practice.
+    explanation: |
+      Traffic does not pass through a system linearly: 10 times the requests can mean that the load on a shared
+      resource grows far more than 10 times, and the first component to fail is usually not the one the team
+      suspects. That is why the only reliable basis for the plan is measurement. A load test turns a vague worry
+      into a ranked list of concrete bottlenecks. Six weeks are enough for two or three test-and-fix cycles only
+      if the first test runs in the first weeks, not the week before the launch.
+
+      The Azure Well-Architected guidance on capacity planning supports this approach: estimate demand from
+      historical data, market trends and business projections, then calculate the resources needed, including
+      personnel. The guidance's own example is a promotional campaign that may require allocating more cloud
+      instances or adjusting autoscaling parameters. It also says that reachable limits (for example concurrent
+      database connections) must be identified and the workload modified before they create a performance
+      problem, and that performance baselines, continuous monitoring and testing validate those limits. Testing
+      early and scaling out ahead of time are how this plan applies that guidance to a fixed launch date.
+
+      The Throttling pattern adds the safety net: when demand approaches the capacity limit, the system keeps
+      working by rejecting excess requests and temporarily turning off less critical features so that the
+      essential ones have enough resources. Throttling also covers the time while autoscaling adds capacity.
+
+      The tech lead's job here is not to optimize code personally but to turn uncertainty into a schedule with
+      owners, decision points and a trade-off agreed with the business: which features may be switched off,
+      what level of service is promised and what residual risk is accepted. A plan that ends with "we will scale
+      if needed" rests on hope. A plan with tested numbers, prepared switches and named owners rests on facts.
+    linkTitles:
+      - "Architecture strategies for capacity planning"
+      - "Throttling pattern"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

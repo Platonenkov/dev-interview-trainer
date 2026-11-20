@@ -1,0 +1,166 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNTSQWDD4X5HPG2F3D
+slug: messaging-framework-vs-raw-broker-client
+stack: dotnet
+topic: distributed
+level: lead
+type: open
+grading: self
+tags: [messaging, masstransit, nservicebus, outbox, architecture-decision]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/architecture/microservices/multi-container-microservice-net-applications/integration-event-based-microservice-communications
+    lang: en
+    kind: docs
+  - url: https://docs.particular.net/nservicebus/
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как решить, строить обмен сообщениями в .NET на клиентах брокера напрямую или взять MassTransit или NServiceBus?
+    prompt: |
+      Команда спорит, как строить обмен сообщениями между сервисами на .NET. Одни предлагают работать напрямую
+      с клиентами брокера (`RabbitMQ.Client`, `Confluent.Kafka`, `Azure.Messaging.ServiceBus`), другие - взять
+      фреймворк вроде MassTransit или NServiceBus. Как вы примете решение и какие риски взвесите для каждого
+      варианта?
+    hint: |
+      Составьте список того, что потребитель и издатель должны уметь в production, и для каждого пункта спросите: кто это напишет, кто будет это поддерживать и сколько будет стоить отказаться от этого решения через два года?
+    answer: |
+      1. **Начать с требований, а не с инструмента.** Перечислить, что нужно сервисам: повторы с задержкой и
+         dead-letter очередь для ядовитых сообщений, transactional outbox, дедупликация входящих сообщений,
+         долгие процессы (саги) с таймаутами, request/response, отложенная доставка, один брокер или несколько,
+         нужно ли общаться с сервисами не на .NET, сколько типов сообщений и команд-участников.
+      2. **Что даёт фреймворк.** Готовые и проверенные на чужом production механизмы: цикл потребителя и
+         подтверждения, повторы и перенос в очередь ошибок, outbox (вместе с учётом обработанных входящих
+         сообщений), саги с сохраняемым состоянием, сериализация и заголовки (correlation id, тип сообщения),
+         соглашения о топологии (exchange, очереди, подписки создаются по типам сообщений), восстановление
+         соединения, корректная остановка, тестовая обвязка, интеграция с DI и трассировкой. Всё это одинаково
+         во всех сервисах, а не по-своему в каждой команде.
+      3. **Чем платим за фреймворк.**
+         - Лишняя зависимость с собственным циклом выпусков: обновления мажорных версий, совместимость с
+           версиями .NET и клиентов брокера.
+         - Лицензия: NServiceBus - коммерческий продукт Particular Software, а MassTransit объявил переход на
+           коммерческую лицензию начиная с версии 9. Условия могут измениться, поэтому лицензию проверяют вместе
+           с юристами и закупками, а риск её изменения записывают явно.
+         - Протекающие абстракции: свой формат конверта сообщения на проводе (сервисам на других языках нужно
+           его понимать или переключать фреймворк на «сырой» JSON), соглашения о топологии, которые не
+           совпадают с вашими, возможности, которые отличаются от транспорта к транспорту. Модель
+           фреймворков построена вокруг очередей, поэтому Kafka в них поддерживается ограниченно.
+         - Скрытое поведение: повторы фреймворка умножаются на повторную доставку брокера и на ретраи
+           HTTP-клиента, а при отладке приходится разбираться во внутренностях библиотеки.
+      4. **Чем платим за клиент брокера.** Всё из пункта 2 команда пишет, тестирует на отказах и поддерживает
+         сама. Типичный результат - несколько несовместимых самописных шин в разных сервисах и ошибки в
+         редких путях: повтор без задержки, потерянное подтверждение, outbox без блокировки строк. Зато полный
+         контроль над семантикой брокера, меньше магии и нет лицензионного риска. Это оправдано, когда типов
+         сообщений немного, брокер один, потребители простые (at-least-once плюс идемпотентность), или когда
+         нагрузка потоковая (Kafka с партициями и смещениями), а не очередь задач.
+      5. **Принять решение по данным.** Таблица требований: для каждого - «есть во фреймворке», «напишем за
+         N недель», «не нужно». Прототип самого критичного сценария на обоих вариантах с внедрёнными отказами
+         (убить потребителя посреди обработки, разорвать соединение с брокером, отправить ядовитое
+         сообщение). Учесть опыт команды и полную стоимость владения: лицензия против зарплаты людей, которые
+         будут поддерживать свою шину.
+      6. **Снизить стоимость смены решения.** Контракты сообщений - простые классы в отдельной сборке без
+         атрибутов фреймворка; формат на проводе явный и задокументированный; бизнес-логика вне обработчиков
+         фреймворка, обработчик только вызывает сервис приложения; конфигурация фреймворка в одном месте
+         композиции. Не строить собственную «универсальную» обёртку над фреймворком: она сводит возможности к
+         наименьшему общему знаменателю и становится ещё одной самописной шиной.
+      7. **Зафиксировать решение в ADR** с критериями и условиями пересмотра: изменение лицензии или условий
+         поддержки, смена брокера, появление сервисов на других языках, рост числа процессов-саг.
+    explanation: |
+      Спор «фреймворк или клиент брокера» на самом деле о том, кто будет владеть надёжностью доставки. Клиент
+      брокера даёт только транспорт: соединение, публикацию, получение и подтверждение. Всё, что делает обмен
+      сообщениями надёжным в production - повторы, outbox, дедупликация, саги, обработка ядовитых сообщений,
+      трассировка, - остаётся задачей команды. Руководство Microsoft по микросервисам на .NET прямо говорит,
+      что его простая шина событий поверх RabbitMQ подходит для разработки и тестов, а для production с сагами
+      и другими возможностями высокого уровня стоит оценить готовые сервисные шины, такие как NServiceBus и
+      MassTransit.
+
+      Фреймворк не бесплатен: он переносит часть решений в чужой код, и вы принимаете его формат сообщений,
+      соглашения о топологии, цикл обновлений и лицензию. Поэтому решение зависит от двух вопросов: сколько
+      возможностей из списка действительно нужны (если почти все - самописное решение со временем повторит
+      фреймворк, только хуже протестированный) и сколько будет стоить уйти с выбранного пути. Второе
+      управляемо: чистые контракты, явный формат на проводе и тонкие обработчики делают смену фреймворка
+      проектом на недели, а не переписыванием системы.
+
+      Для уровня lead сильный ответ не называет «правильный» инструмент, а показывает процесс: требования,
+      прототип с отказами, оценка лицензии и стоимости владения, записанное решение с условиями пересмотра.
+      Идемпотентность потребителей нужна при любом выборе: и фреймворк, и клиент брокера дают доставку
+      at-least-once.
+    linkTitles:
+      - "Обмен интеграционными событиями между микросервисами"
+      - "Документация NServiceBus"
+  en:
+    title: How do you decide between building .NET messaging on raw broker clients and adopting MassTransit or NServiceBus?
+    prompt: |
+      The team is debating how to build messaging between .NET services. Some propose working directly with
+      the broker clients (`RabbitMQ.Client`, `Confluent.Kafka`, `Azure.Messaging.ServiceBus`), others want to
+      adopt a framework such as MassTransit or NServiceBus. How do you make the decision, and which risks do you
+      weigh for each option?
+    hint: |
+      List what a consumer and a publisher must be able to do in production, and for each item ask: who writes it, who maintains it, and what will it cost to back out of the decision in two years?
+    answer: |
+      1. **Start from requirements, not from the tool.** List what the services need: delayed retries and a
+         dead-letter queue for poison messages, a transactional outbox, deduplication of incoming messages,
+         long-running processes (sagas) with timeouts, request/response, scheduled delivery, one broker or
+         several, whether non-.NET services take part, how many message types and participating teams.
+      2. **What a framework gives you.** Ready mechanisms proven in other people's production: the consumer
+         loop and acknowledgements, retries and moving to an error queue, an outbox (together with tracking of
+         processed incoming messages), sagas with persisted state, serialization and headers (correlation id,
+         message type), topology conventions (exchanges, queues and subscriptions created from message types),
+         connection recovery, graceful shutdown, a test harness, integration with DI and tracing. All of it
+         works the same in every service, instead of each team doing it its own way.
+      3. **What the framework costs.**
+         - An extra dependency with its own release cycle: major version upgrades, compatibility with .NET and
+           broker client versions.
+         - Licensing: NServiceBus is a commercial product of Particular Software, and MassTransit announced a
+           move to a commercial license starting with version 9. Terms can change, so review the license with
+           legal and procurement and record the risk of a change explicitly.
+         - Leaky abstractions: its own message envelope on the wire (services in other languages must
+           understand it, or the framework must be switched to raw JSON), topology conventions that do not
+           match yours, features that differ from transport to transport. The frameworks are built around
+           queues, so Kafka support in them is limited.
+         - Hidden behaviour: framework retries multiply with broker redelivery and HTTP client retries, and
+           debugging means digging into the library internals.
+      4. **What the raw client costs.** The team writes, tests under failure and maintains everything from
+         item 2 itself. The typical result is several incompatible home-grown buses in different services and
+         bugs on rare paths: a retry without delay, a lost acknowledgement, an outbox without row locking. In
+         return you get full control over broker semantics, less magic and no license risk. It is justified
+         when there are few message types, one broker and simple consumers (at-least-once plus idempotency), or
+         when the workload is streaming (Kafka with partitions and offsets) rather than a job queue.
+      5. **Decide with data.** A requirements table: for each item, "in the framework", "we build it in N
+         weeks" or "not needed". A prototype of the most critical scenario on both options with injected
+         failures (kill a consumer mid-processing, drop the broker connection, send a poison message). Account
+         for team experience and total cost of ownership: the license versus the salaries of the people who will
+         maintain your own bus.
+      6. **Lower the cost of switching.** Message contracts are plain classes in a separate assembly without
+         framework attributes; the wire format is explicit and documented; business logic lives outside the
+         framework handlers, which only call an application service; framework configuration sits in one
+         composition root. Do not build your own "universal" wrapper over the framework: it reduces features to
+         the lowest common denominator and becomes one more home-grown bus.
+      7. **Record the decision in an ADR** with the criteria and the conditions for revisiting it: a license
+         or support terms change, a broker change, services in other languages, growth in the number of saga
+         processes.
+    explanation: |
+      The "framework or broker client" debate is really about who owns delivery reliability. A broker client
+      gives you only the transport: connecting, publishing, receiving and acknowledging. Everything that makes
+      messaging reliable in production - retries, the outbox, deduplication, sagas, poison message handling,
+      tracing - remains the team's job. The Microsoft guide to .NET microservices states plainly that its simple
+      event bus over RabbitMQ is meant for development and testing, and that for production with sagas and
+      other high-level features you should evaluate mature service buses such as NServiceBus and MassTransit.
+
+      A framework is not free: it moves part of your decisions into someone else's code, and you accept its
+      message format, topology conventions, upgrade cycle and license. So the decision depends on two
+      questions: how many capabilities from the list you really need (if nearly all of them, a home-grown
+      solution will eventually repeat the framework, only less tested), and what it will cost to leave the
+      chosen path. The second is manageable: clean contracts, an explicit wire format and thin handlers turn a
+      framework switch into a project of weeks rather than a rewrite of the system.
+
+      At lead level a strong answer does not name the "right" tool but shows the process: requirements, a
+      prototype with failures, an assessment of licensing and cost of ownership, and a recorded decision with
+      conditions for revisiting it. Idempotent consumers are needed whatever you choose: both a framework and a
+      raw client give at-least-once delivery.
+    linkTitles:
+      - "Implementing event-based communication between microservices (integration events)"
+      - "NServiceBus documentation"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

@@ -1,0 +1,142 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQJA79R1RACH42RNB7
+slug: news-feed-fan-out-on-write-vs-read
+stack: dotnet
+topic: system-design
+level: senior
+type: open
+grading: self
+tags: [news-feed, fan-out, materialized-view, timeline, scalability]
+links:
+  - url: https://learn.microsoft.com/en-us/azure/architecture/patterns/materialized-view
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/azure/architecture/patterns/queue-based-load-leveling
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Когда ленту соцсети готовить заранее при публикации (fan-out on write), а когда собирать при чтении, и что делать с аккаунтами с миллионами подписчиков?
+    prompt: |
+      Вы проектируете домашнюю ленту соцсети: пользователь видит последние посты аккаунтов, на которые подписан,
+      в обратном хронологическом порядке. Есть два подхода: при публикации поста заранее записать его в ленту
+      каждого подписчика (fan-out on write, push) или собирать ленту в момент чтения из постов всех подписок
+      (fan-out on read, pull). Когда вы выберете каждый из них и как будете обслуживать аккаунты с миллионами
+      подписчиков?
+    hint: |
+      Посчитайте для каждого подхода, сколько операций порождает один пост и сколько - одно открытие ленты.
+      Какой из этих путей выполняется чаще?
+    answer: |
+      1. **Fan-out on read (pull).** Пост записывается один раз. При открытии ленты сервис берёт список подписок,
+         читает последние посты каждой и сливает их по времени. Запись дешёвая и хранится одна копия, но цена
+         чтения растёт с числом подписок: на каждое открытие ленты - сотни запросов или один широкий запрос, а
+         результат плохо кэшируется, потому что лента у каждого пользователя своя.
+      2. **Fan-out on write (push).** После публикации фоновые обработчики добавляют id поста в заранее
+         подготовленную ленту каждого подписчика, например в упорядоченный по времени список в Redis или в
+         таблицу с ключом по пользователю. Такая лента - материализованное представление: чтение сводится к
+         одному обращению по ключу и пакетной загрузке постов по id. Цена переходит на запись: один пост - столько
+         записей, сколько у автора подписчиков, плюс память на копии id и задержка доставки.
+      3. **Когда что выбирать.** Чтений ленты обычно гораздо больше, чем публикаций, и у большинства аккаунтов
+         от десятков до тысяч подписчиков, поэтому push выгоден по умолчанию. Чем больше подписок у читателя,
+         тем дороже для него pull, поэтому именно таким читателям push помогает сильнее всего. Pull уместен,
+         когда публикаций много относительно чтений, когда у автора так много подписчиков, что fan-out слишком
+         дорог, когда продукту нужна самая свежая лента без задержки доставки или когда пользователь давно не
+         заходил и поддерживать для него готовую ленту незачем.
+      4. **Аккаунты с миллионами подписчиков - гибрид.** Для аккаунтов выше порога числа подписчиков fan-out при
+         публикации не выполняется. При чтении сервис берёт готовую ленту пользователя и сливает её с последними
+         постами тех популярных аккаунтов, на которые он подписан. Таких подписок у читателя немного, а их
+         последние посты нужны всем подписчикам сразу, поэтому они отлично кэшируются. Похоже поступают с
+         неактивными пользователями: их ленты не пополняют и собирают через pull при следующем входе.
+      5. **Детали реализации.**
+         - В ленте хранить только id постов и ограничивать её длину (например, несколько сотен последних
+           записей). Текст, медиа и счётчики подгружаются при чтении, там же отфильтровываются удалённые и
+           скрытые посты.
+         - Fan-out выполнять асинхронно через очередь, пакетами по подписчикам и идемпотентно: повторная
+           доставка того же id не создаёт дубль.
+         - Автору показывать его пост сразу: добавлять в его собственную ленту синхронно или подмешивать при
+           чтении.
+         - Пагинация курсором по времени или id поста, а не смещением: лента меняется между запросами.
+         - Ленты можно перестроить из источников истины (посты и граф подписок), поэтому их хранилище может
+           быть кэшем, а не основной базой.
+    explanation: |
+      Оба подхода перекладывают одну и ту же работу между путём записи и путём чтения. Push делает запись
+      дорогой, чтобы чтение было дешёвым и предсказуемым по задержке, pull - наоборот. Выбор определяют
+      соотношение чтений и записей и распределение числа подписчиков, которое в соцсетях крайне неравномерно.
+
+      Пример оценки: при 1 000 постов в секунду и в среднем 200 подписчиках push даёт 200 000 записей в ленты
+      в секунду - много, но эта работа хорошо распараллеливается. Один пост аккаунта с 50 млн подписчиков - это
+      50 млн записей: очередь fan-out занята на минуты, ленты обычных пользователей отстают, а память уходит на
+      копии, большую часть которых никто не прочитает. Поэтому гибрид здесь не оптимизация, а необходимость.
+
+      Готовая лента - производные данные в духе паттерна Materialized View: как описывает паттерн, такое
+      представление можно полностью перестроить из исходных данных, а на практике оно согласовано в конечном
+      счёте. Очередь между публикацией и fan-out сглаживает пики нагрузки, но добавляет задержку доставки.
+      Задержка в секунды для ленты допустима, а удаление поста, отписку и блокировку проще и надёжнее
+      обрабатывать фильтрацией при чтении, чем чисткой миллионов лент.
+    linkTitles:
+      - "Паттерн Materialized View"
+      - "Паттерн Queue-Based Load Leveling"
+  en:
+    title: When should a social feed be precomputed on write (fan-out on write) rather than assembled on read, and how do you handle accounts with millions of followers?
+    prompt: |
+      You are designing the home feed of a social network: a user sees the latest posts of the accounts they
+      follow in reverse chronological order. There are two approaches: when a post is published, write it in
+      advance into the feed of every follower (fan-out on write, push), or assemble the feed at read time from
+      the posts of all followed accounts (fan-out on read, pull). When would you choose each of them, and how
+      would you serve accounts with millions of followers?
+    hint: |
+      For each approach, count how many operations one post causes and how many one feed open causes. Which of
+      these paths runs more often?
+    answer: |
+      1. **Fan-out on read (pull).** A post is written once. When a feed is opened, the service takes the list of
+         followed accounts, reads the latest posts of each and merges them by time. Writes are cheap and one copy
+         is stored, but the cost of a read grows with the number of followed accounts: hundreds of queries or one
+         wide query per feed open, and the result caches poorly because every user's feed is different.
+      2. **Fan-out on write (push).** After a post is published, background workers add the post id to the
+         precomputed feed of every follower, for example a time-ordered list in Redis or a table keyed by user.
+         That feed is a materialized view: a read becomes one lookup by key plus a batch load of posts by id. The
+         cost moves to the write: one post means as many writes as the author has followers, plus memory for the
+         copied ids and a delivery delay.
+      3. **When to choose which.** Feed reads usually far outnumber posts, and most accounts have tens to
+         thousands of followers, so push is the default choice. The more accounts a reader follows, the more
+         expensive pull is for them, so such readers benefit from push the most. Pull fits when posts are
+         frequent relative to reads, when an author has so many followers that fan-out is too expensive, when the
+         product needs the freshest feed without delivery delay, or when a user has not visited for a long time
+         and keeping a ready feed for them is pointless.
+      4. **Accounts with millions of followers: a hybrid.** For accounts above a follower threshold, no fan-out
+         happens on publish. At read time the service takes the user's precomputed feed and merges it with the
+         latest posts of the popular accounts the user follows. A reader follows few such accounts, and their
+         latest posts are needed by all their followers at once, so they cache extremely well. Inactive users are
+         handled similarly: their feeds are not updated and are assembled by pull on their next visit.
+      5. **Implementation details.**
+         - Store only post ids in a feed and cap its length (for example, a few hundred latest entries). Text,
+           media and counters are loaded at read time, where deleted and hidden posts are filtered out as well.
+         - Run fan-out asynchronously through a queue, in batches of followers, and idempotently: delivering the
+           same id again does not create a duplicate.
+         - Show authors their own post immediately: add it to their own feed synchronously or merge it in at read
+           time.
+         - Paginate with a cursor by time or post id, not by offset: the feed changes between requests.
+         - Feeds can be rebuilt from the sources of truth (posts and the follow graph), so their store can be a
+           cache rather than the primary database.
+    explanation: |
+      Both approaches move the same work between the write path and the read path. Push makes writes expensive so
+      that reads are cheap and have predictable latency; pull does the opposite. The choice is driven by the
+      read/write ratio and by the distribution of follower counts, which is extremely uneven in social networks.
+
+      An example estimate: with 1,000 posts per second and 200 followers on average, push produces 200,000 feed
+      writes per second - a lot, but this work parallelizes well. One post from an account with 50 million
+      followers is 50 million writes: the fan-out queue is busy for minutes, ordinary users' feeds fall behind,
+      and memory goes to copies most of which nobody will read. That is why the hybrid is not an optimization
+      here but a necessity.
+
+      A precomputed feed is derived data in the spirit of the Materialized View pattern: as the pattern
+      describes, such a view can be fully rebuilt from the source data, and in practice it is eventually
+      consistent. A queue between publishing and fan-out smooths load peaks but adds delivery delay. A delay of
+      seconds is acceptable for a feed, and post deletion, unfollowing and blocking are simpler and more
+      reliable to handle by filtering at read time than by cleaning millions of feeds.
+    linkTitles:
+      - "Materialized View pattern"
+      - "Queue-Based Load Leveling pattern"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

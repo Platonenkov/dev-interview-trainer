@@ -1,0 +1,159 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQ45W1SNBBHS8Q95MJ
+slug: load-shedding-vs-unbounded-queueing
+stack: dotnet
+topic: system-design
+level: senior
+type: open
+grading: self
+tags: [load-shedding, rate-limiting, backpressure, overload, queueing]
+links:
+  - url: https://learn.microsoft.com/en-us/azure/architecture/patterns/throttling
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/performance/rate-limit
+    lang: en
+    kind: docs
+  - url: https://www.rfc-editor.org/rfc/rfc6585
+    lang: en
+    kind: spec
+locales:
+  ru:
+    title: Почему при перегрузке сервису лучше сразу отклонять лишние запросы, чем ставить все в очередь?
+    prompt: |
+      Сервис получает больше запросов, чем способен обработать. Почему отклонить избыток сразу часто лучше, чем
+      поставить в очередь каждый запрос и обработать все по очереди? Как бы вы реализовали это в сервисе на
+      ASP.NET Core?
+    hint: |
+      Что происходит со временем ожидания запроса в конце очереди, которая растёт всё время перегрузки, и что в это
+      время делает клиент, который этот запрос отправил?
+    answer: |
+      1. **Почему очередь без границ вредна.** Если запросы приходят быстрее, чем обрабатываются, очередь растёт всё
+         время перегрузки. Ожидание в очереди примерно равно её длине, делённой на пропускную способность (следствие
+         закона Литтла), поэтому задержка растёт у всех запросов, а не только у «лишних», а пропускная способность
+         не растёт вовсе. Когда ожидание превышает таймаут клиента, сервер тратит ресурсы на запросы, ответа на
+         которые уже никто не ждёт, а клиенты повторяют запросы и увеличивают входящий поток. Полезная пропускная
+         способность (goodput) может упасть почти до нуля, хотя сервер загружен на 100%. Очередь ещё и занимает
+         память, а после пика её хвост долго разгребается.
+      2. **Что даёт ранний отказ.** Сервис принимает столько запросов, сколько успевает обработать, плюс короткую
+         очередь, а остальное сразу отклоняет. Принятые запросы обслуживаются с приемлемой задержкой, отклонённые
+         получают быстрый и дешёвый ответ, и клиент может повторить позже, обратиться к другому экземпляру или
+         показать пользователю деградацию.
+      3. **Реализация в ASP.NET Core.** Middleware ограничения запросов из `Microsoft.AspNetCore.RateLimiting`
+         (встроено начиная с .NET 7, есть и в .NET 10):
+         - `AddRateLimiter` и политика `AddConcurrencyLimiter`: `PermitLimit` задаёт, сколько запросов
+           обрабатывается одновременно, `QueueLimit` - небольшую очередь сверх этого, `QueueProcessingOrder` -
+           порядок её обработки; `UseRateLimiter` в конвейере, политика на эндпоинтах через `RequireRateLimiting`
+           или для всех запросов через `GlobalLimiter`;
+         - `RejectionStatusCode` по умолчанию 503: сервис перегружен. 429 уместен, когда лимитер разбит по
+           клиентам (пользователь, ключ API) и превышена квота конкретного клиента;
+         - `OnRejected` добавляет заголовок `Retry-After`, чтобы клиенты не повторяли запрос немедленно;
+         - значения лимитов подбираются нагрузочным тестом: уровень параллелизма, при котором пропускная способность
+           максимальна, и очередь, которая обрабатывается за малую долю таймаута клиента.
+      4. **Дополнить защиту.** Отдельные лимиты для критичных и второстепенных эндпоинтов, проверки
+         работоспособности не ограничивать; прерывать работу по `HttpContext.RequestAborted`, если клиент ушёл;
+         работу, которую можно отложить, принимать с `202 Accepted` в ограниченную очередь (например,
+         `Channel.CreateBounded`); клиенты соблюдают `Retry-After`, делают повторы с экспоненциальной задержкой и
+         jitter и ограничивают их число; автомасштабирование дополняет отказ, но не заменяет его, потому что не
+         успевает за всплеском; метрики доли отказов и времени в очереди с алертами.
+    explanation: |
+      Главная мысль: при перегрузке очередь не добавляет пропускной способности, она только превращает избыток
+      запросов в задержку для всех. Пока ожидание меньше таймаута клиента, это выглядит как замедление, а после
+      порога начинается коллапс: сервер честно работает, но всё большая доля ответов уходит клиентам, которые уже
+      сдались и повторили запрос. Повторы создают положительную обратную связь, и перегрузка поддерживает сама себя.
+
+      Ограниченная очередь с быстрым отказом разрывает эту связь. Длина очереди задаёт верхнюю границу задержки
+      принятых запросов, а избыток получает ответ за миллисекунды и почти не тратит ресурсы. Паттерн Throttling
+      описывает именно это: сбрасывать нагрузку заранее, а не после насыщения компонента, потому что ранний отказ
+      сигнализирует клиентам сбавить темп и предотвращает коллапс задержки.
+
+      Коды ответа несут разный смысл. 429 Too Many Requests (RFC 6585) говорит, что конкретный клиент превысил свой
+      лимит. 503 Service Unavailable означает, что сервис сейчас не может обработать запрос, часто из-за
+      неожиданного всплеска нагрузки. Оба кода могут сопровождаться `Retry-After`.
+
+      Компромиссы:
+
+      - слишком низкий лимит отклоняет запросы, которые сервис мог бы обработать, слишком высокий возвращает
+        проблему очереди, поэтому лимит измеряют и пересматривают;
+      - порядок очереди важен: `QueueProcessingOrder.OldestFirst` честнее, а `QueueProcessingOrder.NewestFirst`
+        при перегрузке обслуживает свежие запросы, клиенты которых ещё ждут;
+      - глобальный лимит без исключений может отклонять проверки работоспособности, и оркестратор начнёт
+        перезапускать здоровые экземпляры, усиливая перегрузку;
+      - отказ должен быть дешевле работы, которую он предотвращает: если отклонение происходит после тяжёлой
+        аутентификации и разбора тела запроса, часть выигрыша теряется, поэтому отклонять нужно как можно раньше в
+        конвейере обработки запроса.
+    linkTitles:
+      - "Паттерн Throttling"
+      - "Middleware ограничения частоты запросов в ASP.NET Core"
+      - "RFC 6585: дополнительные коды состояния HTTP"
+  en:
+    title: Why is it often better for an overloaded service to reject excess requests early than to queue them all?
+    prompt: |
+      A service receives more requests than it can process. Why is rejecting the excess right away often better
+      than queueing every request and processing them all in turn? How would you implement it in an ASP.NET Core
+      service?
+    hint: |
+      What happens to the waiting time of a request at the end of a queue that keeps growing for as long as the
+      overload lasts, and what is the client that sent it doing in the meantime?
+    answer: |
+      1. **Why an unbounded queue hurts.** If requests arrive faster than they are processed, the queue grows for as
+         long as the overload lasts. The time spent in the queue is roughly its length divided by throughput (a
+         consequence of Little's law), so latency grows for every request, not just the "excess" ones, while
+         throughput does not grow at all. Once the wait exceeds the client timeout, the server spends resources on
+         requests whose response nobody is waiting for, and clients retry, increasing the incoming rate. Useful
+         throughput (goodput) can drop close to zero while the server is 100% busy. The queue also consumes memory,
+         and after the peak its tail takes a long time to drain.
+      2. **What early rejection gives.** The service accepts as many requests as it can process plus a short queue,
+         and rejects the rest immediately. Accepted requests are served with acceptable latency, rejected ones get a
+         fast and cheap response, and the client can retry later, go to another instance or show the user a
+         degraded experience.
+      3. **Implementation in ASP.NET Core.** The rate limiting middleware from `Microsoft.AspNetCore.RateLimiting`
+         (built in since .NET 7, also in .NET 10):
+         - `AddRateLimiter` with an `AddConcurrencyLimiter` policy: `PermitLimit` sets how many requests run at once,
+           `QueueLimit` a small queue on top of that, `QueueProcessingOrder` the order in which it is drained;
+           `UseRateLimiter` in the pipeline, the policy on endpoints via `RequireRateLimiting` or for all requests via
+           `GlobalLimiter`;
+         - `RejectionStatusCode` defaults to 503: the service is overloaded. 429 fits when the limiter is
+           partitioned by client (user, API key) and a specific client exceeded its quota;
+         - `OnRejected` adds a `Retry-After` header so that clients do not retry immediately;
+         - the limit values come from a load test: the concurrency level at which throughput peaks, and a queue that
+           drains within a small fraction of the client timeout.
+      4. **Complete the protection.** Separate limits for critical and secondary endpoints, health checks not
+         limited; stop work on `HttpContext.RequestAborted` when the client has gone; work that can be deferred is
+         accepted with `202 Accepted` into a bounded queue (for example, `Channel.CreateBounded`); clients honour
+         `Retry-After`, retry with exponential backoff and jitter, and cap the number of retries; autoscaling
+         complements rejection but does not replace it, because it cannot keep up with a spike; metrics for the
+         rejection rate and queue time, with alerts.
+    explanation: |
+      The key point: under overload a queue adds no throughput, it only turns the excess of requests into latency
+      for everyone. While the wait stays below the client timeout this looks like a slowdown, but past that
+      threshold collapse begins: the server works hard, yet a growing share of responses goes to clients that have
+      already given up and retried. Retries create positive feedback, and the overload sustains itself.
+
+      A bounded queue with fast rejection breaks that loop. The queue length caps the latency of accepted requests,
+      and the excess gets an answer within milliseconds at almost no cost. The Throttling pattern describes exactly
+      this: shed load proactively rather than after a component saturates, because early rejection signals callers
+      to back off and prevents the latency collapse.
+
+      The status codes mean different things. 429 Too Many Requests (RFC 6585) says that a specific client exceeded
+      its limit. 503 Service Unavailable means the service cannot handle the request right now, often because of an
+      unexpected load spike. Both may carry `Retry-After`.
+
+      Trade-offs:
+
+      - a limit that is too low rejects requests the service could have handled, one that is too high brings the
+        queue problem back, so the limit is measured and revisited;
+      - queue order matters: `QueueProcessingOrder.OldestFirst` is fairer, while `QueueProcessingOrder.NewestFirst`
+        under overload serves fresh requests whose clients are still waiting;
+      - a global limit without exceptions can reject health checks, and the orchestrator starts restarting healthy
+        instances, making the overload worse;
+      - rejection must be cheaper than the work it prevents: if it happens after heavy authentication and parsing
+        of the request body, part of the benefit is lost, so reject as early in the request pipeline as possible.
+    linkTitles:
+      - "Throttling pattern"
+      - "Rate limiting middleware in ASP.NET Core"
+      - "RFC 6585: Additional HTTP Status Codes"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

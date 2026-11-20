@@ -1,0 +1,114 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RK3P7P4R8CZK2CJSV6
+slug: application-service-responsibilities
+stack: dotnet
+topic: architecture
+level: middle
+type: multi
+grading: auto
+tags: [clean-architecture, application-layer, ddd, domain-model]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+  - id: e
+    correct: true
+  - id: f
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/architecture/microservices/microservice-ddd-cqrs-patterns/ddd-oriented-microservice
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/architecture/microservices/microservice-ddd-cqrs-patterns/microservice-application-layer-implementation-web-api
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какие обязанности относятся к сервису приложения, а какие к доменной модели?
+    prompt: |
+      В приложении с чистой (или гексагональной) архитектурой и DDD есть обработчик сценария использования
+      `AddOrderLineHandler` (сервис приложения) и агрегат `Order` в доменной модели.
+
+      Выберите все обязанности, которые должны находиться в сервисе приложения, а не в доменной модели.
+    hint: Какие пункты описывают, что и в каком порядке сделать, а какие - что бизнес разрешает или как он считает?
+    options:
+      a: "Загрузить агрегат `Order` по идентификатору из команды через `IOrderRepository`."
+      b: "Гарантировать правило «в уже отгруженный заказ нельзя добавить позицию»."
+      c: "Вызвать `order.AddLine(...)`, а затем зафиксировать единицу работы, например `await unitOfWork.SaveChangesAsync(ct)`."
+      d: "Рассчитать скидку позиции по бизнес-правилу «от 10 единиц товара скидка 5 %»."
+      e: "Преобразовать результат в DTO, который вернёт API."
+      f: "Проверить, что все позиции оплачены, и после этого присвоить `order.Status = OrderStatus.Shipped`."
+    optionExplanations:
+      b: "Это инвариант агрегата. Его проверяет сам `Order`, например в методе `AddLine`, иначе любой другой сценарий, который добавляет позиции, сможет его обойти."
+      d: "Правило расчёта скидки - бизнес-знание. Оно живёт в сущности или доменном сервисе, чтобы все сценарии считали скидку одинаково."
+      f: "Решение о переходе заказа в статус «отгружен» и условия этого перехода - бизнес-логика. Её место в методе агрегата, например `order.Ship()`, а не в присваивании статуса из обработчика."
+    answer: |
+      Верны a, c и e: загрузить агрегат через репозиторий, вызвать его доменный метод и зафиксировать единицу
+      работы, преобразовать результат в DTO. Правила b, d и f относятся к доменной модели.
+    explanation: |
+      Слой приложения в руководстве Microsoft описан как тонкий: он определяет, какие задачи выполняет
+      программа, и координирует доменные объекты, но сам не содержит бизнес-правил и знаний предметной
+      области. Типичный обработчик команды делает одно и то же: получает агрегат из репозитория, вызывает его
+      методы, сохраняет изменения через единицу работы и возвращает результат в форме, удобной для вызывающей
+      стороны.
+
+      Бизнес-правила, инварианты и решения находятся в доменном слое: в сущностях и агрегатах, а правила,
+      которые не принадлежат естественно одной сущности, - в доменных сервисах. Причина практическая: если
+      проверка «нельзя добавить позицию в отгруженный заказ» живёт в одном обработчике, то второй сценарий
+      (импорт, фоновая задача, другой эндпоинт) может привести агрегат в недопустимое состояние. Когда правило
+      внутри `Order`, обойти его можно только в обход публичного API агрегата.
+
+      Признак протечки логики в слой приложения - обработчик, который читает поля сущности, принимает по ним
+      решение и затем напрямую присваивает новые значения. Такой код стоит превратить в метод агрегата, а
+      обработчику оставить только оркестрацию.
+    linkTitles:
+      - "Проектирование микросервиса в стиле DDD"
+      - "Реализация слоя приложения микросервиса с помощью Web API"
+  en:
+    title: Which responsibilities belong in an application service and which in the domain model?
+    prompt: |
+      An application with clean (or hexagonal) architecture and DDD has a use case handler `AddOrderLineHandler`
+      (an application service) and an `Order` aggregate in the domain model.
+
+      Select all responsibilities that belong in the application service rather than in the domain model.
+    hint: Which items describe what to do and in what order, and which describe what the business allows or how it calculates?
+    options:
+      a: "Load the `Order` aggregate by the id from the command through `IOrderRepository`."
+      b: "Guarantee the rule \"no line can be added to an order that has already shipped\"."
+      c: "Call `order.AddLine(...)` and then commit the unit of work, for example `await unitOfWork.SaveChangesAsync(ct)`."
+      d: "Calculate a line discount from the business rule \"10 or more units get a 5 % discount\"."
+      e: "Map the result to a DTO that the API returns."
+      f: "Check that every line is paid and then assign `order.Status = OrderStatus.Shipped`."
+    optionExplanations:
+      b: "This is an aggregate invariant. `Order` itself enforces it, for example in `AddLine`, otherwise any other use case that adds lines could bypass it."
+      d: "A discount rule is business knowledge. It lives in an entity or a domain service so that every use case calculates the discount the same way."
+      f: "Deciding when an order may become shipped is business logic. It belongs in an aggregate method such as `order.Ship()`, not in a status assignment from the handler."
+    answer: |
+      a, c and e are correct: load the aggregate through the repository, call its domain method and commit the
+      unit of work, map the result to a DTO. The rules in b, d and f belong in the domain model.
+    explanation: |
+      The Microsoft guide describes the application layer as thin: it defines the jobs the software does and
+      coordinates the domain objects, but it holds no business rules or domain knowledge itself. A typical command
+      handler always does the same thing: gets the aggregate from a repository, calls its methods, saves the
+      changes through a unit of work and returns the result in a shape convenient for the caller.
+
+      Business rules, invariants and decisions live in the domain layer: in entities and aggregates, and rules
+      that do not naturally belong to one entity live in domain services. The reason is practical: if the check
+      "no line can be added to a shipped order" lives in one handler, a second use case (an import, a background
+      job, another endpoint) can put the aggregate into an invalid state. When the rule is inside `Order`, the
+      only way around it is around the aggregate's public API.
+
+      A sign that logic has leaked into the application layer is a handler that reads entity fields, makes a
+      decision based on them and then assigns new values directly. Such code should become an aggregate method,
+      leaving only orchestration in the handler.
+    linkTitles:
+      - "Design a DDD-oriented microservice"
+      - "Implement the microservice application layer using the Web API"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

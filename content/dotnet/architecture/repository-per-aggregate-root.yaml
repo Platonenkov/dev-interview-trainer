@@ -1,0 +1,97 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RKPND9H1K47XV6QPQB
+slug: repository-per-aggregate-root
+stack: dotnet
+topic: architecture
+level: senior
+type: single
+grading: auto
+tags: [ddd, repository, aggregates]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/architecture/microservices/microservice-ddd-cqrs-patterns/infrastructure-persistence-layer-design
+    lang: en
+    kind: docs
+  - url: https://martinfowler.com/bliki/DDD_Aggregate.html
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Какие репозитории определить для агрегатов Order с дочерними OrderLine и Customer?
+    prompt: |
+      Модель заказов спроектирована по DDD. Агрегат `Order` содержит дочерние сущности `OrderLine` и проверяет
+      инварианты вроде «сумма заказа не превышает лимит». `Customer` - отдельный агрегат, на который `Order`
+      ссылается через `CustomerId`. В базе три таблицы: `Orders`, `OrderLines` и `Customers`.
+
+      Какой набор репозиториев следует определить в такой модели?
+    hint: Через какой объект внешний код может менять части агрегата и что является единицей загрузки и сохранения?
+    options:
+      a: "`IOrderRepository`, `IOrderLineRepository` и `ICustomerRepository` - по одному на каждую таблицу."
+      b: "`IOrderRepository` и `ICustomerRepository`; строки `OrderLine` загружаются и сохраняются вместе со своим `Order`."
+      c: "Только `IOrderRepository`, который заодно загружает и сохраняет `Customer` заказа, чтобы клиент менялся через ту же точку входа."
+      d: "Один общий `IOrderingRepository` для `Order`, `OrderLine` и `Customer`, чтобы всё сохранялось одной операцией."
+    optionExplanations:
+      a: "`IOrderLineRepository` позволяет добавлять и менять строки в обход корня `Order`, поэтому корень не проверяет свои инварианты. Репозиторий соответствует агрегату, а не таблице: как агрегат раскладывается по таблицам, решает инфраструктура."
+      c: "`Customer` - самостоятельный агрегат со своим жизненным циклом и своими инвариантами. Клиента нужно создавать и менять без заказа, а связывание его сохранения с заказом смешивает две границы согласованности."
+      d: Репозиторий нужен на каждый агрегат, а не на всю модель. Общий репозиторий открывает прямой доступ к `OrderLine` и подталкивает менять два агрегата в одной операции, стирая их границы.
+    answer: "`IOrderRepository` и `ICustomerRepository`: репозиторий определяется только для корней агрегатов, а `OrderLine` загружается и сохраняется через `Order`."
+    explanation: |
+      Агрегат - граница согласованности, и единственный вход в него - корень. Он загружается и сохраняется
+      целиком, поэтому руководство Microsoft по DDD рекомендует определять один репозиторий на каждый агрегат
+      (на его корень). `IOrderRepository` возвращает `Order` вместе со строками и сохраняет их вместе, даже если
+      физически это две таблицы.
+
+      Репозиторий для дочерней сущности ломает эту границу. Любой код получил бы возможность загрузить
+      `OrderLine` и изменить количество или цену, а `Order` об этом не узнал бы и не проверил бы лимит суммы.
+      Подход «репозиторий на таблицу» - это объект доступа к данным, а не репозиторий DDD.
+
+      `Customer` - отдельный агрегат, поэтому у него свой репозиторий. Связь между агрегатами идёт по
+      идентификатору, и каждый из них загружается и сохраняется независимо.
+    linkTitles:
+      - "Проектирование уровня сохранения в инфраструктуре"
+      - "Агрегат в DDD (Martin Fowler)"
+  en:
+    title: Which repositories should you define for an Order aggregate with OrderLine children and a Customer aggregate?
+    prompt: |
+      An ordering model is designed with DDD. The `Order` aggregate contains `OrderLine` child entities and enforces
+      invariants such as "the order total does not exceed the limit". `Customer` is a separate aggregate that `Order`
+      references through `CustomerId`. The database has three tables: `Orders`, `OrderLines` and `Customers`.
+
+      Which set of repositories should this model define?
+    hint: Through which object can outside code change parts of an aggregate, and what is the unit of loading and saving?
+    options:
+      a: "`IOrderRepository`, `IOrderLineRepository` and `ICustomerRepository`, one per table."
+      b: "`IOrderRepository` and `ICustomerRepository`; `OrderLine` rows are loaded and saved together with their `Order`."
+      c: "Only `IOrderRepository`, which also loads and saves the order's `Customer`, so the customer is changed through the same entry point."
+      d: "One shared `IOrderingRepository` for `Order`, `OrderLine` and `Customer`, so everything is saved in one operation."
+    optionExplanations:
+      a: "`IOrderLineRepository` lets code add and change lines bypassing the `Order` root, so the root never checks its invariants. A repository matches an aggregate, not a table: how an aggregate maps to tables is an infrastructure concern."
+      c: "`Customer` is an aggregate in its own right, with its own lifecycle and invariants. A customer must be created and changed without an order, and tying its persistence to the order mixes two consistency boundaries."
+      d: A repository is needed per aggregate, not for the whole model. A shared repository exposes `OrderLine` directly and encourages changing two aggregates in one operation, blurring their boundaries.
+    answer: "`IOrderRepository` and `ICustomerRepository`: repositories are defined only for aggregate roots, and `OrderLine` is loaded and saved through `Order`."
+    explanation: |
+      An aggregate is a consistency boundary, and its root is the only entry point. It is loaded and saved as a
+      whole, which is why the Microsoft DDD guidance recommends one repository per aggregate (per aggregate root).
+      `IOrderRepository` returns an `Order` with its lines and saves them together, even though physically they are
+      two tables.
+
+      A repository for a child entity breaks that boundary. Any code could load an `OrderLine` and change its
+      quantity or price, while `Order` would never know and never check the total limit. "A repository per table"
+      is a data access object, not a DDD repository.
+
+      `Customer` is a separate aggregate, so it gets its own repository. Aggregates reference each other by
+      identity, and each one is loaded and saved independently.
+    linkTitles:
+      - "Design the infrastructure persistence layer"
+      - "DDD Aggregate (Martin Fowler)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

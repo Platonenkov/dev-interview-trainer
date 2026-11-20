@@ -1,0 +1,152 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNWE97527YZDJW6HY8
+slug: kafka-max-poll-interval-rebalance-loop
+stack: dotnet
+topic: distributed
+level: senior
+type: situation
+grading: self
+tags: [kafka, consumer-groups, rebalance, max-poll-interval, consumer-lag]
+links:
+  - url: https://kafka.apache.org/39/javadoc/org/apache/kafka/clients/consumer/KafkaConsumer.html
+    lang: en
+    kind: docs
+  - url: https://kafka.apache.org/documentation/
+    lang: en
+    kind: docs
+  - url: https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Группа потребителей Kafka постоянно ребалансируется и обрабатывает одни и те же записи: что делать?"
+    prompt: |
+      Сервис читает топик Kafka группой потребителей и для каждой записи вызывает внешний HTTP API. На прошлой
+      неделе этот API стал отвечать заметно медленнее. С тех пор группа проходит ребалансировку каждые несколько
+      минут, отставание (lag) растёт, а в логах и в базе видно, что одни и те же записи обрабатываются снова и
+      снова. Процессы потребителей не падают и не перезапускаются.
+
+      Как вы будете диагностировать проблему и что исправите?
+    hint: Сравните, сколько времени уходит на обработку всех записей, полученных одним вызовом `poll`, с таймаутами, по которым группа решает, что потребитель жив.
+    answer: |
+      1. **Подтвердить механизм.** Сопоставить моменты ребалансировок с длительностью обработки одной пачки
+         записей. Признаки превышения интервала опроса: в логе потребителя сообщение о том, что превышен
+         `max.poll.interval.ms` и потребитель покидает группу, а фиксация смещений после этого завершается ошибкой
+         (в Java-клиенте `CommitFailedException`, в Confluent.Kafka для .NET `Consume` возвращает ошибку
+         `Local_MaxPollExceeded`). `kafka-consumer-groups.sh --describe` показывает отставание по партициям и
+         меняющиеся идентификаторы участников. Если же пропадают heartbeat-сообщения (истекает
+         `session.timeout.ms`), причина другая: умерший процесс, долгая пауза сборщика мусора или сеть.
+      2. **Посчитать.** Время между вызовами `poll` примерно равно числу записей в пачке, умноженному на время
+         обработки записи. При значениях по умолчанию `max.poll.records=500` и `max.poll.interval.ms=300000`
+         (5 минут) 500 записей по 1 секунде после замедления API занимают около 500 секунд - больше лимита.
+         Потребителя исключают из группы, его партиции переходят к другому участнику, тот получает те же
+         незафиксированные записи, тратит на них столько же времени и тоже исключается. Цикл подпитывает сам себя,
+         а каждая ребалансировка приостанавливает чтение, поэтому отставание растёт.
+      3. **Стабилизировать.** Уменьшить `max.poll.records`, чтобы пачка с запасом укладывалась в интервал.
+         Поставить таймаут на вызов внешнего API, чтобы одна запись не могла обрабатываться сколь угодно долго.
+         При необходимости осознанно увеличить `max.poll.interval.ms`, понимая цену: действительно зависший
+         потребитель дольше удерживает свои партиции, прежде чем группа это заметит.
+      4. **Исправить архитектуру.** Скорость обработки не должна так напрямую зависеть от внешнего сервиса.
+         Варианты: обрабатывать записи пачки параллельно с ограниченной степенью параллелизма (сохраняя порядок
+         внутри ключа, если он важен) или передавать записи рабочим потокам, ставить партиции на `pause` и
+         продолжать вызывать `poll`, пока работа не закончится, затем `resume`. Автоматическую фиксацию
+         отключить и фиксировать только смещения, все предыдущие записи до которых уже обработаны. Если внешний
+         API отказывает, circuit breaker и пауза чтения лучше, чем повторы внутри цикла опроса.
+      5. **Принять дубликаты как норму.** Доставка at-least-once: после любой ребалансировки записи после
+         последней фиксации обрабатываются снова, поэтому обработчик должен быть идемпотентным.
+      6. **Снизить цену ребалансировок и наблюдать за ними.** Использовать стратегию назначения
+         cooperative-sticky, чтобы ребалансировка не останавливала всю группу. Настроить алерты на отставание
+         группы, частоту ребалансировок, время между вызовами `poll` (в Java-клиенте метрика
+         `time-between-poll-max`) и задержку внешнего API.
+    explanation: |
+      Kafka проверяет живость участника группы двумя независимыми механизмами. Heartbeat-сообщения отправляет
+      фоновый поток, и `session.timeout.ms` ловит умерший процесс или потерю сети. `max.poll.interval.ms`
+      проверяет прогресс: если приложение не вызвало `poll` в течение этого интервала, потребитель считается
+      неисправным, покидает группу, и его партиции назначаются другим участникам. Медленный внешний API не
+      останавливает heartbeat, поэтому увеличение `session.timeout.ms` здесь не помогает.
+
+      Повторная обработка - прямое следствие: исключённый потребитель не может зафиксировать смещения уже
+      обработанных записей, и новый владелец партиции начинает с последнего зафиксированного смещения. Если
+      время обработки пачки по-прежнему больше интервала, новый владелец повторяет судьбу предыдущего, и группа
+      застревает в цикле.
+
+      Документация `KafkaConsumer` называет два рычага: уменьшать размер пачки или увеличивать интервал, а для
+      непредсказуемого времени обработки рекомендует выносить обработку в другой поток, продолжать вызывать
+      `poll` и аккуратно фиксировать только обработанные смещения. Простое увеличение интервала - временная мера:
+      оно скрывает проблему до следующего замедления и замедляет обнаружение зависших потребителей.
+
+      В Confluent.Kafka для .NET (на основе librdkafka) настройки `max.poll.records` нет: `Consume` возвращает по
+      одному сообщению, а `max.poll.interval.ms` (`ConsumerConfig.MaxPollIntervalMs`) отсчитывается между
+      вызовами `Consume`. Если код сам копит сообщения в пачки, размер пачки и время её обработки контролирует
+      он сам.
+    linkTitles:
+      - "Apache Kafka: класс KafkaConsumer"
+      - "Документация Apache Kafka"
+      - "librdkafka: справочник настроек"
+  en:
+    title: "A Kafka consumer group keeps rebalancing and reprocessing the same records: what do you do?"
+    prompt: |
+      A service reads a Kafka topic with a consumer group and calls an external HTTP API for every record. Last
+      week that API became noticeably slower. Since then the group rebalances every few minutes, consumer lag
+      keeps growing, and the logs and the database show the same records being processed again and again. The
+      consumer processes do not crash or restart.
+
+      How do you diagnose the problem and what do you fix?
+    hint: Compare how long it takes to process all the records returned by one `poll` call with the timeouts the group uses to decide that a consumer is alive.
+    answer: |
+      1. **Confirm the mechanism.** Match the rebalance times against the duration of processing one batch. Signs
+         of a poll interval timeout: the consumer log says that `max.poll.interval.ms` was exceeded and the member
+         leaves the group, and offset commits after that fail (in the Java client `CommitFailedException`, in
+         Confluent.Kafka for .NET `Consume` reports the error `Local_MaxPollExceeded`).
+         `kafka-consumer-groups.sh --describe` shows lag per partition and changing member ids. If heartbeats stop
+         instead (`session.timeout.ms` expires), the cause is different: a dead process, a long garbage collector
+         pause or the network.
+      2. **Do the arithmetic.** The time between `poll` calls is roughly the records per batch times the time per
+         record. With the defaults `max.poll.records=500` and `max.poll.interval.ms=300000` (5 minutes), 500
+         records at 1 second each after the API slowdown take about 500 seconds, over the limit. The consumer is
+         removed from the group, its partitions move to another member, which gets the same uncommitted records,
+         spends just as long on them and is removed too. The loop feeds itself, and every rebalance pauses
+         consumption, so lag grows.
+      3. **Stabilize.** Lower `max.poll.records` so that a batch fits into the interval with a margin. Put a
+         timeout on the external API call so that one record cannot take arbitrarily long. If needed, raise
+         `max.poll.interval.ms` deliberately, knowing the cost: a truly hung consumer holds its partitions longer
+         before the group notices.
+      4. **Fix the design.** Processing speed should not depend on the external service this directly. Options:
+         process the records of a batch concurrently with bounded parallelism (keeping per-key order if it
+         matters), or hand records to worker threads, `pause` the partitions and keep calling `poll` until the
+         work is done, then `resume`. Turn off auto commit and commit only offsets whose preceding records are all
+         processed. When the external API is failing, a circuit breaker plus paused consumption beats retrying
+         inside the poll loop.
+      5. **Treat duplicates as normal.** Delivery is at-least-once: after any rebalance the records after the last
+         commit are processed again, so the handler must be idempotent.
+      6. **Make rebalances cheaper and watch them.** Use the cooperative-sticky assignment strategy so that a
+         rebalance does not stop the whole group. Alert on group lag, rebalance rate, time between `poll` calls
+         (the Java client metric `time-between-poll-max`) and external API latency.
+    explanation: |
+      Kafka checks group member liveness with two independent mechanisms. Heartbeats are sent by a background
+      thread, and `session.timeout.ms` catches a dead process or a lost network. `max.poll.interval.ms` checks
+      progress: if the application does not call `poll` within that interval, the consumer is considered failed,
+      leaves the group, and its partitions are assigned to other members. A slow external API does not stop the
+      heartbeats, so raising `session.timeout.ms` does not help here.
+
+      Reprocessing follows directly: the removed consumer cannot commit the offsets of the records it has already
+      processed, and the new owner of the partition starts from the last committed offset. If a batch still takes
+      longer than the interval, the new owner shares the fate of the previous one, and the group is stuck in a
+      loop.
+
+      The `KafkaConsumer` documentation names two levers: a smaller batch or a longer interval, and for
+      unpredictable processing time it recommends moving processing to another thread, continuing to call `poll`
+      and carefully committing only processed offsets. Just raising the interval is a stopgap: it hides the
+      problem until the next slowdown and delays the detection of hung consumers.
+
+      Confluent.Kafka for .NET (built on librdkafka) has no `max.poll.records` setting: `Consume` returns one
+      message at a time, and `max.poll.interval.ms` (`ConsumerConfig.MaxPollIntervalMs`) is measured between
+      `Consume` calls. If your code collects messages into batches itself, it controls the batch size and its
+      processing time.
+    linkTitles:
+      - "Apache Kafka: KafkaConsumer class"
+      - "Apache Kafka documentation"
+      - "librdkafka: configuration reference"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

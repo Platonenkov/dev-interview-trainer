@@ -1,0 +1,146 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RRKSGMBEH64N8QYMWE
+slug: dont-mock-types-you-dont-own
+stack: dotnet
+topic: testing
+level: senior
+type: open
+grading: self
+tags: [test-doubles, mocks, adapters, integration-tests]
+links:
+  - url: https://martinfowler.com/articles/mocksArentStubs.html
+    lang: en
+    kind: article
+  - url: https://martinfowler.com/bliki/TestDouble.html
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Почему опасно мокать клиент стороннего SDK напрямую и как устроить тесты вместо этого?
+    prompt: |
+      Сервис работает с облачным хранилищем через клиент стороннего SDK. В модульных тестах бизнес-логики
+      команда настраивает моки прямо на типы SDK: на сам клиент, его вложенные клиенты и объекты ответов.
+      Тесты зелёные, но в production и после обновлений SDK несколько раз всплывали ошибки, которые тесты не
+      поймали.
+
+      Почему мокать типы, которыми вы не владеете, рискованно? Какую структуру кода и тестов вы предложите
+      вместо этого?
+    hint: Чьё знание о поведении SDK на самом деле проверяет такой мок - авторов SDK или ваше?
+    answer: |
+      **Почему это рискованно.**
+      - Мок воспроизводит не SDK, а ваши предположения о нём: какие исключения он бросает, что возвращает при
+        отсутствии данных (`null`, пустой результат или ошибку), как устроены постраничная выдача, повторы и коды
+        ответов. Если предположение неверно, тест и код ошибаются одинаково, и тест остаётся зелёным.
+      - После обновления SDK поведение может измениться, а мок нет: тесты не замечают изменения.
+      - API SDK широкое и не описано в терминах вашей предметной области. Тест вынужден настраивать цепочки
+        вызовов (клиент, вложенный клиент, ответ) и привязывается к последовательности вызовов SDK, а не к
+        намерению кода. Любой рефакторинг ломает такие тесты.
+      - Многие типы SDK неудобно подменять: запечатанные классы, невиртуальные методы, ответы без публичных
+        конструкторов. Тесты обрастают обходными путями.
+      - Мок теряет обратную связь по дизайну: он не подсказывает, какой интерфейс нужен вашему коду, потому что
+        интерфейс уже навязан извне.
+
+      **Что делать вместо этого.**
+      1. Объявить в своём коде узкий интерфейс в терминах предметной области, например
+         `IInvoiceArchive.SaveAsync(Invoice)` и `IInvoiceArchive.FindAsync(InvoiceId)`. Его форму определяют
+         потребности бизнес-логики, а не возможности SDK.
+      2. Написать тонкий адаптер, который реализует этот интерфейс через SDK: переводит вызовы, отображает
+         исключения и коды SDK в ваши результаты (например, «не найдено» вместо исключения с кодом 404), и
+         больше ничего. Бизнес-логики в адаптере нет.
+      3. В модульных тестах бизнес-логики подменять свой интерфейс: моком для исходящих команд, фейком в памяти
+         для хранилища, состояние которого тест читает обратно.
+      4. Сам адаптер покрыть интеграционными тестами против настоящей зависимости: эмулятора, контейнера или
+         тестовой учётной записи. Их немного, они медленнее, но именно они проверяют предположения о SDK и ловят
+         изменения при его обновлении.
+      5. Если есть фейк, прогонять один и тот же набор тестов и против фейка, и против адаптера, чтобы фейк не
+         расходился с реальным поведением.
+    explanation: |
+      В классификации тестовых двойников Джерарда Месароша, которую приводит Мартин Фаулер, мок заранее
+      запрограммирован ожиданиями, и эти ожидания образуют спецификацию вызовов, которые он должен получить.
+      Когда интерфейс ваш, такая спецификация фиксирует решение, которое принимает ваша команда, и мок помогает
+      это решение проектировать. Когда тип чужой, спецификацию пишете всё равно вы, и она фиксирует догадку о
+      поведении, которое вы не контролируете и которое может отличаться от реального или измениться в следующей
+      версии. Тест проверяет согласованность кода с этой догадкой, а не с реальностью.
+
+      Статьи Фаулера из списка источников дают словарь (мок, фейк, заглушка, проверка поведения и проверка
+      состояния), но сам принцип «мокать только свои типы» (don't mock types you don't own) в них не
+      сформулирован. Он описан у Стива Фримена и Ната Прайса в книге «Growing Object-Oriented Software, Guided
+      by Tests».
+
+      Адаптер разделяет две разные задачи. Бизнес-логика проверяется быстро и детерминированно через ваш
+      интерфейс, а знание о SDK сосредоточено в одном месте и проверяется там, где его можно проверить честно, -
+      в интеграционных тестах против настоящей зависимости. Обновление SDK затрагивает один адаптер и его тесты,
+      а не сотни модульных тестов. По сути это порт и адаптер из гексагональной архитектуры.
+
+      Цена подхода - дополнительный слой кода и отдельный набор интеграционных тестов, поэтому адаптер должен
+      быть узким: только операции, которые реально нужны. Даже если SDK специально сделан удобным для подмены
+      (виртуальные методы, фабрики объектов ответов), это упрощает написание мока, но не делает предположения в
+      нём верными.
+    linkTitles:
+      - "Мартин Фаулер: Mocks Aren't Stubs"
+      - "Мартин Фаулер: Test Double"
+  en:
+    title: Why is it risky to mock a third-party SDK client directly, and how do you structure tests instead?
+    prompt: |
+      A service talks to cloud storage through a third-party SDK client. In the unit tests of the business logic
+      the team sets up mocks directly on the SDK types: the client itself, its nested clients and the response
+      objects. The tests are green, but several bugs that the tests did not catch showed up in production and
+      after SDK upgrades.
+
+      Why is mocking types you do not own risky? What structure of code and tests would you propose instead?
+    hint: Whose knowledge of the SDK behaviour does such a mock actually check - the SDK authors' or yours?
+    answer: |
+      **Why it is risky.**
+      - The mock reproduces not the SDK but your assumptions about it: which exceptions it throws, what it returns
+        when data is missing (`null`, an empty result or an error), how paging, retries and response codes work.
+        If an assumption is wrong, the test and the code are wrong in the same way, and the test stays green.
+      - After an SDK upgrade the behaviour may change while the mock does not: the tests do not notice.
+      - The SDK API is wide and not expressed in terms of your domain. The test has to set up call chains
+        (client, nested client, response) and becomes tied to the SDK call sequence rather than to what the code
+        means to do. Any refactoring breaks such tests.
+      - Many SDK types are awkward to substitute: sealed classes, non-virtual methods, responses without public
+        constructors. The tests fill up with workarounds.
+      - The mock loses design feedback: it does not tell you what interface your code needs, because the
+        interface is imposed from outside.
+
+      **What to do instead.**
+      1. Declare a narrow interface in your own code, in domain terms, for example
+         `IInvoiceArchive.SaveAsync(Invoice)` and `IInvoiceArchive.FindAsync(InvoiceId)`. Its shape follows the
+         needs of the business logic, not the capabilities of the SDK.
+      2. Write a thin adapter that implements this interface with the SDK: it translates calls and maps SDK
+         exceptions and codes to your own results (for example "not found" instead of an exception with code
+         404), and nothing more. There is no business logic in the adapter.
+      3. In the unit tests of the business logic, substitute your interface: a mock for outgoing commands, an
+         in-memory fake for a store whose state the test reads back.
+      4. Cover the adapter itself with integration tests against the real dependency: an emulator, a container or
+         a test account. There are few of them and they are slower, but they are what checks the assumptions
+         about the SDK and catches changes when it is upgraded.
+      5. If there is a fake, run the same test suite against both the fake and the adapter, so that the fake does
+         not drift from the real behaviour.
+    explanation: |
+      In Gerard Meszaros's classification of test doubles, which Martin Fowler quotes, a mock is pre-programmed
+      with expectations, and those expectations form a specification of the calls it should receive. When the
+      interface is yours, that specification records a decision your team makes, and the mock helps you design it.
+      When the type belongs to someone else, you still write the specification, and it records a guess about
+      behaviour you do not control, which may differ from reality or change in the next version. The test checks
+      that the code agrees with the guess, not with reality.
+
+      The Fowler articles in the sources give the vocabulary (mock, fake, stub, behaviour verification and state
+      verification), but they do not state the principle "don't mock types you don't own" itself. It is described
+      by Steve Freeman and Nat Pryce in the book "Growing Object-Oriented Software, Guided by Tests".
+
+      The adapter separates two different jobs. The business logic is tested quickly and deterministically
+      through your interface, while the knowledge about the SDK lives in one place and is checked where it can be
+      checked honestly, in integration tests against the real dependency. An SDK upgrade touches one adapter and
+      its tests, not hundreds of unit tests. In effect this is a port and an adapter from hexagonal architecture.
+
+      The cost is an extra layer of code and a separate set of integration tests, so the adapter should stay
+      narrow: only the operations that are actually needed. Even when an SDK is deliberately made easy to
+      substitute (virtual methods, factories for response objects), that makes the mock easier to write, but it
+      does not make the assumptions in it correct.
+    linkTitles:
+      - "Martin Fowler: Mocks Aren't Stubs"
+      - "Martin Fowler: Test Double"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

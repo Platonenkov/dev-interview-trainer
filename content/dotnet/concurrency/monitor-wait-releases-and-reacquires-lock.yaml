@@ -1,0 +1,177 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNE49ZS61PTGGYBSE8
+slug: monitor-wait-releases-and-reacquires-lock
+stack: dotnet
+topic: concurrency
+level: senior
+type: single
+grading: auto
+tags: [monitor, wait-pulse, producer-consumer, locks]
+code:
+  language: csharp
+  harness: program
+  source: |
+    public sealed class BoundedBuffer<T>
+    {
+        private readonly object _gate = new();
+        private readonly Queue<T> _items = new();
+        private readonly int _capacity;
+
+        public BoundedBuffer(int capacity) => _capacity = capacity;
+
+        public void Add(T item)
+        {
+            lock (_gate)
+            {
+                while (_items.Count == _capacity)
+                {
+                    Monitor.Wait(_gate);
+                }
+                _items.Enqueue(item);
+                Monitor.PulseAll(_gate);
+            }
+        }
+
+        public T Take()
+        {
+            lock (_gate)
+            {
+                while (_items.Count == 0)
+                {
+                    Monitor.Wait(_gate);
+                }
+                T item = _items.Dequeue();
+                Monitor.PulseAll(_gate);
+                return item;
+            }
+        }
+    }
+
+    public static class Program
+    {
+        public static void Main()
+        {
+            var buffer = new BoundedBuffer<int>(2);
+            var producer = new Thread(() =>
+            {
+                for (int i = 1; i <= 5; i++)
+                {
+                    buffer.Add(i);
+                }
+            });
+            producer.Start();
+
+            int sum = 0;
+            for (int i = 0; i < 5; i++)
+            {
+                sum += buffer.Take();
+            }
+            producer.Join();
+            Console.WriteLine(sum);
+        }
+    }
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.monitor.wait
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.monitor
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что Monitor.Wait делает с блокировкой и зачем проверять условие в цикле while?
+    prompt: |
+      Ограниченный буфер для схемы производитель-потребитель построен на `lock` и `Monitor.Wait`/`Monitor.PulseAll`.
+      В реальной системе несколько производителей вызывают `Add`, несколько потребителей вызывают `Take`
+      (в `Main` показан минимальный запуск с одним производителем и одним потребителем).
+
+      Что делает `Monitor.Wait(_gate)` с блокировкой `_gate`, и почему условие ожидания проверяется в цикле `while`,
+      а не в `if`?
+    hint: Что могут успеть сделать другие потоки между сигналом `PulseAll` и моментом, когда `Wait` вернёт управление разбуженному потоку?
+    options:
+      a: "`Wait` освобождает блокировку и снова захватывает её перед возвратом; за это время другой поток может взять блокировку и изменить очередь, поэтому условие нужно перепроверить"
+      b: "`Wait` продолжает держать блокировку, пока поток спит, а `PulseAll` разрешает ему продолжить; цикл `while` нужен только на случай, если `Wait` вернётся по таймауту"
+      c: "`Wait` освобождает блокировку и возвращается, не захватывая её снова, поэтому код после `Wait` выполняется вне блокировки, а `while` вместо `if` - лишь вопрос стиля"
+      d: "`Wait` освобождает блокировку, а `PulseAll` сразу передаёт её разбуженному потоку, поэтому после возврата из `Wait` условие гарантированно выполнено и хватило бы `if`"
+    optionExplanations:
+      b: "Если бы ожидающий поток держал блокировку, ни один производитель не смог бы войти в `lock (_gate)` и вызвать `PulseAll`: получилась бы взаимная блокировка. `Wait` как раз и нужен, чтобы отпустить блокировку на время ожидания. Кроме того, здесь вызывается `Wait(_gate)` без таймаута, так что цикл нужен не из-за таймаута."
+      c: "`Wait` возвращает управление только после того, как поток снова владеет блокировкой. Иначе `Dequeue` выполнялся бы без синхронизации, а выход из `lock` вызвал бы `Monitor.Exit` для блокировки, которой поток не владеет. И `while` здесь не стиль, а условие корректности."
+      d: "`PulseAll` лишь переводит ожидающие потоки в очередь готовых. Блокировка остаётся у вызвавшего потока до выхода из его `lock`, а затем за неё соревнуются все готовые потоки и новые потоки, входящие в `lock`. Первым может успеть другой потребитель и забрать элемент."
+    answer: "`Wait` освобождает блокировку, ждёт сигнала и перед возвратом снова её захватывает; за это время состояние могли изменить другие потоки, поэтому условие перепроверяют в цикле `while`."
+    explanation: |
+      `Monitor.Wait(_gate)` можно вызвать только владея блокировкой `_gate`, иначе выбрасывается `SynchronizationLockException`.
+      Вызов освобождает блокировку и ставит поток в очередь ожидания объекта. `Pulse` или `PulseAll` переводит ожидающий
+      поток в очередь готовых, но блокировку он ещё не получает: она остаётся у потока, вызвавшего сигнал, до выхода из его
+      `lock`. Затем пробуждённый поток соревнуется за блокировку с другими потоками и возвращается из `Wait`, только когда
+      снова владеет ею.
+
+      Между сигналом и возвратом из `Wait` блокировку может первым взять другой поток: второй потребитель, разбуженный тем же
+      `PulseAll`, или поток, который только что вошёл в `Take`. Он заберёт элемент, и очередь снова окажется пустой. Поэтому
+      после возврата из `Wait` условие проверяют заново: `while`, а не `if`. С `if` потребитель вызвал бы `Dequeue` у пустой
+      очереди и получил бы `InvalidOperationException`, а производитель превысил бы ёмкость буфера.
+
+      Есть и вторая причина. Производители и потребители ждут на одном объекте, `PulseAll` будит всех, и проснувшийся поток
+      мог ждать совсем другого условия. Одиночный `Pulse` в такой схеме опасен: он может разбудить поток «не того вида», и
+      сигнал фактически пропадёт. Кроме того, `Monitor` не запоминает `Pulse`, если в этот момент никто не ждёт, поэтому
+      ожидание всегда привязывают к проверке состояния под блокировкой, а не к самому факту сигнала.
+
+      На практике такой буфер редко пишут вручную: есть `BlockingCollection<T>` и `Channel<T>`. Поведение `Monitor`
+      одинаково во всех версиях .NET, включая .NET 10.
+    linkTitles:
+      - Метод Monitor.Wait
+      - Класс Monitor
+  en:
+    title: What does Monitor.Wait do with the lock, and why check the condition in a while loop?
+    prompt: |
+      A bounded buffer for a producer-consumer scheme is built on `lock` and `Monitor.Wait`/`Monitor.PulseAll`.
+      In the real system several producers call `Add` and several consumers call `Take`
+      (`Main` shows a minimal run with one producer and one consumer).
+
+      What does `Monitor.Wait(_gate)` do with the `_gate` lock, and why is the wait condition checked in a `while` loop
+      rather than in an `if`?
+    hint: What can other threads do between the `PulseAll` signal and the moment `Wait` returns control to the woken thread?
+    options:
+      a: "`Wait` releases the lock and reacquires it before returning; meanwhile another thread may take the lock and change the queue, so the condition must be rechecked"
+      b: "`Wait` keeps holding the lock while the thread sleeps, and `PulseAll` lets it continue; the `while` loop only covers the case where `Wait` returns on a timeout"
+      c: "`Wait` releases the lock and returns without reacquiring it, so the code after `Wait` runs outside the lock, and `while` instead of `if` is only a matter of style"
+      d: "`Wait` releases the lock, and `PulseAll` hands it straight to the woken thread, so after `Wait` returns the condition is guaranteed to hold and `if` would be enough"
+    optionExplanations:
+      b: "If the waiting thread kept the lock, no producer could enter `lock (_gate)` and call `PulseAll`: the result would be a deadlock. Releasing the lock for the duration of the wait is the whole purpose of `Wait`. Also, the code calls `Wait(_gate)` without a timeout, so the loop is not about timeouts."
+      c: "`Wait` returns only after the thread owns the lock again. Otherwise `Dequeue` would run without synchronization, and leaving the `lock` would call `Monitor.Exit` on a lock the thread does not own. And `while` here is not style but a correctness requirement."
+      d: "`PulseAll` only moves the waiting threads to the ready queue. The lock stays with the calling thread until it leaves its `lock`, and then all ready threads compete for it together with new threads entering `lock`. Another consumer can get there first and take the item."
+    answer: "`Wait` releases the lock, waits for a signal and reacquires the lock before returning; meanwhile other threads may have changed the state, so the condition is rechecked in a `while` loop."
+    explanation: |
+      `Monitor.Wait(_gate)` may only be called while owning the `_gate` lock, otherwise `SynchronizationLockException` is thrown.
+      The call releases the lock and puts the thread into the object's waiting queue. `Pulse` or `PulseAll` moves a waiting
+      thread to the ready queue, but the thread does not get the lock yet: it stays with the signalling thread until that
+      thread leaves its `lock`. Then the woken thread competes for the lock with other threads and returns from `Wait` only
+      once it owns the lock again.
+
+      Between the signal and the return from `Wait`, another thread can take the lock first: a second consumer woken by the
+      same `PulseAll`, or a thread that has just entered `Take`. It takes the item, and the queue is empty again. That is why
+      the condition is checked again after `Wait` returns: `while`, not `if`. With `if` a consumer would call `Dequeue` on an
+      empty queue and get `InvalidOperationException`, and a producer would exceed the buffer capacity.
+
+      There is a second reason. Producers and consumers wait on the same object, `PulseAll` wakes all of them, and the woken
+      thread may have been waiting for a different condition. A single `Pulse` is dangerous in this scheme: it can wake a
+      thread of the wrong kind, and the signal is effectively lost. Also, `Monitor` does not remember a `Pulse` when nobody
+      is waiting at that moment, so waiting is always tied to checking the state under the lock, not to the signal itself.
+
+      In practice such a buffer is rarely written by hand: there are `BlockingCollection<T>` and `Channel<T>`. The behaviour
+      of `Monitor` is the same in all .NET versions, including .NET 10.
+    linkTitles:
+      - Monitor.Wait method
+      - Monitor class
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

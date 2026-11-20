@@ -1,0 +1,129 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQWR3T18Q6FF8BDJVW
+slug: getvaluereforadddefault-single-lookup-count
+stack: dotnet
+topic: performance
+level: senior
+type: output
+grading: auto
+tags: [collectionsmarshal, dictionary, ref-locals, allocations]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    using System.Runtime.InteropServices;
+
+    string[] words = { "a", "b", "a" };
+    Dictionary<string, int> counts = new();
+    foreach (string word in words)
+    {
+        ref int count = ref CollectionsMarshal.GetValueRefOrAddDefault(counts, word, out _);
+        count++;
+    }
+    Console.Write($"{counts["a"]} {counts["b"]}");
+expect:
+  kind: output
+  value: "2 1"
+acceptedOutputs: ["2 1"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "2 1" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "0 0" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "1 1" }
+  - id: d
+    correct: false
+    expect: { kind: exception, value: System.Collections.Generic.KeyNotFoundException }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.runtime.interopservices.collectionsmarshal.getvaluereforadddefault
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.runtime.interopservices.collectionsmarshal
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что выведет счётчик слов, который увеличивает значения через CollectionsMarshal.GetValueRefOrAddDefault?
+    prompt: |
+      Счётчик слов увеличивает значения в `Dictionary<string, int>` через ссылку, которую возвращает
+      `CollectionsMarshal.GetValueRefOrAddDefault`. Что выведет эта программа в консоль на .NET 10?
+    hint: "Что именно меняет `count++`, если `count` объявлена как `ref int`, и что метод делает, когда ключа в словаре ещё нет?"
+    options:
+      a: "2 1"
+      b: "0 0"
+      c: "1 1"
+      d: Исключение `KeyNotFoundException`
+    optionExplanations:
+      b: "Так было бы, если бы метод возвращал копию значения: записи добавились бы с нулями, а `count++` изменил бы только локальную копию. Но метод возвращает `ref` на ячейку значения внутри словаря, и `count` объявлена как `ref int`, поэтому инкремент меняет хранимое значение."
+      c: "Значение по умолчанию записывается только при отсутствии ключа. Для второго `\"a\"` запись уже существует, метод возвращает ссылку на её текущее значение `1`, и инкремент делает его `2`."
+      d: "Если ключа нет, `GetValueRefOrAddDefault` сам добавляет запись со значением `default` (для `int` это `0`). После цикла оба ключа есть в словаре, поэтому индексатор не выбрасывает исключение."
+    answer: "2 1"
+    explanation: |
+      `CollectionsMarshal.GetValueRefOrAddDefault(dictionary, key, out exists)` ищет ключ один раз. Если ключ найден,
+      метод возвращает `ref` на ячейку значения внутри словаря и `exists = true`. Если не найден, добавляет запись
+      со значением `default(TValue)` и возвращает `ref` на неё, `exists = false`. Здесь `exists` не нужен, поэтому
+      вместо него стоит `out _`.
+
+      Переменная `count` - это `ref int`, то есть псевдоним ячейки в словаре, а не копия. Поэтому `count++` меняет
+      хранимое значение. Трассировка: `"a"` добавляется с `0` и становится `1`, `"b"` добавляется с `0` и становится `1`,
+      второй `"a"` находит существующую запись и увеличивает её до `2`. Программа выводит `2 1`.
+
+      Зачем это нужно. Обычный счётчик `counts[word] = counts.GetValueOrDefault(word) + 1` или пара `TryGetValue` и
+      присваивание через индексатор вычисляют хеш и ищут ключ дважды. Через `GetValueRefOrAddDefault` поиск один:
+      и чтение, и запись идут через полученную ссылку. На горячих путях (подсчёт частот, агрегация) это заметно
+      сокращает работу, а для значений-структур ещё и избавляет от копирования больших структур туда и обратно.
+
+      Цена - отсутствие защиты. Документация предупреждает: пока ссылка используется, в словарь нельзя добавлять
+      элементы и удалять их. При росте словарь перекладывает записи в новый массив, и старая ссылка будет указывать
+      на ячейку, которую словарь больше не использует, изменения молча потеряются. Поэтому ссылку держат
+      максимально коротко: получили, изменили, забыли. Метод доступен начиная с .NET 6, поведение проверено для .NET 10.
+    linkTitles:
+      - Метод CollectionsMarshal.GetValueRefOrAddDefault
+      - Класс CollectionsMarshal
+  en:
+    title: What does a word counter print when it increments counts through CollectionsMarshal.GetValueRefOrAddDefault?
+    prompt: |
+      A word counter increments values in a `Dictionary<string, int>` through the reference returned by
+      `CollectionsMarshal.GetValueRefOrAddDefault`. What does this program print to the console on .NET 10?
+    hint: "What exactly does `count++` change when `count` is declared as `ref int`, and what does the method do when the key is not in the dictionary yet?"
+    options:
+      a: "2 1"
+      b: "0 0"
+      c: "1 1"
+      d: "`KeyNotFoundException`"
+    optionExplanations:
+      b: "That would happen if the method returned a copy of the value: the entries would be added with zeros and `count++` would change only a local copy. But the method returns a `ref` to the value slot inside the dictionary, and `count` is declared as `ref int`, so the increment changes the stored value."
+      c: "The default value is written only when the key is missing. For the second `\"a\"` the entry already exists, the method returns a reference to its current value `1`, and the increment makes it `2`."
+      d: "When the key is missing, `GetValueRefOrAddDefault` itself adds an entry with the `default` value (`0` for `int`). After the loop both keys are in the dictionary, so the indexer does not throw."
+    answer: "2 1"
+    explanation: |
+      `CollectionsMarshal.GetValueRefOrAddDefault(dictionary, key, out exists)` looks the key up once. If the key is
+      found, the method returns a `ref` to the value slot inside the dictionary and `exists = true`. If not, it adds an
+      entry with `default(TValue)` and returns a `ref` to it, `exists = false`. The code does not need `exists`, so it
+      passes `out _`.
+
+      The variable `count` is a `ref int`, an alias of the slot in the dictionary, not a copy. That is why `count++`
+      changes the stored value. Trace: `"a"` is added with `0` and becomes `1`, `"b"` is added with `0` and becomes `1`,
+      the second `"a"` finds the existing entry and increments it to `2`. The program prints `2 1`.
+
+      Why bother. The usual counter `counts[word] = counts.GetValueOrDefault(word) + 1`, or a `TryGetValue` followed by
+      an assignment through the indexer, hashes and looks up the key twice. With `GetValueRefOrAddDefault` there is one
+      lookup: both the read and the write go through the returned reference. On hot paths (frequency counting,
+      aggregation) this noticeably cuts the work, and for struct values it also avoids copying large structs back and forth.
+
+      The price is the lack of safety. The documentation warns that items must not be added to or removed from the
+      dictionary while the reference is in use. When the dictionary grows it moves its entries to a new array, and the
+      old reference points at a slot the dictionary no longer uses, so changes are silently lost. Keep the reference
+      as short-lived as possible: get it, change the value, drop it. The method is available since .NET 6; the
+      behaviour was checked for .NET 10.
+    linkTitles:
+      - CollectionsMarshal.GetValueRefOrAddDefault method
+      - CollectionsMarshal class
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

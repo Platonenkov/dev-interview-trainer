@@ -1,0 +1,129 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQKER31CZ5CY1C3M4S
+slug: cpu-sampling-misses-blocked-time
+stack: dotnet
+topic: performance
+level: senior
+type: multi
+grading: auto
+tags: [profiling, cpu-sampling, dotnet-trace, thread-pool, distributed-tracing]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: true
+  - id: d
+    correct: true
+  - id: e
+    correct: false
+  - id: f
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/visualstudio/profiling/cpu-usage
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-trace
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-counters
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему CPU-профиль не показывает горячих методов, хотя endpoint отвечает две секунды?
+    prompt: |
+      Сервис на .NET 10. Один endpoint отвечает около двух секунд, при этом загрузка CPU процесса держится на уровне
+      нескольких процентов. Профиль, снятый сэмплирующим профилировщиком CPU (например, инструментом CPU Usage в Visual Studio)
+      во время медленных запросов, не показывает горячих методов: выборки размазаны тонким слоем по всему коду.
+      Выберите все верные выводы и следующие шаги.
+    hint: Что именно записывает сэмплирующий профилировщик CPU в момент выборки и чем занят поток, пока ждёт ответа базы данных?
+    options:
+      a: "Большую часть двух секунд код запроса не выполняется на процессоре, а ждёт: ввод-вывода, блокировки или очереди пула потоков. Сэмплирующий профилировщик CPU такое время не видит, потому что записывает стеки только тех потоков, которые в момент выборки выполняются на процессоре"
+      b: "Раз в профиле нет горячих методов, задержка находится вне процесса (сеть, клиент, балансировщик), и код приложения можно исключить из подозреваемых"
+      c: "Нужен взгляд на реальное время (wall-clock, thread time), который учитывает и время, когда поток заблокирован, или распределённая трассировка, где видно, сколько запрос ждёт каждую исходящую операцию (база данных, HTTP-вызовы)"
+      d: "Стоит проверить голодание пула потоков: если `dotnet-counters` показывает растущую очередь рабочих элементов пула потоков и медленный рост числа потоков при низкой загрузке CPU, вероятна синхронная блокировка асинхронного кода (`.Result`, `.Wait()`)"
+      e: "Нужно повысить частоту сэмплирования и снять профиль ещё раз: при более частых выборках горячий метод станет заметен"
+      f: "Раз запрос обрабатывается две секунды, серверу не хватает вычислительной мощности, и первым шагом нужно добавить ядра или экземпляры сервиса"
+    optionExplanations:
+      b: "Блокировка внутри процесса тоже невидима для CPU-профиля: поток, который ждёт `lock`, `SemaphoreSlim.Wait`, `Task.Result` или `Thread.Sleep`, процессор не тратит и в выборки не попадает. Пустой профиль говорит только о том, что время уходит не на вычисления, но не о том, где именно оно уходит."
+      e: "Частота сэмплирования меняет детализацию того, что выполняется на процессоре. Ожидающий поток не попадёт в выборки ни при какой частоте, а горячего кода при загрузке CPU в несколько процентов просто нет."
+      f: "Низкая загрузка CPU означает, что процессор простаивает, а узкое место - ожидание. Дополнительные ядра не ускорят ответ базы данных и не освободят блокировку быстрее. Новые экземпляры могут лишь замаскировать проблему и добавить нагрузки на общий ресурс, например на ту же базу."
+    answer: "Верны `a`, `c` и `d`: время запроса уходит на ожидание, которое CPU-профиль не видит, поэтому нужны инструменты, считающие реальное время и ожидания (thread time, распределённая трассировка, счётчики пула потоков)."
+    explanation: |
+      Время ответа складывается из времени на процессоре и времени ожидания. Сэмплирующий профилировщик CPU периодически
+      фиксирует стеки потоков, которые в этот момент выполняются на процессоре. Поток, ждущий ввода-вывода, блокировки или
+      своей очереди в пуле потоков, ничего не выполняет и в выборки не попадает. Две секунды ответа при загрузке CPU в
+      несколько процентов означают, что вычислений в запросе мало, а основное время - ожидание. Поэтому CPU-профиль здесь
+      честно показывает «ничего горячего» и не может ответить на вопрос, где запрос ждёт.
+
+      Что помогает:
+
+      - **Профиль по реальному времени (thread time).** Он учитывает и заблокированные потоки, поэтому видно, на каком вызове
+        они стоят: ожидание `lock`, синхронное чтение из сокета, `Task.Wait`. Учтите, что `dotnet-trace` собирает стеки через
+        сэмплер EventPipe (`Microsoft-DotNETCore-SampleProfiler`), который снимает стеки управляемых потоков независимо от того,
+        выполняются они или ждут, поэтому его трассировку уместно читать именно как thread time, а не как чистый CPU-профиль.
+      - **Распределённая трассировка.** При `async`/`await` ожидающий запрос вообще не держит поток, и его нет ни на одном стеке.
+        Спаны `Activity` (например, через OpenTelemetry) показывают, сколько длились вызов базы данных, HTTP-запрос к другому
+        сервису и сам запрос целиком.
+      - **Счётчики.** `dotnet-counters` показывает очередь пула потоков и число потоков. Длинная очередь при низкой загрузке CPU -
+        типичный признак голодания пула потоков из-за синхронной блокировки асинхронного кода: потоки заняты ожиданием,
+        а новые рабочие элементы ждут свободного потока.
+
+      Вывод «CPU простаивает» полезен сам по себе: он сразу отсекает оптимизацию алгоритмов и наращивание мощности и
+      направляет диагностику на ожидания.
+    linkTitles:
+      - "Visual Studio: анализ использования CPU"
+      - Утилита dotnet-trace
+      - Утилита dotnet-counters
+  en:
+    title: Why does a CPU profile show no hot methods when an endpoint takes two seconds?
+    prompt: |
+      A service runs on .NET 10. One endpoint takes about two seconds to respond, while the process CPU usage stays at a
+      few percent. A profile taken with a CPU sampling profiler (for example the CPU Usage tool in Visual Studio) during the
+      slow requests shows no hot methods: the samples are spread thinly across the whole code base.
+      Select all valid conclusions and next steps.
+    hint: What exactly does a CPU sampling profiler record at the moment of a sample, and what is a thread doing while it waits for the database to answer?
+    options:
+      a: "For most of the two seconds the request's code is not running on a CPU but waiting: for I/O, a lock or the thread pool queue. A CPU sampling profiler cannot see that time, because it records stacks only of the threads that are running on a CPU at the moment of a sample"
+      b: "Since the profile has no hot methods, the delay is outside the process (network, client, load balancer), and the application code can be ruled out"
+      c: "You need a view of real time (wall-clock, thread time) that also counts the time a thread is blocked, or distributed tracing that shows how long the request waits for each outgoing operation (database, HTTP calls)"
+      d: "Check for thread pool starvation: if `dotnet-counters` shows a growing thread pool work item queue and a slowly growing thread count while CPU usage is low, sync-over-async blocking (`.Result`, `.Wait()`) is likely"
+      e: "Increase the sampling frequency and profile again: with more frequent samples the hot method will become visible"
+      f: "Since a request takes two seconds, the server lacks compute power, and the first step is to add cores or service instances"
+    optionExplanations:
+      b: "Blocking inside the process is invisible to a CPU profile as well: a thread waiting on `lock`, `SemaphoreSlim.Wait`, `Task.Result` or `Thread.Sleep` uses no CPU and does not appear in the samples. An empty profile only says that the time is not spent computing, not where it is spent."
+      e: "The sampling frequency changes the resolution of what runs on the CPU. A waiting thread is not captured at any frequency, and with CPU usage at a few percent there is simply no hot code to find."
+      f: "Low CPU usage means the processor is idle and the bottleneck is waiting. More cores do not make the database answer sooner or release a lock faster. More instances can only mask the problem and add load to a shared resource such as the same database."
+    answer: "`a`, `c` and `d` are correct: the request time goes into waiting, which a CPU profile cannot see, so you need tools that count real time and waits (thread time, distributed tracing, thread pool counters)."
+    explanation: |
+      Response time is time on the CPU plus time spent waiting. A CPU sampling profiler periodically captures the stacks of
+      the threads that are running on a CPU at that moment. A thread waiting for I/O, a lock or its turn in the thread pool
+      executes nothing and is not sampled. Two seconds of response time with CPU usage at a few percent means that the request
+      does little computation and spends most of its time waiting. The CPU profile honestly shows "nothing hot" and cannot
+      answer where the request waits.
+
+      What helps:
+
+      - **A real-time (thread time) profile.** It also counts blocked threads, so you can see which call they are stuck on:
+        waiting on a `lock`, a synchronous socket read, `Task.Wait`. Note that `dotnet-trace` collects stacks through the
+        EventPipe sampler (`Microsoft-DotNETCore-SampleProfiler`), which captures managed thread stacks whether the threads
+        are running or waiting, so its trace is best read as thread time rather than as a pure CPU profile.
+      - **Distributed tracing.** With `async`/`await` a waiting request holds no thread at all and is on no stack.
+        `Activity` spans (for example through OpenTelemetry) show how long the database call, the HTTP request to another
+        service and the whole request took.
+      - **Counters.** `dotnet-counters` shows the thread pool queue and thread count. A long queue with low CPU usage is a
+        typical sign of thread pool starvation caused by sync-over-async blocking: threads are busy waiting, and new work
+        items wait for a free thread.
+
+      The conclusion "the CPU is idle" is useful in itself: it immediately rules out algorithm tuning and adding compute,
+      and points the diagnosis at the waits.
+    linkTitles:
+      - "Visual Studio: analyze CPU usage"
+      - dotnet-trace utility
+      - dotnet-counters utility
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

@@ -1,0 +1,147 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNKJMKN3TEAQ9M26YH
+slug: channel-complete-drains-buffered-items
+stack: dotnet
+topic: concurrency
+level: middle
+type: output
+grading: auto
+tags: [channels, unbounded-channel, producer-consumer, completion]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    using System.Threading.Channels;
+
+    Channel<int> channel = Channel.CreateUnbounded<int>();
+    channel.Writer.TryWrite(1);
+    channel.Writer.Complete();
+
+    bool written = channel.Writer.TryWrite(2);
+    bool before = channel.Reader.Completion.IsCompleted;
+
+    List<int> received = new();
+    while (channel.Reader.TryRead(out int value))
+    {
+        received.Add(value);
+    }
+
+    bool after = channel.Reader.Completion.IsCompleted;
+    Console.Write($"{written} {before} [{string.Join(" ", received)}] {after}");
+expect:
+  kind: output
+  value: "False False [1] True"
+acceptedOutputs: ["False False [1] True"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "False False [1] True" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "False True [1] True" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "False False [] True" }
+  - id: d
+    correct: false
+    expect: { kind: exception, value: System.Threading.Channels.ChannelClosedException }
+  - id: e
+    correct: false
+    expect: { kind: output, value: "False False [1] False" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.channels.channelreader-1.completion
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.channels.channelwriter-1.complete
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/extensions/channels
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что выведет программа, которая завершает канал через Complete и затем вычитывает его?
+    prompt: |
+      В неограниченный канал записывают один элемент и вызывают `Writer.Complete()`. Затем пробуют записать второй
+      элемент через `TryWrite`, проверяют `Reader.Completion.IsCompleted`, вычитывают канал через `TryRead`
+      и снова проверяют `Reader.Completion.IsCompleted`. Что выведет эта программа в .NET 10?
+    hint: "`Complete` запрещает запись. Запрещает ли он чтение того, что уже лежит в буфере, и когда читателю действительно больше нечего ждать?"
+    options:
+      a: "False False [1] True"
+      b: "False True [1] True"
+      c: "False False [] True"
+      d: Исключение `ChannelClosedException`
+      e: "False False [1] False"
+    optionExplanations:
+      b: "`Reader.Completion` завершается, когда данных для чтения больше не будет никогда. Пока в буфере лежит `1`, это неверно, поэтому сразу после `Complete` задача ещё не завершена."
+      c: "`Complete` не очищает канал. Он лишь запрещает новые записи, а элементы, записанные раньше, остаются в буфере и доступны читателю."
+      d: "`TryWrite` после завершения канала не выбрасывает исключение, а возвращает `false`. Исключение `ChannelClosedException` получил бы `await WriteAsync`, а также `ReadAsync` у пустого завершённого канала."
+      e: "В реализации .NET 10 вызов `TryRead`, который забирает последний элемент из буфера завершённого канала, сам завершает `Reader.Completion`, поэтому вторая проверка уже видит `True`. Отдельный вызов `ReadAsync` или `WaitToReadAsync` для этого не нужен."
+    answer: "False False [1] True"
+    explanation: |
+      `Writer.Complete()` помечает канал как завершённый: больше элементов в него записано не будет. Поэтому
+      `TryWrite(2)` возвращает `false`, и второй элемент в канал не попадает.
+
+      Завершение записи не означает, что читатель всё получил. По документации `Reader.Completion` - задача, которая
+      завершается, когда данных для чтения из канала больше не будет никогда, то есть когда запись завершена и буфер
+      пуст. Сразу после `Complete` в буфере лежит `1`, поэтому `IsCompleted` равен `False`. Цикл с `TryRead` забирает
+      `1`, и буфер становится пустым.
+
+      В реализации .NET 10 задача `Completion` завершается прямо внутри того вызова `TryRead`, который опустошил буфер
+      завершённого канала, поэтому вторая проверка `IsCompleted` возвращает `True`. Документация не обещает этот момент
+      явно, поэтому рабочий код не должен опираться на синхронную проверку `IsCompleted`, а должен ожидать
+      `await channel.Reader.Completion`.
+
+      На этом построено корректное завершение конвейера производитель-потребитель. Производитель вызывает `Complete`
+      (или `TryComplete` с исключением при ошибке), а потребитель, например `await foreach` по `ReadAllAsync()`,
+      дочитывает все уже записанные элементы и только потом выходит из цикла. Ожидание `Reader.Completion` позволяет
+      узнать, что канал полностью вычитан, а не только закрыт для записи.
+    linkTitles:
+      - Свойство ChannelReader<T>.Completion
+      - Метод ChannelWriter<T>.Complete
+      - Библиотека System.Threading.Channels
+  en:
+    title: What does a program print when it completes a channel with Complete and then drains it?
+    prompt: |
+      One item is written to an unbounded channel and `Writer.Complete()` is called. Then the code tries to write a
+      second item with `TryWrite`, checks `Reader.Completion.IsCompleted`, drains the channel with `TryRead` and
+      checks `Reader.Completion.IsCompleted` again. What does this program print on .NET 10?
+    hint: "`Complete` forbids writing. Does it forbid reading what is already in the buffer, and when does the reader really have nothing left to wait for?"
+    options:
+      a: "False False [1] True"
+      b: "False True [1] True"
+      c: "False False [] True"
+      d: "`ChannelClosedException`"
+      e: "False False [1] False"
+    optionExplanations:
+      b: "`Reader.Completion` completes when no more data will ever be available to read. While `1` is still in the buffer that is not true, so right after `Complete` the task is not completed yet."
+      c: "`Complete` does not clear the channel. It only forbids new writes, and items written earlier stay in the buffer and are available to the reader."
+      d: "`TryWrite` on a completed channel does not throw, it returns `false`. `ChannelClosedException` is what `await WriteAsync` would get, as would `ReadAsync` on an empty completed channel."
+      e: "In the .NET 10 implementation the `TryRead` call that takes the last item from the buffer of a completed channel completes `Reader.Completion` itself, so the second check already sees `True`. No separate `ReadAsync` or `WaitToReadAsync` call is needed for that."
+    answer: "False False [1] True"
+    explanation: |
+      `Writer.Complete()` marks the channel as complete: no more items will be written to it. That is why
+      `TryWrite(2)` returns `false` and the second item does not enter the channel.
+
+      Completing the writer does not mean the reader has received everything. According to the documentation,
+      `Reader.Completion` is a task that completes when no more data will ever be available to read from the channel,
+      that is, when writing is complete and the buffer is empty. Right after `Complete` the buffer still holds `1`, so
+      `IsCompleted` is `False`. The `TryRead` loop takes `1`, and the buffer becomes empty.
+
+      In the .NET 10 implementation the `Completion` task completes inside the very `TryRead` call that empties the
+      buffer of a completed channel, so the second `IsCompleted` check returns `True`. The documentation does not
+      promise this timing explicitly, so production code should not rely on a synchronous `IsCompleted` check and should
+      `await channel.Reader.Completion` instead.
+
+      This is what makes a producer-consumer pipeline shut down cleanly. The producer calls `Complete` (or `TryComplete`
+      with an exception on failure), and the consumer, for example `await foreach` over `ReadAllAsync()`, reads every item
+      already written and only then leaves the loop. Awaiting `Reader.Completion` tells you that the channel has been fully
+      drained, not just closed for writing.
+    linkTitles:
+      - ChannelReader<T>.Completion property
+      - ChannelWriter<T>.Complete method
+      - System.Threading.Channels library
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

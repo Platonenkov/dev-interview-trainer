@@ -1,0 +1,218 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQC9AKYGE7WJ7SD8FJ
+slug: benchmark-baseline-ratio-and-params
+stack: dotnet
+topic: performance
+level: senior
+type: open
+grading: self
+tags: [benchmarkdotnet, benchmarking, baseline, params, statistics, allocations]
+links:
+  - url: https://benchmarkdotnet.org/articles/features/parameterization.html
+    lang: en
+    kind: docs
+  - url: https://benchmarkdotnet.org/articles/guides/good-practices.html
+    lang: en
+    kind: docs
+  - url: https://benchmarkdotnet.org/articles/features/baselines.html
+    lang: en
+    kind: docs
+  - url: https://benchmarkdotnet.org/articles/configs/diagnosers.html
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как на BenchmarkDotNet убедительно показать, что новый парсер быстрее старого на реалистичных данных?
+    prompt: |
+      Команда переписала парсер входящих сообщений сервиса на .NET 10 и утверждает, что новая версия быстрее.
+      Вам нужно подтвердить или опровергнуть это с помощью BenchmarkDotNet.
+
+      Как вы спроектируете сравнение, на какие столбцы отчёта будете смотреть и при каком результате
+      готовы написать в pull request «новый парсер быстрее»?
+    hint: Что делает одно число из отчёта сравнимым с другим, на каких входных данных парсер работает в продакшене и как отличить разницу от шума измерений?
+    answer: |
+      **1. Сделать сравнение честным ещё до измерений.**
+
+      - Оба парсера - в одном классе бенчмарков, на одних и тех же входных данных: старый помечен
+        `[Benchmark(Baseline = true)]`, новый - просто `[Benchmark]`.
+      - Входные данные готовятся в `[GlobalSetup]`, чтобы чтение файлов и генерация не попадали в замер. Там же
+        проверить, что оба парсера дают одинаковый результат: иначе сравнивается корректный парсер с неполным.
+      - Каждый метод возвращает результат разбора, чтобы JIT не выбросил работу.
+      - Release-сборка, без отладчика, тихая выделенная машина, оба варианта в одном запуске.
+
+      **2. Покрыть реалистичные входные данные через `[Params]`.**
+
+      - `[Params]` ставится на публичное поле или свойство; каждое значение - отдельный набор измерений, и
+        каждый метод прогоняется для каждого значения. Брать размеры, которые реально встречаются: типичное
+        маленькое сообщение, медианное и самое большое из допустимых, а не одно удобное значение.
+      - Важен не только размер, но и форма данных: обезличенные образцы из продакшена, не-ASCII символы,
+        глубокая вложенность, некорректный ввод, если он реально приходит. Для значений, которые не являются
+        константами времени компиляции, есть `[ParamsSource]`, для аргументов метода - `[Arguments]` и
+        `[ArgumentsSource]`.
+      - Ожидать точку пересечения: парсер с более дорогой подготовкой может проигрывать на маленьких входах и
+        выигрывать на больших. Это результат, а не шум.
+
+      **3. Читать отчёт.**
+
+      - `Ratio` - время относительно базовой линии внутри той же комбинации параметров (у базовой линии `1.00`).
+        `0.60` означает, что новый парсер тратит 60% времени старого. `RatioSD` - разброс этого отношения.
+      - `Error` - половина 99,9% доверительного интервала среднего, `StdDev` - разброс отдельных измерений.
+        Утверждать выигрыш можно, только если разница явно больше погрешности: интервалы `Mean ± Error` не
+        пересекаются, а `RatioSD` мал по сравнению с расстоянием от `Ratio` до `1`. Разница в 3% при `Error` в 5% -
+        это не результат.
+      - Прочитать предупреждения в конце отчёта (выбросы, многомодальное распределение), сравнить с `Median`,
+        повторить запуск и убедиться, что вывод не меняется.
+      - Добавить `[MemoryDiagnoser]`: столбцы `Allocated` и `Gen0`/`Gen1`/`Gen2`, а при заданной базовой линии ещё
+        и `Alloc Ratio`. Парсер, который быстрее на 20%, но выделяет втрое больше памяти, под нагрузкой в сервисе
+        может проиграть из-за сборок мусора.
+
+      **4. Оформить вывод.** Таблица по каждому размеру с `Ratio`, `Error` и `Allocated`, заголовок окружения из
+      отчёта (процессор, ОС, среда выполнения, версия BenchmarkDotNet) и вывод по диапазонам, например «быстрее
+      начиная с 1 КБ, на 100 байтах без разницы, выделений на 40% меньше». Бенчмарк остаётся в репозитории, чтобы
+      его можно было повторить.
+
+      ```csharp
+      [MemoryDiagnoser]
+      public class ParserBenchmarks
+      {
+          private string payload;
+
+          [Params(100, 10_000, 1_000_000)]
+          public int Size;
+
+          [GlobalSetup]
+          public void Setup()
+          {
+              payload = Samples.Load(Size); // anonymized production sample of this size
+              if (!OldParser.Parse(payload).Equals(NewParser.Parse(payload)))
+                  throw new InvalidOperationException("Parsers disagree");
+          }
+
+          [Benchmark(Baseline = true)]
+          public ParseResult Old() => OldParser.Parse(payload);
+
+          [Benchmark]
+          public ParseResult New() => NewParser.Parse(payload);
+      }
+      ```
+    explanation: |
+      Каждый пункт закрывает свой способ ошибиться. Базовая линия нужна потому, что абсолютные наносекунды
+      зависят от машины, частоты процессора и фоновой нагрузки, а отношение двух вариантов, измеренных в одном
+      запуске на одной машине, намного устойчивее. Поэтому сравнивают `Ratio`, а не числа из разных запусков.
+
+      `[Params]` нужен потому, что одно входное значение легко вводит в заблуждение: маленький вход целиком
+      помещается в кэш процессора, а один и тот же вход, повторённый миллионы раз, хорошо «запоминает» предсказатель
+      переходов, и время получается ниже, чем в продакшене. Кроме того, выигрыш часто зависит от размера, и
+      честный вывод звучит как «быстрее на таких-то данных», а не «быстрее вообще».
+
+      `Error` и `StdDev` нужны потому, что бенчмарк - это выборка измерений с шумом. Если разница меньше
+      погрешности, повторный запуск может дать обратный знак. Аллокации сравнивают потому, что время одной операции
+      в микробенчмарке почти не отражает цену сборок мусора, которую в сервисе платят все запросы вместе.
+
+      Слабые ответы: цикл со `Stopwatch` вместо BenchmarkDotNet, один удобный вход, «на 5% быстрее» внутри
+      погрешности, сравнение чисел с разных машин и молчание про память. Ответ дан для BenchmarkDotNet на .NET 10.
+    linkTitles:
+      - "BenchmarkDotNet: параметризация бенчмарков"
+      - "BenchmarkDotNet: рекомендации по написанию бенчмарков"
+      - "BenchmarkDotNet: базовые линии"
+      - "BenchmarkDotNet: диагностики"
+  en:
+    title: How do you show with BenchmarkDotNet that a new parser is faster than the old one on realistic inputs?
+    prompt: |
+      The team rewrote the incoming message parser of a .NET 10 service and claims that the new version is faster.
+      You need to confirm or refute this with BenchmarkDotNet.
+
+      How do you design the comparison, which columns of the report do you look at, and with what result are you
+      ready to write "the new parser is faster" in the pull request?
+    hint: What makes one number in the report comparable with another, what inputs does the parser see in production, and how do you tell a difference from measurement noise?
+    answer: |
+      **1. Make the comparison fair before measuring.**
+
+      - Both parsers in one benchmark class, on the same inputs: the old one marked `[Benchmark(Baseline = true)]`,
+        the new one plain `[Benchmark]`.
+      - Inputs are prepared in `[GlobalSetup]`, so reading files and generating data is not measured. Also check
+        there that both parsers return the same result: otherwise you compare a correct parser with an incomplete one.
+      - Each method returns the parse result so that the JIT cannot discard the work.
+      - Release build, no debugger, a quiet dedicated machine, both variants in one run.
+
+      **2. Cover realistic inputs with `[Params]`.**
+
+      - `[Params]` goes on a public field or property; every value is a separate set of measurements, and every
+        method runs for every value. Pick sizes that really occur: a typical small message, the median one and the
+        largest one you accept, not one convenient value.
+      - The shape of the data matters as much as the size: anonymized production samples, non-ASCII characters,
+        deep nesting, malformed input if production receives it. For values that are not compile-time constants
+        there is `[ParamsSource]`, for method arguments `[Arguments]` and `[ArgumentsSource]`.
+      - Expect a crossover point: a parser with a more expensive setup can lose on small inputs and win on large
+        ones. That is a finding, not noise.
+
+      **3. Read the report.**
+
+      - `Ratio` is the time relative to the baseline within the same parameter combination (the baseline shows
+        `1.00`). `0.60` means the new parser takes 60% of the old one's time. `RatioSD` is the spread of that ratio.
+      - `Error` is half of the 99.9% confidence interval of the mean, `StdDev` is the spread of individual
+        measurements. Claim a gain only when the difference is clearly larger than the error: the `Mean ± Error`
+        intervals do not overlap, and `RatioSD` is small compared with the distance between `Ratio` and `1`. A 3%
+        difference with a 5% `Error` is not a result.
+      - Read the warnings at the end of the report (outliers, multimodal distribution), compare with `Median`, run
+        again and make sure the conclusion does not change.
+      - Add `[MemoryDiagnoser]`: the `Allocated` and `Gen0`/`Gen1`/`Gen2` columns, and with a baseline also
+        `Alloc Ratio`. A parser that is 20% faster but allocates three times more can lose in a service under load
+        because of garbage collections.
+
+      **4. Write up the conclusion.** A table per size with `Ratio`, `Error` and `Allocated`, the environment header
+      from the report (CPU, OS, runtime, BenchmarkDotNet version) and a conclusion per range, for example "faster
+      from 1 KB up, no difference at 100 bytes, 40% fewer allocations". The benchmark stays in the repository so it
+      can be repeated.
+
+      ```csharp
+      [MemoryDiagnoser]
+      public class ParserBenchmarks
+      {
+          private string payload;
+
+          [Params(100, 10_000, 1_000_000)]
+          public int Size;
+
+          [GlobalSetup]
+          public void Setup()
+          {
+              payload = Samples.Load(Size); // anonymized production sample of this size
+              if (!OldParser.Parse(payload).Equals(NewParser.Parse(payload)))
+                  throw new InvalidOperationException("Parsers disagree");
+          }
+
+          [Benchmark(Baseline = true)]
+          public ParseResult Old() => OldParser.Parse(payload);
+
+          [Benchmark]
+          public ParseResult New() => NewParser.Parse(payload);
+      }
+      ```
+    explanation: |
+      Each step closes one way of getting it wrong. A baseline is needed because absolute nanoseconds depend on the
+      machine, the CPU frequency and background load, while the ratio of two variants measured in one run on one
+      machine is much more stable. That is why you compare `Ratio`, not numbers from different runs.
+
+      `[Params]` is needed because a single input easily misleads: a small input fits entirely in the CPU cache, and
+      the same input repeated millions of times is easy for the branch predictor to "learn", so the time comes out
+      lower than in production. Besides, the gain often depends on the size, and an honest conclusion sounds like
+      "faster on such and such data", not "faster in general".
+
+      `Error` and `StdDev` are needed because a benchmark is a sample of noisy measurements. If the difference is
+      smaller than the error, a repeated run can flip its sign. Allocations are compared because the time of one
+      operation in a microbenchmark barely reflects the cost of garbage collections that all requests in a service
+      pay together.
+
+      Weak answers: a `Stopwatch` loop instead of BenchmarkDotNet, one convenient input, "5% faster" within the
+      error, comparing numbers from different machines, and saying nothing about memory. The answer is given for
+      BenchmarkDotNet on .NET 10.
+    linkTitles:
+      - "BenchmarkDotNet: parameterization"
+      - "BenchmarkDotNet: good practices"
+      - "BenchmarkDotNet: baselines"
+      - "BenchmarkDotNet: diagnosers"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

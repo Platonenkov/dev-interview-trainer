@@ -1,0 +1,98 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RKWVE9ESV8ZBYAYT00
+slug: async-void-only-for-event-handlers
+stack: dotnet
+topic: async
+level: junior
+type: single
+grading: auto
+tags: [async-void, event-handlers, task, exceptions]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/asynchronous-programming/async-return-types
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/archive/msdn-magazine/2013/march/async-await-best-practices-in-asynchronous-programming
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Когда асинхронный метод уместно объявить как async void?
+    prompt: |
+      Метод выполняет асинхронную работу и не возвращает значения. В каком случае его уместно объявить как
+      `async void`, а не `async Task`?
+    hint: Что получает вызывающий код от метода `async Task` и чего он лишается, если метод возвращает `void`?
+    options:
+      a: "Всегда, когда метод не возвращает значения: `async void` - асинхронный аналог обычного `void`-метода"
+      b: "Только в обработчиках событий, потому что делегат события требует тип возврата `void`"
+      c: "Для запуска по принципу «запустил и забыл»: исключения из `async void` молча игнорируются"
+      d: "Ни в каком: компилятор C# запрещает сочетать `async` с типом возврата `void`"
+    optionExplanations:
+      a: "Асинхронным аналогом `void`-метода является `async Task`. Метод `async Task` тоже не возвращает значения, но отдаёт вызывающему коду задачу, которую можно ожидать через `await`, чтобы узнать о завершении и получить исключение."
+      c: "Исключения из `async void` не игнорируются. Задачи, в которой их можно было бы сохранить, нет, поэтому исключение выбрасывается в `SynchronizationContext`, активном при старте метода, а если контекста нет - в пуле потоков. Там его никто не перехватывает, и необработанное исключение обычно завершает процесс."
+      d: "Код компилируется: `async void` разрешён в языке именно для того, чтобы асинхронными могли быть обработчики событий, у которых делегат возвращает `void` (например, `EventHandler`)."
+    answer: "Только в обработчиках событий: их делегат требует `void`. В остальных случаях нужен `async Task`, иначе вызывающий код не может дождаться метода и перехватить его исключения."
+    explanation: |
+      Метод `async Task` возвращает задачу, и через неё вызывающий код узнаёт всё о ходе операции: `await` ждёт
+      завершения и выбрасывает исключение, если метод упал. У `async void` задачи нет. Вызывающий код продолжает работу
+      сразу после первого незавершённого `await` внутри метода, не знает, когда метод закончится, и не может обернуть
+      вызов в `try`/`catch`: исключение к нему не придёт.
+
+      Вместо этого исключение выбрасывается в `SynchronizationContext`, который был активен в момент запуска метода
+      (в UI-приложении - контекст UI-потока), а без контекста - в пуле потоков. Там его никто не ловит, поэтому
+      необработанное исключение из `async void` обычно приводит к аварийному завершению приложения. Такие методы ещё и
+      неудобно тестировать: тесту нечего ожидать.
+
+      Исключение из правила - обработчики событий. Делегаты событий, например `EventHandler`, возвращают `void`, поэтому
+      асинхронный обработчик нажатия кнопки может быть только `async void`. Внутри такого обработчика стоит самому
+      перехватывать и обрабатывать ошибки, а основную логику выносить в метод `async Task`. Во всех остальных случаях
+      метод без значения объявляют как `async Task`. Поведение описано для .NET 10.
+    linkTitles:
+      - Асинхронные типы возврата
+      - Рекомендации по асинхронному программированию (async/await)
+  en:
+    title: When is it appropriate to declare an async method as async void?
+    prompt: |
+      A method does asynchronous work and returns no value. In which case is it appropriate to declare it as
+      `async void` rather than `async Task`?
+    hint: What does the caller get from an `async Task` method, and what does it lose when the method returns `void`?
+    options:
+      a: "Whenever the method returns no value: `async void` is the asynchronous counterpart of a plain `void` method"
+      b: "Only in event handlers, because the event delegate requires a `void` return type"
+      c: "For fire-and-forget calls: exceptions from `async void` are silently ignored"
+      d: "Never: the C# compiler forbids combining `async` with a `void` return type"
+    optionExplanations:
+      a: "The asynchronous counterpart of a `void` method is `async Task`. An `async Task` method also returns no value, but it gives the caller a task that can be awaited with `await` to learn when the method finishes and to receive its exception."
+      c: "Exceptions from `async void` are not ignored. There is no task to store them in, so the exception is raised on the `SynchronizationContext` that was active when the method started, or on the thread pool if there is none. Nobody catches it there, and the unhandled exception usually terminates the process."
+      d: "The code compiles: `async void` exists in the language precisely so that event handlers, whose delegates return `void` (for example `EventHandler`), can be asynchronous."
+    answer: "Only in event handlers, whose delegate requires `void`. Everywhere else use `async Task`, otherwise the caller cannot wait for the method or catch its exceptions."
+    explanation: |
+      An `async Task` method returns a task, and through it the caller learns everything about the operation: `await` waits
+      for completion and throws the exception if the method failed. An `async void` method has no task. The caller carries
+      on right after the first incomplete `await` inside the method, does not know when the method finishes, and cannot
+      wrap the call in `try`/`catch`: the exception never reaches it.
+
+      Instead, the exception is raised on the `SynchronizationContext` that was active when the method started (the UI
+      thread's context in a UI application), or on the thread pool when there is no context. Nobody catches it there, so an
+      unhandled exception from `async void` usually crashes the application. Such methods are also awkward to test: there
+      is nothing for the test to await.
+
+      The exception to the rule is event handlers. Event delegates such as `EventHandler` return `void`, so an asynchronous
+      button click handler can only be `async void`. Inside such a handler, catch and handle errors yourself and move the
+      main logic into an `async Task` method. In every other case a method without a value is declared as `async Task`.
+      The behaviour is described for .NET 10.
+    linkTitles:
+      - Async return types
+      - Async/await best practices in asynchronous programming
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

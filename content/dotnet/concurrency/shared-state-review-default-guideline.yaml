@@ -1,0 +1,107 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RN0MEXFK1KMMF3JRDZ
+slug: shared-state-review-default-guideline
+stack: dotnet
+topic: concurrency
+level: lead
+type: single
+grading: auto
+tags: [race-conditions, shared-state, code-review, immutability, thread-safety]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/threading/managed-threading-best-practices
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/collections/thread-safe/
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какое правило по умолчанию для общего изменяемого состояния стоит внести в чек-лист code review?
+    prompt: |
+      Вы тимлид. За последний квартал команда поймала в production несколько состояний гонки: потерянные обновления
+      счётчиков, повреждённый `Dictionary<TKey, TValue>` в кэше, «невозможные» значения в отчётах. Вы хотите добавить в
+      чек-лист code review одно правило по умолчанию для кода, который работает с общим изменяемым состоянием.
+
+      Какое правило лучше всего подходит на роль такого правила по умолчанию?
+    hint: Какой многопоточный код ревьюеру проще всего проверить на гонки, и что должно служить основанием для исключения из правила?
+    options:
+      a: "По умолчанию писать код без блокировок: `volatile`-поля и циклы с `Interlocked.CompareExchange`, потому что `lock` медленный; блокировки допускать только там, где без них не обойтись"
+      b: "Сначала избегать общего изменяемого состояния: данные принадлежат одному потоку или задаче, а между потоками передаются неизменяемые снимки или сообщения. Если общее состояние всё же нужно - готовые потокобезопасные типы (`ConcurrentDictionary`, `Channel<T>`, `Interlocked` для одиночного счётчика). Если их не хватает - простой `lock` на закрытом объекте вокруг всей составной операции. Самописный lock-free код - только при данных профилирования и стресс-тестах"
+      c: "Делать каждый класс потокобезопасным: обернуть все публичные методы в `lock` и заменить все коллекции на конкурентные, чтобы ревьюеру не приходилось разбираться, кто какие данные разделяет"
+      d: "Не добавлять синхронизацию заранее: если модульные и интеграционные тесты стабильно зелёные, гонок нет, а синхронизацию добавлять, когда проблема проявится в production"
+    optionExplanations:
+      a: "Lock-free код сложно написать и ещё сложнее проверить на ревью: нужно понимать модель памяти, порядок операций, повторные попытки и проблему ABA. `volatile` не делает составные операции вроде `++` атомарными. Незахваченный `lock` стоит дёшево, и выигрыш от отказа от него появляется только при измеренной высокой конкуренции за блокировку. Делать самый рискованный вариант правилом по умолчанию - значит множить трудноуловимые ошибки."
+      c: "Документация по управляемым потокам советует не делать данные экземпляров потокобезопасными по умолчанию: блокировки везде снижают производительность и повышают риск взаимных блокировок. К тому же блокировка внутри каждого метода не делает атомарной последовательность вызовов: проверка `ContainsKey`, а затем `Add` - это два вызова, и между ними вклинится другой поток. Конкурентная коллекция защищает только отдельную операцию, а не логику вокруг неё. Правило снимает с ревьюера вопрос о владении данными, хотя именно этот вопрос и важен."
+      d: "Состояние гонки зависит от таймингов, числа ядер и нагрузки, поэтому зелёные тесты не доказывают его отсутствие: на машине разработчика и в CI гонка может не проявиться годами. В production такие ошибки дают повреждённые данные, плохо воспроизводятся и дорого стоят. Проблему нужно ловить на этапе проектирования и ревью, а не ждать инцидента."
+    answer: "Вариант `b`: не разделять и не изменять состояние, затем готовые потокобезопасные типы, затем простой `lock`, а самописный lock-free код - только с данными профилирования и стресс-тестами."
+    explanation: |
+      Порядок в правиле - это порядок по стоимости проверки. Гонка невозможна там, где нет общего изменяемого состояния,
+      поэтому лучший способ - не создавать его: данные принадлежат одному потоку или задаче (ограничение владения), а
+      наружу публикуются неизменяемые снимки, которые заменяются целиком, или сообщения через очередь. Документация по
+      управляемым потокам тоже советует по возможности избегать необходимости в синхронизации.
+
+      Если общее состояние нужно, готовые типы из `System.Collections.Concurrent`, `Channel<T>` и `Interlocked` уже
+      протестированы и известны ревьюерам. Важно только помнить, что они защищают отдельный вызов, а не
+      последовательность вызовов: для составной операции используют атомарные методы вроде `AddOrUpdate` или `GetOrAdd`.
+      Когда готового типа не хватает, простой `lock` на закрытом выделенном объекте, охватывающий всю составную операцию
+      целиком, легко прочитать и проверить.
+
+      Самописный lock-free код остаётся исключением, а не запретом: он допустим, если профилировщик показал конкуренцию
+      за блокировку на горячем пути, бенчмарк подтвердил выигрыш, а стресс-тесты гоняют код на многоядерной машине. Для
+      лида ценность такого правила в том, что ревью становится единообразным: в чек-листе остаются вопросы «кто владеет
+      этими данными?», «меняются ли они после публикации?», «вся ли составная операция под одной блокировкой?», а любое
+      отступление требует доказательств, а не ссылки на «так быстрее».
+    linkTitles:
+      - Рекомендации по работе с управляемыми потоками
+      - Потокобезопасные коллекции
+  en:
+    title: Which default rule for shared mutable state belongs in a code review checklist?
+    prompt: |
+      You are a team lead. Over the last quarter the team caught several race conditions in production: lost counter
+      updates, a corrupted `Dictionary<TKey, TValue>` in a cache, "impossible" values in reports. You want to add one
+      default rule to the code review checklist for code that works with shared mutable state.
+
+      Which rule fits best as that default rule?
+    hint: Which multithreaded code is easiest for a reviewer to check for races, and what should justify an exception to the rule?
+    options:
+      a: "Write lock-free code by default: `volatile` fields and loops with `Interlocked.CompareExchange`, because `lock` is slow; allow locks only where there is no way around them"
+      b: "First avoid shared mutable state: data is owned by one thread or task, and threads exchange immutable snapshots or messages. If shared state is still needed, use ready-made thread-safe types (`ConcurrentDictionary`, `Channel<T>`, `Interlocked` for a single counter). If they are not enough, use a plain `lock` on a private object around the whole compound operation. Hand-written lock-free code only with profiling evidence and stress tests"
+      c: "Make every class thread-safe: wrap every public method in `lock` and replace every collection with a concurrent one, so that reviewers do not need to figure out who shares which data"
+      d: "Do not add synchronization up front: if the unit and integration tests are consistently green there are no races, and synchronization is added once the problem shows up in production"
+    optionExplanations:
+      a: "Lock-free code is hard to write and even harder to verify in review: you need to understand the memory model, operation ordering, retries and the ABA problem. `volatile` does not make compound operations such as `++` atomic. An uncontended `lock` is cheap, and dropping it pays off only under measured heavy contention. Making the riskiest option the default multiplies subtle bugs."
+      c: "The managed threading guidance advises against making instance data thread-safe by default: locks everywhere cost performance and raise the risk of deadlocks. Besides, a lock inside each method does not make a sequence of calls atomic: checking `ContainsKey` and then calling `Add` are two calls, and another thread can step in between. A concurrent collection protects a single operation, not the logic around it. The rule removes the question of data ownership from review, while that is exactly the question that matters."
+      d: "A race condition depends on timing, core count and load, so green tests do not prove it is absent: it may never show up on a developer machine or in CI for years. In production such bugs corrupt data, are hard to reproduce and are expensive. The problem has to be caught at design and review time, not after an incident."
+    answer: "Option `b`: do not share and do not mutate, then ready-made thread-safe types, then a plain `lock`, and hand-written lock-free code only with profiling evidence and stress tests."
+    explanation: |
+      The order in the rule is the order of how expensive the code is to verify. A race is impossible where there is no
+      shared mutable state, so the best option is not to create it: data is owned by one thread or task (confinement), and
+      what is published is an immutable snapshot that is replaced as a whole, or messages through a queue. The managed
+      threading guidance also advises avoiding the need for synchronization where possible.
+
+      If shared state is needed, the ready-made types from `System.Collections.Concurrent`, `Channel<T>` and `Interlocked`
+      are already tested and familiar to reviewers. The thing to remember is that they protect a single call, not a
+      sequence of calls: for a compound operation use atomic methods such as `AddOrUpdate` or `GetOrAdd`. When no ready-made
+      type fits, a plain `lock` on a private dedicated object that covers the whole compound operation is easy to read and
+      to check.
+
+      Hand-written lock-free code stays an exception rather than a ban: it is acceptable when a profiler has shown lock
+      contention on a hot path, a benchmark has confirmed the gain, and stress tests exercise the code on a multi-core
+      machine. For a lead, the value of such a rule is consistent review: the checklist keeps the questions "who owns this
+      data?", "is it mutated after publication?", "is the whole compound operation under one lock?", and every deviation
+      needs evidence, not "it is faster".
+    linkTitles:
+      - Managed threading best practices
+      - Thread-safe collections
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

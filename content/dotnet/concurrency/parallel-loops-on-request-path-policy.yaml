@@ -1,0 +1,150 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNXMCGAPH4HBVEFNFS
+slug: parallel-loops-on-request-path-policy
+stack: dotnet
+topic: concurrency
+level: lead
+type: open
+grading: self
+tags: [thread-pool, parallel-foreachasync, aspnet-core, thread-pool-starvation, code-review, load-testing]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.tasks.parallel.foreachasync
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/parallel-programming/potential-pitfalls-in-data-and-task-parallelism
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/best-practices
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какую политику задать команде, если в обработчики запросов ASP.NET Core добавляют Parallel.ForEach и Task.Run ради скорости?
+    prompt: |
+      В сервисе на ASP.NET Core (.NET 10) разработчики всё чаще добавляют в обработчики запросов `Parallel.ForEach`
+      и рассылку работы через `Task.Run`, чтобы эндпоинты отвечали быстрее. На локальной машине замеры одного запроса
+      показывают ускорение. Вы техлид. Какую политику вы зададите команде, как её закрепите и почему?
+    hint: |
+      Чем замер одного запроса на пустом стенде отличается от сотен одновременных запросов, и откуда берётся поток для каждой
+      параллельной ветки?
+    answer: |
+      **Политика по умолчанию для кода на пути запроса.**
+
+      1. **Синхронные `Parallel.For`, `Parallel.ForEach` и PLINQ в обработчиках не используются.** Цикл блокирует поток
+         запроса до своего завершения и забирает дополнительные потоки из того же пула. Степень параллелизма
+         `Parallel.ForEach` по умолчанию не ограничена (`MaxDegreeOfParallelism = -1`).
+      2. **Никакого `await Task.Run(...)` в обработчике.** ASP.NET Core уже выполняет код приложения на потоках пула,
+         поэтому перенос работы на другой поток пула ничего не ускоряет, а только добавляет лишнее планирование. Обёртка
+         блокирующего вызова в `Task.Run` не делает его асинхронным: поток всё равно занят.
+      3. **Конкурентный ввод-вывод разрешён, но асинхронный и ограниченный.** Несколько независимых вызовов известного
+         числа - запустить асинхронные методы и дождаться их через `await Task.WhenAll(...)`: пока идёт ожидание, поток
+         не занят. Для коллекции произвольного размера - `Parallel.ForEachAsync` с явно заданным `MaxDegreeOfParallelism`
+         (небольшое число, обоснованное в PR) и токеном `HttpContext.RequestAborted`. Безграничный `Select(...)` с
+         `Task.WhenAll` на тысячи элементов запрещён.
+      4. **Тяжёлая CPU-работа по умолчанию не выполняется на пути запроса.** Её выносят в фоновую обработку (очередь и
+         `BackgroundService` или отдельный сервис) с ответом `202 Accepted`, либо оставляют последовательной.
+      5. **Параллельные ветки не трогают непотокобезопасные объекты запроса:** `HttpContext`, `DbContext` и другие
+         scoped-сервисы. Каждой ветке свой экземпляр, либо обращение к базе выносится из параллельной части.
+      6. **Исключение - только с доказательством.** Нагрузочный тест на целевом числе одновременных запросов: пропускная
+         способность, p95/p99, длина очереди пула потоков и число потоков (например, через `dotnet-counters`). Замер одного
+         запроса на пустом стенде доказательством не считается.
+      7. **Закрепление.** Пункт в чек-листе code review, анализатор запрещённых API (например, `BannedApiAnalyzers`) с явно
+         оформленными исключениями и короткий документ с причинами и примерами правильной замены.
+
+      **Почему.**
+
+      - В процессе один пул потоков, и обработчики запросов уже выполняются на нём одновременно: сервер параллелен по
+        запросам. Параллелизм внутри запроса умножает спрос на потоки: сотни одновременных запросов, каждый из которых
+        держит свой поток и просит ещё несколько, требуют больше потоков, чем есть у пула. Пул добавляет потоки постепенно,
+        очередь растёт, продолжения `await` других запросов ждут свободного потока. Это голодание пула потоков: задержка
+        растёт у всех эндпоинтов, а не только у «ускоренного».
+      - Для CPU-работы число ядер не меняется: под полной нагрузкой параллелизм внутри запроса не добавляет пропускной
+        способности, а добавляет переключения контекста и конкуренцию. Выигрыш виден только на простаивающей машине,
+        поэтому локальный замер и обманывает.
+      - Рассылка запросов умножает нагрузку и на зависимости: пул соединений к базе, лимиты внешних API. Ограниченная
+        степень параллелизма защищает и их.
+    explanation: |
+      Главная мысль: параллелизм ускоряет работу, когда есть свободные потоки и ядра, а у веб-сервера под нагрузкой их нет -
+      их уже делят между собой одновременные запросы. Поэтому вопрос не в том, «быстрее ли `Parallel.ForEach`», а в том,
+      как ведёт себя весь процесс при целевой нагрузке. Сильный ответ разделяет случаи: асинхронный конкурентный ввод-вывод
+      с ограничением допустим и полезен, а блокирующие параллельные циклы и CPU-параллелизм на пути запроса - нет. Ещё он
+      задаёт проверяемые правила и путь для исключений через нагрузочный тест, а не просто запрет.
+
+      Без `ParallelOptions` метод `Parallel.ForEachAsync` в .NET 10 ограничивает параллелизм числом процессоров. Для одного
+      запроса это уже много, когда таких запросов сотни, поэтому политика требует явного значения.
+
+      Слабые ответы: «запретить всё параллельное без объяснений» (команда начнёт обходить правило) или «поднять
+      `ThreadPool.SetMinThreads`» - это лишь маскирует симптом: потоков становится больше, а ядер нет, и проблема
+      проявится при следующем росте нагрузки.
+    linkTitles:
+      - "Метод Parallel.ForEachAsync"
+      - "Возможные ошибки при параллелизме данных и задач"
+      - "Рекомендации по производительности ASP.NET Core"
+  en:
+    title: What policy do you set for a team that adds Parallel.ForEach and Task.Run to ASP.NET Core request handlers for speed?
+    prompt: |
+      In an ASP.NET Core service (.NET 10) developers keep adding `Parallel.ForEach` and `Task.Run` fan-out to request
+      handlers so that endpoints respond faster. On a local machine, measurements of a single request show a speedup. You
+      are the tech lead. What policy do you set for the team, how do you enforce it, and why?
+    hint: |
+      How does measuring one request on an idle machine differ from hundreds of concurrent requests, and where does the
+      thread for each parallel branch come from?
+    answer: |
+      **Default policy for code on the request path.**
+
+      1. **No synchronous `Parallel.For`, `Parallel.ForEach` or PLINQ in handlers.** The loop blocks the request thread
+         until it finishes and takes additional threads from the same pool. The degree of parallelism of
+         `Parallel.ForEach` is unbounded by default (`MaxDegreeOfParallelism = -1`).
+      2. **No `await Task.Run(...)` in a handler.** ASP.NET Core already runs app code on thread pool threads, so moving
+         work to another pool thread speeds nothing up and only adds extra scheduling. Wrapping a blocking call in
+         `Task.Run` does not make it asynchronous: a thread is still busy.
+      3. **Concurrent IO is allowed, but asynchronous and bounded.** A known number of independent calls - start the async
+         methods and wait for them with `await Task.WhenAll(...)`: no thread is held while waiting. For a collection of
+         arbitrary size - `Parallel.ForEachAsync` with an explicit `MaxDegreeOfParallelism` (a small number justified in
+         the PR) and the `HttpContext.RequestAborted` token. An unbounded `Select(...)` with `Task.WhenAll` over thousands
+         of items is forbidden.
+      4. **Heavy CPU work does not run on the request path by default.** It moves to background processing (a queue and a
+         `BackgroundService`, or a separate service) with a `202 Accepted` response, or it stays sequential.
+      5. **Parallel branches do not touch non-thread-safe request objects:** `HttpContext`, `DbContext` and other scoped
+         services. Each branch gets its own instance, or database access moves out of the parallel part.
+      6. **Exceptions only with evidence.** A load test at the target number of concurrent requests: throughput, p95/p99,
+         thread pool queue length and thread count (for example with `dotnet-counters`). A single-request measurement on
+         an idle machine does not count as evidence.
+      7. **Enforcement.** An item in the code review checklist, a banned API analyzer (for example `BannedApiAnalyzers`)
+         with explicitly documented exceptions, and a short document with the reasons and examples of the correct
+         replacement.
+
+      **Why.**
+
+      - A process has one thread pool, and request handlers already run on it concurrently: the server is parallel across
+        requests. Parallelism inside a request multiplies the demand for threads: hundreds of concurrent requests, each
+        holding its own thread and asking for several more, need more threads than the pool has. The pool adds threads
+        gradually, the queue grows, and `await` continuations of other requests wait for a free thread. That is thread
+        pool starvation: latency grows on every endpoint, not only on the "accelerated" one.
+      - For CPU work the number of cores does not change: under full load, parallelism inside a request adds no
+        throughput, only context switches and contention. The gain shows up only on an idle machine, which is why the
+        local measurement is misleading.
+      - Fan-out also multiplies the load on dependencies: the database connection pool, rate limits of external APIs.
+        A bounded degree of parallelism protects them too.
+    explanation: |
+      The key idea: parallelism speeds work up when there are free threads and cores, and a web server under load has
+      none - concurrent requests already share them. So the question is not "is `Parallel.ForEach` faster" but how the
+      whole process behaves at the target load. A strong answer separates the cases: bounded asynchronous concurrent IO is
+      acceptable and useful, while blocking parallel loops and CPU parallelism on the request path are not. It also sets
+      enforceable rules and an exception path through a load test, not just a ban.
+
+      Without `ParallelOptions`, `Parallel.ForEachAsync` in .NET 10 limits parallelism to the processor count. For one
+      request that is already a lot when there are hundreds of such requests, which is why the policy requires an
+      explicit value.
+
+      Weak answers: "ban everything parallel without explanation" (the team starts working around the rule) or "raise
+      `ThreadPool.SetMinThreads`" - that only masks the symptom: there are more threads but not more cores, and the
+      problem returns with the next growth in load.
+    linkTitles:
+      - "Parallel.ForEachAsync method"
+      - "Potential pitfalls in data and task parallelism"
+      - "ASP.NET Core best practices"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

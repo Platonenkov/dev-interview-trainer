@@ -1,0 +1,138 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RMBY9K0FZ9DP3RYQZK
+slug: asynclocal-change-in-callee-not-visible-to-caller
+stack: dotnet
+topic: async
+level: senior
+type: output
+grading: auto
+tags: [asynclocal, execution-context, task-yield]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    AsyncLocal<string> value = new();
+    value.Value = "outer";
+
+    await ChangeAsync();
+    Console.Write($"caller={value.Value}");
+
+    async Task ChangeAsync()
+    {
+        await Task.Yield();
+        value.Value = "inner";
+        Console.Write($"callee={value.Value} ");
+    }
+expect:
+  kind: output
+  value: "callee=inner caller=outer"
+acceptedOutputs: ["callee=inner caller=outer"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "callee=inner caller=outer" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "callee=inner caller=inner" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "callee=inner caller=" }
+  - id: d
+    correct: false
+    expect: { kind: compile-error }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.asynclocal-1
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.executioncontext
+    lang: en
+    kind: docs
+  - url: https://devblogs.microsoft.com/dotnet/how-async-await-really-works/
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Увидит ли вызывающий метод значение AsyncLocal, изменённое внутри ожидаемого async-метода?
+    prompt: |
+      Вызывающий код записывает в `AsyncLocal<string>` значение `outer`, затем ожидает метод `ChangeAsync`, который
+      после `await Task.Yield()` меняет значение на `inner` и печатает его. После этого вызывающий код печатает значение
+      ещё раз. Что выведет программа в консоль в .NET 10?
+    hint: Где хранится значение `AsyncLocal<T>` и в каком контексте выполняется продолжение вызывающего метода после его `await`?
+    options:
+      a: "callee=inner caller=outer"
+      b: "callee=inner caller=inner"
+      c: "callee=inner caller="
+      d: Ошибка компиляции
+    optionExplanations:
+      b: "`AsyncLocal<T>` - это не общая переменная, а значение в `ExecutionContext` текущего асинхронного потока выполнения. Присваивание внутри `ChangeAsync` меняет значение только для потока выполнения этого метода. Вызывающий метод продолжает работу в контексте, захваченном при его собственном `await`, где по-прежнему `outer`."
+      c: "Значение не теряется при смене потока: `await` захватывает `ExecutionContext` и выполняет продолжение в нём, в каком бы потоке пула оно ни работало. Поэтому вызывающий метод видит `outer`, а не `null`."
+      d: "Код корректен: локальная функция может захватывать локальную переменную из инструкций верхнего уровня и может быть объявлена после них, а `await` допустим в инструкциях верхнего уровня."
+    answer: "callee=inner caller=outer"
+    explanation: |
+      `AsyncLocal<T>` хранит значение не в общей переменной, а в `ExecutionContext` текущего асинхронного потока
+      выполнения. `await` захватывает текущий `ExecutionContext` и выполняет продолжение в нём, в каком бы потоке оно ни
+      работало. Присваивание `Value` влияет только на текущий поток выполнения и на операции, запущенные из него после
+      присваивания. Пример из документации `AsyncLocal<T>` показывает то же с другой стороны: вызывающий метод ставит
+      `Value 2` уже после запуска первого вызова `AsyncMethodB`, и этот вызов после своего `await` всё равно видит `Value 1`.
+
+      Трассировка: основной код устанавливает `outer`. `ChangeAsync` стартует с тем же контекстом, на
+      `await Task.Yield()` захватывает его и продолжает работу в пуле потоков с контекстом, где `outer`. Там он
+      присваивает `inner` - это меняет значение только для продолжения `ChangeAsync` - и печатает `callee=inner `.
+      Вызывающий метод при своём `await ChangeAsync()` захватил собственный контекст со значением `outer`, и его
+      продолжение выполняется именно в нём. Итог: `callee=inner caller=outer`.
+
+      Деталь реализации среды выполнения: построитель async-метода после возврата из синхронной части метода
+      восстанавливает `ExecutionContext` вызывающего (код `AsyncMethodBuilderCore.Start` разобран в статье Стивена Туба).
+      Поэтому вызывающий код не увидел бы изменения, даже если бы `ChangeAsync` сделал его до первого `await`. Практический
+      вывод: через `AsyncLocal<T>` нельзя вернуть результат из вызываемого async-метода. Если состояние нужно разделять в
+      обе стороны, в `AsyncLocal<T>` кладут ссылку на изменяемый объект-держатель и меняют его поля, но это уже общий
+      изменяемый объект со всеми рисками состояния гонки. Поведение описано для .NET 10.
+    linkTitles:
+      - Класс AsyncLocal<T>
+      - Класс ExecutionContext
+      - "Стивен Туб: How Async/Await Really Works in C#"
+  en:
+    title: Does the caller see an AsyncLocal value changed inside an awaited async method?
+    prompt: |
+      The caller stores `outer` in an `AsyncLocal<string>`, then awaits the `ChangeAsync` method, which changes the value
+      to `inner` after `await Task.Yield()` and prints it. After that the caller prints the value again. What does the
+      program print to the console on .NET 10?
+    hint: Where is the value of an `AsyncLocal<T>` stored, and which context does the caller's continuation run in after its `await`?
+    options:
+      a: "callee=inner caller=outer"
+      b: "callee=inner caller=inner"
+      c: "callee=inner caller="
+      d: Compile error
+    optionExplanations:
+      b: "`AsyncLocal<T>` is not a shared variable but a value in the `ExecutionContext` of the current asynchronous flow. The assignment inside `ChangeAsync` changes the value only for that method's flow. The caller resumes in the context captured at its own `await`, which still holds `outer`."
+      c: "The value is not lost when the thread changes: `await` captures the `ExecutionContext` and runs the continuation in it, whichever thread pool thread runs it. So the caller sees `outer`, not `null`."
+      d: "The code is valid: a local function may capture a local variable of the top-level statements and may be declared after them, and `await` is allowed in top-level statements."
+    answer: "callee=inner caller=outer"
+    explanation: |
+      `AsyncLocal<T>` keeps its value not in a shared variable but in the `ExecutionContext` of the current asynchronous
+      flow. `await` captures the current `ExecutionContext` and runs the continuation in it, whichever thread runs it.
+      Setting `Value` affects only the current flow and the operations started from it after the assignment. The example
+      in the `AsyncLocal<T>` documentation shows the same thing from the other side: the caller sets `Value 2` after it has
+      started the first call of `AsyncMethodB`, and that call still sees `Value 1` after its `await`.
+
+      Trace: the main code sets `outer`. `ChangeAsync` starts with the same context, captures it at
+      `await Task.Yield()` and continues on the thread pool with the context that holds `outer`. There it assigns
+      `inner`, which changes the value only for the continuation of `ChangeAsync`, and prints `callee=inner `.
+      The caller captured its own context with `outer` at `await ChangeAsync()`, and its continuation runs in exactly
+      that context. The result is `callee=inner caller=outer`.
+
+      A runtime implementation detail: the async method builder restores the caller's `ExecutionContext` when the
+      synchronous part of an async method returns (Stephen Toub's article walks through this code in
+      `AsyncMethodBuilderCore.Start`). So the caller would not see the change even if `ChangeAsync` made it before its first
+      `await`. The practical lesson: you cannot return a result from an awaited async method through `AsyncLocal<T>`. If
+      state must be shared both ways, the `AsyncLocal<T>` holds a reference to a mutable holder object whose fields are
+      changed, but that is a shared mutable object with all the race condition risks that come with it. The behaviour is
+      described for .NET 10.
+    linkTitles:
+      - AsyncLocal<T> class
+      - ExecutionContext class
+      - "Stephen Toub: How Async/Await Really Works in C#"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

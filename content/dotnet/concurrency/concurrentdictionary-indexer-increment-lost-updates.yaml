@@ -1,0 +1,133 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNC7010MYKS6458DYR
+slug: concurrentdictionary-indexer-increment-lost-updates
+stack: dotnet
+topic: concurrency
+level: middle
+type: find-bug
+grading: auto
+tags: [concurrentdictionary, race-condition, parallel-for, atomicity]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    using System.Collections.Concurrent;
+
+    string[] words = { "red", "green", "blue", "red" };
+    ConcurrentDictionary<string, int> counts = new();
+    foreach (string word in words)
+    {
+        counts.TryAdd(word, 0);
+    }
+
+    Parallel.For(0, 100_000, i =>
+    {
+        string word = words[i % words.Length];
+        counts[word] = counts[word] + 1;
+    });
+
+    Console.WriteLine(string.Join(" ", words.Distinct().Select(w => $"{w}={counts[w]}")));
+bugLineSets: [[13]]
+fixedSource: |
+  using System.Collections.Concurrent;
+
+  string[] words = { "red", "green", "blue", "red" };
+  ConcurrentDictionary<string, int> counts = new();
+
+  Parallel.For(0, 100_000, i =>
+  {
+      string word = words[i % words.Length];
+      counts.AddOrUpdate(word, 1, (_, current) => current + 1);
+  });
+
+  Console.WriteLine(string.Join(" ", words.Distinct().Select(w => $"{w}={counts[w]}")));
+fixedExpect: { kind: output, value: "red=50000 green=25000 blue=25000" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.collections.concurrent.concurrentdictionary-2.addorupdate
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/collections/thread-safe/how-to-add-and-remove-items
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строку, из-за которой счётчик слов на ConcurrentDictionary теряет приращения в Parallel.For
+    prompt: |
+      Программа в .NET 10 считает слова параллельно через `Parallel.For` и хранит счётчики в
+      `ConcurrentDictionary<string, int>`. Из 100 000 итераций слово `red` встречается 50 000 раз, а `green` и `blue`
+      по 25 000, поэтому ожидается вывод `red=50000 green=25000 blue=25000`. На многоядерной машине программа обычно
+      выводит меньшие числа, и от запуска к запуску они разные. Щёлкните по строке с дефектом.
+    hint: Сколько отдельных обращений к словарю выполняет одна строка с индексатором и что может произойти между ними?
+    answer: |
+      Строка 13, `counts[word] = counts[word] + 1`. Чтение через индексатор и последующая запись - два отдельных
+      вызова, вместе они образуют неатомарную операцию «прочитать - изменить - записать», и одновременные приращения
+      затирают друг друга. Исправление - один вызов `counts.AddOrUpdate(word, 1, (_, current) => current + 1)`:
+      он сохраняет новое значение, только если текущее не изменилось с момента чтения, иначе вычисляет его заново,
+      поэтому ни одно приращение не теряется.
+    explanation: |
+      `ConcurrentDictionary<TKey,TValue>` гарантирует потокобезопасность каждого отдельного вызова: чтение через
+      индексатор не увидит словарь в разорванном состоянии, а запись через индексатор не повредит внутреннюю структуру.
+      Но строка 13 состоит из двух вызовов: геттер индексатора читает значение, затем сеттер записывает новое. Между
+      ними другой поток может успеть сделать то же самое. Если два потока прочитали `41`, оба запишут `42`, и одно
+      приращение пропадёт. Словарь при этом остаётся целым, исключений нет, просто итог меньше ожидаемого - это
+      состояние гонки на уровне логики, а не структуры данных.
+
+      Остальные строки корректны. Предварительное заполнение через `TryAdd` выполняется в одном потоке до цикла,
+      повторный `TryAdd` для второго `red` просто возвращает `false`. Чтение массива `words` из нескольких потоков
+      безопасно, потому что его никто не меняет. Итоговая печать выполняется после завершения `Parallel.For`.
+
+      `AddOrUpdate` выполняет «прочитать - вычислить - сохранить» как цикл сравнения и повтора: если ключа нет,
+      добавляет `1`, иначе вычисляет новое значение из текущего и сохраняет его, только если текущее значение всё ещё
+      то, что было прочитано, а при конфликте перечитывает и вычисляет заново. Поэтому приращения не теряются. При этом
+      документация прямо говорит, что все методы `ConcurrentDictionary<TKey,TValue>` потокобезопасны, но не все
+      атомарны, и называет именно `GetOrAdd` и `AddOrUpdate`: делегат обновления вызывается вне внутренней блокировки
+      и может выполниться несколько раз. Поэтому он должен быть быстрым и без побочных эффектов. Предварительный
+      `TryAdd` после исправления не нужен: первое добавление тоже выполняет `AddOrUpdate`.
+
+      Если счётчиков очень много и важна скорость, ещё лучше копить частичные итоги в локальном состоянии каждого
+      потока (перегрузка `Parallel.For` с `localInit` и `localFinally`) и сливать их в конце.
+    linkTitles:
+      - "Метод ConcurrentDictionary<TKey,TValue>.AddOrUpdate"
+      - "Добавление и удаление элементов ConcurrentDictionary"
+  en:
+    title: Find the line that makes a ConcurrentDictionary word counter lose increments in Parallel.For
+    prompt: |
+      A .NET 10 program counts words in parallel with `Parallel.For` and keeps the counters in a
+      `ConcurrentDictionary<string, int>`. Out of 100,000 iterations the word `red` occurs 50,000 times, and `green`
+      and `blue` 25,000 times each, so the expected output is `red=50000 green=25000 blue=25000`. On a multi-core
+      machine it usually prints smaller numbers that differ from run to run. Click the line that contains the defect.
+    hint: How many separate dictionary calls does the indexer line make, and what can happen between them?
+    answer: |
+      Line 13, `counts[word] = counts[word] + 1`. The read through the indexer and the following write are two
+      separate calls that together form a non-atomic read-modify-write, so concurrent increments overwrite each other.
+      The fix is a single call `counts.AddOrUpdate(word, 1, (_, current) => current + 1)`: it stores the new value only
+      if the current one has not changed since it was read, otherwise it recomputes, so no increment is lost.
+    explanation: |
+      `ConcurrentDictionary<TKey,TValue>` guarantees that each single call is thread-safe: a read through the indexer
+      never sees the dictionary in a torn state, and a write through the indexer never corrupts its internal structure.
+      But line 13 consists of two calls: the indexer getter reads the value, then the setter writes the new one. Another
+      thread can do the same in between. If two threads read `41`, both write `42`, and one increment is lost. The
+      dictionary itself stays intact and nothing throws; the total is simply lower than expected. This is a race
+      condition in the logic, not in the data structure.
+
+      The other lines are correct. The initial `TryAdd` calls run on one thread before the loop, and the second
+      `TryAdd` for `red` just returns `false`. Reading the `words` array from several threads is safe because nobody
+      modifies it. The final print runs after `Parallel.For` has finished.
+
+      `AddOrUpdate` does the read-compute-store as a compare-and-retry loop: if the key is missing it adds `1`,
+      otherwise it computes the new value from the current one and stores it only if the current value is still the one
+      it read, and on a conflict it reads again and recomputes. That is why no increment is lost. At the same time the
+      documentation states that all methods of `ConcurrentDictionary<TKey,TValue>` are thread-safe but not all are
+      atomic, naming `GetOrAdd` and `AddOrUpdate` specifically: the update delegate is called outside the internal lock
+      and may run more than once. So it must be fast and free of side effects. After the fix the initial `TryAdd` loop
+      is not needed: `AddOrUpdate` also performs the first add.
+
+      If there are many counters and speed matters, it is even better to accumulate partial totals in per-thread local
+      state (the `Parallel.For` overload with `localInit` and `localFinally`) and merge them at the end.
+    linkTitles:
+      - "ConcurrentDictionary<TKey,TValue>.AddOrUpdate method"
+      - "Add and remove items from a ConcurrentDictionary"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

@@ -1,0 +1,131 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQ87QEMGFDC2BF4WV6
+slug: performance-goals-before-optimizing
+stack: dotnet
+topic: performance
+level: lead
+type: situation
+grading: self
+tags: [profiling, performance-goals, latency-percentiles, dotnet-counters, dotnet-trace]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-counters
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-trace
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Пользователи жалуются, что продукт тормозит, требований к производительности нет, а каждый разработчик хочет оптимизировать своё: что делать лиду?"
+    prompt: |
+      Пользователи и отдел продаж жалуются, что продукт «медленный». Формальных требований к производительности нет.
+      На встрече каждый разработчик предлагает оптимизировать свою часть: один хочет переписать сериализацию, другой -
+      добавить кэш, третий - перевести код на `Span<T>`. Приложение работает на .NET 10. Что вы как лид будете делать
+      и в каком порядке?
+    hint: Как команда поймёт, что работа над производительностью закончена, и по какому признаку выбрать, с какого места начинать?
+    answer: |
+      1. **Превратить жалобы в данные.** Выяснить, какие именно пользовательские сценарии медленные, у кого и с какого
+         момента. Посмотреть, что уже есть в продакшене: задержка по эндпоинтам или операциям в виде перцентилей, доля
+         ошибок, пропускная способность. Если такой телеметрии нет, первая задача - добавить её. Для быстрого взгляда на
+         работающий процесс подходит `dotnet-counters`: он подключается к процессу без перезапуска и показывает загрузку
+         CPU, активность сборщика мусора, длину очереди пула потоков и частоту исключений.
+      2. **Договориться об измеримой цели.** Вместе с владельцем продукта зафиксировать цель для ключевых сценариев,
+         например «p95 поиска заказов меньше 400 мс при 200 запросах в секунду», и профиль нагрузки, к которому она
+         относится. Перцентили, а не среднее: среднее прячет медленный хвост, на который и жалуются пользователи. Цель
+         говорит команде, когда остановиться.
+      3. **Снять базовую линию.** Воспроизвести нагрузку в окружении, близком к продакшену, и записать текущие цифры,
+         чтобы каждое изменение сравнивалось с одной и той же точкой отсчёта.
+      4. **Понять, где тратится время.** С помощью распределённой трассировки разложить время запроса по компонентам:
+         база данных, внешние вызовы, код приложения, ожидание в очередях. Так видно и ожидание, которое не нагружает
+         CPU. Затем углубиться в найденный компонент: `dotnet-counters` - для первичной проверки сборщика мусора и
+         голодания пула потоков, `dotnet-trace` - для сбора профиля CPU и других событий среды выполнения,
+         `dotnet-dump` - для исследования потоков и блокировок при зависаниях.
+      5. **Расставить приоритеты.** Идеи разработчиков собрать в один список и расставить приоритеты по измеренной доле
+         времени и стоимости исправления. Идея, которая не попадает в главный источник задержки, ждёт.
+      6. **Исправить верхний пункт и перемерить.** По одному изменению за раз, проверяя его против базовой линии и цели
+         при той же нагрузке. Если цель достигнута - остановиться и перенести остальные идеи в бэклог. Если нет -
+         профилировать снова: узкое место сместилось.
+      7. **Не дать проблеме вернуться.** Нагрузочная проверка или бенчмарк ключевых сценариев в конвейере или по
+         расписанию, дашборд и алерт на целевой p95 в продакшене, а сама цель записана как нефункциональное требование
+         для следующих фич.
+      8. **Провести команду через процесс.** Объяснить план, отдать авторам идей задачи по профилированию, ограничить
+         исследование по времени и решать споры измерениями, а не мнениями.
+    explanation: |
+      Оптимизация без цели и без профиля размазывает усилия по коду, который может вообще не влиять на то, что видят
+      пользователи. Это закон Амдала: если компонент занимает 5% времени запроса, даже бесконечное ускорение этого
+      компонента сократит время максимум на 5%. Интуиция о «горячих местах» часто ошибается: медленная страница может
+      почти не нагружать CPU, а ждать базу данных, внешний сервис или блокировку, и тогда ускорение сериализации ничего
+      не даст. Поэтому сначала нужна картина всего запроса (распределённая трассировка), и только потом профиль CPU.
+
+      Измеримая цель превращает «медленно» в инженерную задачу с критерием готовности. Она даёт аргументы для
+      приоритизации в разговоре с бизнесом и позволяет команде отказаться от оптимизаций, которые не окупаются.
+      Регрессионная проверка нужна потому, что производительность обычно деградирует постепенно, с каждой фичей, и без
+      автоматического контроля через несколько релизов всё вернётся к исходному состоянию.
+
+      Порядок инструментов следует документации: `dotnet-counters` описан как средство оперативного наблюдения за
+      состоянием процесса и первичного исследования производительности, после которого переходят к более глубокому
+      анализу с PerfView или `dotnet-trace`. Счётчики можно читать из приложений на .NET 5 и новее, включая .NET 10.
+    linkTitles:
+      - Обзор инструментов диагностики .NET
+      - Утилита dotnet-counters
+      - Утилита dotnet-trace
+  en:
+    title: "Users say the product is slow, there are no performance requirements, and every developer wants to optimize something different: what does the lead do?"
+    prompt: |
+      Users and the sales team complain that the product is "slow". There are no formal performance requirements.
+      At a meeting every developer proposes optimizing their own area: one wants to rewrite serialization, another to
+      add a cache, a third to move the code to `Span<T>`. The application runs on .NET 10. What do you do as the lead,
+      and in what order?
+    hint: How will the team know that the performance work is finished, and by what criterion do you pick where to start?
+    answer: |
+      1. **Turn complaints into data.** Find out which user scenarios are slow, for whom and since when. Look at what
+         production already reports: latency per endpoint or operation as percentiles, error rate, throughput. If there
+         is no such telemetry, adding it is the first task. For a quick look at a running process, `dotnet-counters`
+         attaches without a restart and shows CPU usage, garbage collector activity, thread pool queue length and
+         exception rate.
+      2. **Agree on a measurable goal.** Together with the product owner, fix a target for the key scenarios, for example
+         "p95 of order search under 400 ms at 200 requests per second", and the load profile it applies to. Percentiles,
+         not averages: an average hides the slow tail that users complain about. The goal tells the team when to stop.
+      3. **Capture a baseline.** Reproduce the load in an environment close to production and record the present
+         numbers, so every change is compared against the same reference point.
+      4. **Find where the time goes.** Use distributed tracing to split the request time by component: database,
+         external calls, application code, waiting in queues. This also shows waiting that does not load the CPU. Then
+         go deeper into the component you found: `dotnet-counters` for a first check of the garbage collector and thread
+         pool starvation, `dotnet-trace` to collect a CPU profile and other runtime events, `dotnet-dump` to inspect
+         threads and locks when the process hangs.
+      5. **Prioritize.** Collect the developers' ideas into one list and prioritize them by measured share of time and
+         cost of the fix. An idea that does not hit the largest contributor waits.
+      6. **Fix the top item and re-measure.** One change at a time, checked against the baseline and the goal under the
+         same load. If the goal is met, stop and move the remaining ideas to the backlog. If not, profile again: the
+         bottleneck has moved.
+      7. **Keep it from coming back.** A load check or benchmark of the key scenarios in the pipeline or on a schedule,
+         a dashboard and an alert on the p95 target in production, and the target itself written down as a
+         non-functional requirement for further features.
+      8. **Lead the team through it.** Explain the plan, give the people with optimization ideas the profiling tasks,
+         time-box the investigation, and settle disagreements with measurements instead of opinions.
+    explanation: |
+      Optimizing without a goal and without a profile spreads effort over code that may not affect what users see at
+      all. This is Amdahl's law: if a component takes 5% of the request time, even making it infinitely fast cuts the
+      time by at most 5%. Intuition about "hot spots" is often wrong: a slow page may barely use the CPU and instead wait
+      for the database, an external service or a lock, and then faster serialization changes nothing. That is why you
+      first need a picture of the whole request (distributed tracing) and only then a CPU profile.
+
+      A measurable goal turns "slow" into an engineering task with a definition of done. It gives arguments for
+      prioritization in conversations with the business and lets the team decline optimizations that do not pay off.
+      A regression check is needed because performance usually degrades gradually, feature by feature, and without
+      automated control it drifts back to where it started within a few releases.
+
+      The order of the tools follows the documentation: `dotnet-counters` is described as a tool for ad-hoc health
+      monitoring and first-level performance investigation, after which you move on to a deeper investigation with
+      PerfView or `dotnet-trace`. Counters can be read from applications running .NET 5 or later, including .NET 10.
+    linkTitles:
+      - .NET diagnostics tools overview
+      - dotnet-counters tool
+      - dotnet-trace tool
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

@@ -1,0 +1,178 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNAJBPMA0HZ5X7667D
+slug: readerwriterlockslim-write-inside-read-lock
+stack: dotnet
+topic: concurrency
+level: senior
+type: find-bug
+grading: auto
+tags: [readerwriterlockslim, locks, lock-recursion-exception, caching]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    Cache cache = new();
+    Console.WriteLine(cache.Get("a"));
+    Console.WriteLine(cache.Get("a"));
+
+    class Cache
+    {
+        private readonly ReaderWriterLockSlim rwLock = new();
+        private readonly Dictionary<string, int> items = new();
+
+        public int Get(string key)
+        {
+            rwLock.EnterReadLock();
+            try
+            {
+                if (items.TryGetValue(key, out int value))
+                {
+                    return value;
+                }
+                rwLock.EnterWriteLock();
+                try
+                {
+                    int created = key.Length * 10;
+                    items[key] = created;
+                    return created;
+                }
+                finally
+                {
+                    rwLock.ExitWriteLock();
+                }
+            }
+            finally
+            {
+                rwLock.ExitReadLock();
+            }
+        }
+    }
+bugLineSets: [[12, 19], [12], [19]]
+fixedSource: |
+  Cache cache = new();
+  Console.WriteLine(cache.Get("a"));
+  Console.WriteLine(cache.Get("a"));
+
+  class Cache
+  {
+      private readonly ReaderWriterLockSlim rwLock = new();
+      private readonly Dictionary<string, int> items = new();
+
+      public int Get(string key)
+      {
+          rwLock.EnterUpgradeableReadLock();
+          try
+          {
+              if (items.TryGetValue(key, out int value))
+              {
+                  return value;
+              }
+              rwLock.EnterWriteLock();
+              try
+              {
+                  int created = key.Length * 10;
+                  items[key] = created;
+                  return created;
+              }
+              finally
+              {
+                  rwLock.ExitWriteLock();
+              }
+          }
+          finally
+          {
+              rwLock.ExitUpgradeableReadLock();
+          }
+      }
+  }
+fixedExpect: { kind: output, value: "10\n10" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.readerwriterlockslim
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.readerwriterlockslim.enterupgradeablereadlock
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.readerwriterlockslim.enterwritelock
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите дефект, из-за которого кэш на ReaderWriterLockSlim выбрасывает LockRecursionException
+    prompt: |
+      Класс `Cache` защищает словарь через `ReaderWriterLockSlim`: чтение идёт под блокировкой чтения, а отсутствующий
+      ключ должен добавляться под блокировкой записи. Программа должна дважды вывести `10`, но уже при первом вызове
+      `Get` завершается с необработанным исключением `LockRecursionException`. Щёлкните по строке или строкам с дефектом.
+    hint: Какие режимы входа в блокировку есть у `ReaderWriterLockSlim` и какой из них предназначен для случая «читаю, но может понадобиться запись»?
+    answer: |
+      Причина в строке 12, `rwLock.EnterReadLock()`: метод берёт обычную блокировку чтения, хотя ему может понадобиться
+      запись. Исключение выбрасывает строка 19, `rwLock.EnterWriteLock()`, где поток с блокировкой чтения пытается войти
+      в режим записи. Засчитывается выбор строки 12, строки 19 или обеих. Для такого перехода нужно входить через
+      `EnterUpgradeableReadLock`, а не через `EnterReadLock`.
+    explanation: |
+      `new ReaderWriterLockSlim()` создаётся с политикой `LockRecursionPolicy.NoRecursion`. При ней повторный вход потока,
+      который уже держит блокировку, запрещён; разрешён только переход из обновляемого режима чтения в режим записи.
+      Поэтому `EnterWriteLock` при удерживаемой обычной блокировке чтения выбрасывает `LockRecursionException`.
+      Исключение возникает в строке 19, но причина заложена в строке 12: метод сразу берёт обычную блокировку чтения,
+      хотя заранее известно, что ему может понадобиться запись.
+
+      Запрет не случаен. Если бы два потока, держащие блокировку чтения, одновременно попробовали перейти в запись,
+      каждый ждал бы, пока другой отпустит чтение, и получился бы deadlock. Поэтому документация `EnterWriteLock`
+      перечисляет `LockRecursionException` для потока, вошедшего в режим чтения, отдельно от политики `NoRecursion`, то
+      есть переход из обычного чтения в запись запрещён и с `LockRecursionPolicy.SupportsRecursion`. По той же причине
+      из режима чтения нельзя войти и в обновляемый режим. Для сценария «прочитать и, возможно, записать» есть
+      обновляемый режим: в `EnterUpgradeableReadLock` одновременно может находиться только один поток, обычные читатели
+      при этом не блокируются, и этот поток может вызвать `EnterWriteLock` без риска deadlock, дождавшись ухода
+      остальных читателей.
+
+      Исправление: войти через `EnterUpgradeableReadLock` и выйти через `ExitUpgradeableReadLock`. Цена - обновляемый
+      режим занимает только один поток, поэтому если каждый вызов `Get` идёт через него, такие вызовы по сути
+      выстраиваются в очередь. Под нагрузкой обычно делают быстрый путь под `EnterReadLock`, а при промахе отпускают
+      блокировку чтения, берут обновляемую блокировку или блокировку записи и проверяют ключ повторно, потому что другой
+      поток мог успеть его добавить. Для простого кэша часто проще `ConcurrentDictionary<TKey, TValue>.GetOrAdd`.
+      Поведение проверено на .NET 10.
+    linkTitles:
+      - Класс ReaderWriterLockSlim
+      - Метод ReaderWriterLockSlim.EnterUpgradeableReadLock
+      - Метод ReaderWriterLockSlim.EnterWriteLock
+  en:
+    title: Find the defect that makes a ReaderWriterLockSlim cache throw LockRecursionException
+    prompt: |
+      The `Cache` class protects a dictionary with `ReaderWriterLockSlim`: reads happen under the read lock, and a missing
+      key should be added under the write lock. The program should print `10` twice, but on the very first `Get` call
+      it ends with an unhandled `LockRecursionException`. Click the line or lines that contain the defect.
+    hint: Which modes of entering a `ReaderWriterLockSlim` exist, and which of them is meant for the case "I am reading, but may need to write"?
+    answer: |
+      The cause is line 12, `rwLock.EnterReadLock()`: the method takes a plain read lock although it may need to write.
+      The exception is thrown on line 19, `rwLock.EnterWriteLock()`, where a thread holding the read lock tries to enter
+      write mode. Selecting line 12, line 19 or both is accepted. Such a transition requires entering through
+      `EnterUpgradeableReadLock`, not `EnterReadLock`.
+    explanation: |
+      `new ReaderWriterLockSlim()` uses the `LockRecursionPolicy.NoRecursion` policy. With it, a thread that already holds
+      the lock cannot enter it again; the only allowed transition is from upgradeable read mode to write mode. So
+      `EnterWriteLock` while a plain read lock is held throws `LockRecursionException`. The exception surfaces on line 19,
+      but the cause is on line 12: the method takes a plain read lock right away, although it is known in advance that it
+      may need to write.
+
+      The ban is deliberate. If two threads holding the read lock tried to upgrade to write at the same time, each would
+      wait for the other to release its read lock, and the result would be a deadlock. That is why the `EnterWriteLock`
+      documentation lists `LockRecursionException` for a thread that has entered read mode separately from the
+      `NoRecursion` case: moving from plain read mode to write mode is forbidden even with
+      `LockRecursionPolicy.SupportsRecursion`. For the same reason a thread in read mode cannot enter upgradeable mode
+      either. The "read and maybe write" scenario is what upgradeable read mode is for: only one thread at a time can be in
+      `EnterUpgradeableReadLock`, ordinary readers are not blocked by it, and that thread can call `EnterWriteLock` without
+      a deadlock risk, waiting for the other readers to leave.
+
+      The fix: enter with `EnterUpgradeableReadLock` and leave with `ExitUpgradeableReadLock`. The cost is that upgradeable
+      mode admits one thread only, so if every `Get` call goes through it, those calls are effectively serialized. Under
+      load the usual shape is a fast path under `EnterReadLock`; on a miss, release the read lock, take the upgradeable or
+      write lock and check the key again, because another thread may have added it in between. For a simple cache
+      `ConcurrentDictionary<TKey, TValue>.GetOrAdd` is often simpler. The behaviour was checked on .NET 10.
+    linkTitles:
+      - ReaderWriterLockSlim class
+      - ReaderWriterLockSlim.EnterUpgradeableReadLock method
+      - ReaderWriterLockSlim.EnterWriteLock method
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

@@ -1,0 +1,156 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQGYZK8BZVG8FQK8JF
+slug: pooled-stringbuilder-missing-clear
+stack: dotnet
+topic: performance
+level: middle
+type: find-bug
+grading: auto
+tags: [pooling, stringbuilder, object-pool, allocations]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    using System.Text;
+
+    Stack<StringBuilder> pool = new();
+
+    StringBuilder Rent()
+    {
+        return pool.Count > 0 ? pool.Pop() : new StringBuilder();
+    }
+
+    void Return(StringBuilder builder)
+    {
+        pool.Push(builder);
+    }
+
+    string FormatMessage(string user, int unread)
+    {
+        StringBuilder builder = Rent();
+        try
+        {
+            builder.Append(user).Append(": ").Append(unread).Append(" unread");
+            return builder.ToString();
+        }
+        finally
+        {
+            Return(builder);
+        }
+    }
+
+    Console.WriteLine(FormatMessage("alice", 3));
+    Console.WriteLine(FormatMessage("bob", 5));
+bugLineSets: [[12]]
+fixedSource: |
+  using System.Text;
+
+  Stack<StringBuilder> pool = new();
+
+  StringBuilder Rent()
+  {
+      return pool.Count > 0 ? pool.Pop() : new StringBuilder();
+  }
+
+  void Return(StringBuilder builder)
+  {
+      builder.Clear();
+      pool.Push(builder);
+  }
+
+  string FormatMessage(string user, int unread)
+  {
+      StringBuilder builder = Rent();
+      try
+      {
+          builder.Append(user).Append(": ").Append(unread).Append(" unread");
+          return builder.ToString();
+      }
+      finally
+      {
+          Return(builder);
+      }
+  }
+
+  Console.WriteLine(FormatMessage("alice", 3));
+  Console.WriteLine(FormatMessage("bob", 5));
+fixedExpect: { kind: output, value: "alice: 3 unread\nbob: 5 unread" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.text.stringbuilder.clear
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/performance/objectpool
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строку, из-за которой самописный пул StringBuilder подмешивает текст прошлого сообщения
+    prompt: |
+      Чтобы не создавать `StringBuilder` на каждое сообщение, код держит их в простом пуле на основе `Stack<StringBuilder>`.
+      По замыслу автора в пуле лежат только чистые объекты, поэтому `Rent` выдаёт экземпляр из пула как есть, без подготовки.
+      Программа должна вывести `alice: 3 unread`, а затем `bob: 5 unread`, но на .NET 10 вторая строка выглядит так:
+      `alice: 3 unreadbob: 5 unread`. Исключения нет. Щёлкните по строке с дефектом.
+    hint: В каком состоянии объект попадает обратно в пул и что с ним застаёт следующий, кто его возьмёт?
+    answer: "Строка 12: `Return` кладёт `StringBuilder` в пул как есть, не вызвав `builder.Clear()`, поэтому следующий арендатор дописывает текст к содержимому предыдущего."
+    explanation: |
+      Первый вызов `FormatMessage` не находит объектов в пуле, создаёт новый `StringBuilder`, записывает в него
+      `alice: 3 unread` и в `finally` возвращает его в пул. `Return` просто делает `Push`, и вместе с объектом в пул уходит
+      весь накопленный текст. Второй вызов получает этот же экземпляр из `Pop`, а `Append` дописывает в конец, поэтому
+      `ToString()` возвращает `alice: 3 unreadbob: 5 unread`. Пул ничего не знает о состоянии объекта, он только хранит ссылки.
+
+      Правило пулинга: объект, который возвращают в пул, должен быть приведён в исходное состояние, иначе пул раздаёт
+      «грязные» объекты. Для `StringBuilder` это `Clear()`: метод удаляет все символы и по документации равносилен
+      `Length = 0`. Сам экземпляр при этом переиспользуется, и новый объект создавать не нужно - ради этого пул и заведён.
+
+      Вызов `Clear()` в `Rent` (строка 7) тоже убрал бы симптом, но нарушил бы соглашение этого пула, что в нём лежат только
+      чистые объекты, и он хуже по сути. При сбросе на возврате объект не хранит в пуле чужие данные (а они могут быть
+      чувствительными), и в этом же месте удобно решить, стоит ли вообще оставлять объект, например не возвращать в пул
+      сильно разросшийся экземпляр, чтобы пул не держал лишнюю память.
+
+      Так устроен и готовый пул из пакета `Microsoft.Extensions.ObjectPool`: политика `PooledObjectPolicy<T>` задаёт, как
+      объект создаётся и как сбрасывается при возврате в пул, а для `StringBuilder` есть готовая политика
+      `StringBuilderPooledObjectPolicy`, которая сбрасывает построитель при возврате. Кроме того, `Stack<T>` не
+      потокобезопасен, поэтому такой самописный пул годится только для однопоточного кода; в общем случае лучше взять
+      готовый `ObjectPool<T>`.
+    linkTitles:
+      - Метод StringBuilder.Clear
+      - Повторное использование объектов с помощью ObjectPool в ASP.NET Core
+  en:
+    title: Find the line that makes a hand-written StringBuilder pool mix in text from the previous message
+    prompt: |
+      To avoid creating a `StringBuilder` for every message, the code keeps them in a simple pool built on `Stack<StringBuilder>`.
+      By the author's design the pool holds only clean objects, so `Rent` hands out an instance from the pool as it is, without preparing it.
+      The program should print `alice: 3 unread` and then `bob: 5 unread`, but on .NET 10 the second line reads
+      `alice: 3 unreadbob: 5 unread`. No exception is thrown. Click the line that contains the defect.
+    hint: In what state does an object go back into the pool, and what does the next renter find in it?
+    answer: "Line 12: `Return` puts the `StringBuilder` into the pool as it is, without calling `builder.Clear()`, so the next renter appends its text to the previous content."
+    explanation: |
+      The first `FormatMessage` call finds no objects in the pool, creates a new `StringBuilder`, writes
+      `alice: 3 unread` into it and returns it to the pool in `finally`. `Return` only calls `Push`, so all the accumulated
+      text goes into the pool together with the object. The second call gets the same instance from `Pop`, and `Append`
+      writes at the end, so `ToString()` returns `alice: 3 unreadbob: 5 unread`. The pool knows nothing about the object's
+      state; it only stores references.
+
+      The pooling rule: an object returned to a pool must be reset to its initial state, otherwise the pool hands out
+      "dirty" objects. For `StringBuilder` that is `Clear()`: it removes all characters and, according to the documentation,
+      is equivalent to `Length = 0`. The instance itself is reused and no new object has to be created, which is what the
+      pool is for.
+
+      Calling `Clear()` in `Rent` (line 7) would also remove the symptom, but it would break this pool's agreement that it
+      holds only clean objects, and it is worse in substance. When you reset on return, the object does not keep someone
+      else's data while it sits in the pool (and that data may be sensitive), and the same place is convenient for deciding
+      whether to keep the object at all, for example not to put back an instance that has grown very large, so the pool does
+      not hold on to extra memory.
+
+      The ready-made pool from the `Microsoft.Extensions.ObjectPool` package works the same way: a `PooledObjectPolicy<T>`
+      defines how an object is created and how it is reset when returned to the pool, and for `StringBuilder` there is the
+      ready-made `StringBuilderPooledObjectPolicy`, which resets the builder on return. Also, `Stack<T>` is not thread-safe,
+      so a hand-written pool like this one is only suitable for single-threaded code; in general, prefer the ready-made
+      `ObjectPool<T>`.
+    linkTitles:
+      - StringBuilder.Clear method
+      - Object reuse with ObjectPool in ASP.NET Core
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

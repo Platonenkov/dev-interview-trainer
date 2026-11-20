@@ -1,0 +1,152 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQP4HKYKK2GJ67YPYX
+slug: hidden-allocations-in-hot-loop
+stack: dotnet
+topic: performance
+level: middle
+type: multi
+grading: auto
+tags: [allocations, boxing, closures, foreach, string-interpolation]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    Console.WriteLine(Run(new List<int> { 1, 2, 3 }, 3));
+
+    static long Run(List<int> list, int iterations)
+    {
+        IEnumerable<int> sequence = list;
+        long sum = 0;
+        for (int i = 0; i < iterations; i++)
+        {
+            foreach (int x in list) sum += x;          // A
+            foreach (int x in sequence) sum += x;      // B
+            int limit = i;
+            if (list.Exists(x => x > limit)) sum++;    // C
+            if (list.Exists(x => x < 0)) sum--;        // D
+            string key = $"item-{i}";                  // E
+            sum += key.Length;
+        }
+        return sum;
+    }
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+  - id: e
+    correct: true
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.list-1.getenumerator
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/statements/iteration-statements
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/lambda-expressions
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/advanced-topics/performance/interpolated-string-handler
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какие строки горячего цикла на C# выделяют память в управляемой куче на каждой итерации?
+    prompt: |
+      В реальном приложении метод `Run` вызывается в горячем пути с большим `iterations`, первая строка программы лишь
+      показывает пример вызова. Строки цикла помечены комментариями `A`-`E`.
+      Выберите все строки, которые по семантике C# 14 и .NET 10 запрашивают выделение памяти в управляемой куче
+      на **каждой** итерации цикла `for`. Возможные оптимизации JIT-компилятора, убирающие выделения, не учитывайте.
+    hint: Посмотрите на статический тип выражения, которое перебирает каждый `foreach`, и на то, что каждой лямбде нужно запомнить из окружающего кода.
+    options:
+      a: "`A`: `foreach` по переменной `list` типа `List<int>`"
+      b: "`B`: `foreach` по переменной `sequence` типа `IEnumerable<int>`, которая ссылается на тот же список"
+      c: "`C`: `list.Exists` с лямбдой, которая использует локальную переменную `limit`"
+      d: "`D`: `list.Exists` с лямбдой `x => x < 0`, которая ничего не захватывает"
+      e: "`E`: интерполированная строка, присвоенная `key`"
+    optionExplanations:
+      a: "Для выражения типа `List<int>` компилятор находит публичный метод `GetEnumerator`, который возвращает структуру `List<int>.Enumerator`. Перечислитель живёт в локальной переменной, упаковки нет, и `foreach` ничего не выделяет в куче."
+      d: "Лямбда не захватывает ни локальных переменных, ни `this`, поэтому компилятор кэширует делегат в статическом поле скрытого класса. Делегат создаётся один раз при первом выполнении, а на следующих итерациях берётся из кэша. Сам `List<T>.Exists` перебирает внутренний массив и тоже ничего не выделяет."
+    answer: "Верны `b`, `c` и `e`: упаковка перечислителя при `foreach` через интерфейс, замыкание с новым делегатом при захвате `limit` и новая строка при интерполяции. Строки `A` и `D` в установившемся режиме ничего не выделяют."
+    explanation: |
+      - **`A` - без выделения.** `foreach` сначала ищет подходящий метод `GetEnumerator` у статического типа выражения.
+        `List<T>.GetEnumerator()` возвращает структуру `List<T>.Enumerator`, поэтому перечислитель хранится как локальная
+        переменная, а не в куче.
+      - **`B` - упаковка.** У `sequence` статический тип `IEnumerable<int>`, и компилятор вызывает интерфейсный
+        `IEnumerable<int>.GetEnumerator()`, который возвращает `IEnumerator<int>`. Структуру `List<int>.Enumerator`
+        приходится упаковать, то есть каждое выполнение такого `foreach` создаёт в куче один объект. Тот же эффект дают
+        параметры и поля типа `IEnumerable<T>`, а также большинство операторов LINQ.
+      - **`C` - замыкание.** Лямбда захватывает внешнюю переменную `limit`, а захваченная переменная должна жить столько же,
+        сколько делегат. Поэтому компилятор переносит её в объект скрытого класса (замыкание). `limit` объявлена внутри
+        тела цикла, значит на каждой итерации создаётся новый объект замыкания и новый делегат `Predicate<int>`,
+        привязанный к нему. Это два выделения на итерацию.
+      - **`D` - без выделения.** Лямбда без захвата превращается в метод скрытого класса, а делегат на него компилятор
+        создаёт один раз и кэширует в статическом поле.
+      - **`E` - новая строка.** Способ сборки строки компилятор выбирает сам: если все подстановки - строки, он может
+        вызвать `string.Concat`, а для подстановки типа `int`, как здесь, начиная с C# 10 на .NET 6 и последующих версиях
+        может использовать `DefaultInterpolatedStringHandler`, который форматирует `int` без упаковки. Но в любом случае
+        результат - новый объект `string`, и он создаётся на каждой итерации.
+
+      Оговорка про .NET 10: JIT умеет в отдельных случаях с помощью анализа выхода (escape analysis) размещать
+      небольшие объекты на стеке и так убирать часть подобных выделений. Это оптимизация, а не гарантия языка, и
+      рассчитывать на неё в горячем пути нельзя. Реальную картину показывает измерение, например колонка `Allocated`
+      у `[MemoryDiagnoser]` в BenchmarkDotNet или профилировщик выделений.
+    linkTitles:
+      - Метод List<T>.GetEnumerator
+      - Операторы итерации (foreach)
+      - Лямбда-выражения и захват внешних переменных
+      - Обработчики интерполированных строк
+  en:
+    title: Which lines of a hot C# loop allocate on the managed heap on every iteration?
+    prompt: |
+      In the real application the `Run` method is called on a hot path with a large `iterations`; the first line of the
+      program only shows an example call. The lines of the loop are marked with the comments `A`-`E`.
+      Select all lines that, by the semantics of C# 14 and .NET 10, request an allocation on the managed heap on
+      **every** iteration of the `for` loop. Ignore JIT compiler optimizations that might remove allocations.
+    hint: Look at the static type of the expression each `foreach` iterates, and at what each lambda needs to remember from the surrounding code.
+    options:
+      a: "`A`: `foreach` over the variable `list` of type `List<int>`"
+      b: "`B`: `foreach` over the variable `sequence` of type `IEnumerable<int>`, which refers to the same list"
+      c: "`C`: `list.Exists` with a lambda that uses the local variable `limit`"
+      d: "`D`: `list.Exists` with the lambda `x => x < 0`, which captures nothing"
+      e: "`E`: the interpolated string assigned to `key`"
+    optionExplanations:
+      a: "For an expression of type `List<int>` the compiler finds the public `GetEnumerator` method, which returns the struct `List<int>.Enumerator`. The enumerator lives in a local variable, nothing is boxed, and the `foreach` allocates nothing on the heap."
+      d: "The lambda captures no locals and no `this`, so the compiler caches the delegate in a static field of a hidden class. The delegate is created once, on the first execution, and later iterations take it from the cache. `List<T>.Exists` itself walks the internal array and allocates nothing either."
+    answer: "`b`, `c` and `e` are correct: boxing the enumerator in a `foreach` through an interface, a closure with a new delegate when `limit` is captured, and a new string from the interpolation. Lines `A` and `D` allocate nothing in the steady state."
+    explanation: |
+      - **`A` - no allocation.** `foreach` first looks for a suitable `GetEnumerator` method on the static type of the
+        expression. `List<T>.GetEnumerator()` returns the struct `List<T>.Enumerator`, so the enumerator is kept as a local
+        variable, not on the heap.
+      - **`B` - boxing.** The static type of `sequence` is `IEnumerable<int>`, so the compiler calls the interface method
+        `IEnumerable<int>.GetEnumerator()`, which returns `IEnumerator<int>`. The struct `List<int>.Enumerator` has to be
+        boxed, so every execution of this `foreach` creates one heap object. Parameters and fields of type
+        `IEnumerable<T>`, and most LINQ operators, have the same effect.
+      - **`C` - a closure.** The lambda captures the outer variable `limit`, and a captured variable must live as long as
+        the delegate. So the compiler moves it into an instance of a hidden class (the closure). `limit` is declared inside
+        the loop body, so every iteration creates a new closure instance and a new `Predicate<int>` delegate bound to it.
+        That is two allocations per iteration.
+      - **`D` - no allocation.** A non-capturing lambda becomes a method of a hidden class, and the compiler creates the
+        delegate to it once and caches it in a static field.
+      - **`E` - a new string.** The compiler chooses how to build the string: when all holes are strings it may call
+        `string.Concat`, and for an `int` hole, as here, since C# 10 on .NET 6 and later versions it may use
+        `DefaultInterpolatedStringHandler`, which formats the `int` without boxing. Either way the result is a new
+        `string` object, and it is created on every iteration.
+
+      A caveat for .NET 10: in some cases the JIT can use escape analysis to place small objects on the stack and so remove
+      some of these allocations. That is an optimization, not a language guarantee, and a hot path must not rely on it.
+      Measurement shows the real picture, for example the `Allocated` column of `[MemoryDiagnoser]` in BenchmarkDotNet or
+      an allocation profiler.
+    linkTitles:
+      - List<T>.GetEnumerator method
+      - Iteration statements (foreach)
+      - Lambda expressions and captured outer variables
+      - Interpolated string handlers
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

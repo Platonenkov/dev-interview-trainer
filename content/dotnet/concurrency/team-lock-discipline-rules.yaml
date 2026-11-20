@@ -1,0 +1,114 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RN0F0ZZPHVAVS6A1P6
+slug: team-lock-discipline-rules
+stack: dotnet
+topic: concurrency
+level: lead
+type: multi
+grading: auto
+tags: [locks, deadlock, monitor, code-review]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: true
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+  - id: f
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/statements/lock
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/threading/managed-threading-best-practices
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какие правила использования lock стоит закрепить в команде, чтобы снизить риск deadlock и случайного общего объекта блокировки?
+    prompt: |
+      В большой кодовой базе на .NET 10 несколько раз ловили deadlock и долгие ожидания на `lock`. Вы как лид
+      составляете правила для code review. Выберите все правила, которые действительно уменьшают риск
+      взаимных блокировок и случайного разделения одного объекта блокировки между несвязанным кодом.
+    hint: Подумайте, кто ещё может получить ссылку на объект блокировки и что происходит, когда два потока захватывают одни и те же блокировки в разном порядке.
+    options:
+      a: "Блокировать только закрытое поле, созданное специально для этого: `private readonly object _sync = new();` или, начиная с .NET 9, `private readonly Lock _sync = new();`"
+      b: "Если коду нужно несколько блокировок одновременно, захватывать их всегда в одном порядке, заранее заданном для всей кодовой базы"
+      c: "Под блокировкой не вызывать чужой код (колбэки, события, переданные делегаты) и не выполнять ввод-вывод: внутри только короткая работа с защищаемым состоянием"
+      d: "Писать `lock (this)`: блокировка на самом объекте понятна читателю и позволяет вызывающему коду участвовать в той же синхронизации"
+      e: "Для блокировок, общих для нескольких классов, использовать строковый литерал с говорящим именем, например `lock (\"orders-cache\")`"
+      f: "Не ограничивать вложенные `lock`: `Monitor` реентерабелен, поэтому вложенные блокировки в любом порядке не приводят к deadlock"
+    optionExplanations:
+      d: "`this` доступен любому коду, у которого есть ссылка на объект. Внешний код может заблокировать тот же экземпляр по своим причинам, и тогда ваш класс неожиданно делит блокировку с чужим кодом: появляются лишняя конкуренция и deadlock, который нельзя найти, читая только ваш класс. Документация прямо советует не блокировать `this`."
+      e: "Строковые литералы интернируются: одинаковый литерал в любом месте процесса - это один и тот же объект. Любой код, который случайно выберет ту же строку, разделит с вами блокировку. Документация относит экземпляры `string` к объектам, которые нельзя использовать для `lock`. Общую блокировку для нескольких классов лучше явно передать или инкапсулировать в одном владельце состояния."
+      f: "Реентерабельность означает лишь, что один и тот же поток может повторно войти в блокировку, которую уже держит. От deadlock между двумя потоками она не защищает: если поток 1 держит `A` и ждёт `B`, а поток 2 держит `B` и ждёт `A`, оба ждут вечно. Кроме того, повторный вход может застать защищаемое состояние в промежуточном, несогласованном виде."
+    answer: "Верны `a`, `b` и `c`: закрытый выделенный объект блокировки, единый порядок захвата нескольких блокировок и отсутствие чужого кода и ввода-вывода под блокировкой. `lock (this)`, блокировка на строковом литерале и надежда на реентерабельность - вредные правила."
+    explanation: |
+      Правила для команды решают две разные проблемы.
+
+      **Случайное разделение блокировки.** Объект блокировки должен быть виден только коду, который защищает
+      состояние. Закрытое поле `readonly`, созданное только для блокировки, этому удовлетворяет. Начиная с .NET 9
+      и C# 13 для этого есть тип `System.Threading.Lock`, и оператор `lock` с ним использует его собственный API.
+      `this`, объекты `Type` и строки, особенно интернированные литералы, доступны чужому коду, поэтому
+      документация не рекомендует блокировать их.
+
+      **Deadlock.** Взаимная блокировка возникает, когда потоки захватывают несколько блокировок в разном порядке
+      и ждут друг друга по кругу. Единый порядок захвата разрывает этот круг. Вызов колбэка, события или
+      переданного делегата под блокировкой опасен потому, что вы не знаете, какие блокировки захватит этот код
+      и сколько он будет работать: так порядок захвата перестаёт быть под вашим контролем. Ввод-вывод под
+      блокировкой не обязательно даёт deadlock, но держит блокировку долго и выстраивает очередь из потоков пула.
+      `await` внутри `lock` компилятор и так запрещает, а для асинхронного кода нужен, например, `SemaphoreSlim`
+      с `WaitAsync`.
+
+      Для лида важно, что эти правила проверяемы на code review: видно, какое поле блокируется, какой код
+      вызывается внутри и в каком порядке берутся блокировки. Расплывчатое «будьте аккуратны с потоками» проверить нельзя.
+    linkTitles:
+      - Оператор lock
+      - Рекомендации по работе с управляемыми потоками
+  en:
+    title: Which rules for using lock should a team adopt to reduce deadlocks and accidental sharing of a lock object?
+    prompt: |
+      A large .NET 10 codebase has hit deadlocks and long waits on `lock` several times. As the lead you are writing
+      rules for code review. Select all rules that really reduce the risk of deadlocks and of one lock object
+      being shared by accident between unrelated code.
+    hint: Think about who else can get a reference to the lock object, and what happens when two threads take the same locks in a different order.
+    options:
+      a: "Lock only on a private field created for that purpose: `private readonly object _sync = new();` or, starting with .NET 9, `private readonly Lock _sync = new();`"
+      b: "When code needs several locks at once, always take them in one order defined in advance for the whole codebase"
+      c: "Do not call foreign code (callbacks, events, passed-in delegates) or perform I/O under a lock: inside it, only short work on the protected state"
+      d: "Write `lock (this)`: locking on the object itself is clear to the reader and lets calling code take part in the same synchronization"
+      e: "For locks shared by several classes, use a string literal with a meaningful name, for example `lock (\"orders-cache\")`"
+      f: "Do not restrict nested `lock` statements: `Monitor` is reentrant, so nested locks in any order cannot cause a deadlock"
+    optionExplanations:
+      d: "`this` is reachable by any code that holds a reference to the object. External code may lock the same instance for its own reasons, and then your class silently shares a lock with foreign code: extra contention and a deadlock you cannot find by reading your class alone. The documentation explicitly advises against locking on `this`."
+      e: "String literals are interned: the same literal anywhere in the process is the same object. Any code that happens to choose the same string shares the lock with you. The documentation lists `string` instances among the objects not to use with `lock`. A lock shared by several classes should be passed explicitly or encapsulated in one owner of the state."
+      f: "Reentrancy only means that the same thread can enter a lock it already holds. It does not prevent a deadlock between two threads: if thread 1 holds `A` and waits for `B` while thread 2 holds `B` and waits for `A`, both wait forever. Reentrant entry can also observe the protected state in an intermediate, inconsistent form."
+    answer: "`a`, `b` and `c` are correct: a private dedicated lock object, one order for taking several locks, and no foreign code or I/O under a lock. `lock (this)`, locking on a string literal and relying on reentrancy are harmful rules."
+    explanation: |
+      The team rules solve two different problems.
+
+      **Accidental lock sharing.** The lock object should be visible only to the code that protects the state. A private
+      `readonly` field created only for locking satisfies that. Starting with .NET 9 and C# 13 there is the
+      `System.Threading.Lock` type for this, and the `lock` statement uses its own API with it. `this`, `Type` objects and
+      strings, especially interned literals, are reachable by foreign code, so the documentation advises against locking on them.
+
+      **Deadlock.** A deadlock happens when threads take several locks in different orders and wait for each other in a
+      cycle. One global acquisition order breaks the cycle. Calling a callback, an event or a passed-in delegate under a
+      lock is dangerous because you do not know which locks that code takes or how long it runs: the acquisition order is
+      no longer under your control. I/O under a lock does not necessarily cause a deadlock, but it holds the lock for a long
+      time and builds a queue of thread pool threads. The compiler already forbids `await` inside `lock`; asynchronous code
+      needs something like `SemaphoreSlim` with `WaitAsync`.
+
+      What matters for a lead is that these rules can be checked in code review: you can see which field is locked, which
+      code runs inside and in what order locks are taken. A vague "be careful with threads" cannot be checked.
+    linkTitles:
+      - lock statement
+      - Managed threading best practices
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

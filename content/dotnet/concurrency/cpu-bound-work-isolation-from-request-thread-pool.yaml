@@ -1,0 +1,163 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RN9KVWWWTEQGB393FM
+slug: cpu-bound-work-isolation-from-request-thread-pool
+stack: dotnet
+topic: concurrency
+level: architect
+type: open
+grading: self
+tags: [thread-pool, thread-starvation, cpu-bound, worker-service, bulkhead, queues]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/threading/the-managed-thread-pool
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/extensions/workers
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Где запускать тяжёлую CPU-работу и блокирующие вызовы SDK, если те же процессы обслуживают чувствительные к задержке API?
+    prompt: |
+      Платформа состоит из нескольких сервисов на ASP.NET Core в .NET 10. В тех же процессах, которые обслуживают
+      чувствительные к задержке API (цель по p99 - несколько сотен миллисекунд), выполняются ещё два вида работы:
+      генерация отчётов, тяжёлая по CPU (десятки секунд вычислений и крупные аллокации на каждый отчёт), и вызовы
+      унаследованного SDK поставщика, у которого есть только синхронные блокирующие методы. Под нагрузкой задержка API
+      резко растёт, хотя сами обработчики API не менялись.
+
+      Как вы объясните этот эффект и как решите, где должна выполняться каждая из этих работ: в том же процессе,
+      в выделенных потоках или в отдельном сервисе?
+    hint: Сколько пулов потоков в одном процессе и что, кроме потоков, делят между собой обработчики запросов и генерация отчётов?
+    answer: |
+      **Почему страдают API.**
+
+      - В процессе один управляемый пул потоков. Им пользуются обработка запросов ASP.NET Core, продолжения после `await`,
+        обратные вызовы таймеров и `Task.Run`. Отчёт, запущенный через `Task.Run`, или блокирующий вызов SDK внутри
+        обработчика занимает поток пула на секунды.
+      - Блокирующие вызовы держат потоки, которые ничего не делают. Когда число занятых потоков доходит до минимума, пул
+        может добавлять потоки постепенно, а может подождать, поэтому рабочие элементы запросов и продолжения копятся
+        в очереди. Это голодание пула потоков: задержка растёт, хотя загрузка CPU может быть низкой.
+      - Работа, ограниченная CPU, конкурирует не только за потоки, но и за ядра. Даже если потоков хватает, отчёты,
+        занявшие все ядра, заставляют обработку запросов ждать процессорного времени. В контейнере с лимитом CPU это
+        проявляется ещё сильнее.
+      - Общая куча: крупные аллокации отчётов вызывают больше сборок мусора, а паузы сборщика мусора останавливают и потоки
+        запросов того же процесса. Нехватка памяти или падение (в том числе падение нативного кода SDK) роняет вместе
+        с работой и экземпляр API.
+      - `Task.Run` внутри обработчика или `BackgroundService` в том же процессе ничего не изолируют: тот же пул, те же
+        ядра, та же куча.
+
+      **Лестница изоляции.**
+
+      1. **Ограничение внутри процесса.** Ограничить параллелизм (ограниченный `Channel<T>` или `SemaphoreSlim` перед
+         работой), выполнять блокирующие вызовы SDK в небольшом числе выделенных потоков (`new Thread` или
+         `TaskCreationOptions.LongRunning`), которые читают из очереди, добавить таймауты. Это защищает потоки пула и
+         устраняет голодание от блокирующих вызовов, но не защищает ядра, кучу и домен отказа. Подходит для блокирующего
+         SDK с умеренной частотой вызовов и для короткой CPU-работы.
+      2. **Отдельный рабочий сервис, который читает надёжную очередь.** API проверяет запрос, записывает задание в очередь
+         (или через outbox) и возвращает `202 Accepted` с ресурсом статуса. Рабочий сервис (`BackgroundService` в отдельном
+         процессе worker service) забирает задания с ограниченным параллелизмом. Выигрыш: задержка API не зависит от
+         нагрузки отчётами, рабочий сервис масштабируется отдельно по длине очереди и получает свои размеры CPU и памяти,
+         развёртывается независимо и изолирует отказы, очередь даёт обратное давление и повторы. Подходит для тяжёлых
+         отчётов, которые для пользователя и так естественно асинхронны.
+      3. **Сервис-адаптер для унаследованного SDK.** Если SDK вызывают многие сервисы или он нестабилен, не потокобезопасен,
+         течёт или падает: один сервис владеет им, предоставляет асинхронный API, ограничивает параллелизм по лимитам
+         поставщика (bulkhead), а вызывающие стороны ставят таймауты и circuit breaker.
+
+      **Как решить.**
+
+      - Сначала измерить: длину очереди и число потоков пула (`dotnet-counters`, `ThreadPool.PendingWorkItemCount`), CPU
+        на экземпляр, время пауз сборщика мусора, p99 API, отдельно во время всплесков генерации отчётов.
+      - Критерии: нужен ли вызывающему результат синхронно; длительность и частота работы; ограничена она CPU или
+        блокировками; нужно ли изолировать её отказы; нужно ли ей другое масштабирование или другое железо; готова ли
+        команда эксплуатировать больше единиц развёртывания.
+      - Сильно поднятый `ThreadPool.SetMinThreads` - временная мера против блокировок, а не решение: он маскирует
+        блокировки и ничего не даёт при конкуренции за CPU.
+      - Цена разделения: больше единиц развёртывания, очередь, которую надо эксплуатировать, доставка как минимум один раз
+        и поэтому идемпотентные задания, асинхронный UX (опрос статуса или уведомление), сквозная трассировка через очередь.
+        Выносить работу стоит там, где это оправдывают SLO по задержке и профиль масштабирования, а не по умолчанию.
+    explanation: |
+      Главная мысль: граница изоляции должна совпадать с ресурсом, за который идёт конкуренция. Выделенные потоки изолируют
+      только потоки. Отдельный процесс изолирует ядра (через лимиты CPU), кучу и сборку мусора, падения и масштабирование.
+      Сильный ответ разделяет две разные проблемы: блокирующий SDK - это проблема потоков, генерация отчётов - проблема ядер
+      и памяти, и лечатся они разными средствами.
+
+      Слабые ответы: «добавить потоков», «обернуть в `Task.Run`», «сделать асинхронным». CPU-работу нельзя сделать
+      асинхронной, она всё равно занимает ядро, а `Task.Run` вокруг блокирующего вызова лишь переносит блокировку в другой
+      поток того же пула. Другая крайность - сразу выносить всё в микросервисы, не измерив, где именно узкое место.
+      Поведение пула потоков описано для .NET 10.
+    linkTitles:
+      - "Управляемый пул потоков"
+      - "Рабочие службы (worker services) в .NET"
+  en:
+    title: Where should CPU-heavy work and blocking SDK calls run when the same processes serve latency-sensitive APIs?
+    prompt: |
+      A platform consists of several ASP.NET Core services on .NET 10. In the same processes that serve latency-sensitive
+      APIs (a p99 target of a few hundred milliseconds), two other kinds of work run: CPU-heavy report generation (tens of
+      seconds of computation and large allocations per report) and calls to a legacy vendor SDK that has only synchronous,
+      blocking methods. Under load the API latency spikes, although the API handlers themselves did not change.
+
+      How do you explain the effect, and how do you decide where each kind of work should run: in the same process, on
+      dedicated threads or in a separate service?
+    hint: How many thread pools does one process have, and what besides threads do request handlers and report generation share?
+    answer: |
+      **Why the APIs suffer.**
+
+      - A process has one managed thread pool. ASP.NET Core request handling, continuations after `await`, timer callbacks
+        and `Task.Run` all use it. A report started with `Task.Run`, or a blocking SDK call inside a handler, holds a pool
+        thread for seconds.
+      - Blocking calls hold threads that do nothing. When the number of busy threads reaches the minimum, the pool may add
+        threads gradually or it may wait, so request work items and continuations pile up in the queue. This is thread pool
+        starvation: latency grows even though CPU usage may be low.
+      - CPU-bound work competes not only for threads but for cores. Even with enough threads, reports that occupy every core
+        make request handling wait for CPU time. In a container with a CPU limit the effect is even sharper.
+      - A shared heap: large allocations from reports cause more garbage collections, and garbage collector pauses stop the
+        request threads of the same process too. Memory exhaustion or a crash (including a native crash in the SDK) takes the
+        API instance down together with the work.
+      - `Task.Run` inside a handler or a `BackgroundService` in the same process isolates nothing: same pool, same cores,
+        same heap.
+
+      **A ladder of isolation.**
+
+      1. **Bounded in process.** Limit concurrency (a bounded `Channel<T>` or a `SemaphoreSlim` in front of the work), run
+         blocking SDK calls on a small number of dedicated threads (`new Thread` or `TaskCreationOptions.LongRunning`) that
+         read from the queue, and add timeouts. This protects pool threads and removes the starvation caused by blocking
+         calls, but it does not protect cores, the heap or the failure domain. It fits the blocking SDK at a modest call rate
+         and short CPU work.
+      2. **A separate worker service fed by a durable queue.** The API validates the request, writes a job to a queue (or
+         through an outbox) and returns `202 Accepted` with a status resource. A worker service (`BackgroundService` in a
+         separate worker service process) consumes jobs with bounded concurrency. Gains: API latency no longer depends on the
+         report load, the worker scales on its own by queue length and gets its own CPU and memory sizing, it deploys
+         independently and isolates failures, and the queue provides backpressure and retries. It fits heavy reports, which
+         are naturally asynchronous for the user anyway.
+      3. **An adapter service for the legacy SDK.** If many services call the SDK, or it is unstable, not thread-safe, leaks
+         or crashes: one service owns it, exposes an asynchronous API, limits concurrency to the vendor's limits (a bulkhead),
+         and callers use timeouts and a circuit breaker.
+
+      **How to decide.**
+
+      - Measure first: thread pool queue length and thread count (`dotnet-counters`, `ThreadPool.PendingWorkItemCount`),
+        CPU per instance, garbage collector pause time and API p99, separately during report bursts.
+      - Criteria: does the caller need the result synchronously; how long and how frequent the work is; whether it is
+        CPU-bound or blocking; whether its failures must be isolated; whether it needs different scaling or hardware;
+        whether the team can operate more deployment units.
+      - Raising `ThreadPool.SetMinThreads` high is a stopgap for blocking, not a fix: it hides the blocking and does nothing
+        for CPU contention.
+      - The cost of separating: more deployment units, a queue to operate, at-least-once delivery and therefore idempotent
+        jobs, an asynchronous UX (status polling or a notification), end-to-end tracing across the queue. Move work out where
+        the latency SLO and the scaling profile justify it, not by default.
+    explanation: |
+      The key idea: the isolation boundary has to match the resource that is contended. Dedicated threads isolate only
+      threads. A separate process isolates cores (through CPU limits), the heap and garbage collection, crashes and scaling.
+      A strong answer separates two different problems: the blocking SDK is a thread problem, report generation is a core
+      and memory problem, and they are cured by different means.
+
+      Weak answers are "add more threads", "wrap it in `Task.Run`" and "make it async". CPU work cannot be made asynchronous,
+      it still occupies a core, and `Task.Run` around a blocking call only moves the blocking to another thread of the same
+      pool. The opposite extreme is to move everything into microservices at once without measuring where the bottleneck
+      actually is. The thread pool behaviour is described for .NET 10.
+    linkTitles:
+      - "The managed thread pool"
+      - "Worker services in .NET"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

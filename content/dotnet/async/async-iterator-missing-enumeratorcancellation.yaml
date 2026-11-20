@@ -1,0 +1,154 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RMKFKNEBT7AGR180EG
+slug: async-iterator-missing-enumeratorcancellation
+stack: dotnet
+topic: async
+level: senior
+type: find-bug
+grading: auto
+tags: [iasyncenumerable, async-streams, cancellation, enumerator-cancellation]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    using CancellationTokenSource cts = new();
+    int received = 0;
+
+    try
+    {
+        await foreach (int item in ProduceAsync().WithCancellation(cts.Token))
+        {
+            received++;
+            if (received == 2)
+            {
+                cts.Cancel();
+            }
+        }
+    }
+    catch (OperationCanceledException)
+    {
+        Console.WriteLine("canceled");
+    }
+
+    Console.WriteLine(received);
+
+    static async IAsyncEnumerable<int> ProduceAsync(CancellationToken token = default)
+    {
+        for (int i = 1; i <= 5; i++)
+        {
+            await Task.Delay(10, token);
+            yield return i;
+        }
+    }
+bugLineSets: [[22]]
+fixedSource: |
+  using System.Runtime.CompilerServices;
+
+  using CancellationTokenSource cts = new();
+  int received = 0;
+
+  try
+  {
+      await foreach (int item in ProduceAsync().WithCancellation(cts.Token))
+      {
+          received++;
+          if (received == 2)
+          {
+              cts.Cancel();
+          }
+      }
+  }
+  catch (OperationCanceledException)
+  {
+      Console.WriteLine("canceled");
+  }
+
+  Console.WriteLine(received);
+
+  static async IAsyncEnumerable<int> ProduceAsync([EnumeratorCancellation] CancellationToken token = default)
+  {
+      for (int i = 1; i <= 5; i++)
+      {
+          await Task.Delay(10, token);
+          yield return i;
+      }
+  }
+fixedExpect: { kind: output, value: "canceled\n2" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.runtime.compilerservices.enumeratorcancellationattribute
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/asynchronous-programming/generate-consume-asynchronous-stream
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строку, из-за которой асинхронный итератор не видит токен из WithCancellation
+    prompt: |
+      Потребитель получает асинхронную последовательность и, как принято для `IAsyncEnumerable<T>`, передаёт токен
+      отмены через `WithCancellation`. После второго элемента он вызывает `Cancel`. Программа должна вывести
+      `canceled`, а затем `2`. Вместо этого она получает все пять элементов и выводит только `5`.
+      Щёлкните по строке с дефектом.
+    hint: Метод `ProduceAsync()` вызывается без аргументов. Каким путём токен, переданный в `WithCancellation`, может попасть в его параметр `token`?
+    answer: Строка 22, объявление итератора `ProduceAsync`, у параметра `CancellationToken token` нет атрибута `[EnumeratorCancellation]`.
+    explanation: |
+      Для метода-итератора, возвращающего `IAsyncEnumerable<T>`, компилятор генерирует класс, реализующий
+      `GetAsyncEnumerator(CancellationToken)`. `WithCancellation` ничего не отменяет сам: он лишь запоминает токен,
+      и `await foreach` передаёт его в `GetAsyncEnumerator`. Связать этот токен с параметром итератора компилятор
+      может только одним способом: параметр типа `CancellationToken` должен быть помечен атрибутом
+      `[EnumeratorCancellation]` из `System.Runtime.CompilerServices`.
+
+      Без атрибута токен из `GetAsyncEnumerator` просто отбрасывается. Параметр `token` сохраняет значение по
+      умолчанию (`CancellationToken.None`), поэтому `Task.Delay(10, token)` никогда не отменяется, итератор отдаёт
+      все пять элементов, исключения нет, и программа выводит `5`. Компилятор предупреждает об этом (CS8425), но
+      предупреждение легко пропустить.
+
+      С атрибутом токен из `WithCancellation` попадает в `token`. После `Cancel` на втором элементе следующий
+      `MoveNextAsync` возобновляет итератор, `Task.Delay(10, token)` получает уже отменённый токен и возвращает
+      отменённую задачу, `await` выбрасывает `TaskCanceledException` (наследник `OperationCanceledException`), оно
+      выходит из `await foreach`, и программа выводит `canceled`, а затем `2`. Если токен передан и как аргумент
+      метода, и через `WithCancellation`, сгенерированный код объединяет их в связанный токен.
+
+      Правило: в асинхронном итераторе с параметром `CancellationToken` всегда ставьте `[EnumeratorCancellation]`,
+      иначе потребители, которые получают последовательность готовой и отменяют её через `WithCancellation`, не
+      смогут её остановить. Поведение проверено на .NET 10.
+    linkTitles:
+      - Класс EnumeratorCancellationAttribute
+      - Создание и использование асинхронных потоков
+  en:
+    title: Find the line that keeps an async iterator from seeing the token from WithCancellation
+    prompt: |
+      The consumer gets an asynchronous sequence and, as is usual for `IAsyncEnumerable<T>`, passes the cancellation
+      token through `WithCancellation`. After the second item it calls `Cancel`. The program should print
+      `canceled` and then `2`. Instead it receives all five items and prints only `5`.
+      Click the line that contains the defect.
+    hint: "`ProduceAsync()` is called without arguments. How can the token passed to `WithCancellation` reach its `token` parameter?"
+    answer: Line 22, the declaration of the `ProduceAsync` iterator; its `CancellationToken token` parameter lacks the `[EnumeratorCancellation]` attribute.
+    explanation: |
+      For an iterator method that returns `IAsyncEnumerable<T>`, the compiler generates a class that implements
+      `GetAsyncEnumerator(CancellationToken)`. `WithCancellation` cancels nothing by itself: it only stores the token,
+      and `await foreach` passes it to `GetAsyncEnumerator`. The compiler can connect that token to an iterator
+      parameter in only one way: a parameter of type `CancellationToken` must be marked with the
+      `[EnumeratorCancellation]` attribute from `System.Runtime.CompilerServices`.
+
+      Without the attribute the token from `GetAsyncEnumerator` is simply dropped. The `token` parameter keeps its
+      default value (`CancellationToken.None`), so `Task.Delay(10, token)` is never canceled, the iterator yields all
+      five items, nothing is thrown, and the program prints `5`. The compiler warns about this (CS8425), but the
+      warning is easy to miss.
+
+      With the attribute the token from `WithCancellation` reaches `token`. After `Cancel` on the second item, the next
+      `MoveNextAsync` resumes the iterator, `Task.Delay(10, token)` gets an already canceled token and returns a
+      canceled task, `await` throws `TaskCanceledException` (derived from `OperationCanceledException`), it leaves the
+      `await foreach`, and the program prints `canceled` and then `2`. If a token is passed both as a method argument
+      and through `WithCancellation`, the generated code combines them into a linked token.
+
+      The rule: in an async iterator with a `CancellationToken` parameter, always add `[EnumeratorCancellation]`;
+      otherwise consumers that receive a ready-made sequence and cancel it through `WithCancellation` cannot stop it.
+      The behaviour was checked on .NET 10.
+    linkTitles:
+      - EnumeratorCancellationAttribute class
+      - Generate and consume async streams
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

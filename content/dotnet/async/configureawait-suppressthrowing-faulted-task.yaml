@@ -1,0 +1,125 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RKMP26K4YK52G5EX55
+slug: configureawait-suppressthrowing-faulted-task
+stack: dotnet
+topic: async
+level: middle
+type: output
+grading: auto
+tags: [configureawait, configureawaitoptions, exceptions, task-status]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    Task task = Task.FromException(new InvalidOperationException("boom"));
+
+    try
+    {
+        await task.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        Console.Write("A ");
+    }
+    catch (InvalidOperationException)
+    {
+        Console.Write("B ");
+    }
+
+    Console.Write(task.Status);
+expect:
+  kind: output
+  value: "A Faulted"
+acceptedOutputs: ["A Faulted"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "A Faulted" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "B Faulted" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "A RanToCompletion" }
+  - id: d
+    correct: false
+    expect: { kind: exception, value: System.InvalidOperationException }
+  - id: e
+    correct: false
+    expect: { kind: compile-error }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.tasks.configureawaitoptions
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.tasks.task.configureawait
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что выведет await задачи с ошибкой, если указан ConfigureAwaitOptions.SuppressThrowing?
+    prompt: |
+      Задача `task` уже завершилась с исключением `InvalidOperationException`. Программа ожидает её с
+      `ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing)` внутри блока `try`, а затем печатает состояние задачи.
+      Что выведет эта программа в консоль в .NET 10?
+    hint: Что меняет этот флаг - поведение самого `await` или состояние ожидаемой задачи?
+    options:
+      a: "A Faulted"
+      b: "B Faulted"
+      c: "A RanToCompletion"
+      d: Необработанное исключение `InvalidOperationException`
+      e: Ошибка компиляции
+    optionExplanations:
+      b: "Так было бы при обычном `await` или при `ConfigureAwait(false)`. Флаг `SuppressThrowing` как раз отключает повторный выброс сохранённого исключения в точке `await`, поэтому `catch` не выполняется."
+      c: "Флаг влияет только на то, что делает `await` по завершении ожидания. Сама задача остаётся в состоянии `Faulted`, а исключение по-прежнему доступно через `task.Exception`."
+      d: "Исключение не выбрасывается в точке `await` из-за `SuppressThrowing`, а в другом месте программа его не выбрасывает. Даже без этого флага его перехватил бы блок `catch`."
+      e: "Перегрузка `Task.ConfigureAwait(ConfigureAwaitOptions)` и перечисление `ConfigureAwaitOptions` появились в .NET 8, поэтому в .NET 10 код компилируется. Пространство имён `System.Threading.Tasks` подключается неявными директивами `using`."
+    answer: "A Faulted"
+    explanation: |
+      Начиная с .NET 8 у необобщённого `Task` есть перегрузка `ConfigureAwait(ConfigureAwaitOptions)`. Флаг
+      `SuppressThrowing` означает: дождаться завершения задачи, но не выбрасывать её исключение, если она завершилась
+      в состоянии `Faulted` или `Canceled`. Поэтому `await` здесь завершается нормально, печатается `A `, а блок
+      `catch` пропускается.
+
+      Флаг не исправляет задачу: она по-прежнему находится в состоянии `Faulted`, а ошибка хранится в `task.Exception`.
+      Поэтому следом печатается `Faulted`. Итог - `A Faulted`.
+
+      Такой `await` удобен, когда нужно только дождаться окончания работы, а её результат не важен или проверяется
+      отдельно, например при остановке фонового цикла: не нужен пустой `try/catch`, и не тратится время на выброс
+      исключения. Поведение описано для .NET 10.
+    linkTitles:
+      - Перечисление ConfigureAwaitOptions
+      - Метод Task.ConfigureAwait
+  en:
+    title: What does awaiting a faulted task print with ConfigureAwaitOptions.SuppressThrowing?
+    prompt: |
+      The task `task` has already completed with an `InvalidOperationException`. The program awaits it with
+      `ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing)` inside a `try` block and then prints the task status.
+      What does this program print to the console on .NET 10?
+    hint: What does this flag change - the behaviour of the `await` itself, or the state of the awaited task?
+    options:
+      a: "A Faulted"
+      b: "B Faulted"
+      c: "A RanToCompletion"
+      d: An unhandled `InvalidOperationException`
+      e: Compile error
+    optionExplanations:
+      b: "That is what a plain `await` or `ConfigureAwait(false)` would do. The `SuppressThrowing` flag is exactly what turns off rethrowing the stored exception at the `await`, so the `catch` block does not run."
+      c: "The flag only affects what `await` does once waiting is over. The task itself stays `Faulted`, and the exception is still available through `task.Exception`."
+      d: "Because of `SuppressThrowing` the exception is not thrown at the `await`, and nothing else in the program throws it. Even without the flag the `catch` block would have caught it."
+      e: "The `Task.ConfigureAwait(ConfigureAwaitOptions)` overload and the `ConfigureAwaitOptions` enum were added in .NET 8, so the code compiles on .NET 10. The `System.Threading.Tasks` namespace comes from implicit `using` directives."
+    answer: "A Faulted"
+    explanation: |
+      Since .NET 8 the non-generic `Task` has a `ConfigureAwait(ConfigureAwaitOptions)` overload. The `SuppressThrowing`
+      flag means: wait for the task to complete, but do not throw its exception if it ended in the `Faulted` or
+      `Canceled` state. So the `await` here completes normally, `A ` is printed, and the `catch` block is skipped.
+
+      The flag does not repair the task: it is still in the `Faulted` state, and the error is kept in `task.Exception`.
+      That is why `Faulted` is printed next. The result is `A Faulted`.
+
+      Such an `await` is handy when you only need to wait for the work to end and its outcome does not matter or is
+      checked separately, for example when stopping a background loop: no empty `try/catch` is needed, and no time is
+      spent throwing an exception. The behaviour is described for .NET 10.
+    linkTitles:
+      - ConfigureAwaitOptions enum
+      - Task.ConfigureAwait method
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

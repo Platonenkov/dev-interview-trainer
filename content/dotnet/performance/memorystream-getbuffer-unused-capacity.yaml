@@ -1,0 +1,127 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQ633ZSVG6ENM5QED9
+slug: memorystream-getbuffer-unused-capacity
+stack: dotnet
+topic: performance
+level: senior
+type: find-bug
+grading: auto
+tags: [memorystream, getbuffer, buffers, allocations]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    using System.Text;
+
+    ReadOnlyMemory<byte> payload = Serialize(42, "Alice");
+    Console.WriteLine($"Sending {payload.Length} bytes");
+
+    static ReadOnlyMemory<byte> Serialize(int orderId, string customer)
+    {
+        MemoryStream stream = new();
+        using (BinaryWriter writer = new(stream, Encoding.UTF8, leaveOpen: true))
+        {
+            writer.Write(orderId);
+            writer.Write(customer);
+        }
+        // Avoid the ToArray copy: hand out the stream's own buffer.
+        return stream.GetBuffer();
+    }
+bugLineSets: [[15]]
+fixedSource: |
+  using System.Text;
+
+  ReadOnlyMemory<byte> payload = Serialize(42, "Alice");
+  Console.WriteLine($"Sending {payload.Length} bytes");
+
+  static ReadOnlyMemory<byte> Serialize(int orderId, string customer)
+  {
+      MemoryStream stream = new();
+      using (BinaryWriter writer = new(stream, Encoding.UTF8, leaveOpen: true))
+      {
+          writer.Write(orderId);
+          writer.Write(customer);
+      }
+      // Only the first Length bytes of the buffer hold data.
+      return stream.GetBuffer().AsMemory(0, (int)stream.Length);
+  }
+fixedExpect: { kind: output, value: "Sending 10 bytes" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.io.memorystream.getbuffer
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.io.memorystream.trygetbuffer
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строку, из-за которой сообщение, сериализованное через MemoryStream.GetBuffer, содержит сотни лишних нулевых байтов
+    prompt: |
+      Метод `Serialize` записывает заказ в `MemoryStream` через `BinaryWriter` и, чтобы не тратить лишнее выделение
+      памяти и копирование на `ToArray`, отдаёт внутренний буфер потока. Сериализованные данные занимают 10 байт
+      (4 байта `int` и 6 байт строки с префиксом длины), и программа должна вывести `Sending 10 bytes`. На .NET 10 она
+      выводит `Sending 256 bytes`: получатель видит после данных 246 нулевых байтов. Щёлкните по строке с дефектом.
+    hint: Что именно возвращает `GetBuffer` - записанные данные или весь массив, в который поток пишет?
+    answer: "Строка 15: `return stream.GetBuffer()` отдаёт весь внутренний массив потока вместе с неиспользованной ёмкостью, а данными являются только первые `stream.Length` байтов."
+    explanation: |
+      `GetBuffer` возвращает сам внутренний массив `MemoryStream` без копирования. Его длина равна ёмкости потока
+      (`Capacity`), а не количеству записанных байтов (`Length`). `MemoryStream` растёт с запасом: в .NET 10 при первой
+      записи в пустой поток, созданный конструктором без параметров, выделяется массив на 256 байт, дальше ёмкость
+      удваивается. Записано 10 байт, поэтому остальные 246 байт массива - нули, которые никто не записывал. Документация
+      `GetBuffer` прямо предупреждает, что буфер может содержать неиспользуемые байты, и приводит этот же пример с длиной 256.
+
+      Исключения здесь нет: массив корректный, просто код считает данными весь массив. Поэтому такая ошибка доходит до
+      получателя и проявляется как «мусор» в конце сообщения, неверная контрольная сумма или ошибка разбора на другой стороне.
+
+      Исправление - ограничить буфер длиной потока: `stream.GetBuffer().AsMemory(0, (int)stream.Length)`. Так копирования
+      по-прежнему нет, но наружу уходят только записанные байты. Более надёжный вариант - `TryGetBuffer(out ArraySegment<byte> segment)`:
+      он возвращает сегмент, который уже учитывает начало и длину данных, а для потока, созданного поверх чужого массива
+      (например, `new MemoryStream(bytes)`), возвращает `false` вместо исключения `UnauthorizedAccessException`, которое
+      в этом случае бросает `GetBuffer`. Точный размер 256 - деталь реализации, полагаться на него нельзя; контракт только
+      в том, что длина буфера может быть больше `Length`.
+
+      Помните и о времени жизни: возвращённая память смотрит во внутренний массив потока. Если в поток продолжат писать,
+      данные в этом массиве изменятся, а при росте ёмкости поток перейдёт на новый массив. `ToArray` стоит копирования,
+      но даёт независимую копию ровно нужной длины.
+    linkTitles:
+      - Метод MemoryStream.GetBuffer
+      - Метод MemoryStream.TryGetBuffer
+  en:
+    title: Find the line that makes a payload serialized through MemoryStream.GetBuffer carry hundreds of extra zero bytes
+    prompt: |
+      The `Serialize` method writes an order into a `MemoryStream` through a `BinaryWriter` and, to avoid the extra
+      allocation and copy of `ToArray`, hands out the stream's internal buffer. The serialized data takes 10 bytes
+      (4 bytes of `int` and 6 bytes of the length-prefixed string), and the program should print `Sending 10 bytes`. On
+      .NET 10 it prints `Sending 256 bytes`: the receiver sees 246 zero bytes after the data. Click the line that contains
+      the defect.
+    hint: What exactly does `GetBuffer` return - the data that was written, or the whole array the stream writes into?
+    answer: "Line 15: `return stream.GetBuffer()` hands out the stream's whole internal array including unused capacity, while only the first `stream.Length` bytes are data."
+    explanation: |
+      `GetBuffer` returns the internal array of the `MemoryStream` itself, without copying. Its length is the stream's
+      capacity (`Capacity`), not the number of bytes written (`Length`). `MemoryStream` grows with headroom: on .NET 10 the
+      first write to an empty stream created with the parameterless constructor allocates a 256-byte array, and after that
+      the capacity doubles. 10 bytes were written, so the other 246 bytes of the array are zeros that nobody wrote. The
+      `GetBuffer` documentation explicitly warns that the buffer may contain unused bytes and gives this very example with a
+      length of 256.
+
+      No exception is thrown here: the array is valid, the code just treats the whole array as data. That is why this bug
+      reaches the receiver and shows up as "garbage" at the end of the message, a wrong checksum or a parse error on the
+      other side.
+
+      The fix is to limit the buffer to the stream's length: `stream.GetBuffer().AsMemory(0, (int)stream.Length)`. There is
+      still no copy, but only the written bytes leave the method. A more robust option is
+      `TryGetBuffer(out ArraySegment<byte> segment)`: it returns a segment that already accounts for the start and length of
+      the data, and for a stream created over someone else's array (for example `new MemoryStream(bytes)`) it returns
+      `false` instead of the `UnauthorizedAccessException` that `GetBuffer` throws in that case. The exact size of 256 is an
+      implementation detail and must not be relied on; the contract is only that the buffer may be longer than `Length`.
+
+      Also mind the lifetime: the returned memory points into the stream's internal array. If the stream is written to
+      again, the data in that array changes, and when the capacity grows the stream moves to a new array. `ToArray` costs a
+      copy, but gives an independent copy of exactly the right length.
+    linkTitles:
+      - MemoryStream.GetBuffer method
+      - MemoryStream.TryGetBuffer method
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

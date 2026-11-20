@@ -1,0 +1,187 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RN0YYGSGAG5SAGP74K
+slug: spinlock-vs-monitor-when-spinning-pays
+stack: dotnet
+topic: concurrency
+level: senior
+type: open
+grading: self
+tags: [spinlock, spinwait, monitor, locks, contention]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/threading/spinlock
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.spinwait
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.spinlock
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.spinlock.enter
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.manualreseteventslim
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Чем SpinLock и SpinWait отличаются от lock на основе Monitor и когда ожидание в цикле окупается?
+    prompt: |
+      Чем `SpinLock` и `SpinWait` отличаются от обычного `lock`, который в .NET 10 для объекта типа `object` работает
+      через `Monitor`? В каких условиях активное ожидание в цикле (spinning) действительно выгоднее блокировки потока,
+      и как вы решите, стоит ли заменять `lock` на `SpinLock` в конкретном месте?
+    hint: Во что обходится ожидающий поток в каждом случае и насколько коротким должно быть ожидание, чтобы одна из этих цен оказалась меньше?
+    answer: |
+      **Что делает каждый примитив.**
+
+      - `lock` / `Monitor`: реентерабельная блокировка с владельцем-потоком. При конкуренции поток в итоге засыпает
+        на объекте ожидания ОС и освобождает процессорное ядро: пробуждение стоит переключения контекста, зато спящий
+        поток не тратит процессор. В реализации CoreCLR перед этим поток недолго крутится в цикле в надежде, что
+        владелец скоро освободит блокировку. Это деталь реализации, а не документированная гарантия, но именно поэтому
+        короткие и слабо конкурентные секции под `lock` редко доходят до ядра ОС. Есть `Monitor.Wait` / `Monitor.Pulse`.
+        С .NET 9 есть и тип `System.Threading.Lock`: `lock` по полю этого типа использует его, и его реализация
+        устроена похоже (сначала покрутиться, потом заблокироваться), что тоже деталь реализации.
+      - `SpinLock`: структура с методами `Enter(ref bool lockTaken)`, `TryEnter` и `Exit`. Она не реентерабельна:
+        повторный `Enter` в том же потоке при включённом отслеживании владельца выбрасывает `LockRecursionException`,
+        а при выключенном приводит к взаимной блокировке (deadlock). Ожидающий поток не блокируется на объекте ожидания
+        ядра ОС: он крутится в цикле, а по мере роста числа попыток уступает квант времени или ненадолго засыпает,
+        но продолжает опрашивать блокировку. Документация объясняет уступку кванта защитой от инверсии приоритетов и
+        тем, что сборщику мусора нужно дать продвинуться. Нет `Wait` / `Pulse`, нет справедливой очереди.
+      - `SpinWait`: не блокировка, а помощник для цикла ожидания. `SpinOnce` сначала выполняет короткое активное
+        ожидание, а после нескольких итераций уступает квант при каждом вызове; на однопроцессорной машине он всегда
+        уступает квант. `NextSpinWillYield` подсказывает, когда следующий вызов уже уступит процессор, а
+        `SpinWait.SpinUntil(condition, timeout)` ждёт выполнения условия. Его используют в своих неблокирующих
+        алгоритмах и в двухфазном ожидании "покрутиться, затем заблокироваться". Такой подход документирован у
+        `ManualResetEventSlim`: он недолго крутится, а если событие так и не установлено, переходит к обычному ожиданию
+        на дескрипторе; длительность этой фазы задаёт `SpinCount`.
+
+      **Когда ожидание в цикле окупается.** Нужны все условия сразу:
+
+      1. Критическая секция очень короткая: без выделения памяти, ввода-вывода, вызовов, которые могут заблокироваться,
+         виртуальных и интерфейсных вызовов и вызовов чужого кода. Ожидание должно быть короче, чем стоят усыпление и
+         пробуждение потока (переключение контекста - порядка микросекунд).
+      2. Владелец блокировки прямо сейчас выполняется на другом ядре: машина многоядерная, конкурирующих потоков не
+         больше, чем ядер. Если владельца вытеснил планировщик или приостановил сборщик мусора, ожидающие сжигают
+         свои кванты впустую.
+      3. Конкуренция низкая: блокировка обычно свободна или освобождается почти сразу. При высокой конкуренции
+         множество крутящихся потоков тратят процессор и мешают владельцу (перекидывание строки кэша между ядрами).
+      4. Блокировок много и они мелкие (например, по одной на узел связного списка), и важно, что `SpinLock` -
+         структура без отдельного объекта в куче.
+
+      **Почему `SpinLock` выигрывает редко.** Документация прямо советует брать `SpinLock` только тогда, когда
+      профилирование показало, что `Monitor` или методы `Interlocked` заметно замедляют программу. К тому же
+      `Monitor` в CoreCLR и сам недолго крутится перед блокировкой, поэтому заметная разница появляется только в узких
+      случаях из списка выше. Порядок такой: начать с `lock`, а на `SpinLock` переходить только после измерений -
+      бенчмарка (BenchmarkDotNet) при реалистичной конкуренции и данных из production (счётчик
+      `Monitor.LockContentionCount`, загрузка процессора). Часто выгоднее вообще снизить конкуренцию: укоротить
+      секцию, разделить данные на сегменты, использовать `Interlocked`, конкурентные коллекции или неизменяемые снимки.
+
+      **Ловушки `SpinLock`.**
+
+      - Это изменяемая структура: копия - это отдельная, независимая блокировка. Передавайте её по `ref`, не храните
+        в поле `readonly` (вызов `Enter` пойдёт на защитной копии) и не прячьте в автосвойство.
+      - Режим отслеживания владельца (конструктор `SpinLock(Boolean)`, свойство `IsThreadOwnerTrackingEnabled`)
+        полезен при отладке, но замедляет работу; в release-сборке его рекомендуют выключать: `new SpinLock(false)`.
+      - Внутри нельзя блокироваться, брать вторую spin-блокировку и делать долгую работу: ожидающие потоки всё это
+        время тратят процессор. В контейнере с лимитом CPU это ещё и съедает квоту и приводит к троттлингу.
+      - Шаблон использования: `bool lockTaken = false; try { spinLock.Enter(ref lockTaken); ... } finally { if (lockTaken) spinLock.Exit(); }`.
+    explanation: |
+      Это выбор между двумя ценами. Блокировка потока стоит двух переключений контекста (усыпить и разбудить), но
+      освобождает процессорное ядро для другой работы. Активное ожидание стоит процессорного времени, пропорционального
+      длине ожидания. Крутиться выгодно, только если ожидаемое время ожидания меньше цены блокировки, а это верно лишь
+      для очень коротких секций при низкой конкуренции и при владельце, который выполняется на другом ядре.
+      `Monitor` в реализации CoreCLR страхует оба случая: короткое ожидание проходит в цикле, длинное - на объекте ОС.
+      Документированный пример той же двухфазной схемы - `ManualResetEventSlim`.
+
+      Слабый ответ - "`SpinLock` быстрее, потому что не обращается к ядру ОС". Без измерений он легко оказывается
+      медленнее: под конкуренцией или при вытеснении владельца ожидающие сжигают ядра, а `Monitor` к тому моменту уже
+      уступил бы процессор. Сильный ответ объясняет экономику ожидания, называет условия и требует профилирования перед
+      заменой, как и советует документация. Описание относится к .NET 10.
+    linkTitles:
+      - SpinLock (обзор)
+      - Структура SpinWait
+      - Структура SpinLock
+      - Метод SpinLock.Enter
+      - Класс ManualResetEventSlim
+  en:
+    title: How do SpinLock and SpinWait differ from a Monitor-based lock, and when does spinning pay off?
+    prompt: |
+      How do `SpinLock` and `SpinWait` differ from an ordinary `lock`, which in .NET 10 works through `Monitor` for an
+      object of type `object`? Under which conditions is busy waiting in a loop (spinning) really better than blocking
+      the thread, and how would you decide whether to replace `lock` with `SpinLock` in a specific place?
+    hint: What does a waiting thread cost in each case, and how short must the wait be for one of these costs to be the smaller one?
+    answer: |
+      **What each primitive does.**
+
+      - `lock` / `Monitor`: a reentrant lock owned by a thread. Under contention the thread eventually sleeps on an OS
+        wait object and frees the CPU core: waking up costs a context switch, but a sleeping thread burns no CPU. In the
+        CoreCLR implementation the thread first spins for a short while, hoping that the owner releases the lock soon.
+        This is an implementation detail, not a documented guarantee, but it is why short, lightly contended sections
+        under `lock` rarely reach the OS kernel. `Monitor.Wait` / `Monitor.Pulse` are available. Since .NET 9 there is
+        also the `System.Threading.Lock` type: `lock` on a field of that type uses it, and its implementation works
+        in a similar way (spin first, then block), which is also an implementation detail.
+      - `SpinLock`: a struct with `Enter(ref bool lockTaken)`, `TryEnter` and `Exit`. It is not reentrant: a repeated
+        `Enter` on the same thread throws `LockRecursionException` when owner tracking is enabled, and deadlocks when
+        it is disabled. A waiting thread never blocks on an OS kernel wait object: it spins, and as the number of
+        attempts grows it yields its time slice or sleeps briefly, but it keeps polling the lock. The documentation
+        explains the yielding as a way to avoid priority inversion and to let the garbage collector make progress.
+        There is no `Wait` / `Pulse` and no fair queue.
+      - `SpinWait`: not a lock but a helper for a wait loop. `SpinOnce` first does a short busy wait, and after some
+        initial spinning it yields on every call; on a single-processor machine it always yields. `NextSpinWillYield`
+        tells you when the next call will yield the processor, and `SpinWait.SpinUntil(condition, timeout)` waits for a
+        condition. It is used in your own lock-free algorithms and in two-phase waits "spin, then block". This approach
+        is documented for `ManualResetEventSlim`: it spins for a short time, and if the event is still not set, it falls
+        back to a regular wait on a handle; `SpinCount` sets the length of the spinning phase.
+
+      **When spinning pays off.** All conditions are needed at once:
+
+      1. The critical section is very short: no allocations, no IO, no calls that can block, no virtual or interface
+         calls and no calls into code you do not own. The wait has to be shorter than the cost of putting a thread to
+         sleep and waking it up (a context switch is on the order of microseconds).
+      2. The lock owner is running on another core right now: the machine has several cores and there are no more
+         contending threads than cores. If the scheduler has preempted the owner, or the garbage collector has
+         suspended it, the waiters burn their time slices for nothing.
+      3. Contention is low: the lock is usually free or released almost at once. Under high contention many spinning
+         threads waste CPU and slow down the owner (a cache line bouncing between cores).
+      4. There are many fine-grained locks (for example, one per node of a linked list), and it matters that
+         `SpinLock` is a struct with no separate heap object.
+
+      **Why `SpinLock` rarely wins.** The documentation explicitly recommends `SpinLock` only when profiling shows
+      that `Monitor` or the `Interlocked` methods significantly slow the program down. On top of that, `Monitor` in
+      CoreCLR already spins briefly before blocking, so a visible difference appears only in the narrow cases above.
+      The order is: start with `lock`, and move to `SpinLock` only after measuring - a benchmark (BenchmarkDotNet)
+      under realistic contention and production data (the `Monitor.LockContentionCount` counter, CPU usage). Often it
+      is better to reduce contention instead: shorten the section, shard the data, or use `Interlocked`, concurrent
+      collections or immutable snapshots.
+
+      **`SpinLock` pitfalls.**
+
+      - It is a mutable struct: a copy is a separate, independent lock. Pass it by `ref`, do not store it in a
+        `readonly` field (the `Enter` call would run on a defensive copy), and do not hide it behind an auto-property.
+      - Owner tracking mode (the `SpinLock(Boolean)` constructor, the `IsThreadOwnerTrackingEnabled` property) helps
+        debugging but slows things down; the recommendation is to turn it off in release builds: `new SpinLock(false)`.
+      - Inside it you must not block, take a second spin lock or do long work: the waiting threads burn CPU the whole
+        time. In a container with a CPU limit this also eats the quota and leads to throttling.
+      - The usage pattern: `bool lockTaken = false; try { spinLock.Enter(ref lockTaken); ... } finally { if (lockTaken) spinLock.Exit(); }`.
+    explanation: |
+      This is a choice between two costs. Blocking a thread costs two context switches (put it to sleep and wake it up)
+      but frees the CPU core for other work. Spinning costs CPU time proportional to the length of the wait. Spinning
+      wins only when the expected wait is shorter than the cost of blocking, and that holds only for very short sections
+      with low contention and an owner that is running on another core. `Monitor` in the CoreCLR implementation hedges
+      both cases: a short wait is handled by spinning, a long one by an OS wait object. `ManualResetEventSlim` is a
+      documented example of the same two-phase scheme.
+
+      A weak answer is "`SpinLock` is faster because it does not go to the OS kernel". Without measurements it easily
+      turns out slower: under contention, or when the owner is preempted, the waiters burn cores, while `Monitor` would
+      already have given up the CPU. A strong answer explains the economics of waiting, names the conditions and demands
+      profiling before the switch, as the documentation advises. The description refers to .NET 10.
+    linkTitles:
+      - SpinLock (overview)
+      - SpinWait struct
+      - SpinLock struct
+      - SpinLock.Enter method
+      - ManualResetEventSlim class
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

@@ -1,0 +1,137 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNFHYEXNHMKGSW3T65
+slug: threading-timer-callbacks-overlap
+stack: dotnet
+topic: concurrency
+level: middle
+type: single
+grading: auto
+tags: [timer, thread-pool, periodictimer, reentrancy]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    using var worker = new BatchWorker();
+    Thread.Sleep(5000);
+
+    public sealed class BatchWorker : IDisposable
+    {
+        private readonly Timer _timer;
+
+        public BatchWorker()
+        {
+            _timer = new Timer(_ => ProcessBatch(), null,
+                TimeSpan.Zero, TimeSpan.FromSeconds(1));
+        }
+
+        private void ProcessBatch()
+        {
+            // Usually takes 200 ms, sometimes 3 seconds.
+        }
+
+        public void Dispose() => _timer.Dispose();
+    }
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: false
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.timer
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.periodictimer
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что происходит, если обратный вызов System.Threading.Timer с периодом 1 секунда иногда работает 3 секунды?
+    prompt: |
+      Сервис на .NET 10 создаёт `System.Threading.Timer` с периодом 1 секунда (класс `BatchWorker` в коде). Обычно
+      `ProcessBatch` выполняется за 200 мс, но иногда занимает 3 секунды. Что происходит в такие моменты?
+    hint: Проверяет ли таймер, закончился ли предыдущий вызов, прежде чем запустить следующий? И на каких потоках выполняется обратный вызов?
+    options:
+      a: "Таймер ждёт завершения `ProcessBatch` и запускает следующий вызов через 1 секунду после окончания предыдущего, поэтому вызовы никогда не пересекаются"
+      b: "Пока `ProcessBatch` выполняется, срабатывания таймера пропускаются или объединяются в одно, поэтому одновременно работает не больше одного вызова"
+      c: "Таймер на каждом периоде запускает обратный вызов на потоке пула потоков независимо от того, закончился ли предыдущий, поэтому несколько вызовов `ProcessBatch` могут выполняться одновременно на разных потоках пула"
+      d: "Все обратные вызовы выполняются строго по очереди на одном выделенном потоке таймера: они не пересекаются, но накапливаются, и обработка отстаёт от расписания"
+    optionExplanations:
+      a: "Так ведёт себя одноразовый таймер, который сам перезапускается через `Change` в конце обратного вызова. Периодический `Timer` не ждёт завершения предыдущего вызова: он запускает обратный вызов на каждом периоде, даже если предыдущий ещё работает."
+      b: "У `System.Threading.Timer` нет механизма, который отслеживал бы, выполняется ли обратный вызов, и пропускал бы срабатывания. Каждое срабатывание запускает обратный вызов на потоке пула. Пропуск приходится реализовывать самому, например флагом с `Interlocked.CompareExchange`."
+      d: "Метод обратного вызова выполняется не на выделенном потоке таймера, а на потоке пула потоков, который предоставляет система. Разные срабатывания могут попасть на разные потоки пула, поэтому строгой очереди нет."
+    answer: "Таймер запускает обратный вызов на потоке пула на каждом периоде, не дожидаясь предыдущего, поэтому несколько вызовов `ProcessBatch` могут выполняться одновременно на разных потоках пула."
+    explanation: |
+      `System.Threading.Timer` не выполняет обратный вызов на каком-то своём потоке: при каждом срабатывании метод
+      выполняется на потоке пула потоков, который предоставляет система. Завершился ли предыдущий вызов, таймер не
+      проверяет. Если `ProcessBatch` работает 3 секунды при периоде 1 секунда, за это время наступят ещё примерно два
+      срабатывания, и их вызовы пойдут параллельно с первым на других потоках пула. Поэтому обратный вызов периодического
+      таймера должен быть реентерабельным: готовым к тому, что одновременно с ним выполняется его же второй вызов.
+      В .NET 10 поведение то же.
+
+      Последствия: состояние гонки на общих полях, двойная обработка одного пакета, а при долгой деградации - рост числа
+      одновременных вызовов и нагрузки на пул потоков.
+
+      Как исключить пересечение:
+
+      - **Одноразовый таймер с перезапуском.** Создать таймер так:
+        `new Timer(_ => ProcessBatch(), null, TimeSpan.Zero, Timeout.InfiniteTimeSpan)`, а в конце обратного вызова, в
+        блоке `finally`, вызывать `_timer.Change(TimeSpan.FromSeconds(1), Timeout.InfiniteTimeSpan)`. Следующий вызов
+        планируется только после окончания текущего.
+      - **`PeriodicTimer`.** Цикл `while (await timer.WaitForNextTickAsync(ct)) { await ProcessBatchAsync(); }`.
+        Тик сам работу не запускает: она выполняется в теле цикла, а следующий `WaitForNextTickAsync` вызывается только
+        после её завершения. Таймер рассчитан на одного потребителя: одновременно допускается только один вызов
+        `WaitForNextTickAsync`. Подходит для асинхронной работы и поддерживает отмену через `CancellationToken`.
+      - Если таймер должен остаться периодическим, но лишняя работа нежелательна, можно пропускать вызов, пока
+        предыдущий ещё идёт, через флаг и `Interlocked.CompareExchange`.
+    linkTitles:
+      - Класс System.Threading.Timer
+      - Класс PeriodicTimer
+  en:
+    title: What happens when a System.Threading.Timer callback with a 1-second period sometimes takes 3 seconds?
+    prompt: |
+      A .NET 10 service creates a `System.Threading.Timer` with a 1-second period (the `BatchWorker` class in the code).
+      Usually `ProcessBatch` takes 200 ms, but sometimes it takes 3 seconds. What happens at those moments?
+    hint: Does the timer check whether the previous call has finished before it starts the next one? And on which threads does the callback run?
+    options:
+      a: "The timer waits for `ProcessBatch` to finish and starts the next call 1 second after the previous one ends, so calls never overlap"
+      b: "While `ProcessBatch` is running, timer ticks are skipped or coalesced into one, so at most one call runs at a time"
+      c: "On every period the timer runs the callback on a thread pool thread whether or not the previous call has finished, so several `ProcessBatch` calls can run at the same time on different pool threads"
+      d: "All callbacks run strictly one after another on a single dedicated timer thread: they do not overlap, but they pile up and processing falls behind the schedule"
+    optionExplanations:
+      a: "That is how a one-shot timer behaves when it reschedules itself with `Change` at the end of the callback. A periodic `Timer` does not wait for the previous call to finish: it runs the callback on every period, even if the previous one is still running."
+      b: "`System.Threading.Timer` has no mechanism that tracks whether the callback is running and skips ticks. Every tick runs the callback on a pool thread. Skipping has to be implemented by hand, for example with a flag and `Interlocked.CompareExchange`."
+      d: "The callback method does not run on a dedicated timer thread but on a thread pool thread supplied by the system. Different ticks can land on different pool threads, so there is no strict queue."
+    answer: "The timer runs the callback on a pool thread on every period without waiting for the previous one, so several `ProcessBatch` calls can run at the same time on different pool threads."
+    explanation: |
+      `System.Threading.Timer` does not run the callback on a thread of its own: on every tick the method runs on a thread
+      pool thread supplied by the system. The timer does not check whether the previous call has finished. If
+      `ProcessBatch` runs for 3 seconds with a 1-second period, about two more ticks happen in that time, and their calls
+      run in parallel with the first one on other pool threads. That is why the callback of a periodic timer has to be
+      reentrant: ready for a second call of itself running at the same time. The behaviour is the same in .NET 10.
+
+      Consequences: race conditions on shared fields, the same batch processed twice, and during a long slowdown a growing
+      number of concurrent calls and more pressure on the thread pool.
+
+      How to rule out overlap:
+
+      - **A one-shot timer that reschedules itself.** Create the timer as
+        `new Timer(_ => ProcessBatch(), null, TimeSpan.Zero, Timeout.InfiniteTimeSpan)`, and at the end of the callback, in
+        a `finally` block, call `_timer.Change(TimeSpan.FromSeconds(1), Timeout.InfiniteTimeSpan)`. The next call is
+        scheduled only after the current one ends.
+      - **`PeriodicTimer`.** The loop `while (await timer.WaitForNextTickAsync(ct)) { await ProcessBatchAsync(); }`.
+        A tick does not start the work by itself: the work runs in the loop body, and the next `WaitForNextTickAsync` is
+        called only after it finishes. The timer is meant for a single consumer: only one `WaitForNextTickAsync` call may be
+        in flight at a time. It fits asynchronous work and supports cancellation through a `CancellationToken`.
+      - If the timer must stay periodic but extra work is unwanted, you can skip a call while the previous one is still
+        running, using a flag and `Interlocked.CompareExchange`.
+    linkTitles:
+      - System.Threading.Timer class
+      - PeriodicTimer class
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

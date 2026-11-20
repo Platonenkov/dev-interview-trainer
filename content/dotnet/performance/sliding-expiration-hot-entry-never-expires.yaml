@@ -1,0 +1,117 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQCPX0W3GWRQHEMAQA
+slug: sliding-expiration-hot-entry-never-expires
+stack: dotnet
+topic: performance
+level: middle
+type: single
+grading: auto
+tags: [caching, memory-cache, sliding-expiration, stale-data]
+code:
+  language: csharp
+  harness: none
+  source: |
+    using Microsoft.Extensions.Caching.Memory;
+
+    public sealed class PriceService(IMemoryCache cache, IPriceRepository repository)
+    {
+        public Task<decimal> GetPriceAsync(int productId) =>
+            cache.GetOrCreateAsync($"price:{productId}", entry =>
+            {
+                entry.SlidingExpiration = TimeSpan.FromMinutes(5);
+                return repository.LoadPriceAsync(productId);
+            });
+    }
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/performance/caching/memory
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/microsoft.extensions.caching.memory.memorycacheentryoptions.slidingexpiration
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что происходит с часто читаемой записью IMemoryCache, у которой задан только SlidingExpiration?
+    prompt: |
+      Сервис на .NET 10 кэширует цену товара в `IMemoryCache` с одним лишь `SlidingExpiration` в 5 минут. Цену популярного
+      товара запрашивают несколько раз в секунду. Администратор меняет цену в базе данных, а код записи в базу кэш никак
+      не трогает. Что произойдёт с записью в кэше?
+    hint: От какого момента отсчитывается скользящий интервал и что его перезапускает?
+    options:
+      a: Запись истечёт через 5 минут после создания, и следующий запрос загрузит новую цену из базы
+      b: Каждое чтение заново запускает 5-минутный интервал, поэтому запись не истекает и сервис отдаёт старую цену неограниченно долго
+      c: "`MemoryCache` отслеживает изменения в источнике данных и сам удалит запись после обновления цены в базе"
+      d: Кэш раз в 5 минут в фоне вызывает фабрику повторно и тем самым обновляет цену
+    optionExplanations:
+      a: Так ведёт себя абсолютное время жизни (`AbsoluteExpirationRelativeToNow`). Скользящий интервал отсчитывается не от создания записи, а от последнего обращения к ней.
+      c: "`MemoryCache` ничего не знает об источнике данных. Запись пропадает из кэша по причинам, которые видит сам кэш, например: истечение срока, явный вызов `Remove` или `Compact`, перезапись через `Set` под тем же ключом, срабатывание привязанного токена изменений, вытеснение при заданном лимите размера. Изменения в базе данных среди этих причин нет."
+      d: У `MemoryCache` нет фонового обновления значений. Фабрика в `GetOrCreateAsync` вызывается только при промахе, то есть когда записи в кэше нет.
+    answer: Каждое чтение заново запускает 5-минутный интервал, поэтому запись не истекает и сервис отдаёт старую цену неограниченно долго.
+    explanation: |
+      `SlidingExpiration` задаёт, сколько запись может оставаться без обращений, прежде чем её удалят. Каждое успешное
+      чтение (`TryGetValue`, `Get`, `GetOrCreateAsync` с попаданием) обновляет время последнего обращения, и отсчёт
+      начинается заново. Документация ASP.NET Core описывает это так: при каждом обращении запись остаётся в кэше ещё на
+      один скользящий интервал. Значит, если запись читают чаще, чем раз в 5 минут, интервал не истекает никогда.
+
+      В результате старая цена живёт в кэше, пока запись не удалят явно, не вытеснят, например, по лимиту размера, или не
+      перезапустят процесс. Хуже всего то, что это касается именно самых популярных записей: редко читаемые товары
+      обновятся, а горячие - нет.
+
+      Исправление - ограничить время жизни сверху: задать вместе со скользящим сроком абсолютный, например
+      `entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(30)`. Справочник по `SlidingExpiration` прямо
+      говорит, что скользящий срок не продлевает жизнь записи дальше абсолютного, если тот задан. Тогда абсолютный срок
+      задаёт максимальную устарелость данных. Если устаревшая цена недопустима совсем, код, меняющий цену, должен ещё и
+      вызывать `cache.Remove(key)` (или использовать токен изменений). Поведение описано для .NET 10.
+    linkTitles:
+      - Кэширование в памяти в ASP.NET Core
+      - Свойство MemoryCacheEntryOptions.SlidingExpiration
+  en:
+    title: What happens to a frequently read IMemoryCache entry that has only SlidingExpiration set?
+    prompt: |
+      A .NET 10 service caches a product price in `IMemoryCache` with only a `SlidingExpiration` of 5 minutes. The price
+      of a popular product is requested several times a second. An administrator changes the price in the database, and
+      the code that writes to the database does not touch the cache. What happens to the cache entry?
+    hint: From what moment is a sliding interval measured, and what restarts it?
+    options:
+      a: The entry expires 5 minutes after it was created, and the next request loads the new price from the database
+      b: Every read restarts the 5-minute interval, so the entry never expires and the service serves the old price indefinitely
+      c: "`MemoryCache` tracks changes in the data source and removes the entry itself once the price in the database is updated"
+      d: Every 5 minutes the cache calls the factory again in the background and so refreshes the price
+    optionExplanations:
+      a: That is how an absolute lifetime (`AbsoluteExpirationRelativeToNow`) behaves. A sliding interval is measured not from the creation of the entry but from the last access to it.
+      c: "`MemoryCache` knows nothing about the data source. An entry leaves the cache for reasons the cache itself can see, for example: its expiration passes, an explicit `Remove` or `Compact` call, a `Set` that overwrites the same key, an attached change token fires, or eviction under a configured size limit. A change in the database is not among them."
+      d: "`MemoryCache` has no background refresh of values. The factory in `GetOrCreateAsync` runs only on a miss, that is, when the entry is not in the cache."
+    answer: Every read restarts the 5-minute interval, so the entry never expires and the service serves the old price indefinitely.
+    explanation: |
+      `SlidingExpiration` sets how long an entry may stay without being accessed before it is removed. Every successful
+      read (`TryGetValue`, `Get`, `GetOrCreateAsync` with a hit) updates the last access time, and the countdown starts
+      over. The ASP.NET Core documentation puts it this way: each time the entry is accessed, it remains in the cache for
+      a further sliding interval. So if the entry is read more often than once every 5 minutes, the interval never runs out.
+
+      As a result the old price stays in the cache until the entry is removed explicitly, evicted (for example by a size
+      limit), or the process restarts. The worst part is that this hits exactly the most popular entries: rarely read
+      products get refreshed, hot ones do not.
+
+      The fix is to cap the lifetime: set an absolute expiration together with the sliding one, for example
+      `entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(30)`. The `SlidingExpiration` reference page states
+      that a sliding expiration does not extend the entry lifetime beyond the absolute expiration, if one is set. The
+      absolute expiration then sets the maximum staleness of the data. If a stale price is not acceptable at all, the
+      code that changes the price should also call `cache.Remove(key)` (or use a change token). The behaviour is
+      described for .NET 10.
+    linkTitles:
+      - Cache in-memory in ASP.NET Core
+      - MemoryCacheEntryOptions.SlidingExpiration property
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"
+  noRunReason: The snippet uses IMemoryCache from Microsoft.Extensions.Caching.Memory, which is not part of the base shared framework available in the sandbox, and an application repository interface that is not shown.

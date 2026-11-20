@@ -1,0 +1,195 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQE6B1PER52JDZMS5N
+slug: cache-key-versioning-rolling-deploy
+stack: dotnet
+topic: performance
+level: architect
+type: open
+grading: self
+tags: [caching, distributed-cache, hybridcache, serialization, versioning, deployment]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/performance/caching/distributed
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/performance/caching/hybrid
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/serialization/system-text-json/missing-members
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/serialization/binaryformatter-migration-guide/
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как защитить общий распределённый кэш от смены формата объектов при rolling-деплоях на протяжении лет?
+    prompt: |
+      Сервис на .NET 10 работает на нескольких экземплярах и хранит объекты в общем Redis через `IDistributedCache`
+      (или через `HybridCache`, у которого Redis служит вторым уровнем). Выкатка идёт постепенно (rolling): какое-то
+      время старая и новая версии работают одновременно и читают одни и те же ключи. Система будет жить годами: поля
+      кэшируемых классов будут переименовываться и менять тип, будут откаты, обновления .NET и, возможно, смена сериализатора.
+
+      Как вы спроектируете кэш, чтобы деплой или откат не превращали попадания в кэш в ошибки десериализации или
+      в неверные данные?
+    hint: Какой код прочитает запись, которую только что записала новая версия, и что произойдёт с этой записью после отката?
+    answer: |
+      1. **Назвать, почему это ломается.** Общий кэш переживает процесс, который его заполнил. Во время rolling-деплоя
+         версия N читает то, что записала N+1, и наоборот, а при откате N читает записи N+1. Исходы бывают трёх видов:
+         - исключение при десериализации (поле сменило тип), и каждое попадание в кэш превращается в ошибку запроса;
+         - тихо неверные данные: `System.Text.Json` по умолчанию пропускает неизвестные свойства JSON, а свойство,
+           которого нет в JSON, оставляет со значением по умолчанию, поэтому переименованное поле просто окажется пустым
+           (исключение будет только для членов `required`); перенумерованный `enum`, сериализованный числом, поменяет смысл;
+         - поменялась семантика поля при той же форме (например, цена теперь с налогом), и сериализатор этого не заметит вовсе.
+      2. **Считать кэшируемую запись контрактом.** Для кэша - отдельные DTO, а не доменные сущности и не сущности EF Core.
+         Изменение такого DTO проходит то же ревью, что изменение публичного API или сообщения в очереди. Совместимые
+         изменения (добавить необязательное поле с безопасным значением по умолчанию) делаются без смены версии, и
+         читатель обязан их терпеть. Несовместимые (переименование, смена типа или смысла, удаление поля, на которое
+         опирается старая версия) требуют новой версии схемы.
+      3. **Решить, где хранится версия.**
+         - **В ключе**: `catalog:product:v3:{id}`. Версии изолированы, старый код не видит новых записей. Цена: новая
+           версия стартует с холодным кэшем, а на время перекрытия в кэше лежат обе копии.
+         - **В payload** (конверт с полем `schemaVersion` или байт версии в начале). Ключ один, и читатель, увидевший
+           чужую версию, считает это промахом. Но пока работают обе версии, они перезаписывают запись друг друга, и доля
+           попаданий проседает до конца выкатки.
+         - Практичная комбинация: версия схемы в ключе для несовместимых изменений и версия в payload как страховка и
+           для диагностики.
+         - Версия схемы - это константа рядом с DTO, а не версия сборки: иначе каждый релиз обнуляет кэш без причины.
+      4. **Сделать читателя терпимым.** Любая ошибка десериализации или проверки (обязательные поля, допустимые значения)
+         - это промах: залогировать, увеличить метрику, загрузить из источника и перезаписать запись. Ошибка кэша не
+         должна становиться ошибкой запроса. Делается это в одном месте: декоратор над `IDistributedCache` или свой
+         сериализатор для `HybridCache` (регистрация через `AddSerializer`), а не в каждом вызове.
+      5. **Продумать инвалидацию и откат.** При версии в ключе изменение данных во время перекрытия должно удалять ключи
+         всех живых версий схемы. Иначе после отката старая версия найдёт свою запись, которую никто не инвалидировал,
+         и отдаст устаревшие данные. Поэтому инвалидация знает список активных версий, а записи прошлых версий живут
+         недолго.
+      6. **Учесть холодный старт.** Новая версия ключа - это холодный кэш для части трафика. Rolling-деплой растягивает
+         прогрев, но для дорогих ключей нужны ограничение параллелизма загрузки из источника и защита от stampede, а для
+         самых горячих - прогрев до переключения трафика.
+      7. **Убирать старое само собой.** У каждой записи в общем кэше есть абсолютный срок жизни, тогда брошенные версии
+         исчезают без ручной работы. Сбрасывать весь кэш при деплое нельзя: это удар по базе, а если Redis общий, то и по
+         чужим сервисам.
+      8. **Закрепить на годы.**
+         - Тесты совместимости: в репозитории хранятся эталонные payload прошлых версий схемы, тест проверяет, что текущий
+           код их читает или корректно отклоняет как промах.
+         - Обновление .NET и смена сериализатора - тоже смена схемы. `BinaryFormatter` удалён из .NET 9, и кэш с такими
+           payload после обновления не прочитается целиком. Сериализаторы, которые записывают имена типов .NET, ломаются
+           при переименовании класса или пространства имён.
+         - Префикс ключей по сервису. Записи, которые читают несколько сервисов, - это скрытая интеграция: её либо
+           версионируют как контракт, либо запрещают.
+         - С `HybridCache` версия в ключе действует на оба уровня. Первичный кэш в памяти процесса содержит объекты только
+           своей версии кода, опасен общий второй уровень.
+
+      **Компромиссы.**
+
+      | Вариант | Плюсы | Минусы |
+      |---|---|---|
+      | Только совместимые изменения, без версии | Нет холодного старта, нет дублей | Держится на дисциплине, семантические изменения не ловятся |
+      | Версия в ключе | Полная изоляция версий, проще рассуждать | Холодный кэш при деплое, двойная память на время перекрытия, инвалидация нескольких ключей |
+      | Версия в payload | Один ключ, одна копия | Версии перетирают записи друг друга во время выкатки, каждый читатель обязан проверять версию |
+    explanation: |
+      Главная мысль: всё, что лежит в общем кэше, - это сохранённые данные со своим жизненным циклом, как сообщения
+      в очереди или строки в базе. Rolling-деплой и откат гарантируют, что любую запись прочитает и код, который её
+      записал, и код другой версии. Поэтому формат записи надо проектировать как контракт: различать совместимые и
+      несовместимые изменения, явно хранить версию схемы и определять, что делает читатель с чужой или повреждённой
+      записью. Самые опасные поломки не те, что бросают исключение, а те, что тихо дают значения по умолчанию или
+      старый смысл поля.
+
+      Слабые ответы останавливаются на одном рычаге: «сбрасывать кэш при каждом деплое» (stampede на базу и не спасает
+      во время перекрытия версий), «добавить версию сборки в ключ» (каждый релиз обнуляет кэш) или «поставить короткий
+      срок жизни» (во время выкатки записи всё равно читаются чужой версией). Сильный ответ называет классы изменений,
+      место хранения версии и его цену, поведение читателя при ошибке, инвалидацию с учётом отката, уборку старых версий
+      и тесты, которые не дают нарушить контракт через годы. Ответ дан для .NET 10.
+    linkTitles:
+      - Распределённое кэширование в ASP.NET Core
+      - Библиотека HybridCache в ASP.NET Core
+      - "System.Text.Json: обработка неотображаемых членов"
+      - Руководство по миграции с BinaryFormatter
+  en:
+    title: How do you keep a shared distributed cache safe when cached object shapes change across years of rolling deployments?
+    prompt: |
+      A .NET 10 service runs on several instances and stores objects in a shared Redis through `IDistributedCache`
+      (or through `HybridCache` with Redis as its second level). Deployments are rolling: for a while the old and the new
+      version run side by side and read the same keys. The system will live for years: fields of cached classes will be
+      renamed and change type, there will be rollbacks, .NET upgrades and possibly a change of serializer.
+
+      How do you design the cache so that a deployment or a rollback does not turn cache hits into deserialization failures
+      or wrong data?
+    hint: Which code reads the entry that the new version has just written, and what happens to that entry after a rollback?
+    answer: |
+      1. **Name why it breaks.** A shared cache outlives the process that filled it. During a rolling deployment version N
+         reads what N+1 wrote and the other way round, and after a rollback N reads entries written by N+1. There are
+         three kinds of outcome:
+         - a deserialization exception (a field changed type), and every cache hit becomes a failed request;
+         - silently wrong data: by default `System.Text.Json` skips unknown JSON properties and leaves a property that is
+           missing from the JSON at its default value, so a renamed field just comes out empty (an exception is thrown only
+           for `required` members); a renumbered `enum` serialized as a number changes its meaning;
+         - the meaning of a field changed while the shape stayed the same (for example the price now includes tax), and the
+           serializer does not notice at all.
+      2. **Treat a cached entry as a contract.** Use dedicated cache DTOs, not domain entities and not EF Core entities.
+         A change to such a DTO gets the same review as a change to a public API or a queue message. Compatible changes
+         (adding an optional field with a safe default) keep the version, and the reader must tolerate them. Incompatible
+         ones (rename, type or meaning change, removing a field the old version relies on) require a new schema version.
+      3. **Decide where the version lives.**
+         - **In the key**: `catalog:product:v3:{id}`. Versions are isolated, old code never sees new entries. The cost:
+           the new version starts with a cold cache, and during the overlap the cache holds both copies.
+         - **In the payload** (an envelope with a `schemaVersion` field, or a version byte at the start). One key, and a
+           reader that sees a foreign version treats it as a miss. But while both versions run they overwrite each other's
+           entry, and the hit ratio drops until the rollout finishes.
+         - A practical combination: the schema version in the key for incompatible changes, and a version in the payload
+           as a safety net and for diagnostics.
+         - The schema version is a constant next to the DTO, not the assembly version: otherwise every release wipes the
+           cache for no reason.
+      4. **Make the reader tolerant.** Any deserialization or validation failure (required fields, allowed values) is a
+         miss: log it, increment a metric, load from the source and overwrite the entry. A cache failure must not become a
+         request failure. Do it in one place: a decorator over `IDistributedCache` or a custom serializer for `HybridCache`
+         (registered with `AddSerializer`), not in every call site.
+      5. **Think through invalidation and rollback.** With the version in the key, a data change during the overlap must
+         remove the keys of every live schema version. Otherwise, after a rollback the old version finds its own entry that
+         nobody invalidated and serves stale data. So invalidation knows the list of active versions, and entries of past
+         versions have short lifetimes.
+      6. **Plan for the cold start.** A new key version means a cold cache for part of the traffic. A rolling deployment
+         spreads the warm-up, but expensive keys need limited concurrency when loading from the source and stampede
+         protection, and the hottest ones can be warmed before traffic is switched.
+      7. **Let old data clean itself up.** Every entry in the shared cache has an absolute lifetime, so abandoned versions
+         disappear without manual work. Do not flush the whole cache on deployment: it hammers the database and, if Redis
+         is shared, other services too.
+      8. **Lock it in for years.**
+         - Compatibility tests: the repository keeps reference payloads of past schema versions, and a test checks that
+           the current code reads them or rejects them cleanly as a miss.
+         - A .NET upgrade or a serializer change is a schema change too. `BinaryFormatter` was removed in .NET 9, so a
+           cache full of such payloads becomes unreadable as a whole after the upgrade. Serializers that write .NET type
+           names break when a class or namespace is renamed.
+         - Prefix keys per service. Entries read by several services are a hidden integration: either version them as a
+           contract or forbid them.
+         - With `HybridCache` a version in the key applies to both levels. The in-process primary cache only holds objects
+           of its own code version; the risk is the shared second level.
+
+      **Trade-offs.**
+
+      | Option | Pros | Cons |
+      |---|---|---|
+      | Compatible changes only, no version | No cold start, no duplicates | Relies on discipline, semantic changes are not caught |
+      | Version in the key | Full isolation of versions, easy to reason about | Cold cache on deployment, double memory during the overlap, invalidation of several keys |
+      | Version in the payload | One key, one copy | Versions overwrite each other's entries during a rollout, every reader must check the version |
+    explanation: |
+      The main point: whatever sits in a shared cache is persisted data with its own lifecycle, like queue messages or
+      database rows. Rolling deployments and rollbacks guarantee that any entry is read both by the code that wrote it and by
+      code of another version. So the entry format has to be designed as a contract: tell compatible changes from
+      incompatible ones, store the schema version explicitly, and define what a reader does with a foreign or corrupt
+      entry. The most dangerous failures are not the ones that throw, but the ones that silently produce default values or
+      the old meaning of a field.
+
+      Weak answers stop at a single lever: "flush the cache on every deployment" (a stampede on the database, and it does not
+      help while versions overlap), "put the assembly version in the key" (every release wipes the cache) or "use a short
+      lifetime" (during a rollout entries are still read by the other version). A strong answer names the classes of change,
+      where the version lives and what that costs, how the reader behaves on failure, invalidation that accounts for
+      rollbacks, cleanup of old versions, and tests that keep the contract intact for years. The answer applies to .NET 10.
+    linkTitles:
+      - Distributed caching in ASP.NET Core
+      - HybridCache library in ASP.NET Core
+      - "System.Text.Json: handle unmapped members"
+      - BinaryFormatter migration guide
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

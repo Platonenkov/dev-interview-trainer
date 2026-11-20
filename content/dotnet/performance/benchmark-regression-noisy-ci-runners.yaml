@@ -1,0 +1,113 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQWVG6QQNXTNRMBYV5
+slug: benchmark-regression-noisy-ci-runners
+stack: dotnet
+topic: performance
+level: lead
+type: single
+grading: auto
+tags: [benchmarking, benchmarkdotnet, ci, performance-regression]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://benchmarkdotnet.org/articles/guides/good-practices.html
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как ловить регрессии производительности в CI, если результаты бенчмарков на общих раннерах скачут на 20%?
+    prompt: |
+      Команда добавила бенчмарки BenchmarkDotNet в CI, чтобы ловить регрессии производительности до слияния. CI работает
+      на общих облачных раннерах, и один и тот же код без изменений между прогонами показывает разницу во времени до 20%.
+      Сборки то краснеют, то зеленеют без причины, и разработчики начинают игнорировать результат. Какой подход вы как
+      лид предложите команде?
+    hint: Какая часть этих 20% зависит от кода, а какая - от того, на какой машине и рядом с какими соседями выполнялся прогон?
+    options:
+      a: "Сохранять абсолютные результаты каждого прогона main и ронять сборку PR, если бенчмарк медленнее последнего сохранённого значения больше чем на 5%"
+      b: "Прогонять main и PR в одной задаче CI на одной выделенной машине и сравнивать их статистическим тестом с порогом выше измеренного шума"
+      c: "Оставить общие раннеры, многократно увеличить число итераций BenchmarkDotNet, чтобы сузить погрешность, и сравнивать результат с сохранёнными значениями"
+      d: "Убрать бенчмарки из CI, раз на общих раннерах они бесполезны, и находить регрессии по жалобам пользователей и метрикам production"
+    optionExplanations:
+      a: "Сохранённое значение получено на другой машине и в другом окружении, поэтому разница с ним в основном отражает шум, а не код. Порог 5% при разбросе 20% гарантирует постоянные ложные срабатывания, а настоящую регрессию в 10% невозможно отличить от случайного везения."
+      c: "Больше итераций сужает доверительный интервал внутри одного прогона на одной машине, но разница между машинами (модель процессора, частота, турбо-режим, соседи по виртуальной машине) систематическая и не усредняется. Узкие интервалы только создают ложную уверенность при сравнении с числами с другого железа."
+      d: "Это отказ от раннего обнаружения: регрессия найдётся через недели, когда уже непонятно, какой коммит её внёс, и исправлять её дороже. Проблема в методике сравнения, а не в самой идее проверять производительность в CI."
+    answer: "Прогонять базовую (main) и проверяемую (PR) версии в одной задаче CI на одной выделенной машине и сравнивать их статистическим тестом с порогом выше измеренного шума."
+    explanation: |
+      Результат бенчмарка - это свойство пары «код плюс окружение». На общих раннерах окружение каждый раз другое:
+      другое железо, другие соседи на хосте, разное состояние кэшей и частоты процессора. Поэтому абсолютные числа из
+      разных прогонов сравнивать нельзя: разброс в 20% перекрывает почти любую регрессию, которую стоит ловить.
+      Рекомендации BenchmarkDotNet по хорошим практикам предупреждают, что результаты в разных окружениях могут
+      существенно различаться, и советуют закрывать во время прогона все приложения, кроме бенчмарка, а на ноутбуке
+      держать питание подключённым и включать режим максимальной производительности. Схема ниже - инженерная практика,
+      которая следует из этого предупреждения.
+
+      Работающая схема:
+
+      - **Одно окружение для обеих версий.** В одной задаче собрать main и ветку PR и прогнать бенчмарки обеих на одной
+        машине, по возможности поочерёдно. Тогда шум окружения влияет на обе версии примерно одинаково и в разнице
+        в основном остаётся вклад кода.
+      - **Выделенная машина.** Отдельный self-hosted раннер или физическая машина без соседей и с фиксированными
+        настройками питания заметно снижают разброс между прогонами.
+      - **Статистика вместо одного числа.** Сравнивать распределения измерений статистическим тестом (например,
+        критерием Манна-Уитни) с порогом, выбранным выше измеренного шума. Порог подбирается по прогонам «код против
+        того же кода».
+
+      Для лида важна и процессная сторона: нестабильная проверка хуже отсутствующей, потому что приучает команду
+      игнорировать красные сборки. Поэтому стоит начать с небольшого набора критичных бенчмарков, договориться, кто
+      разбирает срабатывания, и сделать проверку блокирующей только после того, как доля ложных срабатываний стала
+      приемлемой. Хорошее дополнение - число выделенных байт (`[MemoryDiagnoser]`): для детерминированного кода оно
+      обычно воспроизводится от прогона к прогону и заметно меньше зашумлено, чем время.
+    linkTitles:
+      - Хорошие практики BenchmarkDotNet
+  en:
+    title: How do you catch performance regressions in CI when benchmark results on shared runners vary by 20%?
+    prompt: |
+      The team added BenchmarkDotNet benchmarks to CI to catch performance regressions before merging. CI runs on shared
+      cloud runners, and the same unchanged code shows up to 20% difference in time between runs. Builds turn red and
+      green for no reason, and developers start ignoring the result. As the lead, which approach do you propose to the team?
+    hint: Which part of those 20% depends on the code, and which on the machine the run happened on and its neighbours?
+    options:
+      a: "Store the absolute results of every main run and fail the PR build when a benchmark is more than 5% slower than the last stored value"
+      b: "Run main and the PR in the same CI job on one dedicated machine and compare them with a statistical test whose threshold exceeds the measured noise"
+      c: "Keep the shared runners, raise the BenchmarkDotNet iteration count many times to shrink the error, and compare the result with the stored values"
+      d: "Remove benchmarks from CI since shared runners make them useless, and catch regressions through user complaints and production metrics"
+    optionExplanations:
+      a: "The stored value was measured on a different machine in a different environment, so the difference from it mostly reflects noise, not code. A 5% threshold with 20% spread guarantees constant false alarms, and a real 10% regression cannot be told apart from random luck."
+      c: "More iterations narrow the confidence interval within one run on one machine, but the difference between machines (CPU model, frequency, turbo, neighbours on the virtual machine) is systematic and does not average out. Narrow intervals only create false confidence when compared with numbers from other hardware."
+      d: "This gives up early detection: the regression is found weeks later, when nobody knows which commit introduced it, and fixing it costs more. The problem is the comparison method, not the idea of checking performance in CI."
+    answer: "Run the baseline (main) and the candidate (PR) in the same CI job on the same dedicated machine and compare them with a statistical test using a threshold above the measured noise."
+    explanation: |
+      A benchmark result is a property of the pair "code plus environment". On shared runners the environment differs
+      every time: different hardware, different neighbours on the host, different cache and CPU frequency state. That is
+      why absolute numbers from different runs cannot be compared: a 20% spread hides almost any regression worth catching.
+      The BenchmarkDotNet good practices warn that results in different environments may vary significantly, and recommend
+      closing every application except the benchmark during a run and, on a laptop, keeping it plugged in in maximum
+      performance mode. The scheme below is engineering practice that follows from that warning.
+
+      A scheme that works:
+
+      - **One environment for both versions.** In one job, build main and the PR branch and run the benchmarks of both on
+        the same machine, interleaved if possible. Environment noise then affects both versions roughly equally, and the
+        difference mostly reflects the code.
+      - **A dedicated machine.** A separate self-hosted runner or a physical machine with no neighbours and fixed power
+        settings noticeably reduces the spread between runs.
+      - **Statistics instead of a single number.** Compare the distributions of measurements with a statistical test (for
+        example the Mann-Whitney test) and a threshold chosen above the measured noise. The threshold is tuned with
+        "same code against same code" runs.
+
+      For a lead the process side matters too: a flaky check is worse than none, because it teaches the team to ignore red
+      builds. So start with a small set of critical benchmarks, agree who triages the alerts, and make the check blocking
+      only after the false alarm rate is acceptable. Allocated bytes (`[MemoryDiagnoser]`) complement such a check well:
+      for deterministic code they usually repeat from run to run and are much less noisy than timings.
+    linkTitles:
+      - BenchmarkDotNet good practices
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

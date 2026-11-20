@@ -1,0 +1,162 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQ2AG29AGM43WC460G
+slug: continuous-profiling-production-rollout
+stack: dotnet
+topic: performance
+level: lead
+type: open
+grading: self
+tags: [profiling, dotnet-monitor, dotnet-trace, diagnostics, observability, production]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-monitor
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-trace
+    lang: en
+    kind: docs
+  - url: https://github.com/dotnet/dotnet-monitor
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как решить, собирать ли профили и трассировки в продакшене постоянно или по запросу?
+    prompt: |
+      Команда сопровождает десятки сервисов на .NET 10 в Kubernetes. Раз в несколько недель задержки резко растут,
+      а через несколько минут всё проходит, и дежурный не успевает подключиться. Часть команды предлагает включить
+      постоянное профилирование на всех экземплярах, часть против.
+
+      Как вы как лид примете решение, собирать ли профили, трассировки и дампы постоянно или по запросу, и как
+      будете внедрять выбранный вариант?
+    hint: "Какие артефакты дёшевы и безопасны, а какие останавливают процесс или содержат чужие данные? И что дороже для команды - не поймать момент сбоя или постоянно платить за сбор?"
+    answer: |
+      **Начать с вопроса, на который должны отвечать данные, а не с инструмента.** Выписать инциденты последних
+      месяцев, которые не удалось диагностировать, и причину: проблема прошла раньше, чем кто-то подключился,
+      в образе не было инструментов, ни у кого не было доступа. Если проблемы редки и воспроизводятся под нагрузкой
+      на стенде, хватает сбора по запросу. Постоянный сбор окупается для коротких плавающих проблем и для сравнения
+      релизов между собой.
+
+      1. **Разложить артефакты по цене и чувствительности.**
+
+      | Артефакт | Накладные расходы | Чувствительность | Режим по умолчанию |
+      |---|---|---|---|
+      | Метрики (`System.Runtime`, метрики запросов) | Низкие | Низкая | Постоянно, на всех экземплярах |
+      | Логи и распределённые трассировки (OpenTelemetry) | От низких до умеренных, регулируются семплированием | Средняя: идентификаторы и данные запросов | Постоянно, с семплированием |
+      | Трассировка с выборкой CPU (`dotnet-trace`, действие `CollectTrace`) | Умеренные на время окна | Средняя: имена методов, иногда данные событий | Короткие окна, по запросу или по триггеру |
+      | Подробные трассировки (выделения памяти, детали GC) | Выше | Средняя | Только по запросу, на одном экземпляре |
+      | Дамп кучи GC, полный дамп процесса | Пауза процесса, большие файлы | Высокая: вся память, включая токены, строки подключения и персональные данные | Только по запросу, с согласованием |
+
+      2. **Первый этап: сбор по запросу и по триггеру на части экземпляров.** Запустить `dotnet-monitor` рядом
+         с частью экземпляров (sidecar-контейнер в Kubernetes), например на canary или в одной зоне. Он подключается
+         к процессу через диагностический порт, поэтому в образ приложения не нужно добавлять инструменты диагностики.
+         Правила сбора (collection rules) состоят из триггера (метрика выше порога в течение скользящего окна,
+         медленные запросы, всплеск ответов 5xx), действий (`CollectTrace` с короткой длительностью, `CollectDump`)
+         и лимитов (`ActionCount` за `ActionCountSlidingWindowDuration`), чтобы «дребезжащий» триггер не заполнил
+         диск и не держал процесс под постоянным сбором. Артефакты уходят через egress-провайдер в защищённое
+         хранилище, а не в файловую систему контейнера. Так данные снимаются ровно в момент сбоя, без дежурного.
+      3. **Измерить накладные расходы до расширения.** Под реальной нагрузкой сравнить p95/p99 задержки, CPU
+         и пропускную способность экземпляров со сбором и без него, в том числе в момент снятия трассировки и дампа.
+         Заранее согласовать бюджет (какую добавку к CPU и задержке принимает владелец продукта) и выключатель:
+         правила - это конфигурация, их можно отключить без релиза.
+      4. **Договориться о владении данными.** Дамп - это продакшен-данные с теми же правилами доступа, что и база:
+         хранилище с ограниченным доступом и шифрованием, короткий срок хранения, доступ для роли дежурного, аудит того,
+         кто запустил сбор и кто скачал артефакт. API `dotnet-monitor` закрыть аутентификацией и не открывать
+         в сеть с `--no-auth`: кто может вызвать API, тот может прочитать память процесса. Получить согласование
+         службы безопасности. Назначить команду, которая разбирает собранные профили: данные, на которые никто
+         не смотрит, - это только расходы и риск.
+      5. **Расширять поэтапно.** Если триггерный сбор раз за разом ловит проблемы, а накладные расходы укладываются
+         в бюджет, добавлять экземпляры. Если нужен постоянный профиль, делать выборку во времени и по парку:
+         короткие сессии на сменяющейся доле экземпляров вместо непрерывной трассировки всех. Готовый профилировщик
+         APM-продукта или свои правила - выбор по стоимости, месту хранения данных и поддержке нужной версии среды
+         выполнения.
+      6. **Закрепить в процессе.** Runbook «какой артефакт собирать при каком симптоме», репетиция на стенде,
+         пересмотр правил и порогов после каждого инцидента.
+    explanation: |
+      Решение - это компромисс между тремя величинами: накладными расходами на продакшене, риском, который несут
+      собранные данные, и временем до диагноза. Метрики дёшевы и безопасны, поэтому включены всегда. Дампы дороги
+      и опасны, поэтому никогда не собираются постоянно. Профили и трассировки лежат посередине, и разумный старт -
+      сбор по триггеру: он фиксирует момент проблемы, но не заставляет платить за сбор постоянно. Начинать с части
+      экземпляров нужно потому, что накладные расходы EventPipe зависят от включённых провайдеров и уровня
+      подробности, и их нужно измерить на своей нагрузке, а не предполагать.
+
+      Слабые ответы обычно крайние: «включить профилировщик везде» (нет измеренных накладных расходов, нет владельца
+      данных, дампы с персональными данными расползаются по хранилищам) или «в продакшене ничего не собираем,
+      воспроизводим локально» (короткие проблемы под реальной нагрузкой локально не воспроизводятся). Ответ уровня
+      лида - это поэтапное внедрение с измерением, явный бюджет накладных расходов, правила доступа и хранения,
+      назначенный владелец данных и возможность быстро всё выключить. Ответ дан для сервисов на .NET 10 и инструментов
+      `dotnet-monitor` и `dotnet-trace`, которые работают через диагностический порт среды выполнения.
+    linkTitles:
+      - Инструмент dotnet-monitor
+      - Инструмент dotnet-trace
+      - Репозиторий dotnet/dotnet-monitor
+  en:
+    title: How do you decide whether to collect profiles and traces in production continuously or on demand?
+    prompt: |
+      A team runs dozens of .NET 10 services in Kubernetes. Every few weeks latency spikes, and a few minutes later
+      everything is back to normal, before the on-call engineer manages to connect. Some of the team want to turn on
+      continuous profiling on every instance, others are against it.
+
+      As the lead, how do you decide whether to collect profiles, traces and dumps continuously or on demand, and how
+      do you roll out the chosen approach?
+    hint: "Which artifacts are cheap and safe, and which pause the process or contain other people's data? And what costs the team more - missing the moment of failure or paying for collection all the time?"
+    answer: |
+      **Start from the question the data must answer, not from the tool.** List the incidents of recent months that
+      could not be diagnosed and the reason: the problem was gone before anyone connected, the image had no tools,
+      nobody had access. If problems are rare and reproduce under load in a test environment, on-demand collection is
+      enough. Continuous collection pays off for short intermittent problems and for comparing releases with each other.
+
+      1. **Sort artifacts by cost and sensitivity.**
+
+      | Artifact | Overhead | Sensitivity | Default mode |
+      |---|---|---|---|
+      | Metrics (`System.Runtime`, request metrics) | Low | Low | Continuous, on every instance |
+      | Logs and distributed traces (OpenTelemetry) | Low to moderate, controlled by sampling | Medium: identifiers and request data | Continuous, sampled |
+      | CPU sampling trace (`dotnet-trace`, the `CollectTrace` action) | Moderate during the window | Medium: method names, sometimes event payloads | Short windows, on demand or triggered |
+      | Verbose traces (allocations, GC details) | Higher | Medium | On demand only, on one instance |
+      | GC heap dump, full process dump | Process pause, large files | High: the whole memory, including tokens, connection strings and personal data | On demand only, with approval |
+
+      2. **Phase one: on-demand and triggered collection on a subset of instances.** Run `dotnet-monitor` next to some
+         instances (a sidecar container in Kubernetes), for example on the canary or in one zone. It reaches the process
+         through the diagnostic port, so the application image needs no diagnostic tools. Collection rules consist of a
+         trigger (a metric above a threshold over a sliding window, slow requests, a burst of 5xx responses), actions
+         (`CollectTrace` with a short duration, `CollectDump`) and limits (`ActionCount` per
+         `ActionCountSlidingWindowDuration`), so that a flapping trigger cannot fill the disk or keep the process under
+         constant collection. Artifacts go through an egress provider to protected storage, not to the container's file
+         system. This captures data exactly at the moment of failure, without waiting for the on-call engineer.
+      3. **Measure the overhead before widening.** Under real load compare p95/p99 latency, CPU and throughput of
+         instances with collection against instances without it, including the moments when a trace or a dump is taken.
+         Agree a budget in advance (how much extra CPU and latency the product owner accepts) and a kill switch: rules
+         are configuration, so they can be turned off without a release.
+      4. **Agree who owns the data.** A dump is production data with the same access rules as the database: storage
+         with restricted access and encryption, a short retention period, access for the on-call role, an audit of who
+         started collection and who downloaded an artifact. Protect the `dotnet-monitor` API with authentication and do
+         not expose it to the network with `--no-auth`: whoever can call the API can read the process memory. Get the
+         security team's sign-off. Name the team that reviews the collected profiles: data nobody looks at is only cost
+         and risk.
+      5. **Widen step by step.** If triggered collection keeps catching problems and the overhead fits the budget, add
+         instances. If you need a continuous profile, sample in time and across the fleet: short sessions on a rotating
+         share of instances instead of tracing all of them all the time. An APM product's profiler or your own rules -
+         choose by cost, data residency and support for the runtime version you need.
+      6. **Make it part of the process.** A runbook "which artifact to collect for which symptom", a rehearsal in a
+         test environment, a review of rules and thresholds after every incident.
+    explanation: |
+      The decision is a trade-off between three quantities: the overhead on production, the risk carried by the
+      collected data, and the time to diagnosis. Metrics are cheap and safe, so they are always on. Dumps are expensive
+      and dangerous, so they are never collected continuously. Profiles and traces sit in between, and triggered
+      collection is a sensible start: it captures the moment of the problem without paying for collection all the time.
+      Starting on a subset of instances matters because EventPipe overhead depends on the enabled providers and
+      verbosity, and it has to be measured on your own load, not assumed.
+
+      Weak answers are usually extreme: "turn the profiler on everywhere" (no measured overhead, no data owner, dumps
+      with personal data spread across storage) or "we collect nothing in production and reproduce locally" (short
+      problems under real load do not reproduce locally). A lead-level answer is a phased rollout with measurement, an
+      explicit overhead budget, access and retention rules, a named data owner and a way to switch everything off
+      quickly. The answer applies to .NET 10 services and the `dotnet-monitor` and `dotnet-trace` tools, which work
+      through the runtime's diagnostic port.
+    linkTitles:
+      - dotnet-monitor tool
+      - dotnet-trace tool
+      - dotnet/dotnet-monitor repository
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

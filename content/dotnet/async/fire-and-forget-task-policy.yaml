@@ -1,0 +1,148 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RM97HVZYG48T0YCKYZ
+slug: fire-and-forget-task-policy
+stack: dotnet
+topic: async
+level: lead
+type: open
+grading: self
+tags: [fire-and-forget, unobserved-task-exception, background-service, analyzers, code-review]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.tasks.taskscheduler.unobservedtaskexception
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/extensions/queue-service
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/compiler-messages/async-await-errors
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какую политику для fire-and-forget задач ввести в сервисе, где ошибки фоновых задач неделями терялись?
+    prompt: |
+      В сервисе на ASP.NET Core (.NET 10) несколько недель подряд не отправлялись часть уведомлений. Выяснилось, что их
+      отправка запускалась без ожидания (`_ = SendNotificationAsync(...)` и `Task.Run(...)` в контроллерах), а исключения
+      из этих задач не попадали ни в логи, ни в метрики. Какую политику для запуска работы без ожидания вы установите
+      в команде, как будете её соблюдать и почему ошибки терялись?
+    hint: "Куда попадает исключение задачи, которую никто не ожидает, и в какой момент среда выполнения вообще узнаёт, что его никто не увидел?"
+    answer: |
+      **Принцип: у каждой фоновой операции есть владелец, который дожидается её завершения и видит её ошибки.**
+
+      1. **По умолчанию - `await`.** Запуск без ожидания - исключение, которое обосновывается на ревью: результат
+         не нужен для ответа, а потерю или повтор работы можно допустить.
+      2. **Разрешённые способы запустить работу в фоне.**
+         - Фоновая очередь внутри процесса: `BackgroundService`, который читает задания из `Channel<T>`, по образцу
+           сервиса очереди из Microsoft Learn. Каждое задание обёрнуто в `try`/`catch` с логированием и метрикой и получает
+           `stoppingToken`, а ёмкость очереди ограничена. В отличие от примера, сервис дополнительно создаёт scope DI
+           на каждое задание, если заданию нужны scoped-зависимости.
+         - Работа, которую нельзя потерять при перезапуске или падении процесса, уходит в постоянную очередь или
+           через outbox, а не в память процесса.
+         - Для редких best-effort вызовов - один общий вспомогательный метод команды (например, расширение
+           `FireAndForget(ILogger)`), который подписывается на завершение задачи и логирует ошибку. Это собственный код,
+           а не API BCL, и он единственный разрешённый способ отбросить задачу.
+      3. **Запрещено.** `async void` вне обработчиков событий; голый `_ = SomethingAsync();` и несохранённый
+         `Task.Run(...)`; фоновая работа из контроллера, которая использует scoped-зависимости (`DbContext`) или токен
+         запроса после того, как запрос завершён.
+      4. **Соблюдение.** Предупреждение CS4014 переводится в ошибку сборки; подключаются анализаторы
+         Microsoft.VisualStudio.Threading.Analyzers: VSTHRD110 (результат асинхронного вызова не используется) и
+         VSTHRD100 (`async void`). Отброс задачи в `_` без помощника - отдельный пункт чек-листа code review.
+      5. **Страховочная сеть и наблюдаемость.** Глобальный обработчик `TaskScheduler.UnobservedTaskException` логирует
+         исключение и увеличивает метрику, на ненулевое значение настроен алерт. Это сигнал, что политика где-то
+         нарушена, а не способ обработки ошибок. У очереди есть метрики длины, числа ошибок и времени обработки.
+      6. **Разбор накопленного долга.** Найти существующие места запуска без ожидания (поиск по `_ =` и `Task.Run`,
+         предупреждения анализаторов), перевести их на очередь или помощник и добавить тест, который проверяет, что
+         ошибка фоновой операции попадает в лог.
+    explanation: |
+      **Почему ошибки терялись.** Исключение внутри задачи сохраняется в самой задаче (состояние `Faulted`) и выбрасывается
+      только при наблюдении задачи через `await`, `Wait()` или `Result`. Чтение свойства `Exception` исключение не выбрасывает,
+      но помечает ошибку как наблюдённую. Если задачу никто не наблюдает, в .NET 10 (как и начиная с .NET Framework 4.5)
+      исключение повторно не выбрасывается и процесс не падает. Единственный след - событие
+      `TaskScheduler.UnobservedTaskException`, которое возникает, когда сборщик мусора финализирует такую задачу: поздно,
+      без контекста запроса, а при редких сборках мусора может не возникнуть вовсе. Без подписчика на это событие ошибка
+      исчезает бесследно. Вдобавок CS4014 выдаётся только для вызова без ожидания внутри `async`-метода, а запись `_ = ...`
+      его подавляет, поэтому код выглядел намеренным и прошёл ревью.
+
+      **Почему нужен владелец, а не только обработчик события.** Событие - индикатор нарушения, а не механизм
+      обработки: оно не говорит, какая операция упала и для какого пользователя, и приходит с непредсказуемой задержкой.
+      Фоновая очередь с `BackgroundService` решает сразу несколько проблем голого fire-and-forget: ошибки каждого задания
+      логируются, scoped-зависимости живут ровно столько, сколько задание, при остановке хоста сервис получает токен
+      остановки и время на завершение (`HostOptions.ShutdownTimeout`), а ёмкость канала ограничивает нагрузку.
+      Важная деталь: необработанное исключение из `ExecuteAsync` начиная с .NET 6 по умолчанию останавливает хост,
+      поэтому `try`/`catch` ставят вокруг каждого задания, а не вокруг всего цикла.
+
+      `async void` - противоположная крайность: исключение некуда сохранить, оно уходит в пул потоков и завершает процесс.
+      Слабые ответы: «просто подписаться на `UnobservedTaskException`», «обернуть всё в `Task.Run` с `try`/`catch`» (это
+      чинит логирование, но не время жизни зависимостей и не корректную остановку), «запретить фоновую работу совсем».
+      Для руководителя важно не только правило, но и то, как оно закреплено: анализаторы в CI, чек-лист ревью, метрика
+      как сигнал нарушения и план перевода существующего кода. Поведение описано для .NET 10.
+    linkTitles:
+      - Событие TaskScheduler.UnobservedTaskException
+      - Создание сервиса очереди (Queue Service) в .NET
+      - "Ошибки и предупреждения async/await (в том числе CS4014)"
+  en:
+    title: What policy do you set for fire-and-forget tasks in a service where background errors were lost for weeks?
+    prompt: |
+      In an ASP.NET Core service (.NET 10), some notifications were not sent for several weeks. It turned out that they
+      were sent without awaiting (`_ = SendNotificationAsync(...)` and `Task.Run(...)` in controllers), and the exceptions
+      from these tasks never reached the logs or the metrics. What policy for starting work without awaiting do you set
+      for the team, how do you enforce it, and why were the errors lost?
+    hint: "Where does the exception of a task nobody awaits go, and at what moment does the runtime even learn that nobody saw it?"
+    answer: |
+      **Principle: every background operation has an owner that waits for it to finish and sees its errors.**
+
+      1. **`await` by default.** Starting work without awaiting is an exception that has to be justified in review: the
+         result is not needed for the response, and losing or repeating the work is acceptable.
+      2. **Allowed ways to run work in the background.**
+         - An in-process background queue: a `BackgroundService` that reads work items from a `Channel<T>`, modelled on
+           the queue service on Microsoft Learn. Every item is wrapped in `try`/`catch` with logging and a metric and receives
+           `stoppingToken`, and the queue capacity is bounded. Unlike the example, the service also creates a DI scope per
+           item when the item needs scoped dependencies.
+         - Work that must not be lost on a restart or a process crash goes to a durable queue or through an outbox,
+           not into process memory.
+         - For rare best-effort calls, one shared team helper (for example a `FireAndForget(ILogger)` extension) that
+           subscribes to the task's completion and logs the failure. This is the team's own code, not a BCL API, and it is
+           the only allowed way to discard a task.
+      3. **Forbidden.** `async void` outside event handlers; a bare `_ = SomethingAsync();` and an unstored
+         `Task.Run(...)`; background work started from a controller that uses scoped dependencies (`DbContext`) or the
+         request token after the request has finished.
+      4. **Enforcement.** Warning CS4014 is promoted to a build error; Microsoft.VisualStudio.Threading.Analyzers are added:
+         VSTHRD110 (the result of an async call is not used) and VSTHRD100 (`async void`). Discarding a task into `_`
+         without the helper is a separate item of the code review checklist.
+      5. **Safety net and observability.** A global `TaskScheduler.UnobservedTaskException` handler logs the exception and
+         increments a metric, with an alert on any non-zero value. It signals that the policy was broken somewhere; it is
+         not a way to handle errors. The queue has metrics for length, failures and processing time.
+      6. **Paying down the existing debt.** Find the existing places that start work without awaiting (search for `_ =`
+         and `Task.Run`, analyzer warnings), move them to the queue or the helper, and add a test that checks that a
+         failure of a background operation reaches the log.
+    explanation: |
+      **Why the errors were lost.** An exception inside a task is stored in the task itself (the `Faulted` state) and is
+      thrown only when the task is observed through `await`, `Wait()` or `Result`. Reading the `Exception` property does not
+      throw it, but marks the error as observed. If nobody observes the task, in .NET 10 (as since .NET Framework 4.5) the
+      exception is not rethrown and the process does not crash. The only trace is the
+      `TaskScheduler.UnobservedTaskException` event, raised when the garbage collector finalizes such a task: late, without
+      request context, and with infrequent collections possibly never. Without a subscriber to that event the error
+      disappears without a trace. On top of that, CS4014 is reported only for an unawaited call inside an `async` method,
+      and writing `_ = ...` suppresses it, so the code looked intentional and passed review.
+
+      **Why you need an owner, not just an event handler.** The event is an indicator of a violation, not a handling
+      mechanism: it does not tell which operation failed or for which user, and it arrives with an unpredictable delay.
+      A background queue with `BackgroundService` solves several problems of bare fire-and-forget at once: every item's
+      failures are logged, scoped dependencies live exactly as long as the item, on host shutdown the service gets a
+      stopping token and time to finish (`HostOptions.ShutdownTimeout`), and the channel capacity bounds the load.
+      An important detail: since .NET 6 an unhandled exception from `ExecuteAsync` stops the host by default, so the
+      `try`/`catch` goes around each item, not around the whole loop.
+
+      `async void` is the opposite extreme: there is no task to store the exception in, so it goes to the thread pool and
+      terminates the process. Weak answers: "just subscribe to `UnobservedTaskException`", "wrap everything in `Task.Run`
+      with `try`/`catch`" (that fixes logging but not dependency lifetimes or graceful shutdown), "ban background work
+      entirely". For a lead, what matters is not only the rule but how it sticks: analyzers in CI, a review checklist, a
+      metric that signals violations and a plan to migrate existing code. The behaviour is described for .NET 10.
+    linkTitles:
+      - TaskScheduler.UnobservedTaskException event
+      - Create a Queue Service in .NET
+      - "Errors and warnings for async/await (including CS4014)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

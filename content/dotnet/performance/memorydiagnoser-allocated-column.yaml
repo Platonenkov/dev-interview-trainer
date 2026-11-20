@@ -1,0 +1,104 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQ5BSXZNG9NPNCKK18
+slug: memorydiagnoser-allocated-column
+stack: dotnet
+topic: performance
+level: junior
+type: single
+grading: auto
+tags: [benchmarkdotnet, benchmarking, allocations, gc]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://benchmarkdotnet.org/articles/configs/diagnosers.html
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/fundamentals
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какой атрибут BenchmarkDotNet добавляет в результаты столбцы Allocated и Gen0?
+    prompt: |
+      Вы сравниваете два способа собрать строку с помощью BenchmarkDotNet. В итоговой таблице есть только
+      столбцы времени: `Mean`, `Error`, `StdDev`. Нужно увидеть ещё, сколько байт выделяет одна операция
+      и сколько сборок мусора по поколениям она вызывает. Какой атрибут нужно добавить к классу с бенчмарками?
+    hint: "В таблице уже есть время. Какие данные не собираются по умолчанию и чем они включаются: настройкой задания (job) или диагностером?"
+    options:
+      a: "`[GcServer(true)]`"
+      b: "`[MemoryDiagnoser]`"
+      c: "`[ThreadingDiagnoser]`"
+      d: "`[DisassemblyDiagnoser]`"
+    optionExplanations:
+      a: "`[GcServer(true)]` настраивает задание (job): бенчмарк запускается с серверным режимом сборщика мусора. Это меняет условия измерения, но не добавляет столбцы с выделенной памятью и числом сборок."
+      c: "`[ThreadingDiagnoser]` собирает сведения о многопоточности: число выполненных рабочих элементов пула потоков и число конфликтов при захвате блокировок. Об аллокациях он ничего не сообщает."
+      d: "`[DisassemblyDiagnoser]` выгружает машинный код, который JIT сгенерировал для бенчмарка. Он помогает понять, во что скомпилировался код, но не измеряет выделения памяти."
+    answer: "`[MemoryDiagnoser]`"
+    explanation: |
+      По умолчанию BenchmarkDotNet измеряет только время, поэтому в таблице нет данных о памяти. Атрибут
+      `[MemoryDiagnoser]` на классе с бенчмарками включает диагностер памяти, и в результатах появляются столбцы:
+
+      - `Gen0`, `Gen1`, `Gen2` - число сборок мусора соответствующего поколения в пересчёте на 1000 операций.
+        Столбец, в котором для всех бенчмарков получились нули, в таблицу не выводится, поэтому часто виден только `Gen0`
+        или ни одного из них;
+      - `Allocated` - сколько управляемой памяти выделяет одна операция.
+
+      Тот же диагностер можно подключить через конфигурацию (`AddDiagnoser(MemoryDiagnoser.Default)`), если
+      бенчмарки настраиваются не атрибутами.
+
+      Для сравнения реализаций эти столбцы не менее важны, чем время: метод может быть чуть быстрее в изолированном
+      замере, но выделять больше памяти. Чем больше приложение выделяет, тем чаще заполняется поколение 0 и тем чаще
+      сборщик мусора запускает сборки, а это уже нагрузка на весь процесс, а не только на измеряемый метод. Поэтому
+      `[MemoryDiagnoser]` стоит включать почти в любой бенчмарк, где сравниваются алгоритмы работы со строками,
+      коллекциями или буферами.
+    linkTitles:
+      - Диагностеры BenchmarkDotNet
+      - Основы сборки мусора в .NET
+  en:
+    title: Which BenchmarkDotNet attribute adds the Allocated and Gen0 columns to the results?
+    prompt: |
+      You compare two ways to build a string with BenchmarkDotNet. The summary table contains only timing
+      columns: `Mean`, `Error`, `StdDev`. You also need to see how many bytes one operation allocates and how
+      many garbage collections per generation it causes. Which attribute do you add to the benchmark class?
+    hint: "The table already measures time. Which kind of data is not collected by default, and is it turned on by a job setting or by a diagnoser?"
+    options:
+      a: "`[GcServer(true)]`"
+      b: "`[MemoryDiagnoser]`"
+      c: "`[ThreadingDiagnoser]`"
+      d: "`[DisassemblyDiagnoser]`"
+    optionExplanations:
+      a: "`[GcServer(true)]` configures the job: the benchmark runs with the server garbage collector mode. That changes the measurement conditions, but it does not add columns with allocated memory or collection counts."
+      c: "`[ThreadingDiagnoser]` collects threading data: the number of completed thread pool work items and the number of lock contentions. It reports nothing about allocations."
+      d: "`[DisassemblyDiagnoser]` exports the machine code that the JIT generated for the benchmark. It helps you see what the code compiled to, but it does not measure memory allocations."
+    answer: "`[MemoryDiagnoser]`"
+    explanation: |
+      By default BenchmarkDotNet measures only time, which is why the table has no memory data. The
+      `[MemoryDiagnoser]` attribute on the benchmark class turns on the memory diagnoser, and the results gain
+      these columns:
+
+      - `Gen0`, `Gen1`, `Gen2` - the number of garbage collections of that generation per 1000 operations.
+        A column whose values are zero for every benchmark is not printed, so you often see only `Gen0`
+        or none of them;
+      - `Allocated` - how much managed memory one operation allocates.
+
+      The same diagnoser can be added through a config (`AddDiagnoser(MemoryDiagnoser.Default)`) when the
+      benchmarks are configured without attributes.
+
+      When comparing implementations these columns matter as much as time: a method can be slightly faster in an
+      isolated measurement yet allocate more. The more an application allocates, the sooner generation 0 fills up and
+      the more often the garbage collector runs, and that costs the whole process, not only the measured method.
+      That is why `[MemoryDiagnoser]` is worth enabling in almost every benchmark that compares algorithms over
+      strings, collections or buffers.
+    linkTitles:
+      - BenchmarkDotNet diagnosers
+      - Fundamentals of garbage collection in .NET
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

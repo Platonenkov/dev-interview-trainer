@@ -1,0 +1,135 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQ7VPJCENGB8B52ABR
+slug: params-empty-call-uses-array-empty
+stack: dotnet
+topic: performance
+level: middle
+type: output
+grading: auto
+tags: [params, allocations, arrays, array-empty]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    int[] a = Capture();
+    int[] b = Capture();
+    int[] c = Capture(1);
+    int[] d = Capture(1);
+    Console.Write($"{ReferenceEquals(a, b)} {ReferenceEquals(c, d)}");
+
+    static int[] Capture(params int[] values) => values;
+expect:
+  kind: output
+  value: "True False"
+acceptedOutputs: ["True False"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "True False" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "False False" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "True True" }
+  - id: d
+    correct: false
+    expect: { kind: compile-error }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/method-parameters
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/language-specification/expressions
+    lang: en
+    kind: spec
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.array.empty
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Одинаковый ли массив получает метод с params int[] при повторных вызовах без аргументов и с аргументами?
+    prompt: |
+      Метод `Capture` просто возвращает массив, который получил в параметре `params int[]`. Его вызывают дважды
+      без аргументов и дважды с одним аргументом. Что выведет программа на .NET 10 с C# 14?
+    hint: Что компилятор должен передать в метод, когда аргументов нет, а что - когда аргумент один?
+    options:
+      a: "True False"
+      b: "False False"
+      c: "True True"
+      d: Ошибка компиляции
+    optionExplanations:
+      b: "Спецификация C# не требует создавать новый пустой массив при вызове без аргументов. Компилятор C# в .NET 10 на практике подставляет `Array.Empty<int>()`, который отдаёт один и тот же пустой массив, поэтому `a` и `b` ссылаются на один объект."
+      c: "Массив с элементами изменяемый: метод может записать в него что угодно или сохранить ссылку. Поэтому каждый вызов с аргументами создаёт новый массив, и `c` и `d` - разные объекты."
+      d: "Код корректен: параметр `params` допускает вызов с нулём аргументов, а статическая локальная функция может объявлять параметр `params`."
+    answer: "True False"
+    explanation: |
+      Вызов метода с `params int[]` в развёрнутой форме обрабатывается так, будто вокруг переданных аргументов
+      написано выражение создания массива. Для `Capture(1)` это `new int[] { 1 }` при каждом вызове: массив изменяемый,
+      метод может его поменять или сохранить, поэтому делить его между вызовами нельзя. Отсюда `ReferenceEquals(c, d)`
+      равно `False`.
+
+      Для вызова без аргументов спецификация C# говорит только, что передаётся пустой массив, и прямо оставляет
+      неопределённым, будет это новый или уже существующий пустой массив. Компилятор C# (Roslyn) на практике выбирает
+      второй вариант: если в целевой платформе есть `Array.Empty<T>()`, он вызывает его вместо `new int[0]`. В .NET 10
+      `Array.Empty<int>()` возвращает один кэшированный экземпляр, а пустой массив изменить невозможно, поэтому делить его
+      безопасно. Отсюда `ReferenceEquals(a, b)` равно `True`, и программа выводит `True False`. Этот результат получен
+      запуском на .NET 10 с C# 14; это поведение компилятора, а не гарантия языка.
+
+      Практические выводы для горячего кода:
+
+      - вызов `params`-метода без аргументов на практике не выделяет память, а каждый вызов с аргументами выделяет
+        массив в куче;
+      - поэтому в часто вызываемых API добавляют перегрузки с фиксированным числом параметров (как у
+        `string.Format` или `Console.WriteLine`), а начиная с C# 13 можно объявить `params ReadOnlySpan<T>`, чтобы
+        компилятор мог обойтись без массива в куче;
+      - то, что пустой массив общий, - деталь компилятора, а не контракт: не стоит использовать полученный массив как
+        уникальный объект, например для `lock` или как ключ по ссылке.
+    linkTitles:
+      - Параметры методов и модификатор params
+      - "Спецификация C#: выражения (списки аргументов)"
+      - Метод Array.Empty<T>
+  en:
+    title: Does a params int[] method receive the same array on repeated calls with and without arguments?
+    prompt: |
+      The method `Capture` simply returns the array it received in its `params int[]` parameter. It is called twice
+      with no arguments and twice with one argument. What does the program print on .NET 10 with C# 14?
+    hint: What does the compiler have to pass to the method when there are no arguments, and when there is one?
+    options:
+      a: "True False"
+      b: "False False"
+      c: "True True"
+      d: Compile error
+    optionExplanations:
+      b: "The C# specification does not require a new empty array for a call with no arguments. The C# compiler on .NET 10 in practice emits `Array.Empty<int>()`, which hands out the same empty array, so `a` and `b` refer to one object."
+      c: "An array with elements is mutable: the method may write into it or keep a reference. That is why every call with arguments creates a new array, and `c` and `d` are different objects."
+      d: "The code is valid: a `params` parameter allows a call with zero arguments, and a static local function may declare a `params` parameter."
+    answer: "True False"
+    explanation: |
+      A call to a `params int[]` method in expanded form is processed as if an array creation expression were written
+      around the passed arguments. For `Capture(1)` that is `new int[] { 1 }` on every call: the array is mutable, the
+      method may change it or store it, so it cannot be shared between calls. Hence `ReferenceEquals(c, d)` is `False`.
+
+      For a call with no arguments the C# specification only says that an empty array is passed, and explicitly leaves
+      it unspecified whether that is a newly allocated or an existing empty array. The C# compiler (Roslyn) in practice
+      picks the second option: when the target platform has `Array.Empty<T>()`, it calls it instead of `new int[0]`. On
+      .NET 10 `Array.Empty<int>()` returns one cached instance, and an empty array cannot be modified, so sharing it is
+      safe. Hence `ReferenceEquals(a, b)` is `True`, and the program prints `True False`. This result comes from a run on
+      .NET 10 with C# 14; it is compiler behaviour, not a language guarantee.
+
+      Practical lessons for hot code:
+
+      - calling a `params` method with no arguments allocates nothing in practice, while every call with arguments
+        allocates an array on the heap;
+      - that is why frequently called APIs add overloads with a fixed number of parameters (like `string.Format` or
+        `Console.WriteLine`), and since C# 13 you can declare `params ReadOnlySpan<T>` so the compiler can avoid a
+        heap array;
+      - the shared empty array is a compiler detail, not a contract: do not use the received array as a unique object,
+        for example for `lock` or as a reference-identity key.
+    linkTitles:
+      - Method parameters and the params modifier
+      - "C# specification: expressions (argument lists)"
+      - Array.Empty<T> method
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

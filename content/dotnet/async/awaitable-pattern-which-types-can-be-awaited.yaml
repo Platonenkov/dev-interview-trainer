@@ -1,0 +1,144 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RME5NEAPKEY3TZCXJ1
+slug: awaitable-pattern-which-types-can-be-awaited
+stack: dotnet
+topic: async
+level: middle
+type: multi
+grading: auto
+tags: [async-await, awaitable-pattern, getawaiter, extension-methods, task-yield]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    using System.Runtime.CompilerServices;
+
+    Stream stream = new MemoryStream(new byte[16]);
+    byte[] buffer = new byte[16];
+
+    Task delay = Task.Delay(100);
+    ValueTask<int> read = stream.ReadAsync(buffer);
+    IAsyncResult pending = stream.BeginRead(buffer, 0, buffer.Length, null, null);
+    Thread worker = new Thread(() => Console.WriteLine("work"));
+    worker.Start();
+
+    // The options are await expressions placed here.
+
+    record Countdown(int Milliseconds);
+
+    static class CountdownExtensions
+    {
+        public static TaskAwaiter GetAwaiter(this Countdown countdown) =>
+            Task.Delay(countdown.Milliseconds).GetAwaiter();
+    }
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: true
+  - id: c
+    correct: true
+  - id: d
+    correct: true
+  - id: e
+    correct: false
+  - id: f
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/await
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/language-specification/expressions
+    lang: en
+    kind: spec
+  - url: https://devblogs.microsoft.com/dotnet/how-async-await-really-works/
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.runtime.compilerservices.yieldawaitable
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какие выражения можно ожидать через await в C#?
+    prompt: |
+      В программе объявлены переменные и типы, показанные выше. Какие из перечисленных строк, вставленных на место
+      комментария, скомпилируются в .NET 10 (C# 14)? Выберите все подходящие.
+    hint: "Что компилятор требует от операнда `await`: чтобы он наследовал какой-то тип или что-то другое?"
+    options:
+      a: "`await delay;`"
+      b: "`await read;`"
+      c: "`await Task.Yield();`"
+      d: "`await new Countdown(100);`"
+      e: "`await pending;`"
+      f: "`await worker;`"
+    optionExplanations:
+      e: "`IAsyncResult` - интерфейс старой модели APM (`BeginXxx`/`EndXxx`). У него нет метода `GetAwaiter`, и в BCL нет такого метода расширения, поэтому строка не компилируется. То, что `Task` реализует `IAsyncResult`, не помогает: компилятор смотрит на статический тип выражения. Чтобы ожидать APM-операцию, её оборачивают в задачу через `Task.Factory.FromAsync` или сразу вызывают асинхронный метод вроде `ReadAsync`."
+      f: "У `Thread` нет метода `GetAwaiter`, ни собственного, ни в виде расширения из BCL, поэтому `await worker` не компилируется. Поток не является задачей: дождаться его можно только блокирующим `Join`."
+    answer: "Верны `a`, `b`, `c` и `d`: `Task`, `ValueTask<int>`, результат `Task.Yield()` и `Countdown` с методом расширения `GetAwaiter` подходят под шаблон awaitable, а `IAsyncResult` и `Thread` - нет."
+    explanation: |
+      `await` основан на шаблоне, а не на типе, так же как `foreach`. Спецификация C# называет выражение awaitable, если у
+      него есть доступный экземплярный метод или метод расширения `GetAwaiter` без параметров и без параметров типа.
+      Тип, который он возвращает (awaiter), должен реализовывать `INotifyCompletion` (метод `OnCompleted`), иметь
+      доступное для чтения свойство `bool IsCompleted` и метод `GetResult()` без параметров. Компилятор разворачивает
+      `await x` примерно так: получить `x.GetAwaiter()`, проверить `IsCompleted`; если операция не завершена,
+      зарегистрировать продолжение конечного автомата через `OnCompleted` (или `UnsafeOnCompleted`) и выйти из метода;
+      когда продолжение вызовут, забрать результат или исключение через `GetResult()`.
+
+      - `Task` и `ValueTask<int>` предоставляют `GetAwaiter` сами.
+      - `Task.Yield()` возвращает не задачу, а структуру `YieldAwaitable`. Её awaiter сообщает, что операция не завершена,
+        поэтому `await` приостанавливает метод и продолжает его асинхронно.
+      - У `Countdown` нет своих членов для ожидания, но метод расширения `GetAwaiter` в области видимости делает тип
+        awaitable: спецификация явно допускает метод расширения.
+      - `IAsyncResult` и `Thread` такого метода не имеют, поэтому `await` над ними - ошибка компиляции. Ничто не мешает
+        написать для них собственное расширение `GetAwaiter`, но из коробки их ожидать нельзя.
+
+      Шаблон существует с C# 5 и не менялся, поведение описано для .NET 10.
+    linkTitles:
+      - Оператор await
+      - "Спецификация C#: выражения (выражения await и awaitable)"
+      - "Стивен Туб: How Async/Await Really Works in C#"
+      - Структура YieldAwaitable
+  en:
+    title: Which expressions can be awaited in C#?
+    prompt: |
+      The program declares the variables and types shown above. Which of the listed lines, put in place of the comment,
+      compile on .NET 10 (C# 14)? Select all that apply.
+    hint: "What does the compiler require of the operand of `await`: that it derives from some type, or something else?"
+    options:
+      a: "`await delay;`"
+      b: "`await read;`"
+      c: "`await Task.Yield();`"
+      d: "`await new Countdown(100);`"
+      e: "`await pending;`"
+      f: "`await worker;`"
+    optionExplanations:
+      e: "`IAsyncResult` is the interface of the old APM model (`BeginXxx`/`EndXxx`). It has no `GetAwaiter` method, and the BCL provides no such extension method, so the line does not compile. The fact that `Task` implements `IAsyncResult` does not help: the compiler looks at the static type of the expression. To await an APM operation, wrap it in a task with `Task.Factory.FromAsync`, or call an asynchronous method such as `ReadAsync` directly."
+      f: "`Thread` has no `GetAwaiter` method, neither its own nor as a BCL extension, so `await worker` does not compile. A thread is not a task: the only way to wait for it is the blocking `Join`."
+    answer: "`a`, `b`, `c` and `d` are correct: `Task`, `ValueTask<int>`, the result of `Task.Yield()` and `Countdown` with an extension `GetAwaiter` method fit the awaitable pattern, while `IAsyncResult` and `Thread` do not."
+    explanation: |
+      `await` is pattern-based, not type-based, just like `foreach`. The C# specification calls an expression awaitable
+      if it has an accessible instance or extension method `GetAwaiter` with no parameters and no type parameters. The
+      type it returns (the awaiter) must implement `INotifyCompletion` (the `OnCompleted` method), have a readable
+      `bool IsCompleted` property and a parameterless `GetResult()` method. The compiler expands `await x` roughly like
+      this: get `x.GetAwaiter()`, check `IsCompleted`; if the operation is not complete, register the state machine's
+      continuation with `OnCompleted` (or `UnsafeOnCompleted`) and return from the method; when the continuation runs,
+      take the result or the exception through `GetResult()`.
+
+      - `Task` and `ValueTask<int>` provide `GetAwaiter` themselves.
+      - `Task.Yield()` returns not a task but a `YieldAwaitable` struct. Its awaiter reports that the operation is not
+        complete, so `await` suspends the method and resumes it asynchronously.
+      - `Countdown` has no members of its own for awaiting, but the extension `GetAwaiter` method in scope makes the type
+        awaitable: the specification explicitly allows an extension method.
+      - `IAsyncResult` and `Thread` have no such method, so `await` on them is a compile error. Nothing stops you from
+        writing your own `GetAwaiter` extension for them, but out of the box they cannot be awaited.
+
+      The pattern has existed since C# 5 and has not changed; the behaviour is described for .NET 10.
+    linkTitles:
+      - await operator
+      - "C# specification: Expressions (await expressions and awaitable expressions)"
+      - "Stephen Toub: How Async/Await Really Works in C#"
+      - YieldAwaitable struct
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

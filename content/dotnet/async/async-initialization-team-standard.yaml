@@ -1,0 +1,150 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RM7M7NCK2J1K757GAF
+slug: async-initialization-team-standard
+stack: dotnet
+topic: async
+level: lead
+type: single
+grading: auto
+tags: [async-initialization, constructors, factory-method, deadlock, async-void, team-standards]
+code:
+  language: csharp
+  harness: none
+  source: |
+    public sealed class PriceCatalog
+    {
+        private readonly Dictionary<string, decimal> _prices;
+
+        // Pattern 1 found in the code base
+        public PriceCatalog(IPriceSource source)
+        {
+            _prices = source.LoadAsync().Result;
+        }
+    }
+
+    public sealed class TaxRules
+    {
+        private List<string> _rules;
+
+        // Pattern 2 found in the code base
+        public TaxRules(IRuleSource source)
+        {
+            Init(source);
+        }
+
+        private async void Init(IRuleSource source)
+        {
+            _rules = await source.LoadAsync();
+        }
+    }
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: false
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+links:
+  - url: https://blog.stephencleary.com/2013/01/async-oop-2-constructors.html
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/archive/msdn-magazine/2013/march/async-await-best-practices-in-asynchronous-programming
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Какой стандарт команды выбрать для классов, которым нужна асинхронная инициализация?
+    prompt: |
+      В кодовой базе классы, которым при создании нужно асинхронно загрузить данные, написаны двумя способами
+      (см. код): конструктор вызывает `.Result` или запускает метод `async void Init`. За последний месяц были
+      зависания приложения и `NullReferenceException` при обращении к ещё не заполненному полю.
+      Какой стандарт вы закрепите для команды?
+    hint: Кто и каким образом может узнать, что инициализация закончилась и не завершилась ли она ошибкой?
+    options:
+      a: "Оставить `.Result` в конструкторах, но требовать `ConfigureAwait(false)` у каждого `await` в коде загрузки"
+      b: "Оставить `async void Init`, но обернуть его тело в `try/catch` с логированием ошибок"
+      c: "Закрытый конструктор и открытый `static async Task<T> CreateAsync(...)`, который загружает данные и возвращает готовый объект; если объект создаёт DI-контейнер - явная инициализация, которую владелец ожидает через `await` до первого использования"
+      d: "Заменить `.Result` на `Task.Run(() => source.LoadAsync()).GetAwaiter().GetResult()`, чтобы продолжениям не требовался захваченный контекст"
+    optionExplanations:
+      a: "Защита держится на том, что каждый `await` во всей цепочке вызовов, включая сторонние библиотеки, написан с `ConfigureAwait(false)`: один пропуск возвращает deadlock в UI-приложении. Кроме того, конструктор по-прежнему блокирует поток, что в ASP.NET Core ведёт к истощению пула потоков под нагрузкой, а ошибка приходит обёрнутой в `AggregateException`."
+      b: "Логирование не решает главную проблему. `Init` возвращает управление на первом незавершённом `await`, поэтому конструктор завершается, и вызывающий код получает наполовину инициализированный объект, не зная, когда загрузка закончится и удалась ли она. Отсюда и `NullReferenceException` при раннем обращении к полю."
+      d: "Перенос в пул потоков убирает зависимость от контекста синхронизации, но это всё тот же синхронный вызов асинхронного кода: блокируется вызывающий поток, плюс занимается поток пула. Под нагрузкой это ведёт к истощению пула, а асинхронность загрузки остаётся скрытой от вызывающего кода. Это обходной приём, а не стандарт."
+    answer: Закрытый конструктор и статический асинхронный фабричный метод `CreateAsync` (или явная инициализация, которую владелец ожидает через `await`), а `.Result` и `async void` в конструкторах запрещены.
+    explanation: |
+      Конструктор не может быть асинхронным: C# (в том числе в версии для .NET 10) не разрешает модификатор `async` у
+      конструктора, а конструктор возвращает объект, а не `Task`. Поэтому асинхронную работу либо прячут внутрь
+      конструктора, либо выносят наружу, где её можно ожидать. Оба найденных способа прячут её.
+
+      - `.Result` в конструкторе - синхронное ожидание асинхронного кода. В приложении с контекстом синхронизации (WinForms,
+        WPF) продолжение ждёт заблокированный поток, и возникает deadlock. В ASP.NET Core контекста нет, но каждый такой
+        вызов держит поток пула, и под нагрузкой пул истощается.
+      - `async void Init` возвращает управление на первом незавершённом `await`, и конструктор сразу завершается. Объект уже
+        у вызывающего кода, но поля ещё не заполнены, а ожидать завершения нечего. Исключение из `async void` нельзя поймать
+        снаружи: оно уходит в контекст синхронизации или в пул потоков и может завершить процесс.
+
+      Фабричный метод делает асинхронность частью контракта: закрытый конструктор не даёт получить неготовый экземпляр,
+      `await CreateAsync(...)` возвращает объект только после загрузки, а ошибка приходит вызывающему коду в точке `await`.
+      Когда объекты создаёт DI-контейнер и фабрику использовать неудобно, тот же принцип реализуют явной инициализацией:
+      метод `InitializeAsync` или свойство-задача инициализации, которые владелец (например, код запуска приложения)
+      ожидает через `await` до первого использования. Этот вариант слабее фабрики: экземпляр доступен до готовности, и
+      корректность зависит от того, что владелец действительно дождётся инициализации.
+
+      Для лида важно не только выбрать шаблон, но и закрепить его: описать в стандарте команды, запрещать `.Result` и
+      `async void` в конструкторах на code review и включить анализаторы синхронных ожиданий и `async void` (например, из
+      пакета `Microsoft.VisualStudio.Threading.Analyzers`), а существующие классы переводить постепенно, начиная с тех, что
+      уже давали зависания.
+    linkTitles:
+      - "Стивен Клири: Async OOP 2: Constructors"
+      - Рекомендации по асинхронному программированию (async/await)
+  en:
+    title: Which team standard should you adopt for classes that need asynchronous initialization?
+    prompt: |
+      In the code base, classes that need to load data asynchronously when they are created are written in two ways
+      (see the code): the constructor calls `.Result` or starts an `async void Init` method. Over the last month there were
+      application hangs and a `NullReferenceException` when a field was read before it was filled.
+      Which standard do you set for the team?
+    hint: Who is able to find out when the initialization has finished and whether it failed, and how?
+    options:
+      a: "Keep `.Result` in constructors, but require `ConfigureAwait(false)` on every `await` in the loading code"
+      b: "Keep `async void Init`, but wrap its body in `try/catch` that logs errors"
+      c: "A private constructor and a public `static async Task<T> CreateAsync(...)` that loads the data and returns a ready object; when a DI container creates the object, an explicit initialization that the owner waits for with `await` before first use"
+      d: "Replace `.Result` with `Task.Run(() => source.LoadAsync()).GetAwaiter().GetResult()` so that continuations do not need the captured context"
+    optionExplanations:
+      a: "The protection depends on every `await` in the whole call chain, including third-party libraries, using `ConfigureAwait(false)`: a single omission brings the deadlock back in a UI application. Besides, the constructor still blocks a thread, which in ASP.NET Core leads to thread pool starvation under load, and the error arrives wrapped in `AggregateException`."
+      b: "Logging does not fix the main problem. `Init` returns control at the first incomplete `await`, so the constructor completes, and the caller gets a half-initialized object without knowing when loading finishes or whether it succeeded. That is where the `NullReferenceException` on early field access comes from."
+      d: "Moving the work to the thread pool removes the dependency on the synchronization context, but it is still synchronous waiting on asynchronous code: the calling thread is blocked and a thread pool thread is taken as well. Under load this leads to thread pool starvation, and the asynchronous nature of loading stays hidden from the caller. It is a workaround, not a standard."
+    answer: A private constructor and a static asynchronous factory method `CreateAsync` (or an explicit initialization that the owner waits for with `await`), with `.Result` and `async void` in constructors banned.
+    explanation: |
+      A constructor cannot be asynchronous: C# (including the version for .NET 10) does not allow the `async` modifier on a
+      constructor, and a constructor returns the object, not a `Task`. So asynchronous work is either hidden inside the
+      constructor or moved outside, where it can be awaited. Both patterns found in the code hide it.
+
+      - `.Result` in a constructor is synchronous waiting on asynchronous code. In an application with a synchronization
+        context (WinForms, WPF) the continuation waits for the blocked thread, and a deadlock follows. ASP.NET Core has no
+        context, but every such call holds a thread pool thread, and under load the pool starves.
+      - `async void Init` returns control at the first incomplete `await`, and the constructor completes right away. The
+        caller already has the object, but the fields are not filled yet, and there is nothing to wait for. An exception from
+        `async void` cannot be caught from outside: it goes to the synchronization context or the thread pool and can bring
+        the process down.
+
+      A factory method makes asynchrony part of the contract: the private constructor prevents anyone from getting an
+      unready instance, `await CreateAsync(...)` returns the object only after loading, and an error reaches the caller at
+      the `await`. When a DI container creates the objects and a factory is awkward, the same principle is implemented as an
+      explicit initialization: an `InitializeAsync` method or an initialization task property that the owner (for example,
+      the application startup code) waits for with `await` before first use. This option is weaker than a factory: the
+      instance is available before it is ready, and correctness depends on the owner actually waiting for initialization.
+
+      For a lead it is not enough to pick the pattern; it has to be enforced: write it into the team standard, reject
+      `.Result` and `async void` in constructors in code review, and enable analyzers for synchronous waits and `async void`
+      (for example, from the `Microsoft.VisualStudio.Threading.Analyzers` package), then migrate existing classes gradually,
+      starting with the ones that have already caused hangs.
+    linkTitles:
+      - "Stephen Cleary: Async OOP 2: Constructors"
+      - Async/await best practices in asynchronous programming
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"
+  noRunReason: Single-choice question; the snippet only illustrates two constructor patterns found in a code base (IPriceSource and IRuleSource are not declared), and code in single questions is not executed.

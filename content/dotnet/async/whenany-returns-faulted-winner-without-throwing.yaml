@@ -1,0 +1,119 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RKNMGPK0XXP1N18X8M
+slug: whenany-returns-faulted-winner-without-throwing
+stack: dotnet
+topic: async
+level: middle
+type: output
+grading: auto
+tags: [task-whenany, task-status, exceptions, taskcompletionsource]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    TaskCompletionSource failing = new();
+    TaskCompletionSource never = new();
+    failing.SetException(new InvalidOperationException("boom"));
+
+    Task winner = await Task.WhenAny(failing.Task, never.Task);
+    Console.Write($"{winner == failing.Task} {winner.Status}");
+expect:
+  kind: output
+  value: "True Faulted"
+acceptedOutputs: ["True Faulted"]
+options:
+  - id: a
+    correct: true
+    expect: { kind: output, value: "True Faulted" }
+  - id: b
+    correct: false
+    expect: { kind: output, value: "False Faulted" }
+  - id: c
+    correct: false
+    expect: { kind: output, value: "True RanToCompletion" }
+  - id: d
+    correct: false
+    expect: { kind: exception, value: System.InvalidOperationException }
+  - id: e
+    correct: false
+    expect: { kind: exception, value: System.AggregateException }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.tasks.task.whenany
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.threading.tasks.task.wait
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Что выведет программа, если первой в Task.WhenAny завершилась задача с ошибкой?"
+    prompt: |
+      Задача `failing.Task` завершена с исключением ещё до вызова `Task.WhenAny`, а `never.Task` не завершается никогда.
+      Что выведет эта программа в консоль в .NET 10?
+    hint: "Дождаться, пока первая задача завершится, и пронаблюдать её ошибку - это одно и то же?"
+    options:
+      a: "True Faulted"
+      b: "False Faulted"
+      c: "True RanToCompletion"
+      d: "Необработанное исключение `InvalidOperationException`"
+      e: "Необработанное исключение `AggregateException`"
+    optionExplanations:
+      b: "`Task.WhenAny` не создаёт копию или обёртку победившей задачи: результатом возвращённой задачи является тот же самый объект `failing.Task`, поэтому сравнение ссылок даёт `True`."
+      c: "Состояние `RanToCompletion` имеет внешняя задача `Task<Task>`, которую вернул `WhenAny`. После `await` переменная `winner` указывает уже на внутреннюю задачу `failing.Task`, а она завершена с ошибкой, то есть `Faulted`."
+      d: "`await Task.WhenAny(...)` не выбрасывает исключение входной задачи: внешняя задача завершается успешно, а ошибка остаётся внутри `winner` и проявится, только если ожидать саму `winner`."
+      e: "Исключение здесь не выбрасывается вовсе, ни исходное, ни обёрнутое. В `AggregateException` ошибку задачи оборачивают блокирующие вызовы вроде `Wait()`, но в программе их нет."
+    answer: "True Faulted"
+    explanation: |
+      `Task.WhenAny` возвращает `Task<Task>`. Эта внешняя задача завершается, как только завершилась любая из входных
+      задач, и всегда завершается в состоянии `RanToCompletion`, а её результатом становится сама первая завершившаяся
+      задача. Так происходит, даже если та завершилась в состоянии `Faulted` или `Canceled`.
+
+      Поэтому `await Task.WhenAny(...)` не выбрасывает исключение, а просто возвращает `failing.Task`. Сравнение
+      `winner == failing.Task` сравнивает ссылки и даёт `True`, а `winner.Status` равен `Faulted`. Итог - `True Faulted`.
+      `never.Task` остаётся незавершённой, но программа её не ждёт.
+
+      Практическое следствие: после `WhenAny` нужно явно обработать победителя, например `await winner`. Именно
+      этот `await` выбросит исходное `InvalidOperationException`, а блокирующий `winner.Wait()` выбросил бы
+      `AggregateException` с этим исключением внутри. Типичная ошибка в шаблоне «работа или таймаут» - проверить
+      только, какая задача победила, и не ожидать её: ошибка тогда молча теряется. Поведение описано для .NET 10.
+    linkTitles:
+      - "Метод Task.WhenAny"
+      - "Метод Task.Wait"
+  en:
+    title: "What does a program print when the first task to finish in Task.WhenAny is faulted?"
+    prompt: |
+      The task `failing.Task` is completed with an exception before `Task.WhenAny` is called, and `never.Task` never completes.
+      What does this program print to the console on .NET 10?
+    hint: "Is waiting for the first task to finish the same as observing its error?"
+    options:
+      a: "True Faulted"
+      b: "False Faulted"
+      c: "True RanToCompletion"
+      d: "An unhandled `InvalidOperationException`"
+      e: "An unhandled `AggregateException`"
+    optionExplanations:
+      b: "`Task.WhenAny` does not create a copy or a wrapper of the winning task: the result of the returned task is the very same `failing.Task` object, so the reference comparison gives `True`."
+      c: "`RanToCompletion` is the state of the outer `Task<Task>` returned by `WhenAny`. After `await`, `winner` refers to the inner task `failing.Task`, which completed with an error, so it is `Faulted`."
+      d: "`await Task.WhenAny(...)` does not throw the exception of an input task: the outer task completes successfully, and the error stays inside `winner` until `winner` itself is awaited."
+      e: "No exception is thrown at all, neither the original nor a wrapped one. Blocking calls such as `Wait()` are what wrap a task's error in `AggregateException`, and the program makes no such call."
+    answer: "True Faulted"
+    explanation: |
+      `Task.WhenAny` returns a `Task<Task>`. This outer task completes as soon as any of the input tasks has completed,
+      and it always ends in the `RanToCompletion` state, with its result set to the first input task to complete. This
+      holds even when that task ended in the `Faulted` or `Canceled` state.
+
+      So `await Task.WhenAny(...)` throws nothing and simply returns `failing.Task`. The comparison
+      `winner == failing.Task` compares references and gives `True`, and `winner.Status` is `Faulted`. The result is
+      `True Faulted`. `never.Task` stays incomplete, but the program does not wait for it.
+
+      A practical consequence: after `WhenAny` you must handle the winner explicitly, for example with `await winner`.
+      That `await` is what throws the original `InvalidOperationException`, while a blocking `winner.Wait()` would throw
+      an `AggregateException` that contains it. A typical mistake in the "work or timeout" pattern is to check only
+      which task won and never await it, so the error is silently lost. The behaviour is described for .NET 10.
+    linkTitles:
+      - "Task.WhenAny method"
+      - "Task.Wait method"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

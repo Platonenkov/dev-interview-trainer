@@ -1,0 +1,172 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RM9S540GEC3NDP0EYS
+slug: async-io-scalability-not-latency-migration
+stack: dotnet
+topic: async
+level: architect
+type: open
+grading: self
+tags: [async-await, scalability, thread-pool, migration, architecture]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/csharp/asynchronous-programming/async-scenarios
+    lang: en
+    kind: docs
+  - url: https://blog.stephencleary.com/2013/11/there-is-no-thread.html
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/best-practices
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/debug-threadpool-starvation
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Стоит ли переводить парк синхронных сервисов с вводом-выводом на async и что это даст?
+    prompt: |
+      У компании несколько десятков синхронных сервисов на .NET, которые в основном ждут базу данных и другие сервисы.
+      Предлагается за несколько лет перевести их на `async` сквозным образом, от контроллеров до доступа к данным,
+      в расчёте на то, что «всё станет быстрее». Как вы как архитектор решите, стоит ли это делать, для каких сервисов
+      и в каком порядке? Что такая миграция улучшит, а что нет? Ответ дайте для .NET 10.
+    hint: Что именно делает поток во время синхронного ожидания ответа от базы и меняется ли от `await` само время этого ожидания?
+    answer: |
+      **Что даёт асинхронный ввод-вывод.** Пока операция ввода-вывода выполняется, поток не занят: метод возвращает
+      управление, поток пула уходит на другую работу, а продолжение запускается, когда операция завершится. Поэтому
+      экземпляр сервиса обслуживает больше одновременных запросов при том же числе потоков, меньше расходует памяти на стеки
+      и переключения контекста и устойчивее к всплескам нагрузки: синхронные блокирующие вызовы под нагрузкой могут
+      приводить к голоданию пула потоков, очередям запросов и росту времени ответа.
+
+      **Чего он не даёт.**
+
+      - Не уменьшает задержку одного запроса: запрос к базе длится столько же, а конечный автомат добавляет небольшие
+        накладные расходы. Под низкой нагрузкой время ответа не изменится.
+      - Не помогает вычислительной (CPU-bound) работе: её по-прежнему выполняет поток, а `Task.Run` на сервере лишь
+        перекладывает её в другой поток пула и добавляет лишнее планирование.
+      - Не ускоряет нижестоящие системы. Наоборот, сервис сможет держать больше одновременных запросов к базе
+        и соседям, и узким местом станут пул соединений или сама база.
+
+      **Как принимать решение: по измерениям, а не по ожиданию ускорения.**
+
+      1. **Оценить параллелизм.** По закону Литтла число одновременных запросов равно пропускной способности, умноженной
+         на время ответа. 2000 запросов в секунду при 200 мс ожидания - это около 400 потоков, заблокированных
+         в синхронном коде. При 20 запросах в секунду выигрыша почти нет.
+      2. **Найти признаки нехватки потоков.** Счётчики пула потоков (число потоков, длина очереди) через `dotnet-counters`
+         или метрики, рост p99 при всплесках при невысокой загрузке CPU, дампы и `dotnet-stack`, где большинство потоков
+         стоит в синхронном вводе-выводе или в `.Result`/`.Wait()`.
+      3. **Найти блокирующие горячие точки.** Sync over async (`.Result`, `.Wait()`, `GetAwaiter().GetResult()`)
+         устраняют в первую очередь: обычно это самое дешёвое исправление и самый опасный источник голодания пула.
+      4. **Сравнить с альтернативами.** Горизонтальное масштабирование, кэширование, сокращение числа вызовов, временное
+         повышение минимума потоков (`ThreadPool.SetMinThreads`) как мера на период миграции. Если они дешевле
+         на горизонте нескольких лет, полная миграция не нужна.
+
+      **Кого переводить.** В приоритете сервисы с высоким параллелизмом, долгими ожиданиями нижестоящих вызовов,
+      всплесками нагрузки и большим числом экземпляров. Сервисы с низкой нагрузкой, вычислительные, пакетные задачи
+      с фиксированной степенью параллелизма и сервисы, которые скоро выведут из эксплуатации, можно не трогать.
+
+      **Как переводить.** Вертикальными срезами по цепочке вызовов, начиная с самых нагруженных эндпоинтов: асинхронный
+      путь от входа до драйвера целиком, с `CancellationToken`. Не стоит оставлять смешанное состояние, где асинхронный
+      нижний слой вызывается синхронно через `.Result`: оно часто хуже исходного. Если у зависимости нет асинхронного API,
+      обёртка в `Task.Run` ничего не даёт. Вместе с миграцией вводятся ограничения параллелизма к базе и соседям
+      (размер пула соединений, ограничители частоты и параллелизма, изоляция отказов), анализаторы на блокирующие вызовы
+      и обучение команды.
+
+      **Критерии успеха** формулируются заранее: пропускная способность на экземпляр при том же p99, число экземпляров
+      и стоимость, число потоков, поведение при всплесках. Снижение задержки одиночного запроса критерием не является.
+    explanation: |
+      Суть вопроса в различии между масштабируемостью и скоростью. Синхронный сервис тратит поток на каждый
+      одновременный запрос, даже когда поток ничего не делает и просто ждёт сеть. Асинхронный ввод-вывод снимает эту
+      связь: во время ожидания поток не используется, поэтому ограничением становится реальная работа, а не число потоков.
+      Время самой операции ввода-вывода от этого не меняется, поэтому обещание «всё станет быстрее» ложно для одиночного
+      запроса и верно лишь косвенно: под высокой нагрузкой исчезают очереди за потоками и деградация p99.
+
+      Отсюда и логика решения. Выигрыш пропорционален числу одновременно ожидающих запросов, которое считается
+      по закону Литтла и проверяется счётчиками пула потоков. Пул потоков добавляет потоки постепенно, а не мгновенно,
+      поэтому синхронный сервис особенно страдает при всплесках, и это главный измеримый симптом. Стоимость же миграции
+      велика: `async` распространяется вверх по всей цепочке вызовов, а промежуточное состояние с блокирующими обёртками
+      часто опаснее исходного. Поэтому архитектор решает по каждому сервису отдельно, сравнивая измеренную выгоду
+      с альтернативами, и переводит код срезами, которые сразу дают законченный асинхронный путь.
+
+      Типичные ошибки: ждать снижения задержки, переводить вычислительный код через `Task.Run`, не учесть, что выросший
+      параллелизм перегрузит базу, и оставить sync over async на годы. Поведение описано для .NET 10 и ASP.NET Core.
+    linkTitles:
+      - Сценарии асинхронного программирования
+      - "Стивен Клири: There Is No Thread"
+      - Рекомендации по ASP.NET Core
+      - Отладка нехватки потоков в пуле потоков
+  en:
+    title: Is converting a fleet of synchronous I/O-bound services to async worth it and what will it give?
+    prompt: |
+      A company runs a few dozen synchronous .NET services that mostly wait on a database and on other services.
+      The proposal is to spend several years converting them to `async` end to end, from controllers to data access,
+      expecting that "everything will get faster". As an architect, how do you decide whether to do it, for which services
+      and in what order? What will such a migration improve, and what will it not? Answer for .NET 10.
+    hint: What exactly is a thread doing during a synchronous wait for the database, and does `await` change how long that wait itself takes?
+    answer: |
+      **What asynchronous I/O gives.** While an I/O operation is in progress no thread is occupied: the method returns,
+      the thread pool thread goes on to other work, and the continuation runs when the operation completes. So an instance
+      serves more concurrent requests with the same number of threads, spends less memory on stacks and less time on
+      context switches, and handles load bursts better: synchronous blocking calls under load can lead to thread pool
+      starvation, queued requests and growing response times.
+
+      **What it does not give.**
+
+      - It does not reduce the latency of a single request: the database query takes as long as before, and the state
+        machine adds a small overhead. Under low load the response time does not change.
+      - It does not help CPU-bound work: a thread still has to run it, and `Task.Run` on a server only moves it to another
+        thread pool thread and adds unnecessary scheduling.
+      - It does not make downstream systems faster. On the contrary, the service can now hold more concurrent calls to the
+        database and its neighbours, and the connection pool or the database itself becomes the bottleneck.
+
+      **How to decide: by measurements, not by expected speed-ups.**
+
+      1. **Estimate concurrency.** By Little's law the number of concurrent requests equals throughput multiplied by
+         response time. 2000 requests per second with 200 ms of waiting is about 400 threads blocked in synchronous code.
+         At 20 requests per second there is almost nothing to gain.
+      2. **Look for signs of thread shortage.** Thread pool counters (thread count, queue length) through `dotnet-counters`
+         or metrics, p99 growing during bursts while CPU usage stays moderate, dumps and `dotnet-stack` showing most threads
+         sitting in synchronous I/O or in `.Result`/`.Wait()`.
+      3. **Find blocking hot spots.** Sync over async (`.Result`, `.Wait()`, `GetAwaiter().GetResult()`) is removed first:
+         it is usually the cheapest to fix and the most dangerous source of thread pool starvation.
+      4. **Compare with alternatives.** Scaling out, caching, fewer calls, temporarily raising the thread minimum
+         (`ThreadPool.SetMinThreads`) as a stopgap during migration. If these are cheaper over a multi-year horizon, a full
+         migration is not needed.
+
+      **Which services to convert.** Priority goes to services with high concurrency, long waits on downstream calls,
+      bursty traffic and many instances. Low-traffic services, CPU-bound ones, batch jobs with a fixed degree of
+      parallelism and services about to be retired can be left alone.
+
+      **How to convert.** In vertical slices along a call chain, starting with the busiest endpoints: an asynchronous path
+      from the entry point down to the driver as a whole, with a `CancellationToken`. Avoid leaving a mixed state where an
+      asynchronous lower layer is called synchronously through `.Result`: it is often worse than the starting point. If a
+      dependency has no asynchronous API, wrapping it in `Task.Run` gains nothing. Together with the migration introduce
+      concurrency limits towards the database and neighbours (connection pool size, rate and concurrency limiters, fault
+      isolation), analyzers for blocking calls and team training.
+
+      **Success criteria** are defined up front: throughput per instance at the same p99, instance count and cost, thread
+      count, behaviour during bursts. Lower latency of a single request is not a criterion.
+    explanation: |
+      The point of the question is the difference between scalability and speed. A synchronous service spends a thread on
+      every concurrent request, even when the thread does nothing but wait for the network. Asynchronous I/O breaks that
+      link: no thread is used during the wait, so the limit becomes the real work, not the number of threads. The duration
+      of the I/O operation itself does not change, so the promise that "everything gets faster" is false for a single
+      request and true only indirectly: under high load the queues for threads and the p99 degradation disappear.
+
+      That drives the decision. The gain is proportional to the number of requests waiting at the same time, which is
+      computed with Little's law and checked with thread pool counters. The thread pool adds threads gradually, not
+      instantly, so a synchronous service suffers most during bursts, and that is the main measurable symptom. The cost of
+      migration is high: `async` spreads up the whole call chain, and an intermediate state with blocking wrappers is often
+      more dangerous than the original. So the architect decides service by service, comparing the measured benefit with
+      the alternatives, and converts the code in slices that each deliver a complete asynchronous path.
+
+      Typical mistakes: expecting lower latency, converting CPU-bound code through `Task.Run`, forgetting that higher
+      concurrency will overload the database, and leaving sync over async in place for years. The behaviour is described
+      for .NET 10 and ASP.NET Core.
+    linkTitles:
+      - Asynchronous programming scenarios
+      - "Stephen Cleary: There Is No Thread"
+      - ASP.NET Core best practices
+      - Debug thread pool starvation
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

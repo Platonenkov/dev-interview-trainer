@@ -1,0 +1,198 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPNJ3XA1MVAJGSV58X
+slug: proto-breaking-change-across-teams
+stack: dotnet
+topic: grpc-realtime
+level: lead
+type: situation
+grading: self
+tags: [grpc, protobuf, versioning, breaking-changes, contracts]
+code:
+  language: protobuf
+  harness: none
+  source: |
+    syntax = "proto3";
+
+    package orders.v1;
+
+    option csharp_namespace = "Orders.V1";
+
+    service OrderService {
+      rpc GetOrder (GetOrderRequest) returns (Order);
+      rpc CreateOrder (Order) returns (Order);
+    }
+
+    message GetOrderRequest {
+      string id = 1;
+    }
+
+    message Order {
+      string id = 1;
+      string customer_id = 2;
+      string currency = 3;
+      int64 total_minor_units = 4;
+      // Discount in percent, 0 to 100.
+      int32 discount = 5;
+    }
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/grpc/versioning
+    lang: en
+    kind: docs
+  - url: https://protobuf.dev/programming-guides/proto3/
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как изменить тип и смысл поля в .proto-контракте, который используют четыре команды?
+    prompt: |
+      Ваша команда владеет сервисом заказов с контрактом из примера. Бизнес требует, чтобы скидка
+      хранилась не в процентах, а абсолютной суммой в валюте заказа в минимальных единицах (копейки, центы).
+      Разработчик предлагает просто поменять `int32 discount = 5;` на `int64 discount = 5;` и пересчитать
+      значение на сервере.
+
+      Контракт используют четыре другие команды: две только вызывают `GetOrder`, ещё две отправляют `Order`
+      в `CreateOrder`. Каждая команда выпускает релизы по своему графику, общий одновременный релиз
+      устроить нельзя. Как вы проведёте это изменение как технический лидер?
+    hint: Что увидит команда, которая ещё месяц будет работать со старым сгенерированным кодом, если под номером 5 начнёт приходить значение с другим смыслом?
+    answer: |
+      1. **Запретить изменение на месте.** На проводе поле идентифицируется номером `5`, а не именем. Смена
+         типа бывает разной: `int32` на `int64` совместима на уровне формата (оба кодируются как varint), и
+         старый читатель лишь обрежет значения, не помещающиеся в 32 бита. А, например, `int32` на `string`
+         или на сообщение меняет тип кодирования, и старый код теряет значение или не может его разобрать.
+         Но главная опасность здесь не в типе, а в смысле: под тем же номером старый клиент молча прочитает
+         скидку 1500 центов как 1500 процентов, а новый сервер примет `10` процентов от старого клиента за
+         10 центов. Ошибок нет, и ни компилятор, ни проверки совместимости формата смену смысла не поймают.
+         Вдобавок в сгенерированном C#-коде свойство станет `long` вместо `int`, и у потребителей после
+         перегенерации клиента перестанет компилироваться код, который присваивает его переменной `int`.
+      2. **Выбрать форму изменения.** Если меняется одно поле - добавить новое поле с новым номером, например
+         `optional int64 discount_minor_units = 6;`, а старое пометить `[deprecated = true]`. Если изменений в
+         контракте много или меняется сама модель - выпустить пакет `orders.v2` с новым сервисом и разместить
+         его в том же приложении рядом с `orders.v1`, переиспользуя общую бизнес-логику: имя пакета входит в
+         адрес сервиса, поэтому обе версии живут одновременно.
+      3. **Расширение (expand): сервер выходит первым.** В ответах сервер заполняет оба поля. Старое поле
+         становится производным и приблизительным: например, `round(discount_minor_units * 100 / total_minor_units)`
+         относительно суммы заказа до скидки. Из-за округления точность теряется, поэтому старые потребители
+         на время миграции получают значение по принципу best effort, и это прямо написано в инструкции по
+         миграции. В запросах `CreateOrder` принимает любое из двух полей: из процентов сумму вычисляет по тому
+         же правилу, а если заданы оба, действует явное правило (например, побеждает новое поле). В proto3
+         незаданный скаляр без `optional` читается как `0`, поэтому новое поле объявлено `optional`: так сервер
+         отличает «не передано» от нулевой скидки.
+      4. **Миграция потребителей.** Опубликовать новую версию контракта (общий репозиторий или пакет с
+         `.proto`), инструкцию по миграции и согласовать срок с лидами четырёх команд. Отслеживать, кто ещё
+         использует старое: метрики по вызовам `v1` или по запросам, где задано поле `5`, с указанием клиента
+         (например, по заголовку в метаданных вызова). Чтение старого поля из ответа сервер не видит, поэтому
+         здесь нужно подтверждение от каждой команды.
+      5. **Сужение (contract).** Когда использование упало до нуля и все команды подтвердили миграцию, удалить
+         поле и зарезервировать номер и имя: `reserved 5;` и `reserved "discount";`. Для варианта с `v2` -
+         отключить сервис `v1` после того, как трафик на него прекратился.
+      6. **Закрепить процесс.** У контракта один владелец (команда и правило обязательного ревью, например
+         через CODEOWNERS), потребители видят изменения до слияния, а CI автоматически проверяет обратную
+         совместимость `.proto`-файлов с основной веткой (например, `buf breaking`) и блокирует смену номеров
+         и типов, удаление полей без `reserved` и переименование пакетов и сервисов. Смену смысла никакой
+         инструмент не увидит, поэтому правило «новый смысл - новое поле» закрепляется в ревью. Отдельно -
+         контрактные тесты старого клиента против нового сервера.
+    explanation: |
+      Главная сложность не в синтаксисе Protobuf, а в независимых релизах: какое-то время старые и новые версии
+      клиентов и сервера работают одновременно в любых сочетаниях. Поэтому изменение проходит по схеме
+      expand-contract: сначала контракт расширяется так, чтобы обе версии понимали друг друга, потом потребители
+      переходят по своему графику, и только потом старое удаляется.
+
+      Предложение разработчика выглядит безопасным именно потому, что `int32` и `int64` совместимы на проводе:
+      ничего не падает. Но совместимость формата не означает совместимость смысла. Номер поля - это обещание,
+      что под ним лежат данные с одним и тем же значением, и менять это обещание можно только через новый номер.
+
+      Добавление поля - неломающее изменение: старый код просто не знает о поле `6`, а старые клиенты в proto3
+      сохраняют его как неизвестное поле. Удалённый номер нужно резервировать: если через год кто-то снова
+      займёт номер `5` под другой тип или смысл, клиент со старым кодом получит ту же поломку, от которой вы уходили.
+
+      Новое поле или `v2` - компромисс. Новое поле дешевле и не удваивает API, но контракт копит устаревшие
+      поля, а на время миграции сервер поддерживает приближённое старое значение. Отдельная версия пакета даёт
+      чистую модель и позволяет менять сразу много, но сервер некоторое время поддерживает два сервиса, и их
+      поведение нужно держать согласованным. Если сервис публикуется ещё и через gRPC JSON transcoding, там
+      важны и имена полей: переименование для JSON-клиентов тоже ломающее.
+
+      Роль лидера - сделать безопасный путь единственно возможным: один владелец контракта, автоматическая
+      проверка совместимости в CI, ревью смысла изменений, видимость того, кто ещё на старой версии, и
+      согласованный срок отключения.
+    linkTitles:
+      - "Версионирование gRPC-сервисов"
+      - "Руководство по языку proto3"
+  en:
+    title: How do you change the type and meaning of a .proto field that four teams consume?
+    prompt: |
+      Your team owns an order service with the contract shown above. The business wants the discount stored
+      not as a percentage but as an absolute amount in the order currency, in minor units (cents, kopecks).
+      A developer suggests simply changing `int32 discount = 5;` to `int64 discount = 5;` and converting the
+      value on the server.
+
+      Four other teams use the contract: two only call `GetOrder`, and two more send `Order` to `CreateOrder`.
+      Each team releases on its own schedule, and a single coordinated release is impossible. As the tech
+      lead, how do you run this change?
+    hint: What will a team that keeps running old generated code for another month see if number 5 starts carrying a value with a different meaning?
+    answer: |
+      1. **Forbid the in-place change.** On the wire a field is identified by its number `5`, not by its name.
+         Type changes differ: `int32` to `int64` is wire-compatible (both are encoded as varints), and an old
+         reader only truncates values that do not fit in 32 bits. A change such as `int32` to `string` or to a
+         message changes the wire encoding, and old code loses the value or cannot parse it. But the main danger
+         here is not the type, it is the meaning: under the same number an old client silently reads a discount
+         of 1500 cents as 1500 percent, and the new server takes `10` percent from an old client as 10 cents.
+         There is no error, and neither the compiler nor wire-compatibility checks can catch a change of meaning.
+         On top of that, the generated C# property becomes `long` instead of `int`, so after regenerating the
+         client, consumer code that assigns it to an `int` variable stops compiling.
+      2. **Choose the shape of the change.** If one field changes, add a new field with a new number, for
+         example `optional int64 discount_minor_units = 6;`, and mark the old one `[deprecated = true]`. If the
+         contract changes a lot or the model itself changes, publish an `orders.v2` package with a new service
+         and host it in the same app next to `orders.v1`, reusing the shared business logic: the package name
+         is part of the service address, so both versions live side by side.
+      3. **Expand: the server ships first.** In responses the server fills both fields. The old field becomes a
+         derived, approximate value: for example `round(discount_minor_units * 100 / total_minor_units)` relative
+         to the order amount before the discount. Rounding loses precision, so during the migration window old
+         consumers get a best-effort value, and the migration guide says so explicitly. In `CreateOrder` requests
+         the server accepts either field: it converts a percentage to an amount with the same rule, and it
+         defines an explicit rule for when both are set (for example the new field wins). In proto3 a scalar
+         without `optional` reads as `0` when unset, which is why the new field is declared `optional`: the
+         server can tell "not sent" from a zero discount.
+      4. **Migrate the consumers.** Publish the new contract version (a shared repository or a package with the
+         `.proto` files), a migration guide, and agree a deadline with the leads of the four teams. Track who
+         still uses the old shape: metrics on `v1` calls or on requests that set field `5`, broken down by client
+         (for example by a header in the call metadata). The server cannot see clients reading the old field from
+         a response, so that part needs a confirmation from each team.
+      5. **Contract.** When usage has dropped to zero and every team has confirmed the migration, remove the
+         field and reserve its number and name: `reserved 5;` and `reserved "discount";`. With the `v2` option,
+         switch off the `v1` service once traffic to it has stopped.
+      6. **Lock in the process.** The contract has one owner (a team and a mandatory review rule, for example
+         through CODEOWNERS), consumers see changes before they merge, and CI automatically checks the
+         backward compatibility of the `.proto` files against the main branch (for example `buf breaking`) and
+         blocks changed numbers and types, removed fields without `reserved`, and renamed packages and services.
+         No tool sees a change of meaning, so the rule "new meaning means a new field" is enforced in review.
+         In addition, contract tests run an old client against the new server.
+    explanation: |
+      The real difficulty is not Protobuf syntax but independent releases: for some time old and new versions of
+      clients and server run together in every combination. That is why the change follows the expand-contract
+      pattern: first the contract is extended so that both versions understand each other, then consumers move
+      over on their own schedule, and only then is the old shape removed.
+
+      The developer's proposal looks safe precisely because `int32` and `int64` are wire-compatible: nothing
+      fails. But wire compatibility is not compatibility of meaning. A field number is a promise that the data
+      under it always means the same thing, and that promise can change only through a new number.
+
+      Adding a field is a non-breaking change: old code simply does not know about field `6`, and old proto3
+      clients keep it as an unknown field. A removed number must be reserved: if a year later someone reuses
+      number `5` for another type or meaning, a client with old code gets exactly the breakage you were avoiding.
+
+      A new field versus `v2` is a trade-off. A new field is cheaper and does not double the API, but the
+      contract accumulates deprecated fields, and during the migration the server maintains an approximate old
+      value. A separate package version gives a clean model and allows many changes at once, but for a while the
+      server supports two services whose behaviour must stay consistent. If the service is also exposed through
+      gRPC JSON transcoding, field names matter too: a rename is breaking for JSON clients.
+
+      The lead's job is to make the safe path the only possible one: one contract owner, an automatic
+      compatibility check in CI, a review of the meaning of changes, visibility of who is still on the old
+      version, and an agreed switch-off date.
+    linkTitles:
+      - "Versioning gRPC services"
+      - "Language Guide (proto 3)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  noRunReason: The snippet is a Protobuf contract, not C# code, and is shown only to illustrate the scenario.

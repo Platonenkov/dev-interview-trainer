@@ -1,0 +1,128 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPD6A6M7HM7KYT85TD
+slug: grpc-http2-max-concurrent-streams-queueing
+stack: dotnet
+topic: grpc-realtime
+level: senior
+type: situation
+grading: self
+tags: [grpc, http2, performance, streaming, diagnostics]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/grpc/performance
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/diagnostics/built-in-metrics-system-net
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Под нагрузкой задержка вызовов gRPC растёт, а CPU сервера почти не загружен
+    prompt: |
+      Сервис A (.NET 10) вызывает сервис B по gRPC через один `GrpcChannel`, который создаётся при старте.
+      Для канала команда сама собрала `SocketsHttpHandler`, чтобы настроить тайм-ауты и сертификаты. Кроме
+      обычных unary-вызовов по этому же каналу открыто несколько сотен долгоживущих подписок
+      (server streaming), каждая живёт минутами.
+
+      Под нагрузкой p99 unary-вызовов на стороне A вырос до нескольких секунд. При этом CPU сервиса B около
+      20%, а в логах B обработка тех же запросов занимает миллисекунды. Как вы будете диагностировать проблему
+      и что исправите?
+    hint: Ожидание не видно в логах сервера. Чем заняты слоты одного HTTP/2-соединения, когда на нём висят сотни подписок?
+    answer: |
+      1. **Найти, где теряется время.** Сравнить длительность вызова на клиенте и на сервере, в распределённой
+         трассировке посмотреть разрыв между началом клиентского спана и началом серверного. Если сервер
+         обрабатывает запрос быстро, вызов ждёт где-то до того, как попал на сервер.
+      2. **Исключить другие ожидания на клиенте.** Проверить в `dotnet-counters` длину очереди пула потоков
+         (нехватка потоков тоже даёт задержку без нагрузки на CPU), время DNS и TLS-рукопожатий.
+      3. **Подтвердить очередь в HTTP/2.** Метрики `System.Net.Http` (с .NET 8): `http.client.request.time_in_queue`
+         и `http.client.open_connections`, или счётчик `http20-requests-queue-duration`. Большое время в очереди
+         при одном открытом HTTP/2-соединении и числе активных вызовов около 100 и выше подтверждает причину.
+      4. **Понять причину.** HTTP/2-соединение ограничивает число одновременных потоков (параметр
+         `SETTINGS_MAX_CONCURRENT_STREAMS`, в Kestrel это `Http2.MaxStreamsPerConnection`, по умолчанию 100).
+         Канал gRPC мультиплексирует вызовы в одном соединении, и вызовы сверх лимита ставятся в очередь на
+         клиенте. Долгие подписки занимают слоты на минуты, поэтому unary-вызовам почти не достаётся мест.
+      5. **Исправить.**
+         - В собственном `SocketsHttpHandler` установить `EnableMultipleHttp2Connections = true`: при
+           достижении лимита канал откроет дополнительные HTTP/2-соединения. Внутренний обработчик, который
+           `GrpcChannel` создаёт сам, включает это автоматически, а самописный - нет.
+         - Вынести долгоживущие подписки в отдельный канал, чтобы короткие вызовы не делили с ними соединение.
+         - Проверить утечки: потоковые вызовы, которые не дочитаны и не освобождены (`Dispose`) или не отменены,
+           продолжают держать поток HTTP/2.
+         - Поднимать `MaxStreamsPerConnection` на сервере можно, но это лишь сдвигает предел и увеличивает
+           расход памяти на соединение. Учесть, что прокси между A и B может задавать собственный лимит.
+      6. **Закрепить.** Алерт на время ожидания в очереди HTTP-клиента и нагрузочный тест с реалистичным числом
+         подписок.
+    explanation: |
+      Низкий CPU сервера при росте задержки означает, что работа не выполняется, а ждёт. Сервер считает время
+      с момента, когда получил запрос, поэтому ожидание на клиенте он не видит, и логи B выглядят идеально.
+
+      Канал gRPC в .NET по умолчанию держит одно HTTP/2-соединение, а сервер объявляет предел одновременных
+      потоков на нём, чаще всего 100. Пока предел не достигнут, мультиплексирование работает отлично. Когда
+      сотни долгих стримов занимают все слоты, каждый новый вызов ждёт, пока какой-то поток завершится. Для
+      стримов, живущих минутами, это ожидание почти бесконечно.
+
+      `SocketsHttpHandler.EnableMultipleHttp2Connections` появился в .NET 5 и есть в .NET 10. Он снимает
+      очередь ценой дополнительных соединений: больше TLS-рукопожатий и памяти, но предел становится не
+      жёстким. Отдельный канал для подписок полезен и при включённом флаге: он изолирует короткие вызовы от
+      долгих и делает поведение предсказуемым.
+    linkTitles:
+      - "Рекомендации по производительности gRPC"
+      - "Встроенные метрики System.Net"
+  en:
+    title: Under load gRPC call latency grows while the server CPU stays low
+    prompt: |
+      Service A (.NET 10) calls service B over gRPC through one `GrpcChannel` created at startup. The team
+      built its own `SocketsHttpHandler` for the channel to configure timeouts and certificates. Besides
+      ordinary unary calls, the same channel carries several hundred long-lived subscriptions
+      (server streaming), each living for minutes.
+
+      Under load the p99 of unary calls measured in A has grown to several seconds. Meanwhile service B's CPU
+      is about 20%, and B's logs show the same requests handled in milliseconds. How do you diagnose the
+      problem and what do you fix?
+    hint: The waiting does not show up in the server logs. What occupies the slots of one HTTP/2 connection when hundreds of subscriptions hang on it?
+    answer: |
+      1. **Find where the time goes.** Compare the call duration on the client with the duration on the
+         server, and in distributed tracing look at the gap between the start of the client span and the start
+         of the server span. If the server handles the request quickly, the call waits somewhere before it
+         reaches the server.
+      2. **Rule out other client-side waits.** Check the thread pool queue length in `dotnet-counters`
+         (thread starvation also adds latency without CPU load), and DNS and TLS handshake times.
+      3. **Confirm the HTTP/2 queue.** The `System.Net.Http` metrics (since .NET 8):
+         `http.client.request.time_in_queue` and `http.client.open_connections`, or the
+         `http20-requests-queue-duration` counter. A large queue time with a single open HTTP/2 connection and
+         about 100 or more active calls confirms the cause.
+      4. **Understand the cause.** An HTTP/2 connection limits the number of concurrent streams (the
+         `SETTINGS_MAX_CONCURRENT_STREAMS` setting, in Kestrel `Http2.MaxStreamsPerConnection`, 100 by default).
+         A gRPC channel multiplexes calls over one connection, and calls above the limit are queued on the
+         client. Long subscriptions hold slots for minutes, so unary calls barely get any.
+      5. **Fix it.**
+         - In the custom `SocketsHttpHandler` set `EnableMultipleHttp2Connections = true`: when the limit is
+           reached, the channel opens additional HTTP/2 connections. The internal handler that `GrpcChannel`
+           creates itself enables this automatically, a hand-built one does not.
+         - Move long-lived subscriptions to a separate channel so short calls do not share a connection with them.
+         - Look for leaks: streaming calls that are not read to the end and not disposed (`Dispose`) or
+           cancelled keep holding their HTTP/2 stream.
+         - Raising `MaxStreamsPerConnection` on the server is possible, but it only moves the limit and
+           increases memory per connection. Remember that a proxy between A and B may set its own limit.
+      6. **Lock it in.** An alert on the HTTP client queue time and a load test with a realistic number of
+         subscriptions.
+    explanation: |
+      Low server CPU with growing latency means the work is not being done but is waiting. The server measures
+      time from the moment it received the request, so it cannot see the waiting on the client, and B's logs
+      look perfect.
+
+      A gRPC channel in .NET holds one HTTP/2 connection by default, and the server announces a limit of
+      concurrent streams on it, most often 100. Below the limit multiplexing works very well. Once hundreds of
+      long streams take all the slots, every new call waits until some stream completes. For streams that
+      live for minutes that wait is close to endless.
+
+      `SocketsHttpHandler.EnableMultipleHttp2Connections` appeared in .NET 5 and is available in .NET 10. It
+      removes the queue at the cost of extra connections: more TLS handshakes and memory, but the limit is no
+      longer hard. A separate channel for subscriptions is useful even with the flag on: it isolates short
+      calls from long ones and makes behaviour predictable.
+    linkTitles:
+      - "Performance best practices with gRPC"
+      - "System.Net built-in metrics"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

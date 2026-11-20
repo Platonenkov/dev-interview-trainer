@@ -1,0 +1,121 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNWCQNZY3G06355414
+slug: serializable-key-range-locks-phantoms
+stack: dotnet
+topic: databases
+level: senior
+type: single
+grading: auto
+tags: [sql-server, locks, key-range-locks, serializable, phantoms]
+code:
+  language: sql
+  harness: none
+  source: |
+    -- Session 1
+    SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+    BEGIN TRANSACTION;
+    SELECT COUNT(*) FROM dbo.Orders
+    WHERE CreatedAt >= '2024-01-01' AND CreatedAt < '2024-02-01';
+    -- other work; the same SELECT runs again later, no COMMIT yet
+
+    -- Session 2
+    INSERT INTO dbo.Orders (CustomerId, CreatedAt) VALUES (42, '2024-01-15');
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/sql/relational-databases/sql-server-transaction-locking-and-row-versioning-guide
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/sql/t-sql/statements/set-transaction-isolation-level-transact-sql
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что блокирует SQL Server на уровне SERIALIZABLE, чтобы запрос по диапазону не увидел фантомов?
+    prompt: |
+      Сеанс 1 в SQL Server работает на уровне изоляции `SERIALIZABLE` и дважды выполняет запрос по диапазону
+      дат, показанный в коде. Между этими запросами сеанс 2 пытается вставить заказ с датой внутри диапазона.
+      Какое утверждение верно описывает, что блокирует сеанс 1, чтобы повторный запрос не увидел фантом, и что
+      меняется, если по столбцу `CreatedAt` нет индекса?
+    hint: Фантом - это строка, которой в момент чтения ещё нет. Что нужно заблокировать, чтобы запретить строку, которой не существует?
+    options:
+      a: "Разделяемые блокировки (`S`) только на прочитанных строках, удерживаемые до конца транзакции. Без индекса по `CreatedAt` поведение то же самое."
+      b: "Блокировки диапазона ключей (`RangeS-S`) на записях индекса, которые покрывают диапазон вместе с промежутками между ключами и следующим ключом после диапазона, поэтому вставка в диапазон ждёт. Без индекса по `CreatedAt` блокируется всё, что прочитал просмотр, вплоть до всей таблицы."
+      c: "Ничего не блокирует: транзакция читает снимок данных на момент своего начала из хранилища версий, поэтому вставка сеанса 2 проходит сразу, а повторный `SELECT` её просто не видит."
+      d: "Блокировки диапазона ключей, но только если есть индекс по `CreatedAt`. Без такого индекса гарантия ослабевает, и повторный `SELECT` может увидеть фантом."
+    optionExplanations:
+      a: "Так работает `REPEATABLE READ`. Блокировка строки защищает только существующие строки, а новой строки ещё нет, и заблокировать её нельзя. Вставка в диапазон прошла бы, и повторный запрос увидел бы фантом."
+      c: "Так ведёт себя уровень `SNAPSHOT` на версиях строк. `SERIALIZABLE` в SQL Server реализован на блокировках: читатель ставит блокировки и держит их до конца транзакции, а несовместимый писатель ждёт."
+      d: "SQL Server не ослабляет уровень изоляции. Если подходящего индекса нет, движок блокирует более крупный набор ресурсов: все ключи, которые прочитал просмотр, или таблицу целиком. Фантомов не будет, но страдает параллельная работа с таблицей."
+    answer: "Блокировки диапазона ключей (`RangeS-S`) на записях индекса, покрывающие диапазон вместе с промежутками и следующим ключом, поэтому вставка в диапазон ждёт. Без индекса по `CreatedAt` блокируется всё, что прочитал просмотр, вплоть до всей таблицы."
+    explanation: |
+      Фантом - это строка, которой при первом чтении не было. Блокировки отдельных строк от него не защищают:
+      блокировать нужно само место, куда новая строка может попасть. SQL Server делает это блокировками
+      диапазона ключей в индексе. На каждый ключ внутри диапазона ставится `RangeS-S`, которая защищает и сам
+      ключ, и промежуток перед ним. Дополнительно блокируется первый ключ после диапазона, чтобы закрыть
+      последний промежуток.
+
+      Перед вставкой нового ключа `INSERT` проверяет диапазон, в который попадает ключ, блокировкой `RangeI-N`.
+      Она несовместима с `RangeS-S`, поэтому сеанс 2 ждёт, пока сеанс 1 не завершит транзакцию. Побочный
+      эффект: промежуток тянется до следующего существующего ключа, поэтому может ждать и вставка значения чуть
+      за границей условия.
+
+      Руководство по блокировкам называет условие для блокировок диапазона ключей: обработчик запросов должен
+      использовать индекс для реализации условия по диапазону. Если индекса по `CreatedAt` нет, план
+      просматривает кластеризованный индекс или кучу и проверяет условие на каждой строке. Тогда блокировки
+      ложатся на все прочитанные ключи, то есть фактически на всю таблицу, или ставится блокировка таблицы.
+      Любая вставка в таблицу ждёт, а транзакции, которые читают и потом вставляют, легко попадают в deadlock.
+      Поэтому на уровне `SERIALIZABLE` индекс по столбцам условия нужен не только для скорости, но и для
+      параллельности, а сами транзакции стоит держать короткими.
+    linkTitles:
+      - "Руководство по блокировкам транзакций и управлению версиями строк"
+      - "SET TRANSACTION ISOLATION LEVEL (Transact-SQL)"
+  en:
+    title: What does SQL Server lock under SERIALIZABLE so that a range query sees no phantoms?
+    prompt: |
+      Session 1 in SQL Server runs at the `SERIALIZABLE` isolation level and executes the date range query from
+      the code twice. Between the two queries, session 2 tries to insert an order with a date inside the range.
+      Which statement correctly describes what session 1 locks so that the repeated query cannot see a phantom,
+      and what changes if there is no index on the `CreatedAt` column?
+    hint: A phantom is a row that does not exist yet at the time of the read. What do you have to lock to forbid a row that does not exist?
+    options:
+      a: "Shared (`S`) locks only on the rows that were read, held until the end of the transaction. Without an index on `CreatedAt` the behavior is the same."
+      b: "Key-range locks (`RangeS-S`) on the index entries that cover the range, together with the gaps between keys and the next key after the range, so an insert into the range waits. Without an index on `CreatedAt`, everything the scan read is locked, up to the whole table."
+      c: "Nothing is locked: the transaction reads a snapshot of the data as of its start from the version store, so the insert of session 2 succeeds at once and the repeated `SELECT` simply does not see it."
+      d: "Key-range locks, but only if there is an index on `CreatedAt`. Without such an index the guarantee is weakened, and the repeated `SELECT` can see a phantom."
+    optionExplanations:
+      a: "That is how `REPEATABLE READ` works. A row lock protects only rows that exist, and the new row does not exist yet, so it cannot be locked. The insert into the range would succeed, and the repeated query would see a phantom."
+      c: "That is how the row-versioning `SNAPSHOT` level behaves. `SERIALIZABLE` in SQL Server is lock-based: the reader takes locks and holds them until the transaction ends, and an incompatible writer waits."
+      d: "SQL Server does not weaken the isolation level. Without a suitable index the engine locks a coarser set of resources: every key the scan read, or the whole table. There are no phantoms, but concurrent work on the table suffers."
+    answer: "Key-range locks (`RangeS-S`) on the index entries that cover the range together with the gaps and the next key, so an insert into the range waits. Without an index on `CreatedAt`, everything the scan read is locked, up to the whole table."
+    explanation: |
+      A phantom is a row that was not there at the first read. Locks on individual rows cannot prevent it: what
+      must be locked is the place where a new row could appear. SQL Server does this with key-range locks in an
+      index. Each key inside the range gets a `RangeS-S` lock, which protects both the key and the gap before it.
+      The first key after the range is locked as well, to close the last gap.
+
+      Before inserting a new key, `INSERT` tests the range the key falls into with a `RangeI-N` lock. It is
+      incompatible with `RangeS-S`, so session 2 waits until session 1 ends its transaction. A side effect: the
+      gap extends to the next existing key, so an insert of a value just past the boundary of the condition can
+      wait too.
+
+      The locking guide states the precondition for key-range locks: the query processor must use an index to
+      implement the range predicate. If there is no index on `CreatedAt`, the plan scans the clustered index or
+      the heap and checks the condition on every row. The locks then fall on every key read, which is in effect
+      the whole table, or a table lock is taken. Any insert into the table waits, and transactions that read and
+      then insert easily end up in a deadlock. That is why under `SERIALIZABLE` an index on the predicate columns
+      matters for concurrency, not only for speed, and the transactions themselves should be kept short.
+    linkTitles:
+      - "Transaction locking and row versioning guide"
+      - "SET TRANSACTION ISOLATION LEVEL (Transact-SQL)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  noRunReason: "The snippet is T-SQL for two concurrent SQL Server sessions, and the sandbox has no database server."

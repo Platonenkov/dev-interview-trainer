@@ -1,0 +1,134 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNHNWK38F3YMF99ANY
+slug: disconnected-graph-update-removed-children
+stack: dotnet
+topic: ef-core
+level: senior
+type: open
+grading: self
+tags: [ef-core, change-tracking, disconnected-entities, aggregates]
+links:
+  - url: https://learn.microsoft.com/en-us/ef/core/saving/disconnected-entities
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/ef/core/change-tracking/explicit-tracking
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как сохранить в EF Core присланный граф заказа с новыми, изменёнными и удалёнными позициями?
+    prompt: |
+      API принимает `PUT` с заказом и его позициями в виде DTO. Ключи генерирует база. В присланном графе есть
+      новые позиции (`Id = 0`), изменённые позиции, а позиций, которые пользователь удалил, в нём просто нет.
+      Обработчик превращает DTO в сущность `Order` с коллекцией `Items`, вызывает `db.Orders.Update(order)` и
+      затем `SaveChangesAsync()`. Почему этого недостаточно и как правильно сохранить такой граф в EF Core 10?
+    hint: "Что именно EF Core обходит при вызове `Update` и где хранится информация о том, какие позиции были у заказа раньше?"
+    answer: |
+      **Почему `Update` недостаточно.**
+
+      - `Update` обходит граф и решает по ключу: при ключах, сгенерированных базой, сущность с заданным ключом
+        получает `Modified`, а с ключом по умолчанию (`Id = 0`) - `Added`. Новые и изменённые позиции он обработает.
+      - Удалённых позиций в графе нет, а `Update` видит только то, что ему передали. Их строки останутся в базе,
+        `DELETE` не будет.
+      - Все свойства помечаются изменёнными, поэтому `UPDATE` перезаписывает все столбцы, включая те, которых
+        нет в DTO (они придут со значениями по умолчанию), и чужие параллельные правки.
+      - Ключи из запроса не проверяются: позиция с `Id` из чужого заказа будет обновлена и перепривязана к этому
+        заказу. А если ключи генерирует клиент (например, `Guid`), новая позиция с заданным ключом получит
+        `Modified`, `UPDATE` не затронет ни одной строки, и `SaveChanges` выбросит `DbUpdateConcurrencyException`.
+
+      **Как сохранить.**
+
+      1. Загрузить текущий агрегат отслеживающим запросом:
+         `db.Orders.Include(o => o.Items).SingleOrDefaultAsync(o => o.Id == id)`, при отсутствии вернуть 404.
+      2. Если у заказа есть токен параллелизма, подставить версию из DTO как исходное значение:
+         `db.Entry(order).Property(o => o.Version).OriginalValue = dto.Version`.
+      3. Скалярные поля заказа перенести через `db.Entry(order).CurrentValues.SetValues(dto)` или явным
+         присваиванием: EF Core пометит изменёнными только свойства, значения которых действительно отличаются.
+      4. Сравнить позиции по ключу:
+         - `Id = 0` - создать позицию и добавить в `order.Items`, она получит `Added`;
+         - `Id` есть среди загруженных - обновить значения через `SetValues`;
+         - `Id` не найден среди позиций этого заказа - отклонить запрос (400), а не доверять клиенту;
+         - загруженной позиции нет в DTO - удалить её: `db.Remove(item)` или `order.Items.Remove(item)` (при
+           обязательной связи EF Core по умолчанию удаляет такую осиротевшую позицию).
+      5. Один вызов `SaveChangesAsync`: все `INSERT`, `UPDATE` и `DELETE` выполнятся в одной транзакции.
+         `DbUpdateConcurrencyException` превратить в ответ 409.
+
+      **Альтернативы.** `ChangeTracker.TrackGraph` позволяет задать состояние каждого узла по своим правилам,
+      но тоже обходит только присланный граф, поэтому удаление придётся выразить явно, например флагом удаления
+      в DTO. Можно также перейти на мягкое удаление или вынести удаление позиций в отдельные команды API.
+    explanation: |
+      Это сценарий отключённых сущностей: контекст, который загружал заказ, давно освобождён, а новый контекст
+      ничего не знает о том, что лежит в базе. `Update` (как и `Attach`) выводит состояние каждой сущности только
+      из неё самой, по значению ключа. Отсутствие объекта в графе - это не объект, и обработать его обход графа
+      не может. Знание о том, какие позиции были, есть только в базе, поэтому для корректного удаления её нужно
+      спросить.
+
+      Загрузка текущего агрегата стоит одного дополнительного запроса, зато даёт сразу несколько гарантий:
+      удаляются ровно отсутствующие позиции, `UPDATE` затрагивает только изменённые столбцы, клиент не может
+      изменить чужие строки, а токен параллелизма ловит одновременные правки. Варианты с `TrackGraph` или флагами
+      в DTO обходятся без загрузки, но перекладывают ответственность за полноту и правдивость графа на клиента.
+      Ответ описывает поведение EF Core 10.
+    linkTitles:
+      - "Отключённые сущности"
+      - "Явное отслеживание сущностей"
+  en:
+    title: How do you save a received order graph with new, changed and removed items in EF Core?
+    prompt: |
+      An API receives a `PUT` with an order and its items as a DTO. The database generates the keys. The
+      received graph contains new items (`Id = 0`) and changed items, while items the user removed are simply
+      absent from it. The handler maps the DTO to an `Order` entity with an `Items` collection, calls
+      `db.Orders.Update(order)` and then `SaveChangesAsync()`. Why is that not enough, and how do you save such
+      a graph correctly in EF Core 10?
+    hint: "What exactly does EF Core traverse when you call `Update`, and where is the information about which items the order had before stored?"
+    answer: |
+      **Why `Update` is not enough.**
+
+      - `Update` walks the graph and decides by key: with database-generated keys, an entity with a set key gets
+        `Modified`, and one with the default key (`Id = 0`) gets `Added`. New and changed items are handled.
+      - Removed items are not in the graph, and `Update` sees only what it was given. Their rows stay in the
+        database, and no `DELETE` is issued.
+      - Every property is marked as modified, so the `UPDATE` overwrites all columns, including those missing from
+        the DTO (they arrive with default values), and concurrent edits by others.
+      - Keys from the request are not checked: an item with an `Id` from another order is updated and re-linked to
+        this order. And if the client generates keys (for example `Guid`), a new item with a set key gets
+        `Modified`, the `UPDATE` affects no rows, and `SaveChanges` throws `DbUpdateConcurrencyException`.
+
+      **How to save it.**
+
+      1. Load the current aggregate with a tracking query:
+         `db.Orders.Include(o => o.Items).SingleOrDefaultAsync(o => o.Id == id)`, and return 404 if it is missing.
+      2. If the order has a concurrency token, set the version from the DTO as the original value:
+         `db.Entry(order).Property(o => o.Version).OriginalValue = dto.Version`.
+      3. Copy the order's scalar fields with `db.Entry(order).CurrentValues.SetValues(dto)` or plain assignments:
+         EF Core marks as modified only the properties whose values actually differ.
+      4. Diff the items by key:
+         - `Id = 0` - create an item and add it to `order.Items`, it gets `Added`;
+         - the `Id` is among the loaded items - update its values with `SetValues`;
+         - the `Id` is not among this order's items - reject the request (400) instead of trusting the client;
+         - a loaded item is missing from the DTO - delete it: `db.Remove(item)` or `order.Items.Remove(item)` (for
+           a required relationship EF Core deletes such an orphaned item by default).
+      5. One `SaveChangesAsync` call: all `INSERT`, `UPDATE` and `DELETE` statements run in one transaction.
+         Turn `DbUpdateConcurrencyException` into a 409 response.
+
+      **Alternatives.** `ChangeTracker.TrackGraph` lets you set the state of every node by your own rules, but it
+      also walks only the received graph, so a deletion has to be expressed explicitly, for example with a delete
+      flag in the DTO. You can also switch to soft deletes or move item deletion into separate API commands.
+    explanation: |
+      This is the disconnected entities scenario: the context that loaded the order was disposed long ago, and the
+      new context knows nothing about what is in the database. `Update` (like `Attach`) infers the state of every
+      entity from the entity alone, by its key value. An object missing from the graph is not an object, and a
+      graph traversal cannot process it. Only the database knows which items existed, so a correct delete
+      requires asking it.
+
+      Loading the current aggregate costs one extra query but gives several guarantees at once: exactly the
+      missing items are deleted, the `UPDATE` touches only changed columns, the client cannot modify rows that do
+      not belong to the order, and the concurrency token catches simultaneous edits. Approaches with `TrackGraph`
+      or flags in the DTO avoid the load, but they move responsibility for a complete and truthful graph to the
+      client. The answer describes EF Core 10.
+    linkTitles:
+      - "Disconnected entities"
+      - "Explicitly tracking entities"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

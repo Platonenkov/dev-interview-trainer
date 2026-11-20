@@ -1,0 +1,148 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RK0Z90S0JF6WNC487F
+slug: read-request-body-twice-enablebuffering
+stack: dotnet
+topic: aspnet-core
+level: senior
+type: open
+grading: self
+tags: [middleware, request-body, enablebuffering, logging, model-binding]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/microsoft.aspnetcore.http.httprequestrewindextensions.enablebuffering
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/middleware/request-response
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/http-logging/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/servers/kestrel/options
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как прочитать тело запроса в middleware логирования и не сломать привязку модели?
+    prompt: |
+      Команда добавила middleware, которое логирует тело каждого запроса к API. Первая версия читает
+      `context.Request.Body` через `StreamReader` и затем вызывает `next`. После этого действия контроллеров с
+      параметром `[FromBody]` перестали получать данные из тела.
+
+      Почему так происходит, как правильно прочитать тело, не мешая остальному конвейеру, и чем за это
+      придётся заплатить?
+    hint: "Можно ли вернуться к началу потока, который приходит прямо из сетевого соединения? Что должно появиться, чтобы это стало возможно?"
+    answer: |
+      - **Причина.** По умолчанию `Request.Body` - однонаправленный поток из соединения: `CanSeek` равно `false`,
+        прочитанные байты нигде не сохраняются. После чтения в middleware форматтер входных данных получает поток,
+        в котором данных больше нет. В контроллере с `[ApiController]` это превращается в ответ 400: в `ModelState`
+        появляется ошибка, и автоматическая проверка модели прерывает запрос. Без `[ApiController]` параметр
+        получает `null`, а `ModelState` невалиден. Вдобавок `StreamReader` по умолчанию закрывает поток при `Dispose`.
+      - **Правильная последовательность:**
+        1. Вызвать `context.Request.EnableBuffering()` до того, как кто-либо начнёт читать тело. Метод
+           подменяет `Request.Body` буферизующим потоком, который поддерживает перемотку.
+        2. Прочитать тело асинхронно: `StreamReader` с `leaveOpen: true` и `ReadToEndAsync()`. Синхронный
+           ввод-вывод в Kestrel по умолчанию запрещён (`AllowSynchronousIO = false`).
+        3. Установить `context.Request.Body.Position = 0` и только после этого вызвать `await next(context)`.
+      - **Цена:**
+        - Память и диск: тело размером до 30 КБ хранится в памяти, большее пишется во временный файл (в папку
+          из `ASPNETCORE_TEMP` или во временную папку пользователя), то есть каждый крупный запрос добавляет
+          дисковый ввод-вывод. Пороги задаются перегрузками `EnableBuffering(bufferThreshold, bufferLimit)`, при
+          чтении сверх `bufferLimit` возникает `IOException`.
+        - Тело читается целиком до того, как его увидит приложение: потоковая обработка больших загрузок
+          теряется, растёт задержка, а клиент может заставить сервер буферизовать на каждый запрос объём вплоть
+          до `MaxRequestBodySize` (в Kestrel по умолчанию 30 000 000 байт).
+        - Пароли, токены и персональные данные попадают в логи.
+      - **Как ограничить:** логировать только нужные маршруты и типы содержимого (JSON, но не
+        `multipart/form-data`), проверять `ContentLength`, обрезать записанный текст до лимита, маскировать
+        чувствительные поля. Часто проще включить встроенное HTTP-логирование (`AddHttpLogging` с
+        `HttpLoggingFields.RequestBody` и `RequestBodyLogLimit`), которое само ограничивает объём тела в логе.
+    explanation: |
+      Kestrel отдаёт тело запроса по мере поступления байтов из соединения и не хранит уже отданные данные:
+      иначе каждый запрос держал бы в памяти всё своё тело. Поэтому тело можно прочитать только один раз, и
+      кто прочитал его первым, тот его и «съел».
+
+      `EnableBuffering` меняет этот контракт: новый поток копирует каждый прочитанный байт в буфер, сначала в
+      памяти, а после порога - во временный файл, который удаляется в конце запроса. Когда middleware
+      возвращает `Position` в 0, следующий читатель (форматтер входных данных MVC или привязка minimal API)
+      получает те же байты из буфера. Это работает и для кода, который читает тело через `Request.BodyReader`:
+      когда `Request.Body` заменяется другим потоком, `BodyReader` автоматически становится новым `PipeReader`
+      поверх этого потока.
+
+      Отсюда и требования к порядку: буферизацию нужно включить до первого чтения, а позицию сбросить до вызова
+      `next`. `leaveOpen: true` нужен потому, что освобождение `StreamReader` иначе закроет поток, который ещё
+      понадобится.
+
+      Цена следует из того же механизма: буферизация превращает потоковый запрос в полностью прочитанный и
+      сохранённый. Для небольших JSON-тел это незаметно, для загрузки файлов это лишние память, диск и
+      задержка, а логирование тел без фильтрации - ещё и риск утечки данных. Поведение описано для
+      ASP.NET Core в .NET 10.
+    linkTitles:
+      - "Метод HttpRequestRewindExtensions.EnableBuffering"
+      - "Операции с запросом и ответом в ASP.NET Core: адаптеры Body и BodyReader"
+      - "HTTP-логирование в ASP.NET Core"
+      - "Настройка параметров веб-сервера Kestrel"
+  en:
+    title: How do you read the request body in a logging middleware without breaking model binding?
+    prompt: |
+      A team added a middleware that logs the body of every API request. The first version reads
+      `context.Request.Body` with a `StreamReader` and then calls `next`. After that, controller actions with a
+      `[FromBody]` parameter stopped getting data from the body.
+
+      Why does this happen, how do you read the body correctly without disturbing the rest of the pipeline,
+      and what does it cost?
+    hint: "Can you go back to the start of a stream that comes straight from the network connection? What would have to exist to make that possible?"
+    answer: |
+      - **The cause.** By default `Request.Body` is a forward-only stream from the connection: `CanSeek` is
+        `false`, and bytes that were read are not kept anywhere. After the middleware reads it, the input
+        formatter gets a stream with no data left. In a controller with `[ApiController]` this becomes a 400
+        response: an error is added to `ModelState` and automatic model validation stops the request. Without
+        `[ApiController]` the parameter gets `null` and `ModelState` is invalid. On top of that, `StreamReader`
+        closes the stream on `Dispose` by default.
+      - **The correct sequence:**
+        1. Call `context.Request.EnableBuffering()` before anyone starts reading the body. The method replaces
+           `Request.Body` with a buffering stream that supports rewinding.
+        2. Read the body asynchronously: a `StreamReader` with `leaveOpen: true` and `ReadToEndAsync()`.
+           Synchronous I/O is disallowed in Kestrel by default (`AllowSynchronousIO = false`).
+        3. Set `context.Request.Body.Position = 0` and only then call `await next(context)`.
+      - **The cost:**
+        - Memory and disk: a body of up to 30 KB is kept in memory, a larger one is written to a temporary file
+          (in the folder from `ASPNETCORE_TEMP` or the user's temporary folder), so every large request adds
+          disk I/O. The thresholds are set with the `EnableBuffering(bufferThreshold, bufferLimit)` overloads,
+          and reading beyond `bufferLimit` causes an `IOException`.
+        - The whole body is read before the application sees it: streaming of large uploads is lost, latency
+          grows, and a client can make the server buffer up to `MaxRequestBodySize` per request (30,000,000
+          bytes by default in Kestrel).
+        - Passwords, tokens and personal data end up in the logs.
+      - **How to contain it:** log only the routes and content types you need (JSON, not
+        `multipart/form-data`), check `ContentLength`, truncate the logged text to a limit, and mask sensitive
+        fields. Often it is simpler to turn on the built-in HTTP logging (`AddHttpLogging` with
+        `HttpLoggingFields.RequestBody` and `RequestBodyLogLimit`), which limits the logged body size itself.
+    explanation: |
+      Kestrel hands out the request body as bytes arrive from the connection and does not keep data it has
+      already handed out: otherwise every request would hold its whole body in memory. So the body can be read
+      only once, and whoever reads it first consumes it.
+
+      `EnableBuffering` changes that contract: the new stream copies every byte that is read into a buffer,
+      first in memory and above the threshold into a temporary file that is deleted at the end of the request.
+      When the middleware sets `Position` back to 0, the next reader (an MVC input formatter or minimal API
+      binding) gets the same bytes from the buffer. This also works for code that reads the body through
+      `Request.BodyReader`: when `Request.Body` is replaced with another stream, `BodyReader` automatically
+      becomes a new `PipeReader` over that stream.
+
+      Hence the ordering rules: buffering must be enabled before the first read, and the position must be reset
+      before calling `next`. `leaveOpen: true` is needed because otherwise disposing the `StreamReader` closes a
+      stream that is still needed.
+
+      The cost follows from the same mechanism: buffering turns a streamed request into a fully read and stored
+      one. For small JSON bodies this is unnoticeable, for file uploads it means extra memory, disk and latency,
+      and logging bodies without filtering is also a data leak risk. The behaviour is described for
+      ASP.NET Core in .NET 10.
+    linkTitles:
+      - "HttpRequestRewindExtensions.EnableBuffering method"
+      - "Request and response operations in ASP.NET Core: Body and BodyReader adapters"
+      - "HTTP logging in ASP.NET Core"
+      - "Configure options for the ASP.NET Core Kestrel web server"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

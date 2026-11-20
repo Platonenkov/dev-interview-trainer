@@ -1,0 +1,135 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQMFVQQGPYTC722NF6
+slug: open-redirect-returnurl-redirect
+stack: dotnet
+topic: security
+level: middle
+type: find-bug
+grading: auto
+tags: [open-redirect, owasp, authentication, aspnet-core]
+code:
+  language: csharp
+  harness: none
+  source: |
+    using System.Security.Claims;
+    using Microsoft.AspNetCore.Authentication;
+    using Microsoft.AspNetCore.Authentication.Cookies;
+    using Microsoft.AspNetCore.Mvc;
+
+    public record LoginModel(string UserName, string Password);
+
+    public interface IUserService
+    {
+        Task<ClaimsPrincipal> ValidateAsync(string userName, string password);
+    }
+
+    public class AccountController : Controller
+    {
+        private readonly IUserService _users;
+
+        public AccountController(IUserService users) => _users = users;
+
+        [HttpPost]
+        [ValidateAntiForgeryToken]
+        public async Task<IActionResult> Login(LoginModel model, string returnUrl)
+        {
+            ClaimsPrincipal principal = await _users.ValidateAsync(model.UserName, model.Password);
+            if (principal is null)
+            {
+                ModelState.AddModelError(string.Empty, "Invalid user name or password.");
+                return View(model);
+            }
+
+            await HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal);
+
+            // returnUrl is carried over from the login link: /Account/Login?returnUrl=...
+            if (string.IsNullOrEmpty(returnUrl))
+            {
+                return RedirectToAction("Index", "Home");
+            }
+
+            return Redirect(returnUrl);
+        }
+    }
+bugLineSets: [[38]]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/security/preventing-open-redirects
+    lang: en
+    kind: docs
+  - url: https://cheatsheetseries.owasp.org/cheatsheets/Unvalidated_Redirects_and_Forwards_Cheat_Sheet.html
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Найдите строку, через которую после входа пользователя отправляют на фишинговый сайт
+    prompt: |
+      Действие входа в приложении ASP.NET Core MVC проверяет пароль, выдаёт аутентификационную cookie и
+      возвращает пользователя на страницу, с которой он пришёл. Адрес этой страницы передаётся в параметре
+      `returnUrl` ссылки на вход.
+
+      Злоумышленник рассылает ссылку `https://shop.example/Account/Login?returnUrl=https://evil.example/login`.
+      Пользователь видит настоящую страницу входа, успешно входит и оказывается на фишинговом сайте. Щёлкните по
+      строке с дефектом. Код не выполняется: для него нужен ASP.NET Core.
+    hint: |
+      Что проверяет `Redirect` в переданном ему адресе и откуда этот адрес берётся?
+    answer: |
+      Строка 38, `return Redirect(returnUrl);`: адрес из запроса используется для перенаправления без проверки, что
+      он ведёт внутрь приложения.
+    explanation: |
+      `Redirect` возвращает ответ `302` с заголовком `Location`, равным переданной строке, и ничего в ней не
+      проверяет. Значение `returnUrl` приходит от клиента, поэтому злоумышленник может подставить любой абсолютный
+      адрес. Это открытое перенаправление (open redirect). Оно опасно тем, что ссылка начинается с настоящего домена
+      и пользователь действительно проходит настоящий вход: на `evil.example` его встречает копия страницы входа с
+      сообщением «неверный пароль», и он вводит пароль ещё раз, уже злоумышленнику. Проверка
+      `string.IsNullOrEmpty` в строке 33 отсекает только пустое значение.
+
+      Исправление из документации ASP.NET Core - разрешать перенаправление только на локальные адреса:
+
+      - `return LocalRedirect(returnUrl);` - выбрасывает исключение, если адрес не локальный;
+      - или `if (Url.IsLocalUrl(returnUrl)) return Redirect(returnUrl);`, а иначе перенаправлять на главную
+        страницу.
+
+      `Url.IsLocalUrl` принимает пути вида `/orders` и `~/orders`, но отклоняет абсолютные адреса и адреса вида
+      `//evil.example` и `/\evil.example`, которые браузер считает адресами другого хоста. Поэтому самодельная
+      проверка `returnUrl.StartsWith("/")` недостаточна.
+    linkTitles:
+      - "Предотвращение атак с открытым перенаправлением в ASP.NET Core"
+      - "OWASP: памятка по непроверенным перенаправлениям"
+  en:
+    title: Find the line that sends users to a phishing site after they sign in
+    prompt: |
+      The sign-in action of an ASP.NET Core MVC application checks the password, issues the authentication cookie
+      and sends the user back to the page they came from. The address of that page arrives in the `returnUrl`
+      parameter of the sign-in link.
+
+      An attacker sends out the link `https://shop.example/Account/Login?returnUrl=https://evil.example/login`.
+      The user sees the real sign-in page, signs in successfully and ends up on a phishing site. Click the line
+      that contains the defect. The code is not executed: it needs ASP.NET Core.
+    hint: |
+      What does `Redirect` check in the address it receives, and where does that address come from?
+    answer: |
+      Line 38, `return Redirect(returnUrl);`: an address from the request is used for the redirect without checking
+      that it points inside the application.
+    explanation: |
+      `Redirect` returns a `302` response whose `Location` header is the string it was given, and it checks nothing
+      in that string. The value of `returnUrl` comes from the client, so the attacker can put any absolute address
+      there. This is an open redirect. It is dangerous because the link starts with the real domain and the user
+      really goes through the real sign-in: on `evil.example` a copy of the sign-in page says "wrong password", and
+      the user types the password again, this time for the attacker. The `string.IsNullOrEmpty` check on line 33
+      only rejects an empty value.
+
+      The fix from the ASP.NET Core documentation is to allow redirects to local addresses only:
+
+      - `return LocalRedirect(returnUrl);` throws an exception if the address is not local;
+      - or `if (Url.IsLocalUrl(returnUrl)) return Redirect(returnUrl);`, and redirect to the home page otherwise.
+
+      `Url.IsLocalUrl` accepts paths such as `/orders` and `~/orders`, but rejects absolute addresses and addresses
+      such as `//evil.example` and `/\evil.example`, which the browser treats as addresses of another host. That is
+      why a home-made `returnUrl.StartsWith("/")` check is not enough.
+    linkTitles:
+      - "Prevent open redirect attacks in ASP.NET Core"
+      - "OWASP Unvalidated Redirects and Forwards Cheat Sheet"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  noRunReason: "ASP.NET Core MVC controller: it needs the ASP.NET Core shared framework, an HTTP server and a browser to show the redirect, which the console sandbox does not provide."

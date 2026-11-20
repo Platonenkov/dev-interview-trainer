@@ -1,0 +1,158 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPRJR6M4QTKYYSCCBH
+slug: realtime-fanout-millions-of-connections
+stack: dotnet
+topic: grpc-realtime
+level: architect
+type: open
+grading: self
+tags: [signalr, websockets, scale-out, fan-out, azure-signalr-service, architecture]
+links:
+  - url: https://learn.microsoft.com/en-us/azure/azure-signalr/signalr-overview
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/signalr/scale
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/azure/azure-web-pubsub/overview
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Как спроектировать push-доставку миллионам одновременно подключённых клиентов, не связывая бизнес-сервисы с соединениями?"
+    prompt: |
+      Продукт должен доставлять события в реальном времени (уведомления, смену статусов, котировки) миллионам
+      одновременно подключённых клиентов: браузерам и мобильным приложениям. События порождают десятки
+      бизнес-сервисов на .NET.
+
+      Как вы спроектируете доставку, чтобы бизнес-сервисы не держали клиентские соединения и не отвечали за
+      рассылку? Назовите компоненты, гарантии доставки и основные компромиссы.
+    hint: "Что происходит с миллионом сокетов, когда сервис, который их держит, выкатывает очередной релиз? И сколько отправок стоит одно событие для темы с миллионом подписчиков?"
+    answer: |
+      - **Отдельный слой соединений.** Клиентские соединения (WebSockets, SignalR, Server-Sent Events) держит
+        выделенный слой: управляемый Azure SignalR Service (или Azure Web PubSub для обычных WebSocket-клиентов)
+        либо собственные шлюзы. Он отвечает за аутентификацию при подключении, keep-alive, подписки
+        (пользователь, группа, тема) и отправку в свои соединения. Бизнес-логики в нём нет.
+      - **Бизнес-сервисы публикуют события, а не вызывают клиентов.** Сервис записывает событие в брокер
+        (Kafka, Azure Service Bus, Event Hubs), желательно через outbox, и не знает, кто и где подключён.
+        Сервисы деплоятся, масштабируются и падают, не разрывая ни одного клиентского соединения.
+      - **Слой рассылки (fan-out).** Отдельные обработчики читают брокер, определяют адресатов события
+        (пользователь, группа, тема, тенант) и передают сообщение в слой соединений. С Azure SignalR Service -
+        через тонкий хаб-сервер или, в бессерверном режиме, через REST API сервиса. С собственными шлюзами -
+        через реестр присутствия (пользователь -> узел) или подписку узла только на те темы, у которых на нём
+        есть подписчики. Общий backplane, через который каждый сервер получает весь широковещательный трафик
+        (например, `Clients.All` через Redis pub/sub), на таком масштабе становится узким местом; к тому же он
+        требует sticky sessions, а приложение с ним приходится масштабировать по числу клиентов.
+      - **Шардирование.** У одного экземпляра сервиса или кластера шлюзов есть предел соединений, поэтому
+        соединения распределяются по нескольким экземплярам по пользователю, тенанту или региону.
+      - **Гарантии доставки.** Push - доставка в лучшем случае (best effort): соединения рвутся, и сообщения
+        в момент разрыва теряются. Источник истины - хранилище: у событий есть порядковый номер или курсор,
+        после переподключения клиент дочитывает пропущенное через обычный API, а push для важных данных
+        служит сигналом "обнови состояние".
+      - **Защита от перегрузки.** Переподключение клиентов с экспоненциальной задержкой и случайным разбросом
+        (jitter), плавный вывод узлов из ротации при деплое, ограниченный буфер отправки на соединение со
+        сбросом или слиянием сообщений для медленных клиентов, объединение частых обновлений одной темы,
+        компактный протокол (например, MessagePack) и небольшие сообщения.
+      - **Масштабирование и наблюдаемость.** Слой соединений масштабируется по числу соединений и памяти,
+        а не по CPU. Метрики: соединения на узел, задержка от публикации события до отправки, доля
+        сброшенных сообщений, частота переподключений.
+    explanation: |
+      Соединения и бизнес-логика масштабируются по разным законам. Соединение живёт часами и почти не тратит
+      CPU, но занимает память, сокет и место в балансировщике. Запрос к бизнес-сервису короткий и тратит CPU,
+      базу и внешние вызовы. Документация ASP.NET Core SignalR описывает это прямо: с Redis backplane
+      приложение использует намного больше ресурсов на соединения, чем веб-приложение без SignalR, и должно
+      масштабироваться по числу клиентов, даже если сообщений мало. С Azure SignalR Service все клиентские
+      соединения держит сервис, у каждого сервера приложения лишь небольшое постоянное число соединений с
+      сервисом, и приложение масштабируется по числу отправляемых сообщений.
+
+      Если соединения держит сам бизнес-сервис, каждый его деплой разрывает все соединения узла и вызывает
+      шквал переподключений, а стоимость рассылки ложится на процесс, который должен обслуживать запросы:
+      одно событие для темы с миллионом подписчиков - это миллион отправок. Выделенный слой соединений
+      меняется редко, деплоится отдельно, а брокер между ним и сервисами развязывает их по времени и
+      сглаживает всплески.
+
+      Компромиссы:
+
+      - Azure SignalR Service снимает с команды удержание соединений, sticky sessions и backplane, но это
+        платный управляемый сервис с пределом соединений на экземпляр: миллионы соединений требуют нескольких
+        экземпляров, работающих вместе (в том числе в разных регионах), а решение привязывает к Azure.
+      - Собственные шлюзы дают контроль над протоколом, маршрутизацией и стоимостью, но команда сама
+        отвечает за реестр присутствия, переподключения, отказоустойчивость и обновление узлов.
+      - Брокер добавляет задержку, но без него сервисы снова оказываются связаны с тем, где находятся
+        клиенты.
+      - Ни один транспорт не гарантирует доставку через разрыв соединения, поэтому корректность держится
+        на дочитывании из хранилища, а не на push.
+    linkTitles:
+      - "Что такое Azure SignalR Service"
+      - "Размещение и масштабирование ASP.NET Core SignalR"
+      - "Что такое Azure Web PubSub"
+  en:
+    title: "How do you architect push delivery to millions of concurrently connected clients without coupling business services to connections?"
+    prompt: |
+      A product must deliver real-time events (notifications, status changes, quotes) to millions of
+      concurrently connected clients: browsers and mobile apps. Dozens of .NET business services produce
+      the events.
+
+      How do you design the delivery so that business services do not hold client connections and are not
+      responsible for fan-out? Name the components, the delivery guarantees and the main trade-offs.
+    hint: "What happens to a million sockets when the service that holds them rolls out a release? And how many sends does one event for a topic with a million subscribers cost?"
+    answer: |
+      - **A separate connection tier.** Client connections (WebSockets, SignalR, Server-Sent Events) are held
+        by a dedicated tier: the managed Azure SignalR Service (or Azure Web PubSub for plain WebSocket clients)
+        or your own gateways. It handles authentication at connect time, keep-alive, subscriptions (user,
+        group, topic) and sending to its own connections. It contains no business logic.
+      - **Business services publish events instead of calling clients.** A service writes the event to a
+        broker (Kafka, Azure Service Bus, Event Hubs), preferably through an outbox, and does not know who is
+        connected or where. Services deploy, scale and fail without dropping a single client connection.
+      - **A fan-out tier.** Separate workers read the broker, resolve the audience of the event (user, group,
+        topic, tenant) and hand the message to the connection tier. With Azure SignalR Service: through a thin
+        hub server or, in serverless mode, through the service REST API. With your own gateways: through a
+        presence registry (user -> node) or by having each node subscribe only to the topics that have
+        subscribers on it. A shared backplane through which every server receives all broadcast traffic (for
+        example `Clients.All` over Redis pub/sub) becomes a bottleneck at this scale; it also needs sticky
+        sessions, and the app has to scale with the number of clients.
+      - **Sharding.** One service instance or gateway cluster has a connection limit, so connections are
+        spread across several instances by user, tenant or region.
+      - **Delivery guarantees.** Push is best-effort delivery: connections drop, and messages sent at the
+        moment of a drop are lost. The source of truth is storage: events carry a sequence number or cursor,
+        after reconnecting the client reads what it missed through a regular API, and for important data the
+        push is only a signal to refresh state.
+      - **Overload protection.** Client reconnects with exponential backoff and jitter, graceful removal of
+        nodes from rotation during deployments, a bounded send buffer per connection with dropping or
+        coalescing for slow clients, coalescing of frequent updates on one topic, a compact protocol (for
+        example MessagePack) and small messages.
+      - **Scaling and observability.** The connection tier scales on connection count and memory, not CPU.
+        Metrics: connections per node, latency from event publication to send, share of dropped messages,
+        reconnect rate.
+    explanation: |
+      Connections and business logic scale by different rules. A connection lives for hours and uses almost
+      no CPU, but it holds memory, a socket and a slot in the load balancer. A request to a business service
+      is short and spends CPU, database time and outbound calls. The ASP.NET Core SignalR documentation
+      states this directly: with the Redis backplane the app uses many more connection resources than a web
+      app without SignalR and must scale out by the number of clients, even when it sends few messages. With
+      Azure SignalR Service the service manages all client connections, each app server needs only a small
+      constant number of connections to the service, and the app scales by the number of messages sent.
+
+      If a business service holds the connections itself, every deployment drops all connections on the node
+      and triggers a reconnect storm, and the cost of fan-out lands on the process that should serve requests:
+      one event for a topic with a million subscribers is a million sends. A dedicated connection tier changes
+      rarely and deploys separately, and the broker between it and the services decouples them in time and
+      absorbs bursts.
+
+      Trade-offs:
+
+      - Azure SignalR Service takes connection handling, sticky sessions and the backplane off the team, but it
+        is a paid managed service with a connection limit per instance: millions of connections need several
+        instances working together (also across regions), and the solution ties you to Azure.
+      - Your own gateways give control over the protocol, routing and cost, but the team owns the presence
+        registry, reconnects, fault tolerance and node upgrades.
+      - The broker adds latency, but without it services are coupled again to where the clients are.
+      - No transport guarantees delivery across a dropped connection, so correctness relies on catching up
+        from storage, not on the push.
+    linkTitles:
+      - "What is Azure SignalR Service?"
+      - "ASP.NET Core SignalR hosting and scaling"
+      - "What is Azure Web PubSub?"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

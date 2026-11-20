@@ -1,0 +1,131 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RR663FNQRGD55D4DQH
+slug: breaking-changes-json-api-contract
+stack: dotnet
+topic: web-api
+level: middle
+type: multi
+grading: auto
+tags: [api-versioning, breaking-changes, json, rest, tolerant-reader]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: true
+  - id: c
+    correct: true
+  - id: d
+    correct: true
+  - id: e
+    correct: false
+  - id: f
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/azure/architecture/best-practices/api-design
+    lang: en
+    kind: docs
+  - url: https://martinfowler.com/bliki/TolerantReader.html
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/dotnet/standard/serialization/system-text-json/missing-members
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какие изменения JSON-контракта ломают уже интегрированных клиентов?
+    prompt: |
+      API заказов версии v1 опубликовано, и с ним уже работают внешние клиенты. Клиенты следуют практике
+      «терпимого читателя» (tolerant reader): незнакомые поля в ответах они игнорируют. Команда хочет внести
+      изменения прямо в v1, не выпуская новую версию. Выберите все изменения, которые сломают таких клиентов,
+      если после изменения их не обновят.
+    hint: Представьте клиента, написанного по старому контракту. Что он отправляет и что ожидает прочитать в ответе - и что из этого перестанет работать?
+    options:
+      a: "Удалить поле `discount` из ответа с заказом."
+      b: "Переименовать поле ответа `customerName` в `clientName`."
+      c: 'Изменить тип поля ответа `id` с числа (`42`) на строку (`"42"`).'
+      d: "Сделать необязательное поле запроса `comment` обязательным."
+      e: "Добавить в ответ с заказом новое необязательное поле `trackingUrl`."
+      f: "Добавить необязательное поле запроса `currency`; если его нет, сервер ведёт себя как раньше."
+    optionExplanations:
+      e: "По условию клиенты игнорируют незнакомые поля ответа, поэтому новое поле для них просто невидимо и ничего не ломает. `System.Text.Json` тоже по умолчанию пропускает свойства JSON, которым нет соответствия в типе."
+      f: "Старые клиенты не отправляют `currency` и получают прежнее поведение. Новое необязательное входное поле, без которого сервер работает как раньше, ничего не ломает."
+    answer: "Удаление поля, переименование поля, смена типа поля и превращение необязательного входного поля в обязательное."
+    explanation: |
+      Изменение ломающее, если клиент, написанный по старому контракту, перестаёт корректно работать без правки
+      своего кода. Даже терпимый клиент ломается в четырёх случаях из списка:
+
+      - удалённое поле `discount` клиент больше не находит и получает `null`, значение по умолчанию или ошибку;
+      - переименование для клиента выглядит как удаление старого поля плюс добавление незнакомого нового, то есть
+        `customerName` пропадает так же, как `discount`;
+      - смена типа `id` с числа на строку ломает строго типизированных клиентов: `JsonSerializer` с параметрами
+        по умолчанию выбрасывает `JsonException` при чтении строки `"42"` в свойство типа `int`, а клиенты на
+        других языках, которые сравнивают или считают с этим числом, тоже начинают ошибаться. Набор
+        `JsonSerializerDefaults.Web` разрешает читать числа из строк, но контракт не может зависеть от настроек
+        каждого клиента;
+      - обязательное поле `comment` старые клиенты не отправляют, и сервер начинает отклонять их запросы, обычно
+        с `400`.
+
+      Новое необязательное поле в ответе совместимо для клиентов, которые игнорируют незнакомые поля: в этом и
+      состоит подход «терпимого читателя», и `System.Text.Json` по умолчанию ведёт себя именно так. Новое
+      необязательное поле в запросе тоже совместимо, пока его отсутствие сохраняет старое поведение.
+
+      Оговорка: клиент со строгой десериализацией ломается даже на новом поле ответа. В .NET 10 (опция появилась
+      в .NET 8) это `JsonUnmappedMemberHandling.Disallow`: десериализация выбрасывает исключение на незнакомом
+      свойстве. Поэтому требование игнорировать лишние поля стоит явно прописать в документации контракта.
+      Ломающие изменения выпускают в новой версии API, а старую поддерживают до объявленной даты вывода из
+      эксплуатации.
+    linkTitles:
+      - "Рекомендации по проектированию Web API (Azure Architecture Center)"
+      - "TolerantReader (Мартин Фаулер)"
+      - "Обработка несопоставленных членов при десериализации в System.Text.Json"
+  en:
+    title: Which JSON contract changes break clients that are already integrated?
+    prompt: |
+      Version v1 of an orders API is published, and external clients already use it. The clients follow the
+      tolerant reader practice: they ignore unknown fields in responses. The team wants to make changes directly
+      in v1 without releasing a new version. Select all changes that break such clients if they are not updated
+      after the change.
+    hint: Picture a client written against the old contract. What does it send and what does it expect to read in the response - and which of that stops working?
+    options:
+      a: "Remove the `discount` field from the order response."
+      b: "Rename the `customerName` response field to `clientName`."
+      c: 'Change the type of the `id` response field from a number (`42`) to a string (`"42"`).'
+      d: "Make the optional `comment` request field required."
+      e: "Add a new optional `trackingUrl` field to the order response."
+      f: "Add an optional `currency` request field; when it is absent, the server behaves as before."
+    optionExplanations:
+      e: "By the condition, clients ignore unknown response fields, so a new field is simply invisible to them and breaks nothing. `System.Text.Json` also skips JSON properties that have no match in the type by default."
+      f: "Old clients do not send `currency` and get the old behaviour. A new optional input field, without which the server works as before, breaks nothing."
+    answer: "Removing a field, renaming a field, changing a field type and making an optional input field required."
+    explanation: |
+      A change is breaking if a client written against the old contract stops working correctly without a change
+      to its code. Even a tolerant client breaks in four cases from the list:
+
+      - the client no longer finds the removed `discount` field and gets `null`, a default value or an error;
+      - to a client, a rename looks like removing the old field and adding an unknown new one, so `customerName`
+        disappears just like `discount`;
+      - changing `id` from a number to a string breaks strongly typed clients: `JsonSerializer` with default
+        options throws `JsonException` when it reads the string `"42"` into an `int` property, and clients in
+        other languages that compare or compute with the number start to misbehave too. The
+        `JsonSerializerDefaults.Web` set does allow reading numbers from strings, but a contract cannot depend on
+        the settings of every client;
+      - old clients do not send the now required `comment` field, so the server starts rejecting their requests,
+        typically with `400`.
+
+      A new optional response field is compatible for clients that ignore unknown fields: that is the tolerant
+      reader approach, and `System.Text.Json` behaves this way by default. A new optional request field is also
+      compatible as long as its absence keeps the old behaviour.
+
+      A caveat: a client with strict deserialization breaks even on a new response field. In .NET 10 (the option
+      appeared in .NET 8) this is `JsonUnmappedMemberHandling.Disallow`: deserialization throws on an unknown
+      property. That is why the requirement to ignore extra fields belongs in the contract documentation.
+      Breaking changes ship in a new API version, and the old one is supported until an announced retirement
+      date.
+    linkTitles:
+      - "Web API design best practices (Azure Architecture Center)"
+      - "TolerantReader (Martin Fowler)"
+      - "Handle unmapped members during deserialization in System.Text.Json"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

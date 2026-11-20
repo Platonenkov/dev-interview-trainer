@@ -1,0 +1,118 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RRSKRSQVX024D8T6A1
+slug: etag-if-match-412-lost-update
+stack: dotnet
+topic: web-api
+level: senior
+type: open
+grading: self
+tags: [http, etag, conditional-requests, optimistic-concurrency, status-codes]
+links:
+  - url: https://www.rfc-editor.org/rfc/rfc9110
+    lang: en
+    kind: spec
+  - url: https://www.rfc-editor.org/rfc/rfc6585
+    lang: en
+    kind: spec
+  - url: https://learn.microsoft.com/en-us/ef/core/saving/concurrency
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как на уровне HTTP не дать двум клиентам молча перезаписать изменения друг друга?
+    prompt: |
+      Два оператора открывают карточку одного заказа: оба выполняют `GET /orders/42`, правят разные поля и
+      сохраняют через `PUT /orders/42`. Второй `PUT` молча затирает изменения первого, и никто об этом не узнаёт.
+      Как предотвратить такую потерю обновления средствами HTTP: какие заголовки и коды состояния вы
+      используете и что должны делать сервер и клиент?
+    hint: Как сервер может узнать, какую версию ресурса видел клиент, когда начинал свои изменения?
+    answer: |
+      - **Версия в ответе.** На `GET` сервер отдаёт заголовок `ETag: "7"` - сильный валидатор текущего
+        представления. Обычно это номер версии строки, `rowversion` или хеш представления.
+      - **Условная запись.** Клиент запоминает ETag и отправляет `PUT /orders/42` с заголовком `If-Match: "7"`.
+        Сервер сравнивает его с текущим ETag ресурса. Если ресурс уже изменили и ETag другой, сервер не выполняет
+        метод и отвечает `412 Precondition Failed`. Если совпал - записывает, версия меняется, и следующей записи
+        нужен уже новый ETag: сервер возвращает его в ответе или клиент получает его повторным `GET`.
+      - **Атомарность.** Проверка и запись должны быть одной операцией, иначе между сравнением и записью успеет
+        пройти чужой запрос. В базе это `UPDATE ... WHERE Id = @id AND Version = @expected` с проверкой числа
+        изменённых строк; в EF Core - токен параллелизма, а `DbUpdateConcurrencyException` превращается в `412`.
+      - **Обязательный заголовок.** Если `PUT` пришёл без `If-Match`, сервер отвечает `428 Precondition Required`
+        (RFC 6585). Без этого клиент, который не знает про ETag, продолжит молча перезаписывать чужие изменения.
+      - **Реакция клиента на `412`.** Перечитать ресурс, показать пользователю расхождение или слить изменения и
+        повторить запрос с новым ETag. Слепой автоматический повтор со свежим ETag снова теряет чужие изменения.
+      - **Смежные случаи.** Та же схема работает для `PATCH` и `DELETE`. `If-None-Match: *` на `PUT` разрешает
+        только создание и не даёт перезаписать уже существующий ресурс. `If-Unmodified-Since` вместе с
+        `Last-Modified` - более слабая замена: точность HTTP-даты одна секунда.
+    explanation: |
+      HTTP не хранит состояние между запросами, поэтому сервер не знает, на какой версии ресурса клиент основывал
+      свои изменения. ETag передаёт эту информацию: клиент возвращает в `If-Match` версию, которую видел, и запись
+      становится условной. Это оптимистичная блокировка: между `GET` и `PUT` ничего не блокируется, а конфликт
+      обнаруживается в момент записи. Пессимистичная блокировка ресурса на время редактирования плохо сочетается
+      с HTTP: клиент может пропасть и так и не снять её.
+
+      RFC 9110 запрещает серверу выполнять метод, если условие `If-Match` ложно, и предусматривает для этого ответ
+      `412 Precondition Failed`. `If-Match` использует сильное сравнение, поэтому слабый ETag с префиксом `W/` в нём
+      никогда не совпадает: для условной записи нужен сильный ETag. `412` точнее, чем `409 Conflict`: он прямо
+      говорит, что не выполнено условие из самого запроса, и клиент понимает, что нужно получить свежую версию.
+
+      Код `428 Precondition Required` ввёл RFC 6585 как раз для проблемы потерянного обновления: сервер может
+      потребовать условный запрос, а не надеяться, что клиент сам пришлёт `If-Match`.
+
+      В ASP.NET Core для собственных эндпоинтов выдачу `ETag` и проверку `If-Match` реализуете вы сами: в
+      обработчике или в фильтре.
+    linkTitles:
+      - "RFC 9110: семантика HTTP"
+      - "RFC 6585: дополнительные коды состояния HTTP"
+      - "Обработка конфликтов параллелизма в EF Core"
+  en:
+    title: How do you stop two clients from silently overwriting each other's changes over HTTP?
+    prompt: |
+      Two operators open the same order: both call `GET /orders/42`, edit different fields and save with
+      `PUT /orders/42`. The second `PUT` silently overwrites the changes of the first, and nobody notices.
+      How do you prevent this lost update with HTTP itself: which headers and status codes do you use, and what
+      must the server and the client do?
+    hint: How can the server learn which version of the resource the client saw when it started its changes?
+    answer: |
+      - **Version in the response.** On `GET` the server sends the header `ETag: "7"`, a strong validator of the
+        current representation. Usually it is a row version number, a `rowversion` or a hash of the representation.
+      - **Conditional write.** The client keeps the ETag and sends `PUT /orders/42` with the header `If-Match: "7"`.
+        The server compares it with the current ETag of the resource. If the resource has changed and the ETag
+        differs, the server does not perform the method and answers `412 Precondition Failed`. If it matches, the
+        server writes, the version changes, and the next write needs the new ETag: the server returns it in the
+        response or the client gets it with another `GET`.
+      - **Atomicity.** The check and the write must be one operation, otherwise another request can slip in
+        between the comparison and the write. In the database this is `UPDATE ... WHERE Id = @id AND Version = @expected`
+        with a check of the affected row count; in EF Core it is a concurrency token, and
+        `DbUpdateConcurrencyException` is mapped to `412`.
+      - **Required header.** If a `PUT` arrives without `If-Match`, the server answers `428 Precondition Required`
+        (RFC 6585). Without this, a client that does not know about ETags keeps silently overwriting other changes.
+      - **Client reaction to `412`.** Re-read the resource, show the user the difference or merge the changes, and
+        retry with the new ETag. A blind automatic retry with the fresh ETag loses the other changes again.
+      - **Related cases.** The same scheme works for `PATCH` and `DELETE`. `If-None-Match: *` on a `PUT` allows only
+        creation and does not let it overwrite an existing resource. `If-Unmodified-Since` with `Last-Modified` is a
+        weaker substitute: an HTTP date has one-second precision.
+    explanation: |
+      HTTP keeps no state between requests, so the server does not know which version of the resource the client
+      based its changes on. The ETag carries this information: the client sends back in `If-Match` the version it
+      saw, and the write becomes conditional. This is optimistic concurrency: nothing is locked between `GET` and
+      `PUT`, and the conflict is detected at write time. Pessimistic locking of the resource for the duration of an
+      edit fits HTTP badly: the client can disappear and never release the lock.
+
+      RFC 9110 forbids the server to perform the method when the `If-Match` condition is false and provides the
+      `412 Precondition Failed` response for that. `If-Match` uses strong comparison, so a weak ETag with the `W/`
+      prefix never matches in it: a conditional write needs a strong ETag. `412` is more precise than
+      `409 Conflict`: it says directly that a condition from the request itself failed, and the client knows it
+      must fetch the fresh version.
+
+      The `428 Precondition Required` code was introduced by RFC 6585 precisely for the lost update problem: the
+      server can demand a conditional request instead of hoping that the client sends `If-Match` on its own.
+
+      In ASP.NET Core, for your own endpoints you implement sending the `ETag` and checking `If-Match` yourself:
+      in the handler or in a filter.
+    linkTitles:
+      - "RFC 9110: HTTP Semantics"
+      - "RFC 6585: Additional HTTP Status Codes"
+      - "Handling concurrency conflicts in EF Core"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

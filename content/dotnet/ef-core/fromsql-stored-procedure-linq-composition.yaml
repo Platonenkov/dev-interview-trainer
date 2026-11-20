@@ -1,0 +1,132 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNMYXYRWCRX86JN1WX
+slug: fromsql-stored-procedure-linq-composition
+stack: dotnet
+topic: ef-core
+level: senior
+type: single
+grading: auto
+tags: [ef-core, raw-sql, fromsql, stored-procedures, sql-server]
+code:
+  language: csharp
+  harness: none
+  source: |
+    int minRating = 4;
+
+    List<Blog> blogs = await context.Blogs
+        .FromSql($"EXECUTE dbo.GetMostPopularBlogs")
+        .Where(b => b.Rating >= minRating)
+        .OrderBy(b => b.Name)
+        .ToListAsync();
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/ef/core/querying/sql-queries
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/ef/core/querying/client-eval
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что произойдёт, если поверх FromSql с вызовом хранимой процедуры добавить Where и OrderBy?
+    prompt: |
+      Хранимая процедура `dbo.GetMostPopularBlogs` в SQL Server возвращает строки со всеми столбцами сущности
+      `Blog`. Разработчик вызывает её через `FromSql` и дописывает поверх `Where` и `OrderBy`. Что произойдёт
+      при выполнении этого запроса в EF Core 10 и как его правильно написать?
+    hint: "Что EF Core должен сделать с текстом SQL из `FromSql`, чтобы добавить к нему `WHERE` и `ORDER BY`?"
+    options:
+      a: "Запрос выполнится: EF Core вызовет процедуру и молча применит `Where` и `OrderBy` к её результату в памяти."
+      b: "Запрос завершится исключением во время выполнения: чтобы добавить `WHERE` и `ORDER BY`, EF Core делает сырой SQL подзапросом, а вызов `EXECUTE` подзапросом быть не может."
+      c: "EF Core превратит `Where` и `OrderBy` в параметры процедуры, и она получит `minRating` и столбец сортировки."
+      d: "Код не скомпилируется: при вызове `EXECUTE` метод `FromSql` возвращает `IEnumerable<Blog>`, а не `IQueryable<Blog>`, и `ToListAsync` недоступен."
+      e: "Запрос выполнится на сервере: SQL Server примет `SELECT ... FROM (EXECUTE ...)`, отфильтрует и отсортирует результат процедуры."
+    optionExplanations:
+      a: "Начиная с EF Core 3.0 непереводимые части запроса не переносятся на клиент молча: на клиенте может выполняться только итоговая проекция. `Where` и `OrderBy` поверх `FromSql` EF Core переводит в SQL, а в память выполнение переходит только по явному вызову вроде `AsEnumerable()`."
+      c: "EF Core не сопоставляет операторы LINQ с параметрами процедуры. Параметры передаются процедуре только явно, в самом тексте SQL, через интерполированную строку `FromSql`."
+      d: "`FromSql` на `DbSet<Blog>` возвращает `IQueryable<Blog>` при любом тексте SQL: компилятор этот текст не анализирует. Ошибка проявится только во время выполнения."
+      e: "SQL Server не позволяет использовать вызов процедуры как источник строк во `FROM`: `EXECUTE` - отдельная инструкция, а не табличное выражение, поэтому SQL с подзапросом вокруг `EXECUTE` недопустим."
+    answer: "Запрос завершится исключением во время выполнения: EF Core делает сырой SQL подзапросом, а `EXECUTE` подзапросом быть не может. Нужно вызвать `AsEnumerable()` или `AsAsyncEnumerable()` сразу после `FromSql` и фильтровать в памяти либо перенести фильтр и сортировку в сам SQL."
+    explanation: |
+      Документация EF Core описывает компоновку так: операторы LINQ поверх `FromSql` строятся с расчётом на то,
+      что переданный SQL - подзапрос. В итоговом запросе этот текст оказывается внутри `FROM (...)`, а `WHERE` и
+      `ORDER BY` строятся вокруг него. Поэтому компоновать можно только SQL, допустимый в роли подзапроса, и
+      документация уточняет, что такой SQL обычно начинается с `SELECT`. `EXECUTE dbo.GetMostPopularBlogs` -
+      отдельная инструкция, а не табличное выражение, и SQL Server не может подставить её во `FROM`. Запрос не
+      вернёт данных и завершится исключением во время выполнения. Как правило, EF Core сам замечает, что SQL не
+      начинается с `SELECT`, и выбрасывает `InvalidOperationException` о некомпонуемом SQL ещё до отправки
+      запроса в базу.
+
+      Как написать правильно:
+
+      - Вызвать `AsEnumerable()` (или `AsAsyncEnumerable()` в асинхронном коде) сразу после `FromSql`. Это явное
+        вычисление на клиенте: в базу уйдёт ровно `EXECUTE dbo.GetMostPopularBlogs`, а `Where` и `OrderBy`
+        выполнятся как LINQ to Objects над материализованными сущностями.
+      - Если процедура возвращает много строк, фильтр в памяти дорог: все строки передаются по сети и
+        материализуются. Тогда фильтр и сортировку переносят в SQL: процедура получает параметр, а значение
+        передаётся через интерполяцию, `FromSql($"EXECUTE dbo.GetMostPopularBlogs @minRating = {minRating}")`.
+        `FromSql` превращает интерполированное значение в `DbParameter`, поэтому SQL-инъекции нет. Другой путь -
+        заменить процедуру табличной функцией или представлением: `SELECT` из них компоновать можно.
+
+      Поведение описано для EF Core 10 и провайдера SQL Server.
+    linkTitles:
+      - "SQL-запросы в EF Core"
+      - "Вычисление на клиенте и на сервере"
+  en:
+    title: What happens when you add Where and OrderBy on top of FromSql that calls a stored procedure?
+    prompt: |
+      The SQL Server stored procedure `dbo.GetMostPopularBlogs` returns rows with all columns of the `Blog`
+      entity. A developer calls it through `FromSql` and adds `Where` and `OrderBy` on top. What happens when
+      this query runs in EF Core 10, and how should it be written?
+    hint: "What does EF Core have to do with the SQL text from `FromSql` to add `WHERE` and `ORDER BY` to it?"
+    options:
+      a: "The query works: EF Core runs the procedure and silently applies `Where` and `OrderBy` to its result in memory."
+      b: "The query fails with an exception at run time: to add `WHERE` and `ORDER BY`, EF Core turns the raw SQL into a subquery, and an `EXECUTE` call cannot be a subquery."
+      c: "EF Core turns `Where` and `OrderBy` into procedure parameters, so the procedure receives `minRating` and the sort column."
+      d: "The code does not compile: with an `EXECUTE` call, `FromSql` returns `IEnumerable<Blog>`, not `IQueryable<Blog>`, so `ToListAsync` is not available."
+      e: "The query runs on the server: SQL Server accepts `SELECT ... FROM (EXECUTE ...)` and filters and sorts the procedure result."
+    optionExplanations:
+      a: "Since EF Core 3.0, untranslatable parts of a query are not moved to the client silently: only the final projection can run on the client. EF Core translates `Where` and `OrderBy` over `FromSql` into SQL, and execution moves into memory only with an explicit call such as `AsEnumerable()`."
+      c: "EF Core does not map LINQ operators to procedure parameters. Parameters reach the procedure only explicitly, in the SQL text itself, through the interpolated string of `FromSql`."
+      d: "`FromSql` on a `DbSet<Blog>` returns `IQueryable<Blog>` whatever the SQL text is: the compiler does not analyze that text. The error shows up only at run time."
+      e: "SQL Server does not allow a procedure call as a row source in `FROM`: `EXECUTE` is a separate statement, not a table expression, so SQL with a subquery around `EXECUTE` is invalid."
+    answer: "The query fails with an exception at run time: EF Core turns the raw SQL into a subquery, and `EXECUTE` cannot be a subquery. Call `AsEnumerable()` or `AsAsyncEnumerable()` right after `FromSql` and filter in memory, or move the filter and sort into the SQL itself."
+    explanation: |
+      The EF Core documentation describes composition like this: LINQ operators on top of `FromSql` are built on
+      the assumption that the supplied SQL is a subquery. In the final query this text sits inside `FROM (...)`,
+      and `WHERE` and `ORDER BY` are built around it. So only SQL that is valid as a subquery can be composed
+      over, and the documentation adds that such SQL generally begins with `SELECT`. `EXECUTE dbo.GetMostPopularBlogs`
+      is a separate statement, not a table expression, and SQL Server cannot place it in `FROM`. The query returns
+      no data and fails with an exception at run time. Typically EF Core itself notices that the SQL does not
+      begin with `SELECT` and throws `InvalidOperationException` about non-composable SQL before the query is
+      sent to the database.
+
+      How to write it correctly:
+
+      - Call `AsEnumerable()` (or `AsAsyncEnumerable()` in async code) right after `FromSql`. This is explicit
+        client evaluation: exactly `EXECUTE dbo.GetMostPopularBlogs` goes to the database, and `Where` and `OrderBy`
+        run as LINQ to Objects over the materialized entities.
+      - If the procedure returns many rows, filtering in memory is expensive: every row crosses the network and is
+        materialized. Then move the filter and sort into the SQL: the procedure gets a parameter, and the value is
+        passed through interpolation, `FromSql($"EXECUTE dbo.GetMostPopularBlogs @minRating = {minRating}")`.
+        `FromSql` turns the interpolated value into a `DbParameter`, so there is no SQL injection. Another option is
+        to replace the procedure with a table-valued function or a view: a `SELECT` from them can be composed over.
+
+      The behavior is described for EF Core 10 and the SQL Server provider.
+    linkTitles:
+      - "SQL queries in EF Core"
+      - "Client vs. server evaluation"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"
+  noRunReason: The snippet uses EF Core types, a DbContext and a SQL Server stored procedure, which the sandbox does not have.

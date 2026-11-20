@@ -1,0 +1,142 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RKY4K1HW5RKZ2F9CRM
+slug: validateonbuild-misses-factory-registrations
+stack: dotnet
+topic: aspnet-core
+level: senior
+type: single
+grading: auto
+tags: [dependency-injection, validateonbuild, validatescopes, service-lifetime, captive-dependency]
+code:
+  language: csharp
+  harness: none
+  source: |
+    using Microsoft.Extensions.DependencyInjection;
+
+    var services = new ServiceCollection();
+    services.AddScoped<IUnitOfWork, UnitOfWork>();
+    services.AddSingleton<IReportCache>(sp =>
+        new ReportCache(sp.GetRequiredService<IUnitOfWork>()));
+
+    // Builds without any error
+    using var provider = services.BuildServiceProvider(new ServiceProviderOptions
+    {
+        ValidateOnBuild = true,
+        ValidateScopes = true
+    });
+
+    // Throws InvalidOperationException here
+    var cache = provider.GetRequiredService<IReportCache>();
+
+    public interface IUnitOfWork { }
+    public class UnitOfWork : IUnitOfWork { }
+    public interface IReportCache { }
+
+    public class ReportCache : IReportCache
+    {
+        public ReportCache(IUnitOfWork unitOfWork) { }
+    }
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/microsoft.extensions.dependencyinjection.serviceprovideroptions.validateonbuild
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/extensions/dependency-injection/guidelines
+    lang: en
+    kind: docs
+  - url: https://github.com/dotnet/runtime/blob/main/src/libraries/Microsoft.Extensions.DependencyInjection/src/ServiceLookup/CallSiteValidator.cs
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему ValidateOnBuild не находит scoped-зависимость singleton-сервиса, зарегистрированного фабрикой?
+    prompt: |
+      Сервисы зарегистрированы так, как показано в коде. `BuildServiceProvider` с `ValidateOnBuild = true` и
+      `ValidateScopes = true` завершается без ошибок, а первое же разрешение `IReportCache` выбрасывает
+      `InvalidOperationException` с сообщением о том, что scoped-сервис нельзя получить из корневого
+      провайдера. Почему проверка при построении контейнера не нашла проблему?
+    hint: Какие сведения о регистрации есть у контейнера до того, как создан хотя бы один экземпляр?
+    options:
+      a: "Для регистрации с фабрикой контейнер видит только делегат и не знает, какие сервисы лямбда запросит внутри, поэтому проверять ему нечего. Ошибка появляется, только когда фабрика выполняется и `ValidateScopes` запрещает получать scoped-сервис из корня."
+      b: "`ValidateOnBuild` проверяет только то, что сервисы можно создать, а конфликты времени жизни никогда не проверяются при построении, даже для регистраций через конструктор."
+      c: "`ValidateOnBuild` проверяет только scoped- и transient-регистрации, а singleton-сервисы создаются лениво и поэтому пропускаются."
+      d: "`ValidateOnBuild` вызывает фабрику, но при построении делегат получает временную область, поэтому scoped-сервис разрешается успешно."
+    optionExplanations:
+      b: "Если включены и `ValidateOnBuild`, и `ValidateScopes`, регистрация `AddSingleton<IReportCache, ReportCache>()` уронила бы `BuildServiceProvider` с ошибкой о том, что singleton не может потреблять scoped-сервис. Время жизни проверяется, но только по зависимостям, которые контейнер видит."
+      c: "Проверка проходит по всем дескрипторам независимо от времени жизни. Ленивое создание singleton здесь ни при чём: проверка не создаёт экземпляры ни для одного времени жизни."
+      d: "`ValidateOnBuild` не создаёт экземпляры и не вызывает фабрики: он только строит план создания (call site) для каждой регистрации. Если бы фабрика вызывалась, ошибка проявилась бы при построении."
+    answer: "Фабрика непрозрачна для проверки: контейнер не видит, что лямбда запросит `IUnitOfWork`, и ошибка обнаруживается только при её выполнении."
+    explanation: |
+      При `ValidateOnBuild = true` контейнер для каждой регистрации строит план создания (call site) и
+      проверяет, что сервис можно создать. Для типа реализации план включает выбранный конструктор и планы
+      всех его параметров, а при `ValidateScopes = true` `CallSiteValidator` обходит этот план и ищет
+      scoped-сервисы в зависимостях singleton. Экземпляры при этом не создаются. Для регистрации с лямбдой план
+      состоит из одного вызова делегата: в исходном коде `CallSiteValidator` такой узел не даёт ни одной
+      зависимости, ведь какие сервисы делегат запросит у `sp`, станет известно только во время выполнения.
+
+      Singleton создаётся в корневой области, и `sp`, переданный в его фабрику, - корневой провайдер. При
+      `ValidateScopes = true` запрос scoped-сервиса из корня выбрасывает `InvalidOperationException`. Без этой
+      проверки (в ASP.NET Core она включена по умолчанию только в окружении Development) запрос молча
+      выполнится: `UnitOfWork` будет создан в корневой области и проживёт до остановки приложения, то есть
+      станет захваченной зависимостью (captive dependency), общей для всех запросов.
+
+      Исправления: регистрировать singleton через тип реализации, чтобы зависимость была видна проверке;
+      внутри singleton создавать область на каждую операцию через `IServiceScopeFactory`; или сделать сам
+      сервис scoped. Поведение описано для Microsoft.Extensions.DependencyInjection в .NET 10.
+    linkTitles:
+      - "Свойство ServiceProviderOptions.ValidateOnBuild"
+      - "Рекомендации по внедрению зависимостей"
+      - "Исходный код CallSiteValidator в dotnet/runtime"
+  en:
+    title: Why does ValidateOnBuild miss the scoped dependency of a singleton registered with a factory?
+    prompt: |
+      The services are registered as shown in the code. `BuildServiceProvider` with `ValidateOnBuild = true` and
+      `ValidateScopes = true` completes without errors, but the very first resolution of `IReportCache` throws
+      an `InvalidOperationException` saying that a scoped service cannot be resolved from the root provider.
+      Why did the check at container build time not find the problem?
+    hint: What information does the container have about a registration before any instance is created?
+    options:
+      a: "For a factory registration the container sees only a delegate and does not know which services the lambda will request inside, so there is nothing for it to check. The error appears only when the factory runs and `ValidateScopes` forbids resolving a scoped service from the root."
+      b: "`ValidateOnBuild` only checks that services can be created, and lifetime conflicts are never checked at build time, even for constructor registrations."
+      c: "`ValidateOnBuild` checks only scoped and transient registrations, and singletons are created lazily, so they are skipped."
+      d: "`ValidateOnBuild` calls the factory, but at build time the delegate receives a temporary scope, so the scoped service resolves successfully."
+    optionExplanations:
+      b: "With both `ValidateOnBuild` and `ValidateScopes` enabled, the registration `AddSingleton<IReportCache, ReportCache>()` would make `BuildServiceProvider` fail with an error saying a singleton cannot consume a scoped service. Lifetimes are checked, but only through the dependencies the container can see."
+      c: "The check walks every descriptor regardless of lifetime. Lazy creation of singletons is irrelevant: the check creates no instances for any lifetime."
+      d: "`ValidateOnBuild` creates no instances and calls no factories: it only builds a creation plan (call site) for every registration. If the factory were called, the error would show up at build time."
+    answer: "The factory is opaque to the check: the container cannot see that the lambda will request `IUnitOfWork`, so the error is found only when the lambda runs."
+    explanation: |
+      With `ValidateOnBuild = true` the container builds a creation plan (call site) for every registration and
+      checks that the service can be created. For an implementation type the plan includes the chosen
+      constructor and the plans of all its parameters, and with `ValidateScopes = true` the `CallSiteValidator`
+      walks that plan looking for scoped services among the dependencies of a singleton. No instances are
+      created. For a lambda registration the plan is a single delegate call: in the `CallSiteValidator` source
+      such a node yields no dependencies at all, because which services the delegate asks `sp` for becomes known
+      only at run time.
+
+      A singleton is created in the root scope, and the `sp` passed to its factory is the root provider. With
+      `ValidateScopes = true` resolving a scoped service from the root throws `InvalidOperationException`.
+      Without this check (ASP.NET Core enables it by default only in the Development environment) the call
+      silently succeeds: `UnitOfWork` is created in the root scope and lives until the application stops, that
+      is, it becomes a captive dependency shared by all requests.
+
+      Fixes: register the singleton by implementation type so that the check can see the dependency; inside
+      the singleton create a scope per operation with `IServiceScopeFactory`; or make the service itself scoped.
+      The behaviour is described for Microsoft.Extensions.DependencyInjection in .NET 10.
+    linkTitles:
+      - "ServiceProviderOptions.ValidateOnBuild property"
+      - "Dependency injection guidelines"
+      - "CallSiteValidator source code in dotnet/runtime"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"
+  noRunReason: "The snippet uses Microsoft.Extensions.DependencyInjection, which is not part of the base shared framework available to the sandbox console project."

@@ -1,0 +1,166 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RRG8KHPQY7V4B896XT
+slug: outbound-webhooks-for-partners-design
+stack: dotnet
+topic: web-api
+level: architect
+type: situation
+grading: self
+tags: [webhooks, idempotency, at-least-once, hmac, retries, transactional-outbox]
+links:
+  - url: https://github.com/standard-webhooks/standard-webhooks/blob/main/spec/standard-webhooks.md
+    lang: en
+    kind: spec
+  - url: https://learn.microsoft.com/en-us/azure/architecture/patterns/retry
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/azure/architecture/patterns/circuit-breaker
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как спроектировать исходящие вебхуки для сотен партнёров, чтобы они годами работали надёжно?
+    prompt: |
+      Сотни партнёров сейчас опрашивают ваш API заказов каждые несколько секунд, чтобы узнать об изменениях.
+      Они просят присылать уведомления: вебхук на их HTTPS-адрес при каждом изменении заказа. У партнёров разные
+      стеки и разное качество эндпоинтов: одни отвечают за миллисекунды, другие подвисают на десятки секунд
+      или лежат сутками.
+
+      Как вы спроектируете исходящие вебхуки, чтобы события не терялись, партнёры могли им доверять, один
+      проблемный партнёр не задерживал остальных, а система оставалась поддерживаемой несколько лет?
+    hint: Может ли отправитель по HTTP отличить «запрос не дошёл» от «запрос обработан, но ответ потерян»? И что произойдёт с общей очередью отправки, если один получатель отвечает по 30 секунд?
+    answer: |
+      1. **Сначала гарантия доставки.** По HTTP отправитель не может отличить недоставленное событие от
+         доставленного с потерянным ответом, поэтому контракт - доставка хотя бы один раз (at-least-once):
+         дубликаты возможны, порядок не гарантирован. Это прямо записывается в документации для партнёров.
+      2. **Не терять события.** Изменение заказа и запись о событии сохраняются в одной транзакции
+         (transactional outbox), отдельный диспетчер переносит события в надёжную очередь. Отправка HTTP прямо
+         из обработчика запроса теряет события при сбое и делает задержку операций с заказом зависимой от партнёров.
+      3. **Конверт события.** У каждого события уникальный идентификатор, который не меняется между повторами,
+         тип (`order.status_changed`), время, версия схемы и данные. Получатель устраняет дубликаты по
+         идентификатору. Для порядка в событие добавляется версия или порядковый номер заказа, либо события
+         делаются «тонкими» (идентификатор и тип), а актуальное состояние партнёр читает из API - это заодно
+         уменьшает объём данных, уходящих наружу.
+      4. **Подлинность.** Для каждого эндпоинта свой секрет и подпись HMAC-SHA256 над идентификатором, временем
+         и сырым телом, передаваемые в заголовках. Удобно взять готовую спецификацию Standard Webhooks
+         (`webhook-id`, `webhook-timestamp`, `webhook-signature`), для которой у партнёров есть библиотеки.
+         Получатель сравнивает подпись за постоянное время и отклоняет слишком старые метки времени (защита от
+         повторного воспроизведения). Ротация секрета: в переходный период отправляются подписи обоими секретами.
+         Только HTTPS.
+      5. **Изоляция по эндпоинтам.** Отдельная очередь или партиция на эндпоинт, ограниченный параллелизм,
+         короткий тайм-аут (несколько секунд), любой `2xx` - успех, всё остальное - повтор. Медленный или
+         недоступный партнёр заполняет только свою очередь, автоматический выключатель (circuit breaker) на
+         эндпоинт не даёт зависшим соединениям занять ресурсы диспетчера.
+      6. **Повторы.** Экспоненциальная задержка со случайным разбросом (jitter) на длинном окне - от часов до
+         суток, затем очередь недоставленных сообщений и уведомление партнёру; после длительных сбоев эндпоинт
+         отключается. Получателям рекомендуется быстро отвечать `2xx`, а обрабатывать событие асинхронно.
+      7. **Восстановление и самообслуживание.** Портал или API: регистрация эндпоинтов и типов событий, журнал
+         доставок, повторная отправка, тестовое событие. Плюс API «события после курсора», чтобы партнёр мог
+         догнать пропущенное после своего простоя: вебхук - уведомление, источник истины - API.
+      8. **Безопасность своей стороны.** Адреса, которые вводят партнёры, - вектор SSRF: только `https`,
+         запрет частных, loopback-адресов и адресов метаданных облака после разрешения DNS, без следования
+         редиректам. В событиях нет секретов и лишних персональных данных.
+      9. **Эволюция на годы.** Типы событий версионируются, внутри версии только аддитивные изменения, новая
+         версия идёт параллельно со старой и с окном депрекации, каталог событий документирован. Метрики по
+         эндпоинтам (доля успехов, отставание, глубина очереди) с алертами. Решение «свой сервис доставки или
+         управляемый» фиксируется в ADR.
+    explanation: |
+      Ядро задачи - честно признать, что ровно один раз по сети доставить нельзя. Повтор после тайм-аута
+      неизбежен, значит дубликаты неизбежны, и ответственность за идемпотентность переходит к получателю. Ваша
+      задача - дать ему для этого инструмент: стабильный уникальный идентификатор события и информацию о
+      порядке. Без этого любой повтор превращается у партнёра в двойную обработку.
+
+      Подпись нужна потому, что эндпоинт партнёра публичен: без неё кто угодно может прислать поддельное
+      «заказ оплачен». Метка времени внутри подписи закрывает повторное воспроизведение перехваченного запроса.
+      Общая спецификация вроде Standard Webhooks снижает стоимость интеграции для сотен партнёров: им не нужно
+      разбираться в вашей собственной схеме подписи.
+
+      Изоляция - главное, что отличает систему на сотни партнёров от прототипа. При общей очереди с
+      последовательной обработкой один эндпоинт, отвечающий по 30 секунд, задерживает доставку всем
+      (head-of-line blocking), а после восстановления массовые повторы без разброса создают шторм запросов.
+      Это прямое применение шаблонов Retry и Circuit Breaker: повторять только временные сбои с растущей
+      задержкой и перестать обращаться к получателю, который заведомо не отвечает, пока он не восстановится.
+      Отдельные очереди, лимиты параллелизма, короткие тайм-ауты и выключатель на эндпоинт ограничивают ущерб
+      одним партнёром.
+
+      Горизонт в несколько лет делает важными не только доставку, но и эксплуатацию: журнал доставок и
+      повторная отправка снимают нагрузку с поддержки, API для догоняющего чтения закрывает случаи, когда окно
+      повторов исчерпано, а версионирование событий позволяет менять контракт, не ломая интеграции.
+    linkTitles:
+      - "Спецификация Standard Webhooks"
+      - "Шаблон Retry (Azure Architecture Center)"
+      - "Шаблон Circuit Breaker (Azure Architecture Center)"
+  en:
+    title: How do you design outbound webhooks for hundreds of partners that stay reliable for years?
+    prompt: |
+      Hundreds of partners poll your orders API every few seconds to find out about changes. They ask you to
+      send them notifications: a webhook to their HTTPS address on every order change. The partners have different
+      stacks and endpoints of different quality: some answer in milliseconds, others hang for tens of seconds
+      or are down for days.
+
+      How do you design outbound webhooks so that events are not lost, partners can trust them, one problematic
+      partner does not delay the others, and the system stays maintainable for several years?
+    hint: Can an HTTP sender tell "the request never arrived" from "the request was processed but the response was lost"? And what happens to a shared send queue when one receiver takes 30 seconds to answer?
+    answer: |
+      1. **The delivery guarantee comes first.** Over HTTP a sender cannot tell an undelivered event from a
+         delivered one whose response was lost, so the contract is at-least-once delivery: duplicates are
+         possible and order is not guaranteed. This is stated explicitly in the partner documentation.
+      2. **Do not lose events.** The order change and the event record are saved in one transaction
+         (transactional outbox), and a separate dispatcher moves events to a durable queue. Sending HTTP straight
+         from the request handler loses events on a crash and makes order operations wait on partners.
+      3. **Event envelope.** Every event has a unique id that does not change between retries, a type
+         (`order.status_changed`), a timestamp, a schema version and data. Receivers deduplicate by the id. For
+         ordering, the event carries the order version or sequence number, or events are "thin" (id and type)
+         and the partner reads the current state from the API, which also reduces the data that leaves your system.
+      4. **Authenticity.** Each endpoint has its own secret, and an HMAC-SHA256 signature over the id, the
+         timestamp and the raw body is sent in headers. It is convenient to adopt the Standard Webhooks
+         specification (`webhook-id`, `webhook-timestamp`, `webhook-signature`), which partners have libraries
+         for. The receiver compares the signature in constant time and rejects timestamps that are too old
+         (replay protection). Secret rotation: during the overlap, signatures with both secrets are sent.
+         HTTPS only.
+      5. **Per-endpoint isolation.** A separate queue or partition per endpoint, limited concurrency, a short
+         timeout (a few seconds), any `2xx` means success and everything else means retry. A slow or dead partner
+         fills only its own queue, and a circuit breaker per endpoint keeps hanging connections from consuming
+         the dispatcher's resources.
+      6. **Retries.** Exponential backoff with jitter over a long window, from hours to days, then a dead-letter
+         queue and a notification to the partner; after a prolonged failure the endpoint is disabled. Receivers
+         are advised to answer `2xx` quickly and process the event asynchronously.
+      7. **Recovery and self-service.** A portal or API: register endpoints and event types, view the delivery
+         log, resend, send a test event. Plus an "events after cursor" API so a partner can catch up after its own
+         outage: the webhook is a notification, the API is the source of truth.
+      8. **Protect your own side.** URLs entered by partners are an SSRF vector: `https` only, block private,
+         loopback and cloud metadata addresses after DNS resolution, do not follow redirects. Events carry no
+         secrets and no unnecessary personal data.
+      9. **Evolution over years.** Event types are versioned, only additive changes happen within a version, a
+         new version runs in parallel with the old one and a deprecation window, and the event catalogue is
+         documented. Per-endpoint metrics (success rate, lag, queue depth) with alerts. The "own delivery service
+         or managed one" decision is recorded in an ADR.
+    explanation: |
+      The core of the problem is admitting that exactly-once delivery over a network is impossible. A retry
+      after a timeout is unavoidable, so duplicates are unavoidable, and responsibility for idempotency moves to
+      the receiver. Your job is to give it the tools: a stable unique event id and ordering information. Without
+      them every retry becomes double processing on the partner's side.
+
+      The signature is needed because the partner's endpoint is public: without it anyone can send a forged
+      "order paid". A timestamp inside the signature stops the replay of an intercepted request. A shared
+      specification such as Standard Webhooks lowers the integration cost for hundreds of partners: they do not
+      have to learn your home-grown signing scheme.
+
+      Isolation is what separates a system for hundreds of partners from a prototype. With one shared queue
+      processed sequentially, a single endpoint that answers in 30 seconds delays delivery for everyone
+      (head-of-line blocking), and after it recovers, mass retries without jitter create a request storm.
+      This is a direct application of the Retry and Circuit Breaker patterns: retry only transient failures
+      with a growing delay, and stop calling a receiver that is known to be failing until it recovers.
+      Separate queues, concurrency limits, short timeouts and a circuit breaker per endpoint confine the damage
+      to one partner.
+
+      A horizon of several years makes operations as important as delivery: the delivery log and resend relieve
+      support, the catch-up API covers cases where the retry window is exhausted, and event versioning lets the
+      contract change without breaking integrations.
+    linkTitles:
+      - "Standard Webhooks specification"
+      - "Retry pattern (Azure Architecture Center)"
+      - "Circuit Breaker pattern (Azure Architecture Center)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

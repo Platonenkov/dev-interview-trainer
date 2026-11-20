@@ -1,0 +1,116 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RR99BQAQNMVYQRHJ62
+slug: standard-resilience-handler-retry-unsafe-methods
+stack: dotnet
+topic: web-api
+level: senior
+type: multi
+grading: auto
+tags: [httpclient, resilience, retries, idempotency, polly]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+  - id: f
+    correct: true
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/core/resilience/http-resilience
+    lang: en
+    kind: docs
+  - url: https://www.rfc-editor.org/rfc/rfc9110
+    lang: en
+    kind: spec
+locales:
+  ru:
+    title: Что AddStandardResilienceHandler делает с исходящими POST-запросами?
+    prompt: |
+      Сервис вызывает внешний API платежей через типизированный `HttpClient`. Клиент зарегистрирован с
+      `AddStandardResilienceHandler()` из пакета `Microsoft.Extensions.Http.Resilience` (версия пакета для .NET 10)
+      с настройками по умолчанию, и через него отправляются запросы `POST /payments`.
+
+      Выберите все верные утверждения.
+    hint: Смотрит ли стратегия повторов на HTTP-метод запроса, когда решает, считать ли сбой временным и повторять ли запрос?
+    options:
+      a: "По умолчанию стратегия повторов повторяет запрос при временных сбоях (например, ответ `503` или `HttpRequestException`) для всех HTTP-методов, включая `POST`."
+      b: "По умолчанию повторяются только безопасные методы (`GET`, `HEAD`, `OPTIONS`), поэтому `POST` никогда не отправляется дважды."
+      c: "Вызов `options.Retry.DisableForUnsafeHttpMethods()` в делегате настройки обработчика отключает повторы для `POST`, `PATCH`, `PUT`, `DELETE` и `CONNECT`."
+      d: "`DisableForUnsafeHttpMethods()` отключает повторы только для `POST` и `PATCH`, а `PUT` и `DELETE` продолжают повторяться, потому что они идемпотентны."
+      e: "Стандартный обработчик сам добавляет к `POST`-запросам заголовок `Idempotency-Key`, чтобы сервер мог отбросить повторы."
+      f: "Даже с отключёнными повторами `POST`, который завершился по таймауту попытки, мог быть уже выполнен сервером: клиент не знает, создан ли платёж."
+    optionExplanations:
+      b: "Стандартный конвейер по умолчанию не проверяет метод запроса: документация прямо говорит, что повторы выполняются для всех HTTP-методов, и предупреждает, что повтор `POST` может создать дубликат записи."
+      d: "Метод отключает повторы для небезопасных методов по RFC 9110, то есть для всех, чья семантика не только чтение: `POST`, `PATCH`, `PUT`, `DELETE` и `CONNECT`. Идемпотентность `PUT` и `DELETE` здесь не учитывается."
+      e: "Обработчик не добавляет никаких заголовков идемпотентности. Ключ идемпотентности - это договорённость между клиентом и сервером, её реализует приложение, а не стратегия повторов."
+    answer: "Верны утверждения a, c и f."
+    explanation: |
+      `AddStandardResilienceHandler` собирает конвейер из пяти стратегий: ограничение числа запросов, общий
+      таймаут, повторы, автоматический выключатель (circuit breaker) и таймаут одной попытки. Стратегия повторов
+      по умолчанию делает до трёх повторов с экспоненциальной задержкой и случайным разбросом и считает временными
+      ответы `5xx`, `408` и `429`, а также `HttpRequestException` и `TimeoutRejectedException`. Метод запроса в
+      этом решении не участвует, поэтому `POST`, на который сервер ответил `503` или который не уложился в таймаут
+      попытки, будет отправлен ещё раз. Для платежей это прямой путь к двойному списанию.
+
+      Чтобы этого избежать, в делегате настройки вызывают `options.Retry.DisableFor(...)` со своим списком методов
+      или `options.Retry.DisableForUnsafeHttpMethods()`. Второй вариант ориентируется на понятие небезопасного
+      метода из RFC 9110, а не на идемпотентность, поэтому отключает повторы и для `PUT` и `DELETE`.
+
+      Отключение повторов не делает вызов "ровно один раз". Таймаут на клиенте не означает, что сервер не
+      обработал запрос: ответ мог просто не дойти. Надёжное решение - ключ идемпотентности, который клиент
+      передаёт с каждой попыткой, а сервер использует для отбрасывания повторов. Тогда повторы `POST` снова
+      становятся безопасными. Поведение описано для версий пакета `Microsoft.Extensions.Http.Resilience`,
+      выпущенных для .NET 10.
+    linkTitles:
+      - "Создание устойчивых HTTP-приложений: основные подходы"
+      - "RFC 9110: семантика HTTP"
+  en:
+    title: What does AddStandardResilienceHandler do with outgoing POST requests?
+    prompt: |
+      A service calls an external payments API through a typed `HttpClient`. The client is registered with
+      `AddStandardResilienceHandler()` from the `Microsoft.Extensions.Http.Resilience` package (the package version
+      for .NET 10) with default settings, and it sends `POST /payments` requests.
+
+      Select all true statements.
+    hint: Does the retry strategy look at the HTTP method of the request when it decides whether a failure is transient and the request should be repeated?
+    options:
+      a: "By default the retry strategy repeats a request on transient failures (for example a `503` response or `HttpRequestException`) for every HTTP method, including `POST`."
+      b: "By default only safe methods (`GET`, `HEAD`, `OPTIONS`) are retried, so a `POST` is never sent twice."
+      c: "Calling `options.Retry.DisableForUnsafeHttpMethods()` in the handler configuration delegate disables retries for `POST`, `PATCH`, `PUT`, `DELETE` and `CONNECT`."
+      d: "`DisableForUnsafeHttpMethods()` disables retries only for `POST` and `PATCH`, while `PUT` and `DELETE` keep being retried because they are idempotent."
+      e: "The standard handler adds an `Idempotency-Key` header to `POST` requests by itself, so the server can drop repeats."
+      f: "Even with retries disabled, a `POST` that ended with an attempt timeout may already have been executed by the server: the client does not know whether the payment was created."
+    optionExplanations:
+      b: "The standard pipeline does not check the request method by default: the documentation states that retries happen for all HTTP methods and warns that retrying a `POST` can create a duplicate record."
+      d: "The method disables retries for unsafe methods in the RFC 9110 sense, that is every method whose semantics are not read-only: `POST`, `PATCH`, `PUT`, `DELETE` and `CONNECT`. The idempotency of `PUT` and `DELETE` is not taken into account."
+      e: "The handler adds no idempotency headers. An idempotency key is an agreement between client and server that the application implements, not the retry strategy."
+    answer: "Statements a, c and f are true."
+    explanation: |
+      `AddStandardResilienceHandler` builds a pipeline of five strategies: a rate limiter, a total request timeout,
+      retries, a circuit breaker and a per-attempt timeout. By default the retry strategy makes up to three retries
+      with exponential backoff and jitter and treats `5xx`, `408` and `429` responses as transient, as well as
+      `HttpRequestException` and `TimeoutRejectedException`. The request method plays no part in this decision, so
+      a `POST` that got a `503` or did not finish within the attempt timeout is sent again. For payments that is a
+      direct path to a double charge.
+
+      To avoid it, call `options.Retry.DisableFor(...)` with your own list of methods, or
+      `options.Retry.DisableForUnsafeHttpMethods()`, in the configuration delegate. The second one is based on the
+      notion of an unsafe method from RFC 9110, not on idempotency, so it disables retries for `PUT` and `DELETE` too.
+
+      Disabling retries does not make the call "exactly once". A timeout on the client does not mean the server did
+      not process the request: the response may simply not have arrived. The reliable fix is an idempotency key that
+      the client sends with every attempt and the server uses to drop repeats. Then retries of `POST` become safe
+      again. The behaviour is described for the versions of the `Microsoft.Extensions.Http.Resilience` package
+      released for .NET 10.
+    linkTitles:
+      - "Build resilient HTTP apps: key development patterns"
+      - "RFC 9110: HTTP Semantics"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

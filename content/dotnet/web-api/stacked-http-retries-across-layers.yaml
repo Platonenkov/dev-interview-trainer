@@ -1,0 +1,178 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RR09ZEAWC24JNQ2D5N
+slug: stacked-http-retries-across-layers
+stack: dotnet
+topic: web-api
+level: lead
+type: situation
+grading: self
+tags: [httpclient, retries, retry-storm, resilience, circuit-breaker, timeouts]
+links:
+  - url: https://learn.microsoft.com/en-us/azure/architecture/antipatterns/retry-storm/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/resilience/http-resilience
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/azure/architecture/best-practices/transient-faults
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/microsoft.extensions.http.resilience.httpretrystrategyoptions
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Три сервиса в цепочке повторяют запросы, и при замедлении внешнего API нагрузка на него вырастает в разы
+    prompt: |
+      Запрос пользователя проходит цепочку A -> B -> C, а сервис C вызывает внешний API D. Каждая из трёх
+      команд независимо настроила повторы: при ошибке или тайм-ауте сервис делает до трёх попыток вызова
+      следующего звена. Во время замедления D трафик на него вырос во много раз по сравнению с обычным,
+      D окончательно лёг, а восстановление заняло гораздо больше времени, чем само замедление.
+
+      Вы технический лид этих команд. Что вы измените в сервисах и как сделаете это правилом для всех команд,
+      чтобы ситуация не повторилась?
+    hint: "Что происходит с числом обращений к D, когда повторы настроены независимо на каждом звене, и в какой момент эти повторы срабатывают?"
+    answer: |
+      1. **Остановить усиление сейчас.** Через конфигурацию отключить повторы в A и B, в C оставить не больше
+         одного повтора с задержкой. Если D перегружен, быстро отказывать или отдавать деградированный ответ
+         вместо новых попыток. Связаться с командой D и посмотреть, отвечает ли он `429` или `503` с `Retry-After`.
+      2. **Посчитать множитель.** Один запрос к A даёт до 3 вызовов B, каждый из них до 3 вызовов C, каждый из
+         них до 3 вызовов D: 3 x 3 x 3 = 27 вызовов D. Если «три повтора» означают три повтора после первой
+         попытки, то 4 x 4 x 4 = 64. Множитель включается именно тогда, когда D замедлился и все звенья видят
+         тайм-ауты, то есть нагрузка растёт тогда, когда D меньше всего может её выдержать. Вдобавок тайм-ауты
+         звеньев не согласованы: A уже сдался и вернул ошибку, а B и C продолжают работать и повторять впустую.
+      3. **Повторы только в одном звене.** Повторяет только тот, кто непосредственно видит временный сбой
+         зависимости: C при вызове D. Промежуточные звенья не повторяют вызовы внутренних сервисов, у которых
+         есть своя устойчивость: они быстро отказывают и передают ошибку вверх. Исключения оформляются явно и
+         со своим ограниченным бюджетом.
+      4. **Бюджет времени, а не число попыток.** На входе (A) задаётся общий тайм-аут операции, исходя из SLA.
+         Каждое внутреннее звено получает меньше, чем осталось у вызывающего; тайм-аут одной попытки меньше
+         общего; повторы прекращаются, когда бюджет исчерпан. Отмена передаётся по цепочке: токен
+         `HttpContext.RequestAborted` передаётся в исходящие вызовы `HttpClient`, чтобы после отказа вызывающего
+         работа ниже по цепочке останавливалась. Дополнительно можно ограничить общее число повторов к D
+         на процесс (retry budget), например не больше заданного числа в минуту.
+      5. **Экспоненциальная задержка и circuit breaker.** Задержка между попытками растёт экспоненциально и
+         с джиттером, чтобы экземпляры не повторяли синхронно. В C на вызовах D стоит circuit breaker: при
+         высокой доле ошибок вызовы сразу отклоняются без нагрузки на D, а после паузы пропускаются пробные
+         запросы. Пока он разомкнут, C быстро отвечает B ошибкой, которую B и A не повторяют.
+      6. **Уважать `Retry-After` и повторять только безопасное.** Если D вернул `429` или `503` с `Retry-After`,
+         ждать указанное время или сразу отказаться, если ожидание не укладывается в бюджет. Повторять только
+         временные сбои (сетевые ошибки, `408`, `429`, `5xx`) и только идемпотентные операции или операции
+         с ключом идемпотентности.
+      7. **Как это выглядит в .NET 10.** `AddStandardResilienceHandler` из `Microsoft.Extensions.Http.Resilience`
+         собирает ограничитель частоты, общий тайм-аут, повторы, circuit breaker и тайм-аут попытки. По умолчанию
+         он делает до 3 повторов для всех HTTP-методов, с экспоненциальной задержкой и джиттером в пределах
+         общего тайм-аута 30 секунд. Если каждая команда просто добавит его со значениями по умолчанию, получится
+         ровно эта цепочка повторов. Поэтому для вызова внешней зависимости используется стандартный обработчик
+         с параметрами, подобранными под бюджет: меньше повторов, общий тайм-аут из бюджета,
+         `options.Retry.DisableForUnsafeHttpMethods()` для неидемпотентных вызовов. Берётся ли задержка повтора
+         из `Retry-After`, определяет свойство `options.Retry.ShouldRetryAfterHeader`: общий профиль явно задаёт
+         ему `true`, а не полагается на значение по умолчанию, и проверяет это тестом. Ожидание, которое не
+         укладывается в бюджет, обрывает общий тайм-аут. Для внутренних вызовов - свой конвейер через
+         `AddResilienceHandler` с тайм-аутом и circuit breaker, но без повторов.
+      8. **Сделать это правилом команд.** ADR «политика повторов»: какое звено повторяет, какие коды и с каким
+         бюджетом. Общая внутренняя библиотека с готовыми профилями («внешняя зависимость», «внутренний вызов»)
+         вместо ручной настройки в каждом сервисе. Пункт в чек-листе code review. Метрики повторов на каждом
+         звене и коэффициент усиления (вызовы D на один входящий запрос A) с алертом. Тест с внедрением сбоя на
+         стенде: замедлить D и проверить, что нагрузка на него растёт не больше согласованного множителя.
+         Разбор инцидента с выводами для всех команд.
+    explanation: |
+      Повторы на каждом звене перемножаются, а не складываются. Повтор полезен при коротком случайном сбое, но
+      при перегрузке зависимости он превращается в положительную обратную связь: чем хуже отвечает D, тем больше
+      вызовов он получает. Это антипаттерн retry storm из Azure Architecture Center, а рекомендации по обработке
+      временных сбоев прямо предостерегают от многоуровневых повторов в иерархии вызовов: уже два звена с тремя
+      повторами дают девять попыток к целевому сервису.
+
+      Число попыток - плохая единица ограничения, потому что каждое звено не знает, сколько времени осталось
+      у вызывающего. Общий бюджет времени и передача отмены по цепочке гарантируют, что никто не работает на
+      запрос, от которого уже отказались. Circuit breaker и `Retry-After` дают перегруженной зависимости паузу,
+      чтобы восстановиться, а не добивают её. Но `Retry-After` помогает, только если клиент действительно его
+      читает, поэтому это поведение фиксируется явно в общем профиле, а не остаётся на значениях по умолчанию.
+
+      Для лида важно, что ошибку не сделал никто по отдельности: каждая команда приняла локально разумное
+      решение. Поэтому исправление тоже не локальное: согласованное правило, общие профили настроек вместо
+      ручной конфигурации и метрика усиления, которая сразу покажет, если кто-то снова добавит повторы.
+    linkTitles:
+      - "Антипаттерн Retry Storm (Azure Architecture Center)"
+      - "Построение устойчивых HTTP-приложений в .NET"
+      - "Обработка временных сбоев (Azure Architecture Center)"
+      - "Класс HttpRetryStrategyOptions"
+  en:
+    title: Three services in a call chain each retry, and a slow downstream API gets many times its normal traffic
+    prompt: |
+      A user request goes through the chain A -> B -> C, and service C calls an external API D. Each of the
+      three teams set up retries on its own: on an error or a timeout a service makes up to three attempts to
+      call the next hop. During a slowdown of D its traffic grew many times above normal, D went down
+      completely, and recovery took much longer than the slowdown itself.
+
+      You are the tech lead of these teams. What do you change in the services, and how do you make it a rule
+      for all teams so that this does not happen again?
+    hint: "What happens to the number of calls reaching D when every hop has its own independent retry, and when do those retries fire?"
+    answer: |
+      1. **Stop the amplification now.** Through configuration, switch off retries in A and B, and leave at most
+         one retry with a delay in C. If D is overloaded, fail fast or return a degraded response instead of new
+         attempts. Contact the D team and check whether D answers `429` or `503` with `Retry-After`.
+      2. **Count the multiplier.** One request to A gives up to 3 calls to B, each of them up to 3 calls to C,
+         each of them up to 3 calls to D: 3 x 3 x 3 = 27 calls to D. If "three retries" means three retries after
+         the first attempt, it is 4 x 4 x 4 = 64. The multiplier kicks in exactly when D has slowed down and every
+         hop sees timeouts, so the load grows when D can least take it. On top of that the hop timeouts are not
+         aligned: A has already given up and returned an error, while B and C keep working and retrying for nothing.
+      3. **Retries in one hop only.** Only the hop that directly sees the transient failure of the dependency
+         retries: C when calling D. Intermediate hops do not retry calls to internal services that have their own
+         resilience: they fail fast and pass the error up. Exceptions are made explicit and get their own limited budget.
+      4. **A time budget, not an attempt count.** The entry point (A) sets a total timeout for the operation based
+         on the SLA. Each inner hop gets less than what the caller has left; the per-attempt timeout is shorter than
+         the total one; retries stop when the budget is spent. Cancellation flows down the chain: the
+         `HttpContext.RequestAborted` token is passed to outgoing `HttpClient` calls, so that work further down
+         stops once the caller has given up. On top of that you can cap the total number of retries against D per
+         process (a retry budget), for example no more than a set number per minute.
+      5. **Exponential backoff and a circuit breaker.** The delay between attempts grows exponentially and with
+         jitter, so that instances do not retry in sync. C has a circuit breaker on the calls to D: when the share
+         of failures is high, calls are rejected immediately without loading D, and after a pause trial requests
+         are let through. While it is open, C quickly answers B with an error that B and A do not retry.
+      6. **Respect `Retry-After` and retry only what is safe.** If D returns `429` or `503` with `Retry-After`,
+         wait the given time, or give up at once if the wait does not fit into the budget. Retry only transient
+         failures (network errors, `408`, `429`, `5xx`) and only idempotent operations or operations with an
+         idempotency key.
+      7. **What it looks like in .NET 10.** `AddStandardResilienceHandler` from `Microsoft.Extensions.Http.Resilience`
+         combines a rate limiter, a total timeout, retries, a circuit breaker and an attempt timeout. By default it
+         makes up to 3 retries for every HTTP method, with exponential backoff and jitter, within a total timeout of
+         30 seconds. If every team simply adds it with the defaults, you get exactly this chain of retries. So the
+         call to the external dependency uses the standard handler with options tuned to the budget: fewer retries,
+         a total timeout taken from the budget, `options.Retry.DisableForUnsafeHttpMethods()` for non-idempotent
+         calls. Whether the retry delay is taken from `Retry-After` is controlled by
+         `options.Retry.ShouldRetryAfterHeader`: the shared profile sets it to `true` explicitly instead of relying
+         on the default, and a test checks it. A wait that does not fit the budget is cut off by the total timeout.
+         Internal calls use a custom pipeline built with `AddResilienceHandler` that has a timeout and a circuit
+         breaker but no retries.
+      8. **Make it a team rule.** An ADR "retry policy": which hop retries, on which status codes and with what
+         budget. A shared internal library with ready-made profiles ("external dependency", "internal call")
+         instead of hand-made configuration in every service. An item in the code review checklist. Metrics for
+         retries on every hop and the amplification factor (calls to D per incoming request to A) with an alert.
+         A failure-injection test in staging: slow down D and check that its load grows by no more than the agreed
+         factor. A post-incident review with conclusions shared with all teams.
+    explanation: |
+      Retries on every hop multiply, they do not add up. A retry helps with a short random failure, but when the
+      dependency is overloaded it becomes positive feedback: the worse D responds, the more calls it gets. This is
+      the retry storm antipattern from the Azure Architecture Center, and the transient fault handling guidance
+      warns directly against layered retries in a hierarchy of calls: two hops with three retries each already
+      give nine attempts against the target service.
+
+      An attempt count is a poor unit of limitation, because no hop knows how much time its caller has left. A
+      total time budget and cancellation that flows down the chain guarantee that nobody works on a request that
+      has already been abandoned. A circuit breaker and `Retry-After` give an overloaded dependency a pause to
+      recover instead of finishing it off. But `Retry-After` only helps if the client actually reads it, so this
+      behaviour is set explicitly in the shared profile rather than left to defaults.
+
+      For a lead the key point is that nobody made the mistake alone: every team made a locally reasonable
+      decision. So the fix is not local either: an agreed rule, shared configuration profiles instead of manual
+      setup, and an amplification metric that shows at once if someone adds retries again.
+    linkTitles:
+      - "Retry Storm antipattern (Azure Architecture Center)"
+      - "Build resilient HTTP apps in .NET"
+      - "Transient fault handling (Azure Architecture Center)"
+      - "HttpRetryStrategyOptions class"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

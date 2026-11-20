@@ -1,0 +1,114 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPX5TPQ06X0KKGPQF2
+slug: sse-event-missing-blank-line
+stack: dotnet
+topic: grpc-realtime
+level: middle
+type: find-bug
+grading: auto
+tags: [server-sent-events, eventsource, aspnet-core, streaming]
+code:
+  language: csharp
+  harness: none
+  source: |
+    var builder = WebApplication.CreateBuilder(args);
+    var app = builder.Build();
+
+    app.MapGet("/progress", async (HttpContext context, CancellationToken ct) =>
+    {
+        context.Response.ContentType = "text/event-stream";
+        context.Response.Headers.CacheControl = "no-cache";
+
+        for (int percent = 0; percent <= 100; percent += 10)
+        {
+            await context.Response.WriteAsync($"data: {percent}\n", ct);
+            await context.Response.Body.FlushAsync(ct);
+            await Task.Delay(TimeSpan.FromSeconds(1), ct);
+        }
+    });
+
+    app.Run();
+bugLineSets: [[11]]
+links:
+  - url: https://html.spec.whatwg.org/multipage/server-sent-events.html
+    lang: en
+    kind: spec
+  - url: https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему EventSource в браузере не получает ни одного события от SSE-эндпоинта на ASP.NET Core?
+    prompt: |
+      Эндпоинт ASP.NET Core раз в секунду сообщает прогресс через Server-Sent Events. В браузере его слушают так:
+      `new EventSource("/progress")` с обработчиком `onmessage`. В инструментах разработчика видно, что ответ
+      имеет тип `text/event-stream` и строки `data: 0`, `data: 10` и так далее приходят по одной в секунду, но
+      `onmessage` не срабатывает ни разу. Примерно через 10 секунд запрос завершается, браузер открывает новый, и
+      всё повторяется.
+
+      Щёлкните по строке с дефектом.
+    hint: По какому признаку парсер EventSource понимает, что очередное событие закончилось и его пора отдать странице?
+    answer: |
+      Строка 11: каждое обновление заканчивается одним `\n`, а событие SSE отправляется странице только после пустой
+      строки. Нужно писать `$"data: {percent}\n\n"`.
+    explanation: |
+      По спецификации WHATWG поток `text/event-stream` разбирается построчно. Строка `data: 0` только дописывает
+      значение в буфер данных текущего события. Событие отправляется (срабатывает `message` и `onmessage`) лишь
+      тогда, когда парсер встречает пустую строку. В коде каждое обновление заканчивается одним `\n`, пустой
+      строки нет, и все строки `data:` копятся в буфере одного незаконченного события.
+
+      Когда обработчик завершает цикл и ответ закрывается, спецификация требует отбросить незавершённое событие.
+      После обычного закрытия потока EventSource переподключается, и всё начинается заново, поэтому странице не
+      доходит ни одно обновление.
+
+      Исправление - завершать каждое событие пустой строкой: `$"data: {percent}\n\n"`. Если данные многострочные,
+      каждая строка отправляется отдельным полем `data:`, а пустая строка ставится один раз в конце события. То же
+      относится к событиям с полями `event:` и `id:`.
+
+      Остальные строки корректны: без типа `text/event-stream` EventSource вообще не принял бы ответ, а
+      `FlushAsync` нужен, чтобы событие сразу ушло клиенту, а не ждало в буфере сервера. В .NET 10 вместо ручного
+      форматирования можно вернуть `TypedResults.ServerSentEvents(...)` с `IAsyncEnumerable<T>`: формат событий,
+      включая завершающую пустую строку, тогда пишет сам фреймворк.
+    linkTitles:
+      - "HTML Living Standard: Server-Sent Events"
+      - "MDN: использование Server-Sent Events"
+  en:
+    title: Why does a browser EventSource receive no events from an ASP.NET Core SSE endpoint?
+    prompt: |
+      An ASP.NET Core endpoint reports progress once a second through Server-Sent Events. The browser listens with
+      `new EventSource("/progress")` and an `onmessage` handler. The developer tools show that the response has
+      the type `text/event-stream` and that the lines `data: 0`, `data: 10` and so on arrive one per second, but
+      `onmessage` never fires. After about 10 seconds the request ends, the browser opens a new one, and it all
+      repeats.
+
+      Click the line that contains the defect.
+    hint: How does the EventSource parser know that an event has ended and can be handed to the page?
+    answer: |
+      Line 11: every update ends with a single `\n`, while an SSE event is dispatched to the page only after a blank
+      line. It must write `$"data: {percent}\n\n"`.
+    explanation: |
+      In the WHATWG specification a `text/event-stream` is parsed line by line. The line `data: 0` only appends a
+      value to the data buffer of the current event. The event is dispatched (`message` and `onmessage` fire) only
+      when the parser meets a blank line. In the code every update ends with a single `\n`, there is no blank
+      line, and all the `data:` lines pile up in the buffer of one unfinished event.
+
+      When the handler finishes the loop and the response closes, the specification requires the unfinished event
+      to be discarded. After a normal end of the stream EventSource reconnects and everything starts again, so not
+      a single update reaches the page.
+
+      The fix is to end every event with a blank line: `$"data: {percent}\n\n"`. For multi-line data each line is
+      sent as its own `data:` field, and the blank line comes once at the end of the event. The same applies to
+      events with `event:` and `id:` fields.
+
+      The other lines are correct: without the `text/event-stream` type EventSource would not accept the response
+      at all, and `FlushAsync` makes the event leave for the client at once instead of waiting in a server buffer.
+      In .NET 10, instead of formatting by hand, you can return `TypedResults.ServerSentEvents(...)` with an
+      `IAsyncEnumerable<T>`: the framework then writes the event format, including the closing blank line.
+    linkTitles:
+      - "HTML Living Standard: Server-Sent Events"
+      - "MDN: Using server-sent events"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"
+  noRunReason: An ASP.NET Core minimal API endpoint needs the ASP.NET Core shared framework, a running host and a browser EventSource client, which the console sandbox does not provide.

@@ -1,0 +1,113 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNRY80MSY696B5168A
+slug: dbcontext-shared-across-parallel-tasks
+stack: dotnet
+topic: ef-core
+level: middle
+type: find-bug
+grading: auto
+tags: [ef-core, dbcontext, concurrency, async, dbcontext-factory]
+code:
+  language: csharp
+  harness: none
+  source: |
+    public sealed class CustomerDashboard
+    {
+        private readonly ShopContext _db;
+
+        public CustomerDashboard(ShopContext db) => _db = db;
+
+        public async Task<DashboardDto> LoadAsync(int customerId)
+        {
+            var ordersTask = _db.Orders.Where(o => o.CustomerId == customerId).ToListAsync();
+            var ticketsTask = _db.Tickets.Where(t => t.CustomerId == customerId).ToListAsync();
+
+            await Task.WhenAll(ordersTask, ticketsTask);
+
+            return new DashboardDto(ordersTask.Result, ticketsTask.Result);
+        }
+    }
+bugLineSets: [[10], [9, 10]]
+links:
+  - url: https://learn.microsoft.com/en-us/ef/core/dbcontext-configuration/
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/microsoft.entityframeworkcore.idbcontextfactory-1
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строку, из-за которой два параллельных запроса через один DbContext падают
+    prompt: |
+      Сервис зарегистрирован в DI ASP.NET Core, `ShopContext` подключён через `AddDbContext` и внедряется в
+      конструктор. Чтобы страница открывалась быстрее, разработчик запустил два запроса одновременно и ждёт их
+      через `Task.WhenAll`. На стенде страница падает с `InvalidOperationException`: "A second operation was
+      started on this context instance before a previous operation completed".
+      Щёлкните по строке с дефектом.
+    hint: Сколько операций одновременно может выполнять один экземпляр `DbContext` и завершилась ли первая операция к моменту, когда стартует вторая?
+    answer: "Строка 10: второй запрос `ToListAsync` запускается на том же экземпляре `_db`, пока первый запрос из строки 9 ещё не завершён."
+    explanation: |
+      `DbContext` не потокобезопасен и не поддерживает параллельные операции: на одном экземпляре в каждый момент
+      может выполняться только одна асинхронная операция. Вызов `ToListAsync` в строке 9 начинает запрос и
+      возвращает незавершённую задачу, не дожидаясь результата. Строка 10 сразу же стартует второй запрос на том
+      же контексте. EF Core замечает одновременное использование и выбрасывает `InvalidOperationException`, а
+      `await Task.WhenAll` в строке 12 доносит эту ошибку до вызывающего кода. Сама строка 12 лишь ожидает задачи:
+      ошибка в том, что вторая операция начата до завершения первой.
+
+      Обнаружение одновременного доступа в EF Core работает по принципу "лучшее, что можно сделать" и не
+      гарантировано. Если конфликт не обнаружен, возможны непредсказуемое поведение и повреждение состояния
+      контекста, поэтому полагаться на то, что "иногда работает", нельзя.
+
+      Исправления:
+
+      - Если параллельность не нужна, ждать запросы по очереди: `var orders = await ...ToListAsync();`, затем
+        второй запрос. Для двух коротких запросов это обычно самый простой и достаточный вариант.
+      - Если запросы действительно должны идти параллельно, каждому нужен свой контекст. Зарегистрировать фабрику
+        через `AddDbContextFactory<ShopContext>()`, внедрить `IDbContextFactory<ShopContext>` и в каждой
+        параллельной операции создавать отдельный экземпляр: `await using var db = await _factory.CreateDbContextAsync();`.
+        Учтите, что каждый контекст займёт отдельное подключение к базе.
+
+      Поведение описано для EF Core 10.
+    linkTitles:
+      - "Время жизни, настройка и инициализация DbContext"
+      - "Интерфейс IDbContextFactory<TContext>"
+  en:
+    title: Find the line that makes two parallel queries on one DbContext fail
+    prompt: |
+      The service is registered in ASP.NET Core DI, and `ShopContext` is registered with `AddDbContext` and
+      injected into the constructor. To make the page faster, a developer started two queries at once and awaits
+      them with `Task.WhenAll`. On the test environment the page fails with `InvalidOperationException`: "A second
+      operation was started on this context instance before a previous operation completed".
+      Click the line that contains the defect.
+    hint: How many operations can one `DbContext` instance run at a time, and has the first operation finished when the second one starts?
+    answer: "Line 10: the second `ToListAsync` query starts on the same `_db` instance while the first query from line 9 has not completed yet."
+    explanation: |
+      `DbContext` is not thread-safe and does not support parallel operations: only one asynchronous operation
+      may run on an instance at any moment. The `ToListAsync` call on line 9 starts the query and returns an
+      unfinished task without waiting for the result. Line 10 immediately starts a second query on the same
+      context. EF Core detects the concurrent use and throws `InvalidOperationException`, and the
+      `await Task.WhenAll` on line 12 delivers that error to the caller. Line 12 itself only waits for the tasks:
+      the defect is that the second operation starts before the first one completes.
+
+      EF Core detects concurrent access on a best-effort basis and does not guarantee it. When a conflict goes
+      undetected, the result can be undefined behavior and a corrupted context state, so code that "sometimes
+      works" cannot be relied on.
+
+      Fixes:
+
+      - If parallelism is not needed, await the queries one after another: `var orders = await ...ToListAsync();`,
+        then the second query. For two short queries this is usually the simplest and sufficient choice.
+      - If the queries really must run in parallel, each needs its own context. Register a factory with
+        `AddDbContextFactory<ShopContext>()`, inject `IDbContextFactory<ShopContext>` and create a separate
+        instance in every parallel operation: `await using var db = await _factory.CreateDbContextAsync();`.
+        Keep in mind that every context takes its own database connection.
+
+      The behavior is described for EF Core 10.
+    linkTitles:
+      - "DbContext lifetime, configuration and initialization"
+      - "IDbContextFactory<TContext> interface"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"
+  noRunReason: The snippet uses EF Core types and needs a database provider, which the sandbox does not have. Not executed.

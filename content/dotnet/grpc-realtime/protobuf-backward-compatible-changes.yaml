@@ -1,0 +1,140 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPTF9G48FR9Y0EFMGK
+slug: protobuf-backward-compatible-changes
+stack: dotnet
+topic: grpc-realtime
+level: middle
+type: multi
+grading: auto
+tags: [grpc, protobuf, versioning, backward-compatibility]
+code:
+  language: protobuf
+  harness: none
+  source: |
+    syntax = "proto3";
+
+    package orders.v1;
+
+    service OrderService {
+      rpc GetOrder (GetOrderRequest) returns (Order);
+    }
+
+    message GetOrderRequest {
+      int32 id = 1;
+    }
+
+    message Order {
+      int32 id = 1;
+      string customer_id = 2;
+      string comment = 3;
+    }
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+  - id: f
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/grpc/versioning
+    lang: en
+    kind: docs
+  - url: https://protobuf.dev/programming-guides/proto3/
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какие изменения .proto-контракта не ломают существующих клиентов и серверы gRPC?
+    prompt: |
+      Сервис заказов с этим контрактом и его клиенты развёртываются независимо, сообщения передаются в
+      двоичном формате Protobuf (без JSON transcoding). Выберите все изменения контракта, после которых и
+      старые клиенты с новым сервером, и новые клиенты со старым сервером продолжат работать: ни одна
+      сторона не получит ошибку разбора, не прочитает значение с чужим смыслом и не потеряет значения полей,
+      которые известны обеим сторонам.
+    hint: Что передаётся по сети, чтобы получатель понял, к какому полю относится значение, - имя поля или что-то другое?
+    options:
+      a: "Добавить в `Order` поле `string currency = 4;`."
+      b: 'Удалить поле `comment` и объявить в `Order` `reserved 3;` и `reserved "comment";`.'
+      c: "Изменить номер поля `customer_id` с `2` на `5`."
+      d: "Изменить тип поля `customer_id` со `string` на `int32`, оставив номер `2`."
+      e: "Удалить поле `comment` без `reserved`, а через несколько релизов добавить `int64 created_at = 3;`."
+      f: "Переименовать пакет `orders.v1` в `orders`."
+    optionExplanations:
+      c: "По сети поле опознаётся по номеру. Старая сторона ждёт `customer_id` под номером `2`, новая отправляет его под `5`: значение попадает в неизвестные поля, а `customer_id` читается как пустая строка. Фактически это удаление поля и добавление нового с тихой потерей данных."
+      d: "Вместе с типом меняется способ кодирования на проводе (wire type): `string` передаётся как блок с длиной, `int32` - как varint. Старая сторона не может прочитать такое значение как свою строку: в зависимости от реализации это ошибка разбора или потеря значения, и поле остаётся пустым."
+      e: "Старые клиенты и серверы по-прежнему считают номер `3` полем `comment`. Данные нового поля они прочитают с чужим смыслом, получат ошибку разбора или потеряют, в зависимости от типов. Именно от этого защищает `reserved`: компилятор `protoc` не даст снова занять зарезервированный номер."
+      f: "Пакет входит в полное имя сервиса, а оно - в путь HTTP/2-запроса `/orders.v1.OrderService/GetOrder`. Старые клиенты продолжат вызывать этот путь, а новый сервер обслуживает `/orders.OrderService/GetOrder`, и вызовы завершатся статусом `Unimplemented`."
+    answer: "a и b: добавить поле с новым номером и удалить поле, зарезервировав его номер и имя."
+    explanation: |
+      В двоичном формате Protobuf имя поля не передаётся: каждое значение помечено номером поля и способом
+      кодирования (wire type). Поэтому совместимость контракта определяется номерами и типами, а не именами.
+
+      - **Добавление поля с новым номером** безопасно в обе стороны. Старая сторона не знает номер `4` и
+        сохраняет значение в неизвестных полях сообщения, не падая. Новая сторона, получив сообщение от
+        старой, видит у `currency` значение по умолчанию proto3 - пустую строку.
+      - **Удаление поля** не ломает протокол: значения от старых клиентов уходят в неизвестные поля, а старые
+        клиенты видят у `comment` значение по умолчанию. Код клиентов придётся обновить, когда они перейдут
+        на новый контракт, а бизнес должен быть готов к отсутствию значения. `reserved` с номером и именем
+        нужен, чтобы номер `3` никто случайно не занял снова.
+      - **Смена номера, смена типа на несовместимый и повторное использование номера** ломают обмен: одно и то
+        же значение старая и новая сторона ищут под разными номерами или читают с разным смыслом.
+      - **Переименование пакета, сервиса или метода** меняет путь вызова, и старые клиенты перестают находить
+        метод.
+
+      Правило на практике: номера полей никогда не меняются и не переиспользуются, а несовместимое изменение
+      оформляют как новое поле или новую версию сервиса (`orders.v2`) рядом со старой.
+    linkTitles:
+      - "Версионирование сервисов gRPC"
+      - "Руководство по языку Protocol Buffers (proto3)"
+  en:
+    title: Which .proto contract changes keep existing gRPC clients and servers working?
+    prompt: |
+      The order service with this contract and its clients are deployed independently, and messages travel in
+      binary Protobuf (no JSON transcoding). Select all contract changes after which both old clients with the
+      new server and new clients with the old server keep working: neither side gets a parse error, reads a
+      value with a foreign meaning, or loses values of fields that both sides know.
+    hint: What travels on the wire so that the receiver knows which field a value belongs to - the field name or something else?
+    options:
+      a: "Add the field `string currency = 4;` to `Order`."
+      b: 'Delete the `comment` field and declare `reserved 3;` and `reserved "comment";` in `Order`.'
+      c: "Change the number of `customer_id` from `2` to `5`."
+      d: "Change the type of `customer_id` from `string` to `int32`, keeping number `2`."
+      e: "Delete `comment` without `reserved`, and a few releases later add `int64 created_at = 3;`."
+      f: "Rename the package `orders.v1` to `orders`."
+    optionExplanations:
+      c: "On the wire a field is identified by its number. The old side expects `customer_id` under number `2`, the new side sends it under `5`: the value lands in unknown fields and `customer_id` reads as an empty string. In effect this removes a field and adds a new one, silently losing data."
+      d: "Changing the type also changes the wire type: `string` is sent length-delimited, `int32` as a varint. The old side cannot read such a value as its string: depending on the implementation this is a parse error or a lost value, and the field stays empty."
+      e: "Old clients and servers still treat number `3` as `comment`. They read the data of the new field with a foreign meaning, fail to parse it or lose it, depending on the types. This is exactly what `reserved` prevents: the `protoc` compiler refuses to reuse a reserved number."
+      f: "The package is part of the full service name, and that name is part of the HTTP/2 request path `/orders.v1.OrderService/GetOrder`. Old clients keep calling that path, while the new server serves `/orders.OrderService/GetOrder`, so the calls end with status `Unimplemented`."
+    answer: "a and b: add a field with a new number, and remove a field while reserving its number and name."
+    explanation: |
+      In binary Protobuf the field name is not sent: every value is tagged with the field number and the wire
+      type. That is why contract compatibility is decided by numbers and types, not by names.
+
+      - **Adding a field with a new number** is safe in both directions. The old side does not know number `4`
+        and keeps the value in the message's unknown fields without failing. The new side, receiving a message
+        from the old one, sees the proto3 default for `currency`, an empty string.
+      - **Removing a field** does not break the protocol: values from old clients go to unknown fields, and old
+        clients see the default value for `comment`. Client code must be updated when it moves to the new
+        contract, and the business must accept that the value is gone. `reserved` with the number and the name
+        ensures that nobody accidentally takes number `3` again.
+      - **Changing a number, changing the type to an incompatible one and reusing a number** break the exchange:
+        the old and new sides look for the same value under different numbers or read it with different meanings.
+      - **Renaming a package, service or method** changes the call path, and old clients can no longer find
+        the method.
+
+      The practical rule: field numbers are never changed or reused, and an incompatible change is made as a new
+      field or a new service version (`orders.v2`) next to the old one.
+    linkTitles:
+      - "Versioning gRPC services"
+      - "Language Guide (proto3)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  noRunReason: The snippet is a Protobuf contract, not C# code, and the sandbox only compiles and runs C# snippets.

@@ -1,0 +1,166 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RK2B8G60T02P91S4JD
+slug: business-logic-in-action-filters-decision
+stack: dotnet
+topic: aspnet-core
+level: lead
+type: open
+grading: self
+tags: [filters, action-filters, architecture, transactions, validation]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/mvc/controllers/filters
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/ef/core/miscellaneous/connection-resiliency
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Стоит ли переносить бизнес-валидацию и транзакции в action-фильтры MVC, чтобы контроллеры были тонкими?
+    prompt: |
+      Команда предлагает перенести бизнес-валидацию (например, «сумма заказа не может превышать кредитный
+      лимит клиента») и управление транзакцией базы данных (начать перед действием, зафиксировать после него)
+      в action-фильтры MVC, чтобы контроллеры остались тонкими. Вы техлид. Как вы примете решение и какое
+      правило зададите команде? Речь об ASP.NET Core в .NET 10.
+    hint: Представьте, что завтра тот же сценарий нужно вызвать из обработчика сообщений или фоновой задачи. Какую часть логики он потеряет?
+    answer: |
+      **Решение: цель принять, средство отклонить.** Тонкие контроллеры - правильная цель, но фильтры - часть
+      конвейера обработки запроса MVC, а не приложения.
+
+      **Почему бизнес-правила не место в фильтрах**
+
+      - **Невидимость.** Правило подключается атрибутом или глобальной регистрацией. Читая действие или
+        сценарий, его не видно, а порядок выполнения зависит от области (глобальная, контроллер, действие) и
+        свойства `Order`. Забытый атрибут молча отключает проверку.
+      - **Только MVC.** Конвейер фильтров выполняется только для действий контроллеров (у Razor Pages свои
+        page-фильтры). Minimal API-эндпоинты используют отдельные endpoint-фильтры, а обработчик сообщений,
+        hosted service или тест, который вызывает сценарий напрямую, проверку не получит. Правила начинают
+        дублироваться или пропускаться.
+      - **Тестируемость.** Правило проверяется только через конвейер: моками `ActionExecutingContext` или
+        интеграционными тестами, а не обычным модульным тестом сценария.
+      - **Слабая типизация.** Фильтр работает со словарём `ActionArguments` и `IActionResult`, а не с типом
+        команды.
+
+      **Почему транзакцию не стоит открывать в action-фильтре**
+
+      - Граница транзакции совпадает с действием, а не с бизнес-операцией: она открыта, пока действие делает
+        что угодно, включая внешние HTTP-вызовы, и дольше держит блокировки.
+      - Решение о фиксации принимается по `context.Exception` и типу результата. Действие, вернувшее
+        `BadRequest` без исключения, зафиксирует изменения, если фильтр не разбирает результат, и семантика
+        HTTP начинает определять согласованность данных.
+      - Выполнение результата идёт после action-фильтров: если действие вернуло отложенный запрос, обращение
+        к базе произойдёт уже после фиксации и вне транзакции.
+      - Стратегия повторов EF Core (`EnableRetryOnFailure`) требует, чтобы явная транзакция вместе со всеми
+        операциями была обёрнута в `strategy.ExecuteAsync(...)` и могла повториться целиком. Фильтр, который
+        открывает транзакцию и отдаёт управление действию, повторить действие не может.
+
+      **Правило для команды**
+
+      1. Фильтры и middleware - только для задач уровня HTTP: авторизация, проверка формы входных данных с
+         ответом 400 (DataAnnotations и автоматический ответ `[ApiController]`), преобразование ошибок
+         приложения в коды состояния и ProblemDetails, заголовки кэширования, логирование и корреляция.
+      2. Бизнес-правила - в доменной модели и прикладном слое (обработчик сценария или сервис). Сценарий
+         возвращает результат или выбрасывает исключение приложения, которое на границе HTTP превращается в ответ.
+      3. Граница транзакции - внутри сценария: единица работы, один `SaveChanges` или явная транзакция внутри
+         стратегии выполнения. Если одно и то же нужно многим обработчикам, это декоратор вокруг обработчиков
+         в прикладном слое, не зависящий от MVC.
+      4. Контроллер только переводит запрос в команду, вызывает сценарий и переводит результат в ответ.
+
+      **Как закрепить:** обсудить с командой на конкретном сценарии с двумя точками входа (HTTP и очередь),
+      записать решение в ADR, добавить пункт в чек-лист code review, при желании - архитектурные тесты,
+      запрещающие доменному и прикладному слою ссылаться на `Microsoft.AspNetCore.Mvc`, и пересмотреть
+      существующие фильтры.
+    explanation: |
+      Конвейер фильтров нужен, чтобы оборачивать действия кодом, о котором само действие не обязано знать.
+      Документация приводит примеры сквозных задач: обработка ошибок, кэширование, конфигурация, авторизация,
+      логирование. Именно это свойство делает фильтры плохим местом для бизнес-правил: правило, о котором
+      сценарий «не знает», нельзя увидеть, переиспользовать и проверить вне HTTP.
+
+      Полезный вопрос для границы: «Это правило верно для любого вызывающего или только для HTTP?» Формат
+      поля и код ответа - забота HTTP. Кредитный лимит и атомарность создания заказа верны для любого входа,
+      поэтому живут там, где их получит каждый вход.
+
+      Решение уровня лида - не вопрос чистоты архитектуры. Для маленького CRUD-сервиса с одной точкой входа
+      цена фильтров ниже, и исключение можно оформить явно. Но правило по умолчанию задаётся так, чтобы
+      ошибка в нём не проявлялась тихо: пропущенная проверка или транзакция, которую нельзя повторить, видны
+      только в production. Описание соответствует ASP.NET Core и EF Core в .NET 10.
+    linkTitles:
+      - "Фильтры в ASP.NET Core"
+      - "Устойчивость подключений в EF Core"
+  en:
+    title: Should business validation and transactions live in MVC action filters to keep controllers thin?
+    prompt: |
+      The team proposes moving business validation (for example "an order total cannot exceed the customer's
+      credit limit") and database transaction handling (begin before the action, commit after it) into MVC
+      action filters, so that controllers stay thin. You are the tech lead. How do you make the decision, and
+      what rule do you set for the team? The context is ASP.NET Core in .NET 10.
+    hint: Imagine that tomorrow the same use case must be called from a message consumer or a background job. Which part of the logic would it lose?
+    answer: |
+      **Decision: accept the goal, reject the means.** Thin controllers are the right goal, but filters are
+      part of the MVC request pipeline, not of the application.
+
+      **Why business rules do not belong in filters**
+
+      - **Invisible.** The rule is attached by an attribute or a global registration. Reading the action or
+        the use case you do not see it, and the execution order depends on the scope (global, controller,
+        action) and the `Order` property. A forgotten attribute silently disables the check.
+      - **MVC only.** The filter pipeline runs only for controller actions (Razor Pages have their own page
+        filters). Minimal API endpoints use separate endpoint filters, and a message consumer, a hosted
+        service or a test that calls the use case directly gets no check. Rules end up duplicated or skipped.
+      - **Testability.** The rule can be checked only through the pipeline: with mocks of
+        `ActionExecutingContext` or integration tests, not with a plain unit test of the use case.
+      - **Weak typing.** A filter works with the `ActionArguments` dictionary and `IActionResult`, not with
+        the command type.
+
+      **Why the transaction should not be opened in an action filter**
+
+      - The transaction boundary matches the action, not the business operation: it stays open while the
+        action does anything, including external HTTP calls, and holds locks longer.
+      - The commit decision is based on `context.Exception` and the result type. An action that returns
+        `BadRequest` without an exception commits its changes unless the filter inspects the result, and HTTP
+        semantics start deciding data consistency.
+      - Result execution runs after the action filters: if the action returns a deferred query, the database
+        is hit after the commit and outside the transaction.
+      - The EF Core retrying execution strategy (`EnableRetryOnFailure`) requires an explicit transaction and
+        all its operations to be wrapped in `strategy.ExecuteAsync(...)` so the whole block can be retried. A
+        filter that opens a transaction and hands control to the action cannot retry the action.
+
+      **The rule for the team**
+
+      1. Filters and middleware are only for HTTP-level concerns: authorization, validating the shape of the
+         input with a 400 response (DataAnnotations and the automatic `[ApiController]` response), mapping
+         application errors to status codes and ProblemDetails, caching headers, logging and correlation.
+      2. Business rules live in the domain model and the application layer (a use-case handler or service).
+         The use case returns a result or throws an application exception, which the HTTP boundary turns into
+         a response.
+      3. The transaction boundary is inside the use case: a unit of work, a single `SaveChanges`, or an
+         explicit transaction inside the execution strategy. If many handlers need the same thing, use a
+         decorator around handlers in the application layer that does not depend on MVC.
+      4. The controller only maps the request to a command, calls the use case and maps the result to a
+         response.
+
+      **How to make it stick:** discuss it with the team on a concrete use case with two entry points (HTTP
+      and a queue), record the decision in an ADR, add an item to the code review checklist, optionally add
+      architecture tests that forbid the domain and application layers from referencing
+      `Microsoft.AspNetCore.Mvc`, and review the existing filters.
+    explanation: |
+      The filter pipeline exists to wrap actions with code the action does not need to know about. The
+      documentation gives examples of such cross-cutting concerns: error handling, caching, configuration,
+      authorization, logging. That very property makes filters a poor home for business rules: a rule the use
+      case "does not know" about cannot be seen, reused or tested outside HTTP.
+
+      A useful question for the boundary: "Is this rule true for any caller, or only for HTTP?" A field format
+      and a response code are HTTP concerns. A credit limit and the atomicity of creating an order hold for
+      every entry point, so they live where every entry point gets them.
+
+      A lead's decision is not about architectural purity. For a small CRUD service with a single entry point
+      filters cost less, and an exception can be made explicitly. But the default rule is set so that
+      mistakes do not fail silently: a skipped check or a transaction that cannot be retried shows up only in
+      production. The description matches ASP.NET Core and EF Core in .NET 10.
+    linkTitles:
+      - "Filters in ASP.NET Core"
+      - "Connection resiliency in EF Core"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

@@ -1,0 +1,133 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RKRVFG6P7G3HNRQV92
+slug: typefilter-vs-servicefilter-registration
+stack: dotnet
+topic: aspnet-core
+level: middle
+type: single
+grading: auto
+tags: [filters, dependency-injection, mvc]
+code:
+  language: csharp
+  harness: none
+  source: |
+    using Microsoft.AspNetCore.Mvc;
+    using Microsoft.AspNetCore.Mvc.Filters;
+    using Microsoft.Extensions.Logging;
+
+    public class AuditFilter : IActionFilter
+    {
+        private readonly ILogger<AuditFilter> _logger;
+
+        public AuditFilter(ILogger<AuditFilter> logger) => _logger = logger;
+
+        public void OnActionExecuting(ActionExecutingContext context) =>
+            _logger.LogInformation("Executing {Action}", context.ActionDescriptor.DisplayName);
+
+        public void OnActionExecuted(ActionExecutedContext context) { }
+    }
+
+    [ApiController]
+    [Route("api/orders")]
+    public class OrdersController : ControllerBase
+    {
+        // Program.cs calls builder.Services.AddControllers() only;
+        // AuditFilter itself is not registered in the DI container.
+        [HttpGet]
+        // Apply AuditFilter to this action here
+        public IActionResult Get() => Ok();
+    }
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/mvc/controllers/filters
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/microsoft.aspnetcore.mvc.typefilterattribute
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Каким атрибутом применить MVC-фильтр с зависимостями в конструкторе, не регистрируя его в DI?
+    prompt: |
+      Фильтр действий `AuditFilter` получает `ILogger<AuditFilter>` через конструктор. В `Program.cs` вызывается
+      только `builder.Services.AddControllers()`, сам тип `AuditFilter` в контейнере DI не зарегистрирован, и
+      регистрировать его команда не хочет. Как применить этот фильтр к действию `Get`, чтобы при запросе он
+      создавался и получал логгер?
+    hint: Чем отличается «взять готовый объект из контейнера» от «создать объект самому, взяв из контейнера только аргументы конструктора»?
+    options:
+      a: "`[TypeFilter(typeof(AuditFilter))]`"
+      b: "`[ServiceFilter(typeof(AuditFilter))]`"
+      c: "Унаследовать `AuditFilter` от `Attribute` и применить его напрямую как `[AuditFilter]`"
+      d: "`[ServiceFilter(typeof(AuditFilter), IsReusable = true)]`"
+    optionExplanations:
+      b: "`ServiceFilterAttribute` получает экземпляр фильтра из контейнера DI. Если тип не зарегистрирован, при запросе к действию будет `InvalidOperationException` с сообщением о том, что сервис этого типа не зарегистрирован."
+      c: "Аргументы конструктора атрибута задаются в месте применения атрибута и должны быть константами. DI не может подставить `ILogger<AuditFilter>`, поэтому `[AuditFilter]` без аргументов не скомпилируется."
+      d: "`IsReusable` лишь сообщает, что экземпляр можно переиспользовать между запросами. Сам экземпляр по-прежнему берётся из DI, поэтому без регистрации будет та же `InvalidOperationException`."
+    answer: "`[TypeFilter(typeof(AuditFilter))]`: этот атрибут создаёт фильтр сам, а из контейнера DI берёт только зависимости конструктора."
+    explanation: |
+      Фильтр, который сам является атрибутом, не может получать зависимости через конструктор: аргументы
+      конструктора атрибута указываются в месте его применения. Для фильтров с зависимостями есть два
+      атрибута-фабрики.
+
+      - `ServiceFilterAttribute` запрашивает экземпляр фильтра у контейнера DI. Тип фильтра должен быть
+        зарегистрирован, например `builder.Services.AddScoped<AuditFilter>()`, и тогда фильтр получает время жизни
+        этой регистрации. Без регистрации запрос к действию завершается `InvalidOperationException`.
+      - `TypeFilterAttribute` не разрешает сам тип фильтра из контейнера. Он создаёт экземпляр через
+        `ObjectFactory` (механизм `ActivatorUtilities`), а параметры конструктора берёт из DI. Регистрировать
+        `AuditFilter` не нужно. Через свойство `Arguments` можно передать дополнительные аргументы конструктора,
+        которых нет в контейнере.
+
+      Поэтому без регистрации подходит только `[TypeFilter(typeof(AuditFilter))]`. Описание соответствует
+      ASP.NET Core в .NET 10.
+    linkTitles:
+      - "Фильтры в ASP.NET Core"
+      - "Класс TypeFilterAttribute"
+  en:
+    title: Which attribute applies an MVC filter with constructor dependencies without registering it in DI?
+    prompt: |
+      The action filter `AuditFilter` takes `ILogger<AuditFilter>` through its constructor. `Program.cs` calls only
+      `builder.Services.AddControllers()`, the `AuditFilter` type itself is not registered in the DI container, and
+      the team does not want to register it. How do you apply this filter to the `Get` action so that on a
+      request it is created and receives the logger?
+    hint: How does "take a ready object from the container" differ from "create the object yourself and take only its constructor arguments from the container"?
+    options:
+      a: "`[TypeFilter(typeof(AuditFilter))]`"
+      b: "`[ServiceFilter(typeof(AuditFilter))]`"
+      c: "Derive `AuditFilter` from `Attribute` and apply it directly as `[AuditFilter]`"
+      d: "`[ServiceFilter(typeof(AuditFilter), IsReusable = true)]`"
+    optionExplanations:
+      b: "`ServiceFilterAttribute` gets the filter instance from the DI container. If the type is not registered, a request to the action fails with an `InvalidOperationException` saying that no service of this type has been registered."
+      c: "Attribute constructor arguments are given where the attribute is applied and must be constants. DI cannot supply `ILogger<AuditFilter>`, so `[AuditFilter]` without arguments does not compile."
+      d: "`IsReusable` only says that the instance may be reused across requests. The instance itself is still taken from DI, so without a registration you get the same `InvalidOperationException`."
+    answer: "`[TypeFilter(typeof(AuditFilter))]`: this attribute creates the filter itself and takes only the constructor dependencies from the DI container."
+    explanation: |
+      A filter that is itself an attribute cannot get dependencies through its constructor: attribute constructor
+      arguments are specified where the attribute is applied. For filters with dependencies there are two factory
+      attributes.
+
+      - `ServiceFilterAttribute` asks the DI container for the filter instance. The filter type must be registered,
+        for example `builder.Services.AddScoped<AuditFilter>()`, and the filter then gets the lifetime of that
+        registration. Without a registration a request to the action fails with `InvalidOperationException`.
+      - `TypeFilterAttribute` does not resolve the filter type itself from the container. It creates the instance
+        through an `ObjectFactory` (the `ActivatorUtilities` mechanism) and takes the constructor parameters from
+        DI. `AuditFilter` does not need to be registered. The `Arguments` property passes extra constructor
+        arguments that are not in the container.
+
+      So only `[TypeFilter(typeof(AuditFilter))]` works without a registration. The description matches
+      ASP.NET Core in .NET 10.
+    linkTitles:
+      - "Filters in ASP.NET Core"
+      - "TypeFilterAttribute class"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"
+  noRunReason: "ASP.NET Core MVC filter code: needs the ASP.NET Core shared framework and an HTTP request, which the console sandbox does not provide."

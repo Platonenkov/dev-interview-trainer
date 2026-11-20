@@ -1,0 +1,134 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RRE2HZC8CYABK08N5R
+slug: openapi-design-first-vs-code-first
+stack: dotnet
+topic: web-api
+level: lead
+type: open
+grading: self
+tags: [openapi, api-design, api-contracts, breaking-changes, ci]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/openapi/overview
+    lang: en
+    kind: docs
+  - url: https://spec.openapis.org/oas/v3.1.0.html
+    lang: en
+    kind: spec
+locales:
+  ru:
+    title: Как решить, писать ли контракт OpenAPI до кода (design-first) или генерировать его из кода ASP.NET Core (code-first)?
+    prompt: |
+      В компании несколько команд выпускают HTTP API на ASP.NET Core. Одни сначала пишут и согласуют документ
+      OpenAPI, а потом реализуют его (design-first). Другие пишут эндпоинты, а документ OpenAPI генерируется из
+      кода (code-first). Вам как техлиду нужно установить правило. По каким критериям вы выберете подход для
+      конкретного API и как в каждом случае не дать контракту и реализации разойтись?
+    hint: Кто узнаёт об изменении контракта и в какой момент - до реализации, на code review или когда у потребителя падает интеграция?
+    answer: |
+      - **Что на самом деле выбирается.** Что считается источником истины для контракта: документ OpenAPI, который
+        пишут и ревьюят до кода, или код ASP.NET Core, из которого документ генерируется. В обоих случаях контракт
+        должен оказаться версионируемым артефактом в репозитории; вопрос лишь в том, какая сторона следует за другой.
+      - **Design-first**, когда у API есть потребители вне команды: партнёры, публичный API, мобильные приложения,
+        другие команды; когда потребители разрабатывают параллельно, по мокам и сгенерированным клиентам; когда
+        контракт живёт годами и несовместимое изменение стоит дорого. Файл OpenAPI проходит pull request вместе с
+        потребителями до реализации, проверяется линтером на соответствие внутренним правилам API, а CI сравнивает
+        его с опубликованной версией и блокирует несовместимые изменения.
+      - **Code-first**, когда у API один потребитель, которым владеет та же команда (BFF для своего фронтенда,
+        внутренний сервис), контракт меняется вместе с кодом и важна скорость. В ASP.NET Core 9 и 10 документ строит
+        встроенный пакет `Microsoft.AspNetCore.OpenApi` (`AddOpenApi`, `MapOpenApi`) по эндпоинтам и их метаданным.
+      - **Защита code-first от дрейфа.** Генерировать документ при сборке (пакет
+        `Microsoft.Extensions.ApiDescription.Server`), хранить его в репозитории и ронять CI, если он изменился без
+        явного ревью или если diff с предыдущей версией содержит несовместимые изменения. Описывать ответы явно
+        (`TypedResults`, `Produces`, `ProducesResponseType`), чтобы документ был полным, и отдавать отдельные DTO, а не
+        сущности, чтобы рефакторинг не менял JSON незаметно.
+      - **Защита design-first от обратного дрейфа.** Реализацию тоже надо проверять по спецификации: генерировать из
+        неё серверные модели или интерфейсы, сравнивать в CI документ, сгенерированный из кода, с согласованным, или
+        валидировать реальные ответы в интеграционных тестах по схеме.
+      - **Правило для команд.** Подход задаётся по категории API (внешний, межкомандный, внутренний) и фиксируется в
+        ADR. Критерий - цена несовместимого изменения для потребителя, а не личные предпочтения. На практике часто
+        работает гибрид: прототип в code-first, затем сгенерированный документ замораживается как контракт, и любое
+        его изменение проходит ревью как изменение API.
+    explanation: |
+      Спецификация OpenAPI описывает стандартное, не зависящее от языка описание HTTP API, по которому люди и
+      инструменты понимают возможности сервиса без доступа к его исходному коду. Значит, контракт - это то, на что
+      опираются потребители, и главный вопрос - кто и как контролирует его изменения.
+
+      В code-first документ - побочный продукт кода. Переименовали свойство DTO, поменяли nullability, изменили
+      сериализацию enum или имя класса, от которого зависит имя схемы, - и контракт изменился без всякого
+      обсуждения. Потребители узнают об этом по упавшей интеграции. Code-first быстрее на старте и не требует умения
+      писать OpenAPI вручную, но без снимка контракта в репозитории и проверки diff в CI контракт дрейфует вслед за
+      деталями реализации.
+
+      Design-first переносит обсуждение на этап, когда изменения дешёвы, и делает контракт отдельным артефактом с
+      ревью: потребители соглашаются с ним до реализации, могут сразу строить клиенты и моки, а CI сравнивает версии
+      документа и ловит несовместимые изменения. Цена - медленнее старт, нужны навыки проектирования API и
+      инструменты, а также появляется второй артефакт, который реализация может перестать соблюдать, если её не
+      проверять по спецификации.
+
+      Описание опирается на ASP.NET Core 9 и 10: в .NET 10 встроенная генерация по умолчанию выдаёт документ
+      OpenAPI 3.1. Сильный ответ не объявляет один подход лучшим, а называет критерии выбора и механизмы, которые в
+      каждом случае не дают контракту и коду разойтись.
+    linkTitles:
+      - "Обзор поддержки OpenAPI в ASP.NET Core"
+      - "Спецификация OpenAPI 3.1.0"
+  en:
+    title: How do you decide between writing the OpenAPI contract first (design-first) and generating it from ASP.NET Core code (code-first)?
+    prompt: |
+      Several teams in the company ship HTTP APIs on ASP.NET Core. Some first write and agree on an OpenAPI
+      document and then implement it (design-first). Others write the endpoints and generate the OpenAPI document
+      from the code (code-first). As the tech lead you need to set a rule. By which criteria do you choose the
+      approach for a given API, and in each case how do you keep the contract and the implementation from
+      diverging?
+    hint: Who learns about a contract change, and when - before implementation, at code review, or when a consumer's integration breaks?
+    answer: |
+      - **What is really being chosen.** What counts as the source of truth for the contract: an OpenAPI document
+        written and reviewed before the code, or the ASP.NET Core code from which the document is generated. Either
+        way the contract must end up as a versioned artifact in the repository; the only question is which side
+        follows the other.
+      - **Design-first** when the API has consumers outside the team: partners, a public API, mobile apps, other
+        teams; when consumers build in parallel against mocks and generated clients; when the contract lives for
+        years and a breaking change is expensive. The OpenAPI file goes through a pull request with the consumers
+        before implementation, a linter checks it against the internal API rules, and CI compares it with the
+        published version and blocks breaking changes.
+      - **Code-first** when the API has a single consumer owned by the same team (a BFF for your own frontend, an
+        internal service), the contract changes together with the code, and speed matters. In ASP.NET Core 9 and 10
+        the built-in `Microsoft.AspNetCore.OpenApi` package (`AddOpenApi`, `MapOpenApi`) builds the document from
+        the endpoints and their metadata.
+      - **Guarding code-first against drift.** Generate the document at build time (the
+        `Microsoft.Extensions.ApiDescription.Server` package), keep it in the repository, and fail CI when it
+        changes without an explicit review or when the diff with the previous version contains breaking changes.
+        Describe responses explicitly (`TypedResults`, `Produces`, `ProducesResponseType`) so the document is
+        complete, and return dedicated DTOs rather than entities so a refactoring cannot change the JSON unnoticed.
+      - **Guarding design-first against the reverse drift.** The implementation must also be checked against the
+        specification: generate server models or interfaces from it, compare in CI the document generated from the
+        code with the agreed one, or validate real responses against the schema in integration tests.
+      - **The team rule.** The approach is set per API category (external, cross-team, internal) and recorded in
+        an ADR. The criterion is the cost of a breaking change for the consumer, not personal preference. In
+        practice a hybrid often works: prototype code-first, then freeze the generated document as the contract,
+        and review every change to it as an API change.
+    explanation: |
+      The OpenAPI Specification defines a standard, language-agnostic description of HTTP APIs that lets people
+      and tools understand what a service can do without access to its source code. So the contract is what
+      consumers rely on, and the main question is who controls its changes, and how.
+
+      In code-first the document is a by-product of the code. Rename a DTO property, change nullability, change how
+      an enum is serialized or rename the class a schema name comes from, and the contract has changed without any
+      discussion. Consumers find out from a broken integration. Code-first is faster to start and needs no skill in
+      writing OpenAPI by hand, but without a snapshot of the contract in the repository and a diff check in CI the
+      contract drifts along with implementation details.
+
+      Design-first moves the discussion to the stage where changes are cheap and makes the contract a separate,
+      reviewed artifact: consumers agree on it before implementation, can build clients and mocks right away, and
+      CI compares document versions and catches breaking changes. The cost is a slower start, the need for API
+      design skills and tooling, and a second artifact that the implementation can stop honouring if it is not
+      checked against the specification.
+
+      The description is based on ASP.NET Core 9 and 10: in .NET 10 the built-in generation produces an OpenAPI 3.1
+      document by default. A strong answer does not declare one approach better; it names the selection criteria
+      and the mechanisms that keep the contract and the code from diverging in each case.
+    linkTitles:
+      - "OpenAPI support in ASP.NET Core overview"
+      - "OpenAPI Specification 3.1.0"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

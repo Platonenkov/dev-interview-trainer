@@ -1,0 +1,101 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPCZWX37VWDKFKW2J5
+slug: sse-vs-websockets-direction-and-protocol
+stack: dotnet
+topic: grpc-realtime
+level: junior
+type: open
+grading: self
+tags: [server-sent-events, websockets, eventsource, http]
+links:
+  - url: https://html.spec.whatwg.org/multipage/server-sent-events.html
+    lang: en
+    kind: spec
+  - url: https://www.rfc-editor.org/rfc/rfc6455
+    lang: en
+    kind: spec
+locales:
+  ru:
+    title: Чем Server-Sent Events отличаются от WebSockets?
+    prompt: |
+      Сравните Server-Sent Events (SSE) и WebSockets по трём вопросам:
+
+      - в каком направлении идут сообщения;
+      - какой протокол лежит в основе соединения;
+      - что происходит, когда соединение обрывается.
+    hint: Что остаётся от HTTP после того, как соединение установлено, в каждом из двух случаев? И кто отвечает за восстановление оборванного соединения - браузер или ваш код?
+    answer: |
+      - **Направление.** SSE - односторонний поток от сервера к клиенту. Если клиенту нужно что-то отправить,
+        он делает отдельный обычный HTTP-запрос. WebSocket - полнодуплексный канал: обе стороны отправляют
+        сообщения по одному соединению в любой момент.
+      - **Протокол.** SSE - это обычный HTTP-ответ с `Content-Type: text/event-stream`, который сервер не
+        закрывает и дописывает по мере появления событий. Формат текстовый (UTF-8): строки `data:`, `event:`,
+        `id:`, `retry:`, событие завершается пустой строкой. WebSocket начинается с HTTP-рукопожатия
+        (`Upgrade: websocket`, ответ `101 Switching Protocols`), после чего соединение перестаёт быть HTTP и
+        несёт кадры своего протокола, текстовые и двоичные.
+      - **Переподключение.** Браузерный `EventSource` переподключается сам после обрыва и отправляет заголовок
+        `Last-Event-ID` с последним полученным `id`, так что сервер может продолжить поток с нужного места;
+        задержку можно задать полем `retry:`. У WebSocket встроенного переподключения нет: обрыв нужно
+        обнаружить и восстановить соединение в коде приложения (или взять библиотеку, например клиент SignalR
+        с `WithAutomaticReconnect`).
+    explanation: |
+      Главное различие в том, насколько каждая технология остаётся HTTP. SSE не вводит нового протокола:
+      это долгий HTTP-ответ, поэтому он проходит через прокси, балансировщики и аутентификацию так же, как
+      любой другой запрос, и работает поверх HTTP/1.1 и HTTP/2. Цена - только одно направление и только текст.
+
+      WebSocket использует HTTP лишь для рукопожатия, а дальше работает по собственному протоколу кадров из
+      RFC 6455. Это даёт двустороннюю связь с низкими накладными расходами и двоичные сообщения, но
+      инфраструктура должна пропускать `Upgrade`, а надёжность соединения - забота приложения.
+
+      Отсюда простое правило выбора: если сервер только сообщает клиенту о событиях (уведомления, прогресс,
+      котировки), SSE обычно достаточно и он проще. Если клиент и сервер активно обмениваются сообщениями
+      (чат, совместное редактирование, игры), нужен WebSocket. Сервер может запретить `EventSource`
+      переподключаться, ответив `204 No Content`. В ASP.NET Core в .NET 10 есть встроенная поддержка SSE
+      в minimal API через `TypedResults.ServerSentEvents`, а для WebSockets - middleware `UseWebSockets`.
+    linkTitles:
+      - "HTML Living Standard: Server-sent events"
+      - "RFC 6455: протокол WebSocket"
+  en:
+    title: How do Server-Sent Events differ from WebSockets?
+    prompt: |
+      Compare Server-Sent Events (SSE) and WebSockets on three points:
+
+      - in which direction messages flow;
+      - which protocol the connection is based on;
+      - what happens when the connection drops.
+    hint: In each case, what is left of HTTP once the connection is established? And who is responsible for restoring a dropped connection - the browser or your code?
+    answer: |
+      - **Direction.** SSE is a one-way stream from the server to the client. If the client needs to send
+        something, it makes a separate ordinary HTTP request. A WebSocket is a full-duplex channel: both sides
+        send messages over one connection at any time.
+      - **Protocol.** SSE is an ordinary HTTP response with `Content-Type: text/event-stream` that the server
+        keeps open and appends to as events occur. The format is text (UTF-8): `data:`, `event:`, `id:` and
+        `retry:` lines, and an event ends with a blank line. A WebSocket starts with an HTTP handshake
+        (`Upgrade: websocket`, response `101 Switching Protocols`), after which the connection stops being HTTP
+        and carries frames of its own protocol, text and binary.
+      - **Reconnection.** The browser `EventSource` reconnects by itself after a drop and sends a
+        `Last-Event-ID` header with the last `id` it received, so the server can resume the stream from the
+        right place; the delay can be set with the `retry:` field. WebSocket has no built-in reconnection: the
+        application code must detect the drop and reconnect (or use a library such as the SignalR client with
+        `WithAutomaticReconnect`).
+    explanation: |
+      The key difference is how much of each technology remains HTTP. SSE introduces no new protocol: it is a
+      long HTTP response, so it passes through proxies, load balancers and authentication like any other
+      request and works over HTTP/1.1 and HTTP/2. The price is one direction only and text only.
+
+      A WebSocket uses HTTP only for the handshake and then runs its own framing protocol from RFC 6455. That
+      gives two-way communication with low overhead and binary messages, but the infrastructure must pass
+      `Upgrade` through, and keeping the connection alive is the application's job.
+
+      This gives a simple rule of thumb: if the server only tells the client about events (notifications,
+      progress, prices), SSE is usually enough and simpler. If client and server actively exchange messages
+      (chat, collaborative editing, games), you need a WebSocket. A server can stop `EventSource` from
+      reconnecting by answering `204 No Content`. In ASP.NET Core on .NET 10, minimal APIs support SSE out of
+      the box through `TypedResults.ServerSentEvents`, and WebSockets are handled by the `UseWebSockets` middleware.
+    linkTitles:
+      - "HTML Living Standard: Server-sent events"
+      - "RFC 6455: The WebSocket Protocol"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

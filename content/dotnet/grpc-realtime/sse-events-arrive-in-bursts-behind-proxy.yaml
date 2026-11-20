@@ -1,0 +1,114 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPNBYFN6ZS3DD7PXEN
+slug: sse-events-arrive-in-bursts-behind-proxy
+stack: dotnet
+topic: grpc-realtime
+level: senior
+type: situation
+grading: self
+tags: [server-sent-events, reverse-proxy, buffering, response-compression, nginx]
+links:
+  - url: https://html.spec.whatwg.org/multipage/server-sent-events.html
+    lang: en
+    kind: spec
+  - url: https://learn.microsoft.com/en-us/aspnet/core/performance/response-compression
+    lang: en
+    kind: docs
+  - url: https://nginx.org/en/docs/http/ngx_http_proxy_module.html
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: SSE-поток с прогрессом за обратным прокси приходит пачками или целиком в конце
+    prompt: |
+      Сервис на ASP.NET Core (.NET 10) отдаёт ход долгой операции через Server-Sent Events: эндпоинт с
+      `Content-Type: text/event-stream` раз в секунду пишет событие `data: ...`, а браузер слушает его через
+      `EventSource`. Локально, при прямом обращении к Kestrel, события приходят по одному и вовремя.
+
+      В production сервис стоит за обратным прокси (nginx). Там клиенты получают события большими пачками
+      раз в несколько десятков секунд или все сразу, когда операция уже закончилась. Кроме того, поток иногда
+      обрывается, если операция долго не присылает новых событий.
+
+      Что вы проверите и что измените?
+    hint: Где ещё, кроме самого приложения, ответ может накапливаться по пути к браузеру, и почему посредник считает это нормальным?
+    answer: |
+      1. **Локализовать место задержки.** Подключиться к потоку через `curl -N` (без буферизации на стороне curl) сначала напрямую к экземпляру приложения, затем через прокси, и сравнить время прихода событий. Посмотреть заголовки ответа: есть ли `Content-Encoding` (gzip, br), не появился ли `Content-Length`, что с `Transfer-Encoding` и `Cache-Control`. Если напрямую события идут ровно, а через прокси пачками, данные копит посредник.
+      2. **Отключить буферизацию прокси для SSE-маршрута.** nginx по умолчанию буферизует ответ upstream (`proxy_buffering on`) и отдаёт его клиенту, когда заполнится буфер или закончится ответ: мелкие события как раз и приходят пачками размером с буфер или целиком в конце. Для маршрута SSE задать `proxy_buffering off` в его `location` или отправлять из приложения заголовок ответа `X-Accel-Buffering: no`, который выключает буферизацию только для этого ответа. Обычно там же задают `proxy_http_version 1.1`. У других прокси, балансировщиков и CDN ищется аналогичная настройка.
+      3. **Исключить поток из сжатия на всех звеньях.** Компрессор gzip или Brotli копит входные данные, пока не наберёт блок, и тоже превращает поток в пачки. `text/event-stream` не должен сжиматься: проверить `ResponseCompressionOptions.MimeTypes` в ASP.NET Core (по умолчанию этого типа там нет, но список часто расширяют), `gzip_types` в nginx, динамическое сжатие IIS, настройки CDN. В итоге у SSE-ответа не должно быть `Content-Encoding`. Мелкие текстовые события всё равно сжимаются плохо, так что потеря невелика.
+      4. **Проверить само приложение.** После каждого события вызывать `await Response.Body.FlushAsync(cancellationToken)`, не задавать `Content-Length`, отправлять `Cache-Control: no-cache`, завершать цикл по `HttpContext.RequestAborted`. При необходимости явно выключить буферизацию ответа через `IHttpResponseBodyFeature.DisableBuffering()`. В .NET 10 вместо ручной записи можно вернуть `TypedResults.ServerSentEvents(...)` из `IAsyncEnumerable`, и форматирование событий возьмёт на себя фреймворк.
+      5. **Защититься от тайм-аутов простоя.** Прокси закрывает соединение, если upstream долго молчит (в nginx это `proxy_read_timeout`). Во время пауз отправлять строку-комментарий, например `: ping` и пустую строку, раз в 15 секунд или около того, а тайм-аут чтения на прокси сделать заметно больше этого интервала.
+      6. **Закрепить.** Проверять SSE на стенде с той же цепочкой прокси, что и в production, добавить синтетическую проверку, которая измеряет задержку между отправкой события и его получением через прокси, и описать настройки SSE-маршрута в конфигурации инфраструктуры рядом с кодом.
+    explanation: |
+      Поток SSE - это обычный HTTP-ответ, который просто долго не заканчивается. Протокол работает, только если
+      каждое звено между приложением и браузером пропускает байты дальше сразу. Посредники же по умолчанию
+      оптимизируют пропускную способность, а не задержку: буфер прокси быстро забирает ответ у приложения и
+      освобождает upstream, а сжатие выгоднее большими блоками. Для обычной страницы это правильно, для
+      потока событий это и есть симптом: события приходят пачками размером с буфер или блок компрессора, а
+      если буфер не заполняется, то все сразу в конце ответа. Локально посредников нет, поэтому всё работает.
+
+      Спецификация HTML прямо предупреждает об этом в заметках для авторов: прокси могут рвать соединения по
+      короткому тайм-ауту, поэтому рекомендуется отправлять строку-комментарий (начинается с `:`) примерно раз в
+      15 секунд. `EventSource` комментарии игнорирует, а прокси видит активность.
+
+      Компромиссы:
+
+      - Буферизацию стоит отключать только для SSE-маршрута, а не для всего сервера: для обычных ответов она
+        защищает приложение от медленных клиентов.
+      - Flush после каждого события решает проблему только внутри приложения. Если посредник буферизует или
+        сжимает, никакой flush в коде не поможет, поэтому диагностика начинается со сравнения прямого
+        подключения и подключения через прокси.
+      - Каждый открытый поток держит соединение на прокси и в приложении, поэтому нужно учитывать лимиты
+        соединений и тайм-ауты на всех звеньях.
+    linkTitles:
+      - "Server-Sent Events (HTML Living Standard)"
+      - "Сжатие ответов в ASP.NET Core"
+      - "Модуль nginx ngx_http_proxy_module"
+  en:
+    title: An SSE progress feed behind a reverse proxy arrives in bursts or all at once at the end
+    prompt: |
+      An ASP.NET Core (.NET 10) service reports the progress of a long operation through Server-Sent Events:
+      an endpoint with `Content-Type: text/event-stream` writes a `data: ...` event once a second, and the
+      browser listens with `EventSource`. Locally, talking to Kestrel directly, events arrive one by one and on time.
+
+      In production the service sits behind a reverse proxy (nginx). There clients receive events in large
+      bursts every few dozen seconds, or all at once after the operation has finished. On top of that, the
+      stream sometimes breaks when the operation sends no new events for a while.
+
+      What do you check and what do you change?
+    hint: Where else, apart from the app itself, can the response pile up on its way to the browser, and why does the intermediary consider that normal?
+    answer: |
+      1. **Find where the delay happens.** Connect to the stream with `curl -N` (no buffering on the curl side), first directly to an app instance and then through the proxy, and compare when the events arrive. Look at the response headers: is there a `Content-Encoding` (gzip, br), did a `Content-Length` appear, what about `Transfer-Encoding` and `Cache-Control`. If events flow evenly directly but in bursts through the proxy, an intermediary is holding the data.
+      2. **Turn off proxy buffering for the SSE route.** By default nginx buffers the upstream response (`proxy_buffering on`) and passes it to the client when a buffer fills or the response ends: that is exactly why small events arrive in buffer-sized bursts or all at once at the end. For the SSE route set `proxy_buffering off` in its `location`, or send the `X-Accel-Buffering: no` response header from the app, which disables buffering for that response only. `proxy_http_version 1.1` is usually set there too. Other proxies, load balancers and CDNs have an equivalent setting.
+      3. **Exclude the stream from compression at every hop.** A gzip or Brotli compressor accumulates input until it has a block, which also turns the stream into bursts. `text/event-stream` must not be compressed: check `ResponseCompressionOptions.MimeTypes` in ASP.NET Core (the type is not there by default, but the list is often extended), `gzip_types` in nginx, IIS dynamic compression and CDN settings. In the end the SSE response must have no `Content-Encoding`. Small text events compress poorly anyway, so little is lost.
+      4. **Check the app itself.** Call `await Response.Body.FlushAsync(cancellationToken)` after every event, do not set `Content-Length`, send `Cache-Control: no-cache`, and stop the loop on `HttpContext.RequestAborted`. If needed, turn off response buffering explicitly with `IHttpResponseBodyFeature.DisableBuffering()`. In .NET 10, instead of writing by hand you can return `TypedResults.ServerSentEvents(...)` over an `IAsyncEnumerable`, and the framework formats the events.
+      5. **Guard against idle timeouts.** A proxy closes the connection when the upstream stays silent for too long (in nginx this is `proxy_read_timeout`). During pauses send a comment line such as `: ping` followed by a blank line every 15 seconds or so, and make the proxy read timeout clearly longer than that interval.
+      6. **Lock it in.** Test SSE on an environment with the same proxy chain as production, add a synthetic check that measures the delay between sending an event and receiving it through the proxy, and keep the SSE route settings in the infrastructure configuration next to the code.
+    explanation: |
+      An SSE stream is an ordinary HTTP response that simply takes a long time to finish. The protocol works only
+      if every hop between the app and the browser passes bytes on immediately. Intermediaries, however, optimise
+      for throughput, not latency, by default: a proxy buffer quickly drains the response from the app and frees
+      the upstream, and compression pays off on large blocks. That is right for an ordinary page, and for an event
+      stream it is exactly the symptom: events arrive in bursts the size of a buffer or a compressor block, and if
+      the buffer never fills, all at once when the response ends. Locally there are no intermediaries, so everything works.
+
+      The HTML specification warns about this in its authoring notes: proxies may drop connections after a short
+      timeout, so it recommends sending a comment line (starting with `:`) about every 15 seconds. `EventSource`
+      ignores comments, while the proxy sees activity.
+
+      Trade-offs:
+
+      - Turn off buffering only for the SSE route, not for the whole server: for ordinary responses it protects
+        the app from slow clients.
+      - Flushing after every event fixes the problem only inside the app. If an intermediary buffers or
+        compresses, no flush in code helps, which is why diagnosis starts by comparing a direct connection with
+        one through the proxy.
+      - Every open stream holds a connection on the proxy and in the app, so connection limits and timeouts must
+        be accounted for at every hop.
+    linkTitles:
+      - "Server-Sent Events (HTML Living Standard)"
+      - "Response compression in ASP.NET Core"
+      - "nginx ngx_http_proxy_module"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

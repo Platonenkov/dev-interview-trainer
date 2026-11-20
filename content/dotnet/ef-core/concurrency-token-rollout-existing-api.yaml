@@ -1,0 +1,182 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPP6V300GEHSD4N694
+slug: concurrency-token-rollout-existing-api
+stack: dotnet
+topic: ef-core
+level: lead
+type: open
+grading: self
+tags: [ef-core, concurrency-tokens, optimistic-concurrency, etag, api-contract]
+links:
+  - url: https://learn.microsoft.com/en-us/ef/core/saving/concurrency
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/ef/core/saving/execute-insert-update-delete
+    lang: en
+    kind: docs
+  - url: https://www.rfc-editor.org/rfc/rfc9110.html#section-13.1.1
+    lang: en
+    kind: spec
+  - url: https://www.rfc-editor.org/rfc/rfc9110.html#section-15.5.10
+    lang: en
+    kind: spec
+  - url: https://www.rfc-editor.org/rfc/rfc6585
+    lang: en
+    kind: spec
+locales:
+  ru:
+    title: Как внедрить токены параллелизма в существующий API, которым пользуются несколько команд-клиентов?
+    prompt: |
+      Ваша команда отвечает за API на ASP.NET Core и EF Core 10. В нём десятки сущностей, которые меняются
+      через PUT, PATCH и DELETE, а вызывают его несколько команд-клиентов: веб, мобильное приложение,
+      интеграции партнёров. После инцидентов с потерянными обновлениями решено ввести оптимистичную
+      блокировку через токены параллелизма.
+
+      Как вы проведёте это внедрение, не сломав клиентов, и о чём договоритесь с командами-клиентами?
+    hint: "С каким значением токена EF Core сравнивает строку в базе, если каждый запрос API получает новый DbContext?"
+    answer: |
+      **Почему одной миграции мало.** В веб-API у каждого запроса свой `DbContext`. Если сервер загружает
+      сущность и применяет изменения в том же запросе, EF Core берёт исходным значением токен, который только
+      что прочитал, и проверка покрывает лишь короткий промежуток между этим чтением и `SaveChanges`.
+      Потерянное обновление возникает между GET и PUT клиента, и обнаружить его можно только по значению
+      токена, которое клиент прочитал и прислал обратно. Поэтому внедрение - это изменение контракта API,
+      а не только миграция.
+
+      **План.**
+
+      1. **Инвентаризация и приоритеты.** Список сущностей, изменяющих их эндпоинтов (PUT, PATCH, DELETE) и
+         команд, которые их вызывают. Начинать с сущностей, где потерянное обновление дорого (деньги, остатки,
+         статусы), а не со всех десятков сразу.
+      2. **Модель и миграция.** Одно соглашение для всех сущностей: на SQL Server столбец `rowversion` через
+         `[Timestamp]` или `IsRowVersion()`, который база меняет при каждом обновлении; на провайдерах без
+         такого типа - токен, управляемый приложением (`[ConcurrencyCheck]` или `IsConcurrencyToken()`), которому
+         код присваивает новое значение при каждом сохранении, например в переопределении `SaveChanges`.
+         Миграцию проверить на таблицах production-размера: заполнение столбца для существующих строк может
+         занять время и держать блокировки.
+      3. **Единая обработка конфликта.** `DbUpdateConcurrencyException` в одном месте (обработчик исключений или
+         фильтр) превращается в согласованный ответ: `412 Precondition Failed`, если токен пришёл в `If-Match`,
+         `409 Conflict`, если он пришёл полем в теле, с телом problem details. Если часть клиентов не умеет
+         обрабатывать 412, команды могут договориться об одном коде 409 для всех конфликтов: важнее, чтобы ответ
+         был одинаковым и описан в контракте. Клиент не должен слепо повторять такой запрос: перечитать ресурс,
+         слить изменения или показать конфликт пользователю.
+      4. **Публикация токена без поломок.** GET отдаёт заголовок `ETag` для отдельного ресурса и поле `version`
+         в теле (нужно для списков и для клиентов, которым неудобно читать заголовки). `rowversion` - это
+         `byte[]`, его кодируют в Base64. Новое поле в ответе - добавляющее изменение, но клиентов со строгой
+         десериализацией стоит проверить заранее.
+      5. **Необязательный токен на переходный период.** Если запрос принёс токен, сервер записывает его в
+         исходное значение: `db.Entry(entity).Property(e => e.Version).OriginalValue = clientVersion`, и EF Core
+         добавляет его в `WHERE` команд `UPDATE` и `DELETE`. Если токена нет, сервер сохраняет старое поведение
+         (берёт значение, только что прочитанное из базы, то есть последняя запись побеждает) и пишет метрику и
+         лог с идентификатором клиента. Опасное место - код, который собирает сущность из DTO и вызывает
+         `Update` или `Attach` без загрузки: без токена исходное значение пустое, `WHERE` не находит строку, и
+         каждое обновление падает с конфликтом. Такие эндпоинты должны читать текущий токен из базы, если
+         клиент его не прислал.
+      6. **Договорённость с командами-клиентами.** Описанный контракт (OpenAPI, changelog), пример обработки
+         конфликта, обновлённый SDK, если он есть, тестовая среда, где конфликт легко воспроизвести, и дата,
+         после которой токен станет обязательным.
+      7. **Включение строгого режима.** Когда метрика показывает, что клиент везде присылает токен, строгий режим
+         включается по эндпоинтам: запрос без токена получает `428 Precondition Required`. Клиенты, которые не
+         успевают, остаются на старой версии API с объявленным сроком поддержки.
+      8. **Страховка от регресса.** Интеграционные тесты с двумя конкурирующими обновлениями для каждой сущности,
+         правило code review, что новый изменяющий эндпоинт принимает токен, и напоминание, что
+         `ExecuteUpdate`, `ExecuteDelete` и сырой SQL токен сами не проверяют: условие по токену добавляют в
+         `Where` и проверяют число затронутых строк.
+    explanation: |
+      Оптимистичная блокировка в EF Core устроена как `UPDATE ... WHERE Id = @id AND Version = @original`: если
+      затронуто ноль строк, `SaveChanges` выбрасывает `DbUpdateConcurrencyException`. Защита ровно настолько
+      хороша, насколько правильно значение `@original`. В приложении с долгоживущим контекстом это то, что видел
+      пользователь, а в API без состояния это значение должно уйти клиенту и вернуться от него. Поэтому основная
+      работа лида - контракт и координация: настройка модели занимает несколько строк, а семантика API меняется
+      для каждого клиента.
+
+      Переходный период с необязательным токеном и метрикой позволяет обойтись без одновременного релиза всех
+      команд: сервер готов первым, клиенты переходят в своём темпе, а строгость включается тогда, когда данные
+      показывают, что от старого поведения никто не зависит. Коды ответов следуют семантике HTTP: по RFC 9110
+      ложное условие `If-Match` даёт 412, конфликт с текущим состоянием ресурса - это 409, а по RFC 6585 код 428
+      означает, что сервер требует условный запрос именно ради защиты от потерянных обновлений. Массовые
+      `ExecuteUpdate` и `ExecuteDelete` работают мимо трекера изменений, поэтому проверку токена в них пишут
+      вручную. Ответ описан для EF Core 10.
+    linkTitles:
+      - "Обработка конфликтов параллелизма в EF Core"
+      - "ExecuteUpdate и ExecuteDelete в EF Core"
+      - "RFC 9110: заголовок If-Match"
+      - "RFC 9110: код состояния 409 Conflict"
+      - "RFC 6585: дополнительные коды состояния HTTP"
+  en:
+    title: How do you roll out concurrency tokens across an existing API used by several client teams?
+    prompt: |
+      Your team owns an API on ASP.NET Core and EF Core 10. It has dozens of entities that are changed through
+      PUT, PATCH and DELETE, and several client teams call it: web, mobile, partner integrations. After
+      incidents with lost updates, the decision is to introduce optimistic concurrency with concurrency tokens.
+
+      How do you roll this out without breaking the clients, and what do you agree on with the client teams?
+    hint: "Which token value does EF Core compare the database row with when every API request gets a new DbContext?"
+    answer: |
+      **Why a migration alone is not enough.** In a web API every request has its own `DbContext`. If the server
+      loads the entity and applies the changes in the same request, EF Core uses the token it has just read as
+      the original value, and the check covers only the short window between that read and `SaveChanges`. A
+      lost update happens between the client's GET and its PUT, and it can be detected only by the token value
+      the client read and sends back. So the rollout is a change of the API contract, not just a migration.
+
+      **Plan.**
+
+      1. **Inventory and priorities.** List the entities, the endpoints that change them (PUT, PATCH, DELETE) and
+         the teams that call them. Start with entities where a lost update is costly (money, stock, statuses),
+         not with all dozens at once.
+      2. **Model and migration.** One convention for all entities: on SQL Server a `rowversion` column via
+         `[Timestamp]` or `IsRowVersion()`, which the database changes on every update; on providers without such
+         a type, an application-managed token (`[ConcurrencyCheck]` or `IsConcurrencyToken()`) that the code sets
+         to a new value on every save, for example in a `SaveChanges` override. Test the migration on
+         production-size tables: filling the column for existing rows can take time and hold locks.
+      3. **One way to handle a conflict.** `DbUpdateConcurrencyException` is turned into an agreed response in
+         one place (an exception handler or a filter): `412 Precondition Failed` when the token came in
+         `If-Match`, `409 Conflict` when it came as a body field, with a problem details body. If some clients
+         cannot handle 412, the teams may agree on a single 409 for every conflict: what matters is that the
+         response is consistent and documented in the contract. The client must not retry such a request
+         blindly: it re-reads the resource, merges the changes or shows the conflict to the user.
+      4. **Publish the token without breaking anyone.** GET returns an `ETag` header for a single resource and a
+         `version` field in the body (needed for lists and for clients that cannot easily read headers).
+         `rowversion` is a `byte[]`, so encode it as Base64. A new response field is an additive change, but check
+         clients with strict deserialization in advance.
+      5. **Optional token during a transition period.** If the request carries a token, the server writes it to
+         the original value: `db.Entry(entity).Property(e => e.Version).OriginalValue = clientVersion`, and EF Core
+         adds it to the `WHERE` of the `UPDATE` and `DELETE` commands. If there is no token, the server keeps the
+         old behavior (it uses the value just read from the database, so the last write wins) and records a
+         metric and a log entry with the client id. The dangerous spot is code that builds an entity from a DTO
+         and calls `Update` or `Attach` without loading it: without a token the original value is empty, the
+         `WHERE` matches no row, and every update fails with a conflict. Such endpoints must read the current
+         token from the database when the client did not send one.
+      6. **Agreement with the client teams.** A documented contract (OpenAPI, changelog), an example of handling
+         a conflict, an updated SDK if there is one, a test environment where a conflict is easy to reproduce,
+         and a date after which the token becomes mandatory.
+      7. **Turn on strict mode.** When the metric shows that a client sends the token everywhere, strict mode is
+         turned on per endpoint: a request without a token gets `428 Precondition Required`. Clients that cannot
+         make it in time stay on the old API version with an announced end of support.
+      8. **Guard against regressions.** Integration tests with two competing updates for every entity, a code
+         review rule that a new mutating endpoint accepts the token, and a reminder that `ExecuteUpdate`,
+         `ExecuteDelete` and raw SQL do not check the token by themselves: add the token condition to `Where` and
+         check the number of affected rows.
+    explanation: |
+      Optimistic concurrency in EF Core works as `UPDATE ... WHERE Id = @id AND Version = @original`: if zero
+      rows are affected, `SaveChanges` throws `DbUpdateConcurrencyException`. The protection is only as good as
+      the `@original` value. In an application with a long-lived context it is what the user saw, while in a
+      stateless API that value has to travel to the client and back. So most of the lead's work is the contract
+      and the coordination: configuring the model takes a few lines, but the API semantics change for every client.
+
+      A transition period with an optional token and a metric avoids a release where all teams must ship at
+      once: the server is ready first, the clients move at their own pace, and strictness is turned on when data
+      shows that nobody depends on the old behavior. The status codes follow HTTP semantics: per RFC 9110 a false
+      `If-Match` condition gives 412 and a conflict with the current state of the resource is 409, and per
+      RFC 6585 the 428 code means the server requires a conditional request precisely to prevent lost updates.
+      Bulk `ExecuteUpdate` and `ExecuteDelete` bypass the change tracker, so the token check in them is written
+      by hand. The answer describes EF Core 10.
+    linkTitles:
+      - "Handling concurrency conflicts in EF Core"
+      - "ExecuteUpdate and ExecuteDelete in EF Core"
+      - "RFC 9110: the If-Match header"
+      - "RFC 9110: the 409 Conflict status code"
+      - "RFC 6585: additional HTTP status codes"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

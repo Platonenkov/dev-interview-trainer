@@ -1,0 +1,153 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RN0EP64F5HBPJJHN77
+slug: filtered-index-parameterized-predicate
+stack: dotnet
+topic: databases
+level: middle
+type: open
+grading: self
+tags: [sql-server, indexes, filtered-index, parameterization, ef-core]
+code:
+  language: sql
+  harness: none
+  source: |
+    CREATE NONCLUSTERED INDEX IX_Orders_Open
+        ON dbo.Orders (CreatedAt)
+        INCLUDE (CustomerId)
+        WHERE Status = 'Open';
+
+    -- Query 1: the status is a literal
+    SELECT CustomerId, CreatedAt
+    FROM dbo.Orders
+    WHERE Status = 'Open' AND CreatedAt >= '2024-01-01';
+
+    -- Query 2: the status is a parameter
+    SELECT CustomerId, CreatedAt
+    FROM dbo.Orders
+    WHERE Status = @status AND CreatedAt >= @from;
+links:
+  - url: https://learn.microsoft.com/en-us/sql/relational-databases/indexes/create-filtered-indexes
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/sql/t-sql/queries/hints-transact-sql-query
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/ef/core/modeling/indexes
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Когда помогает фильтрованный индекс и почему параметризованный запрос может его не использовать?
+    prompt: |
+      В SQL Server у таблицы `dbo.Orders` есть фильтрованный индекс `IX_Orders_Open` из кода. Открытых заказов
+      мало, закрытых - миллионы. В каких случаях такой индекс полезен? Почему первый запрос может его
+      использовать, а второй, где статус передаётся параметром `@status`, обычно нет, даже если при вызове
+      `@status = 'Open'`? Как это исправить?
+    hint: Кэшированный план должен давать верный результат при любом значении параметра. Что это требует от индекса, в котором есть только часть строк?
+    answer: |
+      - **Когда помогает.** Запросы постоянно читают небольшую чётко очерченную часть строк: открытые заказы
+        среди миллионов закрытых, строки `WHERE DeletedAt IS NULL`, разреженный столбец, где почти все значения
+        `NULL`. Индекс содержит только эти строки, поэтому он меньше и быстрее читается, изменения строк, не
+        попадающих под фильтр, его не затрагивают, а статистика индекса построена только по этим строкам и
+        точнее. Уникальный фильтрованный индекс задаёт уникальность только среди подходящих строк, например
+        среди значений, отличных от `NULL`.
+      - **Условие использования.** Чтобы запрос выиграл от фильтрованного индекса, его условие должно быть
+        подмножеством фильтра индекса, и оптимизатор должен убедиться в этом при компиляции.
+        `WHERE Status = 'Open' AND CreatedAt >= ...` подходит.
+        `WHERE Status IN ('Open', 'Pending')` - нет: часть таких строк лежит вне индекса.
+      - **Почему параметр мешает.** План второго запроса кэшируется и переиспользуется для любых значений
+        `@status`. План, читающий только `IX_Orders_Open`, был бы верен лишь при `'Open'`, а для `'Closed'`
+        вернул бы пустой, то есть неверный, результат. Поэтому оптимизатор не сопоставляет такой запрос с
+        фильтрованным индексом, какое бы значение ни пришло при компиляции: это вопрос корректности плана, а
+        не его стоимости, и подглядывание параметров (parameter sniffing) здесь не помогает. В XML такого плана
+        может появиться предупреждение `UnmatchedIndexes`.
+      - **Как исправить.**
+        - Писать литерал, если значение фильтра в запросе фиксировано. В EF Core константа в LINQ-выражении
+          (`o.Status == "Open"`) попадает в SQL литералом, а значение из переменной - параметром; явно
+          запросить литерал можно через `EF.Constant`.
+        - `OPTION (RECOMPILE)`: оператор компилируется под значения текущего выполнения, и план не сохраняется
+          для повторного использования, поэтому значение параметра можно считать известной константой и
+          сопоставить с фильтром. Цена - компиляция при каждом выполнении.
+        - Отдельная ветка для значения из фильтра: `IF @status = 'Open'` и внутри запрос с литералом `'Open'`.
+    explanation: |
+      Фильтрованный индекс - это индекс не по всей таблице, а по подмножеству строк, заданному условием `WHERE`
+      в определении индекса. Поэтому его можно использовать, только если ответ на запрос целиком содержится в
+      этом подмножестве. Оптимизатор проверяет это сравнением предикатов при компиляции: условие запроса должно
+      логически влечь условие фильтра. Литерал `'Open'` такую проверку проходит, а параметр - нет: его значение
+      может меняться от вызова к вызову, а кэшированный план обязан возвращать верный результат при любом.
+
+      Отсюда важное следствие для приложений на .NET: ORM и ADO.NET почти всегда передают значения
+      параметрами, и это правильно для безопасности и переиспользования планов. Поэтому фильтрованный индекс
+      проектируют под запросы, где значение фильтра - неизменная часть бизнес-логики ("открытые", "не
+      удалённые"), и пишут это значение в запросе литералом. Склеивать в текст SQL значения, пришедшие от
+      пользователя, ради такого индекса нельзя.
+
+      Есть и ограничения самого индекса: фильтр поддерживает только простые операторы сравнения столбцов с
+      константами, объединённые через `AND`, и `IN`; функции, `LIKE` и `OR` в нём не допускаются. Если нужна
+      сложная логика или несколько таблиц, используют представление. Кроме того, при неверных параметрах `SET`
+      (например, `ANSI_NULLS` или `QUOTED_IDENTIFIER` выключены) изменение данных в таблице с фильтрованным
+      индексом завершается ошибкой. В EF Core фильтр задаётся через `HasFilter` при настройке индекса.
+    linkTitles:
+      - "Создание фильтрованных индексов"
+      - "Подсказки запросов (Transact-SQL)"
+      - "Индексы в EF Core"
+  en:
+    title: When does a filtered index help, and why might a parameterized query not use it?
+    prompt: |
+      In SQL Server, the `dbo.Orders` table has the filtered index `IX_Orders_Open` shown in the code. There are
+      few open orders and millions of closed ones. When is such an index useful? Why can the first query use it,
+      while the second one, where the status is passed as the parameter `@status`, usually does not, even when
+      the call passes `@status = 'Open'`? How do you fix it?
+    hint: The cached plan has to return a correct result for every value of the parameter. What does that require of an index that holds only some of the rows?
+    answer: |
+      - **When it helps.** Queries keep reading a small, well-defined part of the rows: open orders among
+        millions of closed ones, rows `WHERE DeletedAt IS NULL`, a sparse column where almost all values are
+        `NULL`. The index contains only those rows, so it is smaller and faster to read, changes to rows outside
+        the filter do not touch it, and its statistics are built only from those rows and are more accurate. A
+        unique filtered index enforces uniqueness only among the matching rows, for example among non-`NULL`
+        values.
+      - **Condition for use.** To benefit from a filtered index, the query condition must be a subset of the
+        index filter, and the optimizer must be able to establish this at compile time.
+        `WHERE Status = 'Open' AND CreatedAt >= ...` qualifies.
+        `WHERE Status IN ('Open', 'Pending')` does not: some of those rows lie outside the index.
+      - **Why the parameter gets in the way.** The plan of the second query is cached and reused for any value
+        of `@status`. A plan that reads only `IX_Orders_Open` would be correct only for `'Open'`, and for
+        `'Closed'` it would return an empty, that is wrong, result. So the optimizer does not match such a query
+        to the filtered index, whatever value is present at compile time: it is a question of plan correctness,
+        not cost, and parameter sniffing does not help here. The XML of such a plan can contain an
+        `UnmatchedIndexes` warning.
+      - **How to fix it.**
+        - Write a literal when the filter value of the query is fixed. In EF Core a constant in the LINQ
+          expression (`o.Status == "Open"`) goes into SQL as a literal, while a value from a variable becomes a
+          parameter; you can request a literal explicitly with `EF.Constant`.
+        - `OPTION (RECOMPILE)`: the statement is compiled for the values of the current execution and the plan
+          is not kept for reuse, so the parameter value can be treated as a known constant and matched against
+          the filter. The price is a compilation on every execution.
+        - A separate branch for the filter value: `IF @status = 'Open'` with a query that uses the literal
+          `'Open'` inside it.
+    explanation: |
+      A filtered index covers not the whole table but the subset of rows defined by the `WHERE` condition in
+      the index definition. That is why it can be used only when the answer to the query is entirely inside this
+      subset. The optimizer checks this by comparing predicates at compile time: the query condition must
+      logically imply the filter condition. The literal `'Open'` passes this check and a parameter does not: its
+      value can change from call to call, and a cached plan must return a correct result for any of them.
+
+      This has an important consequence for .NET applications: ORMs and ADO.NET almost always send values as
+      parameters, which is right for security and plan reuse. So a filtered index is designed for queries where
+      the filter value is a fixed part of the business logic ("open", "not deleted"), and that value is written
+      into the query as a literal. Concatenating user-supplied values into SQL text for the sake of such an
+      index is not acceptable.
+
+      The index itself has limits too: the filter supports only simple comparison operators between columns and
+      constants, combined with `AND`, and `IN`; functions, `LIKE` and `OR` are not allowed in it. For complex
+      logic or several tables you use a view instead. Also, with wrong `SET` options (for example `ANSI_NULLS`
+      or `QUOTED_IDENTIFIER` turned off), data modifications on a table with a filtered index fail with an
+      error. In EF Core the filter is set with `HasFilter` when you configure the index.
+    linkTitles:
+      - "Create filtered indexes"
+      - "Query hints (Transact-SQL)"
+      - "Indexes in EF Core"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  noRunReason: "The snippet is T-SQL and needs a SQL Server database, while the sandbox runs only C#."

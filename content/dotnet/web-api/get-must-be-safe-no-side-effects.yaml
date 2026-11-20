@@ -1,0 +1,119 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RR87YTZG4H62KW22RW
+slug: get-must-be-safe-no-side-effects
+stack: dotnet
+topic: web-api
+level: middle
+type: open
+grading: self
+tags: [http, rest, safe-methods, get, csrf]
+links:
+  - url: https://www.rfc-editor.org/rfc/rfc9110
+    lang: en
+    kind: spec
+  - url: https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/aspnet/core/security/anti-request-forgery
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему опасен эндпоинт GET /orders/42/cancel, даже если вызвать его может только вошедший пользователь?
+    prompt: |
+      В веб-приложении кнопка «Отменить заказ» сделана обычной ссылкой, которая ведёт на `GET /orders/42/cancel`.
+      Эндпоинт требует входа в систему и отменяет заказ текущего пользователя. Коллега считает, что раз
+      анонимно его вызвать нельзя, то и проблемы нет.
+
+      Почему такой эндпоинт опасен и как его следует спроектировать?
+    hint: Что HTTP обещает про метод `GET` и кто, кроме самого пользователя, полагается на это обещание?
+    answer: |
+      - **`GET` - безопасный метод.** По RFC 9110 клиент, отправляя `GET`, не запрашивает и не ожидает изменения
+        состояния на сервере. На этом обещании построена вся инфраструктура HTTP, поэтому `GET` отправляют без
+        намерения пользователя что-либо менять.
+      - **Кто вызовет его случайно.** Браузер при предзагрузке ссылок и предварительной отрисовке страниц,
+        расширения и защитное ПО, которые заранее открывают ссылки, а также сам пользователь: обновление страницы,
+        кнопка «Назад» и восстановление вкладок повторяют `GET` без предупреждения, тогда как для `POST` браузер
+        спрашивает о повторной отправке формы. Клиенты, прокси и политики повторов считают `GET` безопасным
+        для автоматического повтора после обрыва соединения.
+      - **Почему вход не спасает.** Запрос уходит из браузера самого пользователя вместе с его cookie, то есть это
+        CSRF. Достаточно ссылки или перенаправления на чужом сайте: это навигация верхнего уровня методом `GET`, а
+        cookie с `SameSite=Lax` при ней отправляются. При `SameSite=None` хватит даже тега `<img>` с этим адресом.
+        Антифорджери-токены в ASP.NET Core проверяются только для небезопасных методов, так что `GET` эту защиту
+        обходит.
+      - **Побочные проблемы.** Ответ на `GET` может быть закэширован, и запрос не дойдёт до сервера. Адрес
+        действия остаётся в истории браузера, в логах прокси и в заголовке `Referer`.
+      - **Как правильно.** Изменение состояния - только небезопасным методом: `POST /orders/42/cancellation`
+        (или `POST /orders/42/cancel`), либо `PATCH` статуса заказа. В интерфейсе это кнопка формы или
+        `fetch`, а не ссылка. При аутентификации через cookie - антифорджери-токен. Саму отмену стоит сделать
+        идемпотентной: повторная отмена уже отменённого заказа возвращает тот же результат и ничего не делает.
+    explanation: |
+      RFC 9110 называет методы `GET`, `HEAD`, `OPTIONS` и `TRACE` безопасными: их семантика по сути только для
+      чтения. Цель этого различия RFC формулирует прямо: чтобы автоматические обходчики и оптимизации вроде
+      предзагрузки могли работать, не боясь причинить вред. Сервер технически может выполнить в обработчике
+      `GET` что угодно, но клиент такого действия не запрашивал и не отвечает за него. RFC отдельно оговаривает,
+      что если параметры URI выбирают действие (например, `page?do=delete`) и это действие небезопасное,
+      владелец ресурса обязан запретить его при обращении безопасным методом.
+
+      Аутентификация отвечает на вопрос «кто», но не на вопрос «хотел ли он этого». Анонимный поисковый робот
+      действительно получит `401`, но браузер вошедшего пользователя, его расширения и чужие страницы, которые он
+      открыл, действуют от его имени. Защита от CSRF (`SameSite`, антифорджери-токены) рассчитана на то, что
+      изменения идут через небезопасные методы, поэтому `GET` с побочным эффектом выпадает из неё.
+
+      Сильный ответ называет нарушенный контракт безопасного метода, перечисляет непреднамеренные источники
+      запросов, объясняет, почему вход не защищает от CSRF, и предлагает перенести действие на `POST` или
+      `PATCH` с антифорджери-защитой.
+    linkTitles:
+      - "RFC 9110: семантика HTTP (безопасные методы)"
+      - "OWASP: шпаргалка по защите от CSRF"
+      - "Защита от атак CSRF в ASP.NET Core"
+  en:
+    title: Why is an endpoint like GET /orders/42/cancel dangerous even if only logged-in users can call it?
+    prompt: |
+      In a web application the "Cancel order" button is a plain link that points to `GET /orders/42/cancel`.
+      The endpoint requires a signed-in user and cancels the current user's order. A colleague argues that since
+      it cannot be called anonymously, there is no problem.
+
+      Why is such an endpoint dangerous, and how should it be designed?
+    hint: What does HTTP promise about the `GET` method, and who besides the user relies on that promise?
+    answer: |
+      - **`GET` is a safe method.** Under RFC 9110 a client sending `GET` does not request and does not expect any
+        state change on the server. The whole HTTP infrastructure is built on this promise, so `GET` requests are
+        sent without the user meaning to change anything.
+      - **Who triggers it by accident.** The browser when it prefetches links or prerenders pages, extensions and
+        security software that open links ahead of time, and the user themselves: reload, the Back button and
+        restored tabs repeat a `GET` without a warning, while for `POST` the browser asks before resubmitting a
+        form. Clients, proxies and retry policies treat `GET` as safe to retry automatically after a connection drop.
+      - **Why signing in does not help.** The request leaves the user's own browser with the user's cookies, which
+        is CSRF. A link or a redirect on another site is enough: it is a top-level navigation with `GET`, and
+        cookies with `SameSite=Lax` are sent on it. With `SameSite=None` even an `<img>` tag with that address is
+        enough. Antiforgery tokens in ASP.NET Core are validated only for unsafe methods, so a `GET` bypasses them.
+      - **Side problems.** A `GET` response can be cached, so the request may never reach the server. The action
+        URL stays in the browser history, in proxy logs and in the `Referer` header.
+      - **The right design.** Change state only with an unsafe method: `POST /orders/42/cancellation` (or
+        `POST /orders/42/cancel`), or a `PATCH` of the order status. In the UI that is a form button or a
+        `fetch` call, not a link. With cookie authentication add an antiforgery token. Make the cancellation
+        itself idempotent: cancelling an already cancelled order returns the same result and does nothing.
+    explanation: |
+      RFC 9110 calls `GET`, `HEAD`, `OPTIONS` and `TRACE` safe: their semantics are essentially read-only. The RFC
+      states the purpose of the distinction directly: to let automated retrieval (spiders) and optimizations such
+      as prefetching work without fear of causing harm. A server can technically do anything in a `GET` handler,
+      but the client did not request that action and cannot be held accountable for it. The RFC also says that if
+      parameters in the URI select an action (for example `page?do=delete`) and that action is unsafe, the
+      resource owner must disable it when it is accessed with a safe method.
+
+      Authentication answers "who", not "did they mean it". An anonymous crawler will indeed get `401`, but the
+      signed-in user's browser, its extensions and foreign pages the user opens all act on the user's behalf.
+      CSRF defences (`SameSite`, antiforgery tokens) assume that changes go through unsafe methods, so a `GET`
+      with a side effect falls outside them.
+
+      A strong answer names the broken contract of a safe method, lists the unintended sources of requests,
+      explains why signing in does not protect against CSRF, and moves the action to `POST` or `PATCH` with
+      antiforgery protection.
+    linkTitles:
+      - "RFC 9110: HTTP Semantics (safe methods)"
+      - "OWASP Cross-Site Request Forgery Prevention Cheat Sheet"
+      - "Prevent Cross-Site Request Forgery (XSRF/CSRF) attacks in ASP.NET Core"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

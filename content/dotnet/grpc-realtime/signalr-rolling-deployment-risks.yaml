@@ -1,0 +1,140 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RP5MP9C65FTFM8Y9KZ
+slug: signalr-rolling-deployment-risks
+stack: dotnet
+topic: grpc-realtime
+level: lead
+type: multi
+grading: auto
+tags: [signalr, rolling-deployment, reconnect, versioning]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+  - id: e
+    correct: true
+  - id: f
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/signalr/javascript-client
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/signalr/groups
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/signalr/api-design
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/signalr/scale
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какие риски нужно учесть, прежде чем выкатывать приложение с SignalR поэтапно (rolling deployment)?
+    prompt: |
+      Команда хочет перевести приложение с хабом ASP.NET Core SignalR (.NET 10) с выкладки "остановили всё -
+      запустили всё" на поэтапную выкладку (rolling deployment): экземпляры с новой версией заменяют старые
+      по одному. Клиенты - браузерные страницы с JavaScript-клиентом SignalR.
+      Выберите все риски, которые действительно нужно учесть в плане перехода.
+    hint: Что хранится только в памяти экземпляра, который останавливают, и какая версия клиентского кода работает в уже открытой вкладке браузера во время выкладки?
+    options:
+      a: "Соединения с останавливаемым экземпляром закрываются. Клиенты без автоматического переподключения остаются отключёнными, а переподключившиеся клиенты пропустили сообщения за время разрыва и должны заново загрузить актуальное состояние."
+      b: "SignalR прозрачно переносит активные соединения с останавливаемого экземпляра на работающий, клиенту не нужно переподключаться."
+      c: "Членство в группах не сохраняется при переподключении, поэтому сервер должен снова добавить соединение в его группы, например в `OnConnectedAsync` по данным, которые хранит сам."
+      d: "Достаточно sticky sessions: балансировщик держит каждого клиента на его экземпляре, поэтому во время выкладки соединения не рвутся."
+      e: "Открытые вкладки браузера продолжают выполнять старый клиентский код во время и после выкладки, поэтому переименование метода хаба или добавление в него параметра ломает такие клиенты."
+      f: "Добавление нового метода хаба на сервере ломает всех клиентов, загруженных до релиза."
+    optionExplanations:
+      b: "Соединение, его состояние и группы живут в памяти процесса, который его принял. Когда процесс останавливается, соединение закрывается, и клиент должен установить новое соединение с другим экземпляром."
+      d: "Sticky sessions лишь направляют запросы соединения на один экземпляр. Остановку этого экземпляра они не отменяют: при его замене соединения всё равно закрываются, и клиенты переходят на другие экземпляры."
+      f: "Добавление метода - совместимое изменение: старые клиенты о нём не знают и просто его не вызывают, а существующие методы продолжают работать."
+    answer: "Верны варианты про разрыв соединений и обновление состояния, про восстановление групп после переподключения и про несовместимое изменение методов хаба для клиентов со старым кодом."
+    explanation: |
+      При поэтапной выкладке экземпляры останавливаются по одному, а соединения SignalR и группы живут в памяти
+      процесса. Поэтому каждая замена экземпляра - это разрыв всех его соединений, и некоторое время
+      одновременно работают старая и новая версии сервера и клиента. Отсюда три группы рисков.
+
+      - **Разрыв соединений.** JavaScript-клиент переподключается сам, только если настроен
+        `withAutomaticReconnect()`. По умолчанию он делает попытки через 0, 2, 10 и 30 секунд и после
+        неудачи четвёртой переходит в состояние `Disconnected` и вызывает `onclose`. Для сервера переподключение
+        выглядит как новое соединение с новым идентификатором. По умолчанию сообщения, отправленные за время
+        разрыва, повторно не доставляются. Stateful reconnect (начиная с .NET 8) умеет буферизовать и
+        досылать сообщения при коротком обрыве, но буфер хранится в памяти экземпляра и не переживает его
+        остановку. Поэтому в `onreconnected` клиент должен запросить актуальное состояние. Сотни клиентов
+        с одинаковыми задержками переподключаются одной волной, поэтому стоит задать свою политику через
+        `nextRetryDelayInMilliseconds` со случайным разбросом и обработать `onclose`, когда попытки кончились.
+      - **Группы и состояние соединения.** Членство в группах не сохраняется при переподключении и не
+        переживает перезапуск сервера. Сервер должен восстановить группы сам, например в `OnConnectedAsync`
+        по данным пользователя из базы, а не рассчитывать на память старого экземпляра.
+      - **Совместимость контракта хаба.** Вкладка, открытая до релиза, держит старый клиентский код и
+        подключится к новому серверу. Переименование метода или добавление параметра - несовместимое
+        изменение: старый клиент получит ошибку при вызове. Безопасный путь - добавить новый метод рядом со
+        старым, удалить старый только когда старых клиентов не осталось, а в новых методах передавать один
+        объект-параметр, в который можно добавлять свойства без поломки.
+
+      Sticky sessions нужны, чтобы все запросы одного соединения попадали на один экземпляр, но от разрыва
+      при остановке этого экземпляра они не защищают.
+    linkTitles:
+      - "JavaScript-клиент ASP.NET Core SignalR"
+      - "Пользователи и группы в SignalR"
+      - "Рекомендации по проектированию API SignalR"
+      - "Размещение и масштабирование ASP.NET Core SignalR"
+  en:
+    title: Which risks must you plan for before moving a SignalR app to rolling deployments?
+    prompt: |
+      A team wants to move an app with an ASP.NET Core SignalR (.NET 10) hub from "stop everything, start
+      everything" releases to rolling deployments: instances with the new version replace the old ones one
+      at a time. The clients are browser pages with the SignalR JavaScript client.
+      Select all risks that the migration plan really has to cover.
+    hint: What lives only in the memory of the instance being stopped, and which version of the client code runs in a browser tab that is already open during the rollout?
+    options:
+      a: "Connections to an instance that is being stopped are closed. Clients without automatic reconnect stay disconnected, and clients that reconnect have missed the messages sent during the gap and must reload the current state."
+      b: "SignalR transparently moves active connections from a stopping instance to a running one, so the client does not need to reconnect."
+      c: "Group membership is not kept when a connection reconnects, so the server must add the connection to its groups again, for example in `OnConnectedAsync` from data it stores itself."
+      d: "Sticky sessions are enough: the load balancer keeps each client on its instance, so connections are not dropped during the rollout."
+      e: "Open browser tabs keep running the old client code during and after the rollout, so renaming a hub method or adding a parameter to it breaks those clients."
+      f: "Adding a new hub method on the server breaks every client that was loaded before the release."
+    optionExplanations:
+      b: "A connection, its state and its groups live in the memory of the process that accepted it. When that process stops, the connection is closed, and the client has to establish a new connection to another instance."
+      d: "Sticky sessions only route the requests of a connection to one instance. They do not prevent that instance from being stopped: when it is replaced, its connections are closed anyway and the clients move to other instances."
+      f: "Adding a method is a compatible change: old clients do not know about it and simply never call it, while the existing methods keep working."
+    answer: "The correct options are the ones about dropped connections and state refresh, about restoring groups after a reconnect, and about incompatible hub method changes for clients running old code."
+    explanation: |
+      In a rolling deployment instances stop one at a time, and SignalR connections and groups live in process
+      memory. So every instance replacement drops all of its connections, and for a while the old and new
+      versions of both server and client run side by side. That gives three groups of risks.
+
+      - **Dropped connections.** The JavaScript client reconnects by itself only if `withAutomaticReconnect()`
+        is configured. By default it retries after 0, 2, 10 and 30 seconds, and when the fourth attempt fails
+        it moves to the `Disconnected` state and fires `onclose`. To the server a reconnect looks like a new
+        connection with a new id. By default messages sent during the gap are not delivered again. Stateful
+        reconnect (since .NET 8) can buffer and resend messages across a brief drop, but the buffer lives in
+        the memory of the instance and does not survive that instance stopping. So in `onreconnected` the
+        client must fetch the current state. Hundreds of clients with identical delays reconnect in one wave,
+        so it is worth setting your own policy through `nextRetryDelayInMilliseconds` with random jitter, and
+        handling `onclose` for when the attempts run out.
+      - **Groups and connection state.** Group membership is not kept when a connection reconnects and does
+        not survive a server restart. The server must restore groups itself, for example in `OnConnectedAsync`
+        from the user's data in a database, instead of relying on the memory of the old instance.
+      - **Hub contract compatibility.** A tab opened before the release keeps the old client code and will
+        connect to the new server. Renaming a method or adding a parameter is a breaking change: the old
+        client gets an error when it invokes the method. The safe path is to add the new method next to the
+        old one, remove the old one only when no old clients remain, and give new methods a single object
+        parameter so that properties can be added without breaking anyone.
+
+      Sticky sessions are needed so that all requests of one connection reach the same instance, but they do
+      not protect against the drop when that instance is stopped.
+    linkTitles:
+      - "ASP.NET Core SignalR JavaScript client"
+      - "Manage users and groups in SignalR"
+      - "SignalR API design considerations"
+      - "ASP.NET Core SignalR hosting and scaling"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

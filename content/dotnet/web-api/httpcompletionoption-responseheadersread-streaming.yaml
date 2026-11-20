@@ -1,0 +1,117 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RRTBWKGGHGP74P8EK7
+slug: httpcompletionoption-responseheadersread-streaming
+stack: dotnet
+topic: web-api
+level: senior
+type: single
+grading: auto
+tags: [httpclient, streaming, memory, httpcompletionoption]
+code:
+  language: csharp
+  harness: none
+  source: |
+    public async Task DownloadAsync(string url, string path, CancellationToken ct)
+    {
+        using HttpResponseMessage response = await _client.GetAsync(url, ct);
+        response.EnsureSuccessStatusCode();
+        await using Stream body = await response.Content.ReadAsStreamAsync(ct);
+        await using FileStream file = File.Create(path);
+        await body.CopyToAsync(file, ct);
+    }
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: false
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.net.http.httpcompletionoption
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.net.http.httpclient.maxresponsecontentbuffersize
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему скачивание большого файла через HttpClient занимает память размером с файл?
+    prompt: |
+      Сервис на .NET 10 скачивает файлы размером в сотни мегабайт методом ниже; `_client` - общий долгоживущий
+      `HttpClient`. Хотя тело ответа читается через `ReadAsStreamAsync` и копируется в файл потоком, во время
+      каждой загрузки память процесса растёт примерно на размер файла. Какое изменение это исправляет?
+    hint: В какой момент завершается задача, которую возвращает `GetAsync`, если не передать ему дополнительных параметров?
+    options:
+      a: "Заменить `ReadAsStreamAsync` на `ReadAsByteArrayAsync` и записать массив в файл через `File.WriteAllBytesAsync`."
+      b: "Уменьшить `_client.MaxResponseContentBufferSize`, чтобы ответ не занимал в памяти больше заданного размера."
+      c: "Вызывать `_client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct)`, а копирование потока в файл и освобождение ответа оставить как есть."
+      d: "Перед чтением вызвать `await response.Content.LoadIntoBufferAsync()`, чтобы содержимое читалось заранее одним блоком."
+      e: "Создавать для каждой загрузки отдельный `HttpClient` и освобождать его после копирования."
+    optionExplanations:
+      a: "Массив байтов по определению держит всё содержимое в памяти, а `GetAsync` по-прежнему целиком буферизует ответ. Память растёт как минимум на размер файла."
+      b: "Лимит не включает потоковую передачу: `GetAsync` всё равно буферизует тело, а если оно больше лимита, запрос завершится исключением вместо загрузки файла."
+      d: "`LoadIntoBufferAsync` как раз и читает всё тело в память. Именно это `GetAsync` уже делает по умолчанию."
+      e: "Буферизация зависит от `HttpCompletionOption`, а не от экземпляра клиента. Память растёт так же, а клиент на каждую загрузку ещё и мешает переиспользовать соединения."
+    answer: "Передать в `GetAsync` значение `HttpCompletionOption.ResponseHeadersRead`, читать тело потоком и освобождать ответ."
+    explanation: |
+      По умолчанию `GetAsync` использует `HttpCompletionOption.ResponseContentRead`: задача завершается только
+      после того, как прочитан весь ответ вместе с содержимым. Тело при этом складывается в буфер в памяти, и
+      `ReadAsStreamAsync` возвращает поток уже поверх этого буфера. Копирование в файл выглядит потоковым, но
+      к этому моменту весь файл уже лежит в памяти. Размер буфера ограничен `MaxResponseContentBufferSize`,
+      по умолчанию 2 ГБ.
+
+      С `ResponseHeadersRead` задача завершается сразу после чтения заголовков, а `ReadAsStreamAsync` отдаёт
+      поток, который читает данные прямо из соединения по мере работы `CopyToAsync`. В памяти держится только
+      буфер копирования. Цена - ответственность за освобождение: пока `HttpResponseMessage` не освобождён,
+      соединение занято и не возвращается в пул, поэтому `using` на ответе обязателен.
+
+      `HttpClient.GetStreamAsync` тоже не буферизует тело, но возвращает только поток, без доступа к
+      заголовкам ответа.
+    linkTitles:
+      - "Перечисление HttpCompletionOption"
+      - "Свойство HttpClient.MaxResponseContentBufferSize"
+  en:
+    title: Why does downloading a large file with HttpClient take memory the size of the file?
+    prompt: |
+      A .NET 10 service downloads files of hundreds of megabytes with the method below; `_client` is a shared
+      long-lived `HttpClient`. Although the response body is read with `ReadAsStreamAsync` and copied to the file
+      as a stream, process memory grows by roughly the file size during every download. Which change fixes it?
+    hint: At what point does the task returned by `GetAsync` complete when you pass it no extra arguments?
+    options:
+      a: "Replace `ReadAsStreamAsync` with `ReadAsByteArrayAsync` and write the array to the file with `File.WriteAllBytesAsync`."
+      b: "Lower `_client.MaxResponseContentBufferSize` so that the response cannot take more memory than that size."
+      c: "Call `_client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct)` and keep the stream copy and the response disposal as they are."
+      d: "Call `await response.Content.LoadIntoBufferAsync()` before reading, so that the content is read ahead in one block."
+      e: "Create a separate `HttpClient` for every download and dispose it after the copy."
+    optionExplanations:
+      a: "A byte array by definition holds the whole content in memory, and `GetAsync` still buffers the whole response. Memory grows by at least the file size."
+      b: "The limit does not enable streaming: `GetAsync` still buffers the body, and if the body is larger than the limit the request fails with an exception instead of downloading the file."
+      d: "`LoadIntoBufferAsync` is exactly what reads the whole body into memory. `GetAsync` already does this by default."
+      e: "Buffering depends on `HttpCompletionOption`, not on the client instance. Memory grows the same way, and a client per download also prevents connection reuse."
+    answer: "Pass `HttpCompletionOption.ResponseHeadersRead` to `GetAsync`, read the body as a stream and dispose the response."
+    explanation: |
+      By default `GetAsync` uses `HttpCompletionOption.ResponseContentRead`: the task completes only after the
+      whole response, including the content, has been read. The body is collected into an in-memory buffer, and
+      `ReadAsStreamAsync` returns a stream over that buffer. The copy to the file looks like streaming, but by
+      then the whole file is already in memory. The buffer size is limited by `MaxResponseContentBufferSize`,
+      2 GB by default.
+
+      With `ResponseHeadersRead` the task completes as soon as the headers are read, and `ReadAsStreamAsync`
+      returns a stream that reads data straight from the connection while `CopyToAsync` runs. Only the copy
+      buffer stays in memory. The price is responsibility for disposal: until the `HttpResponseMessage` is
+      disposed, the connection is busy and does not return to the pool, so `using` on the response is required.
+
+      `HttpClient.GetStreamAsync` does not buffer the body either, but it returns only the stream, without
+      access to the response headers.
+    linkTitles:
+      - "HttpCompletionOption enum"
+      - "HttpClient.MaxResponseContentBufferSize property"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"
+  noRunReason: The snippet downloads a file over the network and is a method fragment that relies on a `_client` field; the sandbox has no network.

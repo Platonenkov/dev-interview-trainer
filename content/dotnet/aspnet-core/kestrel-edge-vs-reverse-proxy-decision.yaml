@@ -1,0 +1,208 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RK72SETJPATQVFR5A5
+slug: kestrel-edge-vs-reverse-proxy-decision
+stack: dotnet
+topic: aspnet-core
+level: lead
+type: open
+grading: self
+tags: [kestrel, reverse-proxy, hosting, forwarded-headers, tls, host-filtering]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/servers/kestrel/when-to-use-a-reverse-proxy
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/servers/kestrel
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/proxy-load-balancer
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Открывать Kestrel напрямую в интернет или ставить перед ним обратный прокси - как принять решение?
+    prompt: |
+      Команда спорит о публикации нового сервиса на ASP.NET Core (.NET 10). Одни предлагают открыть Kestrel
+      напрямую в интернет: "меньше звеньев - меньше проблем". Другие настаивают на обратном прокси (Nginx, YARP,
+      облачный балансировщик) перед приложением: "так все делают".
+
+      Вы технический лид. По каким критериям вы примете решение, какие риски есть у каждого варианта и что
+      зафиксируете для команды, чтобы выбранный вариант был настроен правильно?
+    hint: Начните не с вопроса "нужен ли прокси вообще", а с вопроса, какую конкретную задачу он решает в вашем окружении и кто будет его сопровождать.
+    answer: |
+      **Отправная точка.** Kestrel поддерживается как edge-сервер, то есть может принимать трафик из интернета
+      без прокси: он умеет HTTPS, HTTP/2 и HTTP/3 и имеет защитные лимиты (`KestrelServerLimits`: число
+      соединений, размер тела запроса, минимальная скорость передачи данных, тайм-аут заголовков). Обратный
+      прокси не обязателен, поэтому его добавляют под конкретные потребности, а не по привычке.
+
+      **Когда прокси оправдан**
+
+      - **Несколько приложений на одном IP и порту.** Kestrel не умеет делить один IP и порт между
+        процессами: слушающий порт процесс получает весь трафик этого порта независимо от заголовка `Host`.
+        Прокси принимает трафик на 443 и раздаёт его приложениям на внутренних адресах.
+      - **Централизованный TLS.** Сертификат публичного домена нужен только прокси, продление и смена
+        сертификатов делаются в одном месте, а до приложений трафик идёт по внутренней сети (HTTP или HTTPS;
+        внутренний HTTPS безопаснее, но заметно дороже).
+      - **Балансировка нагрузки** между экземплярами, проверки работоспособности, blue-green и canary-выкатки.
+      - **Эшелонированная защита.** Меньше открытая поверхность приложений, дополнительный слой фильтрации
+        запросов, WAF, ограничение частоты запросов и защита от DDoS до того, как запрос дойдёт до приложения.
+        Прокси обновляется независимо от релизов приложения.
+      - **Существующая инфраструктура.** В Kubernetes или в облаке перед сервисом обычно уже стоит ingress
+        или балансировщик, и тогда вопрос не "ставить ли прокси", а "как правильно с ним интегрироваться".
+
+      **Когда Kestrel на краю допустим:** одно приложение на хост или VM, простой контур без балансировки,
+      команда готова сама управлять сертификатами. Условия: HTTPS-эндпоинты с сертификатом, фильтрация хостов
+      (`AllowedHosts`), осознанно выставленные лимиты Kestrel, rate limiting middleware, запуск не от root
+      (на Linux порты ниже 1024 требуют привилегий) и регулярное обновление .NET: исправления безопасности
+      Kestrel приходят вместе с runtime и требуют пересборки или перевыкатки приложения.
+
+      **Цена прокси**
+
+      - **Ещё один компонент:** его надо обновлять, мониторить, резервировать; лишний сетевой переход и
+        ещё одно место для ошибки конфигурации.
+      - **Пересылаемые заголовки.** За прокси приложение видит IP прокси и схему `http`. Нужен
+        `UseForwardedHeaders` с `ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto`, вызванный
+        до аутентификации, `UseHttpsRedirection` и HSTS, и список доверенных прокси: `KnownProxies` для
+        конкретных адресов, `KnownIPNetworks` для подсетей, если адрес прокси меняется (например, в
+        Kubernetes). По умолчанию доверяется только loopback. В контейнерах часто включают middleware
+        переменной `ASPNETCORE_FORWARDEDHEADERS_ENABLED=true`: она снимает это ограничение и доверяет
+        заголовкам от любого источника, поэтому её можно использовать, только если приложение недоступно
+        в обход прокси. Без настройки - неверный IP клиента в логах и лимитах, бесконечные редиректы на
+        HTTPS, ссылки с `http` в адресах возврата OAuth. С доверием всем подряд - подделка
+        `X-Forwarded-For` клиентом.
+      - **Фильтрация хостов остаётся обязательной.** Прокси не снимает её: в конфигурации с обратным
+        прокси документация прямо требует фильтрацию хостов. Настройте `AllowedHosts`, а если приложение
+        доверяет `X-Forwarded-Host`, ещё и `ForwardedHeadersOptions.AllowedHosts`, иначе клиент может
+        подставить чужое имя хоста в генерируемые ссылки.
+      - **Согласованность параметров:** лимиты размера тела, тайм-ауты, поддержка WebSockets и HTTP/2 до
+        приложения (для gRPC) должны совпадать на прокси и в Kestrel.
+      - **Обход прокси.** Kestrel должен слушать только внутреннюю сеть, иначе все защиты прокси можно обойти.
+
+      **Что делает лид**
+
+      1. Собирает требования: число приложений на хост, где завершается TLS, нужна ли балансировка и WAF,
+         что уже есть в инфраструктуре, кто будет владельцем прокси (команда или платформенная команда).
+      2. Фиксирует решение и причины в ADR, включая условия, при которых его пересматривают.
+      3. Делает правильную настройку стандартом: шаблон сервиса с `AllowedHosts` и лимитами Kestrel в обоих
+         вариантах; для варианта с прокси - плюс `UseForwardedHeaders` с `KnownProxies` или `KnownIPNetworks`,
+         для варианта без прокси - плюс HTTPS-эндпоинты и rate limiting. Добавляет проверку в тестовом
+         окружении, что логи показывают реальный IP клиента и схему `https`, а запрос с чужим `Host`
+         отклоняется.
+    explanation: |
+      Главная мысль: прокси - не обязательный ритуал и не бесплатная защита, а компонент с конкретными
+      функциями и конкретной ценой. Аргумент "так все делают" не отвечает на вопрос, какую задачу он решает, а
+      аргумент "меньше звеньев" игнорирует то, что часть задач (общий порт для нескольких приложений,
+      централизованные сертификаты, балансировка, WAF) Kestrel не решает или решает неудобно.
+
+      Самый частый источник инцидентов при варианте с прокси - не сам прокси, а забытая настройка пересылаемых
+      заголовков. Приложение не знает, что перед ним кто-то стоит: без `UseForwardedHeaders` оно считает
+      клиентом прокси, а запрос - нешифрованным. Это ломает редиректы, генерацию ссылок, аутентификацию через
+      внешних провайдеров и ограничение запросов по IP. Обратная ошибка - доверять заголовкам от любого
+      источника (в том числе неявно, через `ASPNETCORE_FORWARDEDHEADERS_ENABLED`): тогда клиент сам пишет себе
+      нужный IP. Вторая частая ошибка - считать, что прокси заменяет фильтрацию хостов: приложение по-прежнему
+      строит ссылки из заголовка `Host` или `X-Forwarded-Host`, поэтому список разрешённых хостов нужен в обоих
+      вариантах.
+
+      При варианте без прокси ответственность за всё, что обычно делает прокси, переходит к приложению и
+      команде: сертификаты, лимиты, ограничение частоты запросов, своевременное обновление runtime. Поэтому
+      решение - это ещё и вопрос владения: кто будет это сопровождать через год. Описание соответствует
+      ASP.NET Core в .NET 10.
+    linkTitles:
+      - "Когда использовать Kestrel с обратным прокси"
+      - "Веб-сервер Kestrel в ASP.NET Core"
+      - "Настройка ASP.NET Core для работы с прокси-серверами и балансировщиками нагрузки"
+  en:
+    title: Expose Kestrel directly to the internet or put a reverse proxy in front - how do you decide?
+    prompt: |
+      The team is debating how to publish a new ASP.NET Core service (.NET 10). Some propose exposing Kestrel
+      directly to the internet: "fewer hops, fewer problems". Others insist on a reverse proxy (Nginx, YARP, a
+      cloud load balancer) in front of the app: "everyone does it".
+
+      You are the tech lead. Which criteria decide it, what risks does each option carry, and what do you
+      record for the team so that the chosen option is configured correctly?
+    hint: Start not with "do we need a proxy at all" but with which concrete problem it solves in your environment and who will operate it.
+    answer: |
+      **Starting point.** Kestrel is supported as an edge server, so it can take traffic from the internet
+      without a proxy: it handles HTTPS, HTTP/2 and HTTP/3 and has protective limits (`KestrelServerLimits`:
+      connection count, request body size, minimum data rate, header timeout). A reverse proxy is not
+      required, so you add one for concrete needs, not out of habit.
+
+      **When a proxy is justified**
+
+      - **Several apps on one IP and port.** Kestrel cannot share an IP and port between processes: the
+        process listening on a port receives all traffic for that port regardless of the `Host` header. A
+        proxy takes traffic on 443 and forwards it to the apps on internal addresses.
+      - **Central TLS.** Only the proxy needs the certificate for the public domain, renewal and rotation
+        happen in one place, and traffic to the apps goes over the internal network (HTTP or HTTPS; internal
+        HTTPS is more secure but noticeably more expensive).
+      - **Load balancing** across instances, health checks, blue-green and canary rollouts.
+      - **Defense in depth.** A smaller exposed surface of the apps, an extra layer of request filtering, a
+        WAF, rate limiting and DDoS protection before a request reaches the app. The proxy is patched
+        independently of app releases.
+      - **Existing infrastructure.** In Kubernetes or in the cloud there is usually already an ingress or a
+        load balancer in front of the service, and the question becomes "how do we integrate with it
+        correctly" rather than "do we add a proxy".
+
+      **When Kestrel at the edge is acceptable:** one app per host or VM, a simple setup without load
+      balancing, and a team ready to manage certificates itself. Conditions: HTTPS endpoints with a
+      certificate, host filtering (`AllowedHosts`), deliberately set Kestrel limits, rate limiting middleware,
+      not running as root (on Linux ports below 1024 need privileges), and regular .NET updates: Kestrel
+      security fixes ship with the runtime and require rebuilding or redeploying the app.
+
+      **The cost of a proxy**
+
+      - **One more component:** it must be patched, monitored and made highly available; an extra network
+        hop and one more place to misconfigure.
+      - **Forwarded headers.** Behind a proxy the app sees the proxy's IP and the `http` scheme. You need
+        `UseForwardedHeaders` with `ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto`, called
+        before authentication, `UseHttpsRedirection` and HSTS, and a list of trusted proxies: `KnownProxies`
+        for specific addresses, `KnownIPNetworks` for subnets when the proxy address changes (for example in
+        Kubernetes). By default only loopback is trusted. Containers often turn the middleware on with
+        `ASPNETCORE_FORWARDEDHEADERS_ENABLED=true`: it lifts that restriction and trusts the headers from any
+        source, so use it only when the app cannot be reached around the proxy. Without this setup: wrong
+        client IP in logs and limits, HTTPS redirect loops, `http` links in OAuth redirect addresses. Trusting
+        everyone instead: clients can spoof `X-Forwarded-For`.
+      - **Host filtering is still required.** A proxy does not remove it: the documentation explicitly
+        requires host filtering in a reverse proxy configuration. Configure `AllowedHosts`, and if the app
+        trusts `X-Forwarded-Host`, also `ForwardedHeadersOptions.AllowedHosts`, otherwise a client can inject
+        a foreign host name into generated links.
+      - **Consistent settings:** body size limits, timeouts, WebSockets support and HTTP/2 to the app (for
+        gRPC) must match on the proxy and in Kestrel.
+      - **Bypassing the proxy.** Kestrel must listen only on the internal network, otherwise every protection
+        of the proxy can be bypassed.
+
+      **What the lead does**
+
+      1. Collects requirements: apps per host, where TLS terminates, whether load balancing and a WAF are
+         needed, what the infrastructure already has, who owns the proxy (the team or a platform team).
+      2. Records the decision and its reasons in an ADR, including the conditions for revisiting it.
+      3. Makes the correct setup the default: a service template with `AllowedHosts` and Kestrel limits in
+         both options; for the proxy option add `UseForwardedHeaders` with `KnownProxies` or
+         `KnownIPNetworks`, for the no-proxy option add HTTPS endpoints and rate limiting. Adds a check in a
+         test environment that logs show the real client IP and the `https` scheme, and that a request with a
+         foreign `Host` is rejected.
+    explanation: |
+      The key point: a proxy is neither a mandatory ritual nor free protection, but a component with concrete
+      functions and a concrete cost. "Everyone does it" does not say which problem it solves, and "fewer
+      hops" ignores that some problems (a shared port for several apps, central certificates, load balancing,
+      a WAF) Kestrel does not solve, or solves awkwardly.
+
+      The most common source of incidents with a proxy is not the proxy itself but forgotten forwarded-header
+      configuration. The app does not know anyone is in front of it: without `UseForwardedHeaders` it treats
+      the proxy as the client and the request as unencrypted. That breaks redirects, link generation,
+      authentication with external providers and per-IP rate limiting. The opposite mistake is trusting the
+      headers from any source (including implicitly, through `ASPNETCORE_FORWARDEDHEADERS_ENABLED`): then the
+      client writes whatever IP it likes. Another common mistake is assuming the proxy replaces host
+      filtering: the app still builds links from the `Host` or `X-Forwarded-Host` header, so a list of allowed
+      hosts is needed in both options.
+
+      Without a proxy, everything a proxy usually does becomes the responsibility of the app and the team:
+      certificates, limits, rate limiting, timely runtime updates. So the decision is also about ownership:
+      who will maintain this a year from now. The description matches ASP.NET Core in .NET 10.
+    linkTitles:
+      - "When to use Kestrel with a reverse proxy"
+      - "Kestrel web server in ASP.NET Core"
+      - "Configure ASP.NET Core to work with proxy servers and load balancers"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

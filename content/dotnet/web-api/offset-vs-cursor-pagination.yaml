@@ -1,0 +1,152 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RRGWQSDAX8ECS4RKRT
+slug: offset-vs-cursor-pagination
+stack: dotnet
+topic: web-api
+level: senior
+type: open
+grading: self
+tags: [pagination, rest, keyset-pagination, sql, performance]
+links:
+  - url: https://learn.microsoft.com/en-us/ef/core/querying/pagination
+    lang: en
+    kind: docs
+  - url: https://github.com/microsoft/api-guidelines/blob/vNext/azure/Guidelines.md
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/azure/architecture/best-practices/api-design
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как переделать пагинацию со страницами, если глубокие страницы тормозят, а при вставках появляются дубли?
+    prompt: |
+      Эндпоинт `GET /orders?page=5000&pageSize=50` отдаёт список заказов, отсортированный по дате создания,
+      сначала новые. Первые страницы открываются быстро, а глубокие - за секунды. Кроме того, клиенты, которые
+      листают список во время активных вставок, видят одни и те же заказы на соседних страницах.
+      Объясните причины обеих проблем и предложите новую схему пагинации: запрос к базе, контракт API и
+      цену, которую придётся заплатить.
+    hint: Что база данных делает со строками до `OFFSET` и что происходит с нумерацией позиций, когда в начало списка вставляется новая строка?
+    answer: |
+      - **Почему глубокие страницы медленные.** `page` и `pageSize` превращаются в `OFFSET ... ROWS FETCH NEXT ... ROWS ONLY`
+        (`Skip` и `Take` в EF Core). База не умеет перепрыгнуть сразу к нужной позиции: она обрабатывает и отбрасывает
+        все пропущенные строки, поэтому стоимость запроса растёт с номером страницы. Часто к этому добавляется
+        `COUNT(*)` ради общего числа страниц, а это ещё один проход по данным.
+      - **Почему дубли.** Страница задана относительной позицией. Список отсортирован так, что новые заказы идут
+        первыми, поэтому каждая вставка между двумя запросами сдвигает все строки на одну позицию вниз, и последний
+        заказ страницы N снова приходит первым на странице N+1. Удаление строки даёт обратный эффект: одна строка
+        пропускается.
+      - **Новая схема: keyset-пагинация (курсор).** Сортировка фиксирована и идёт по индексированным столбцам с
+        уникальным столбцом для однозначного порядка (tie-breaker): `ORDER BY CreatedAt DESC, Id DESC` и индекс по
+        `(CreatedAt, Id)`. Следующая страница запрашивается от последнего показанного ключа:
+        `WHERE CreatedAt < @lastCreatedAt OR (CreatedAt = @lastCreatedAt AND Id < @lastId)` плюс ограничение
+        на `pageSize` строк. База ищет ключ в индексе и читает только `pageSize` строк, поэтому стоимость не
+        зависит от глубины, а вставки перед курсором не сдвигают следующую страницу.
+      - **Контракт.** Ответ содержит элементы и ссылку на продолжение: `{ "value": [...], "nextLink": "/orders?pageSize=50&cursor=..." }`
+        или отдельный токен продолжения. Курсор непрозрачный: сервер кодирует в него значения последнего ключа,
+        сортировку и фильтры (например, Base64, лучше с подписью или шифрованием), а клиент только передаёт его
+        обратно. Нет `nextLink` - это последняя страница. Сервер ограничивает максимальный `pageSize`. Общее
+        количество - необязательное, отдельным запросом или приблизительное.
+      - **Цена.** Нельзя перейти сразу на страницу N: только вперёд, а назад - обратным запросом. Сортировать
+        можно только по полям, для которых есть индекс и уникальный дополнительный столбец. Курсор привязан к
+        сортировке и фильтрам: при их изменении листание начинается заново. Строки, вставленные позади курсора,
+        клиент увидит только при следующем проходе.
+      - **Переход.** Новый параметр `cursor` вводится рядом со старым `page`, клиентов переводят на `nextLink`,
+        а `page` объявляют устаревшим. Пагинация по номерам остаётся там, где она действительно нужна: небольшие
+        таблицы в админке, где важен переход к номеру страницы, причём с ограничением максимальной глубины.
+    explanation: |
+      Обе проблемы следуют из того, что offset-пагинация адресует страницу позицией в результате запроса. Для
+      `page=5000` и `pageSize=50` базе нужно пропустить 249 950 строк в порядке сортировки, чтобы вернуть 50, даже
+      если есть подходящий индекс. Документация EF Core прямо говорит, что пропущенные строки всё равно
+      обрабатываются и нагрузка растёт с их числом. И позиция строки не постоянна: любая вставка или удаление выше
+      по списку меняет позиции всех строк ниже, поэтому граница между страницами смещается между запросами.
+
+      Keyset-пагинация адресует страницу значением ключа. Условие `WHERE` по ведущим столбцам индекса позволяет
+      сделать поиск по индексу (seek) и сразу прочитать нужные строки. Документация EF Core описывает этот подход
+      как keyset-пагинацию: `OrderBy`, `Where` по последнему значению ключа и `Take`, и отмечает, что она подходит
+      для перехода вперёд и назад, но не для произвольного доступа к странице.
+
+      Уникальный дополнительный столбец обязателен: если сортировать только по `CreatedAt`, а у нескольких заказов
+      одинаковое время, то на границе страниц часть из них потеряется или повторится. EF Core предупреждает об этом
+      для любого способа пагинации: порядок должен быть полностью однозначным. Не во всех СУБД есть сравнение
+      кортежей `(CreatedAt, Id) < (@c, @id)`, например в SQL Server его нет, поэтому условие записывают через `OR`.
+
+      Непрозрачный курсор оставляет серверу свободу менять реализацию (столбцы ключа, формат) без нарушения
+      контракта и не даёт клиентам собирать курсоры вручную. Azure REST API Guidelines описывают именно такую
+      серверную пагинацию: элементы коллекции в `value` и ссылка `nextLink`, по которой клиент запрашивает
+      продолжение.
+
+      Рекомендации Azure Architecture Center по проектированию Web API показывают более простой вариант с
+      параметрами `limit` и `offset` и значениями по умолчанию (`limit=25`, `offset=0`). Для небольших наборов данных
+      он годится, но на глубоких страницах и при активных вставках у него те же недостатки, что и у `page` и `pageSize`.
+    linkTitles:
+      - "Пагинация в EF Core"
+      - "Azure REST API Guidelines"
+      - "Рекомендации по проектированию Web API (Azure Architecture Center)"
+  en:
+    title: How do you redesign page-number pagination when deep pages are slow and inserts cause duplicates?
+    prompt: |
+      The endpoint `GET /orders?page=5000&pageSize=50` returns a list of orders sorted by creation date,
+      newest first. The first pages open fast, but deep pages take seconds. In addition, clients that page
+      through the list while orders are actively being inserted see the same orders on neighbouring pages.
+      Explain the causes of both problems and propose a new pagination scheme: the database query, the API
+      contract and the price you will pay.
+    hint: What does the database do with the rows before the `OFFSET`, and what happens to row positions when a new row is inserted at the start of the list?
+    answer: |
+      - **Why deep pages are slow.** `page` and `pageSize` turn into `OFFSET ... ROWS FETCH NEXT ... ROWS ONLY`
+        (`Skip` and `Take` in EF Core). The database cannot jump straight to the position: it processes and discards
+        every skipped row, so the cost of the query grows with the page number. Often a `COUNT(*)` for the total
+        number of pages is added on top, which is one more pass over the data.
+      - **Why duplicates.** A page is defined by a relative position. The list is sorted newest first, so every
+        insert between two requests shifts all rows down by one position, and the last order of page N arrives
+        again as the first one of page N+1. A deletion has the opposite effect: one row is skipped.
+      - **New scheme: keyset (cursor) pagination.** The sort order is fixed and uses indexed columns with a unique
+        tie-breaker column: `ORDER BY CreatedAt DESC, Id DESC` and an index on `(CreatedAt, Id)`. The next page is
+        requested from the last key shown:
+        `WHERE CreatedAt < @lastCreatedAt OR (CreatedAt = @lastCreatedAt AND Id < @lastId)` plus a limit of
+        `pageSize` rows. The database seeks the key in the index and reads only `pageSize` rows, so the cost does
+        not depend on depth, and inserts before the cursor do not shift the next page.
+      - **Contract.** The response carries the items and a link to continue: `{ "value": [...], "nextLink": "/orders?pageSize=50&cursor=..." }`
+        or a separate continuation token. The cursor is opaque: the server encodes the last key values, the sort
+        and the filters into it (for example as Base64, preferably signed or encrypted), and the client only sends
+        it back. No `nextLink` means the last page. The server caps `pageSize`. A total count is optional, served by
+        a separate request or as an estimate.
+      - **Price.** You cannot jump to page N: only forward, and backward with a reversed query. You can sort only by
+        fields that have an index and a unique tie-breaker. The cursor is bound to the sort and the filters: when
+        they change, paging starts over. Rows inserted behind the cursor are seen only on the next pass.
+      - **Migration.** Add a `cursor` parameter next to the old `page`, move clients to `nextLink`, and deprecate
+        `page`. Keep page numbers only where they are really needed: small admin tables where jumping to a page
+        number matters, with a cap on the maximum depth.
+    explanation: |
+      Both problems come from the fact that offset pagination addresses a page by its position in the query
+      result. For `page=5000` and `pageSize=50` the database has to skip 249,950 rows in sort order to return 50,
+      even when a suitable index exists. The EF Core documentation states that the skipped rows are still
+      processed and the load grows with their number. And a row's position is not stable: any insert or delete
+      higher up in the list changes the position of every row below it, so the boundary between pages moves
+      between requests.
+
+      Keyset pagination addresses a page by a key value. A `WHERE` condition on the leading index columns lets the
+      database do an index seek and read the needed rows at once. The EF Core documentation describes this approach
+      as keyset pagination: `OrderBy`, `Where` on the last key value, then `Take`, and notes that it suits moving
+      forward and backward but not random access to a page.
+
+      The tie-breaker is required: if you sort only by `CreatedAt` and several orders share the same timestamp,
+      some of them are lost or repeated at a page boundary. EF Core warns about this for every pagination method:
+      the ordering must be fully unique. Not every database supports the tuple comparison
+      `(CreatedAt, Id) < (@c, @id)`; SQL Server, for example, does not, so the condition is written with `OR`.
+
+      An opaque cursor leaves the server free to change the implementation (key columns, format) without breaking
+      the contract, and stops clients from building cursors by hand. The Azure REST API Guidelines describe exactly
+      this kind of server-driven paging: the collection items in `value` and a `nextLink` that the client follows
+      to get the continuation.
+
+      The Azure Architecture Center web API design guidance shows the simpler form with `limit` and `offset`
+      parameters and defaults (`limit=25`, `offset=0`). It is fine for small data sets, but on deep pages and under
+      active inserts it has the same weaknesses as `page` and `pageSize`.
+    linkTitles:
+      - "Pagination in EF Core"
+      - "Azure REST API Guidelines"
+      - "Web API design best practices (Azure Architecture Center)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

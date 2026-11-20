@@ -1,0 +1,109 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQ6HYTBQTZC6S8W80F
+slug: authorization-policy-requirements-and-handlers-combine
+stack: dotnet
+topic: security
+level: middle
+type: open
+grading: self
+tags: [authorization, policies, requirements, aspnet-core]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/security/authorization/policies
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/security/authorization/roles
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Зачем переходить от ролей в [Authorize(Roles = ...)] к политикам и как в политике сочетаются требования и обработчики?
+    prompt: |
+      В API на ASP.NET Core (.NET 10) доступ задан строками ролей: `[Authorize(Roles = "Admin,Manager")]` на десятках
+      контроллеров и эндпоинтов. Зачем переходить на именованные политики? Как сочетаются несколько требований
+      (`IAuthorizationRequirement`) в одной политике и несколько обработчиков одного требования, и что меняет вызов
+      `context.Fail()`?
+    hint: |
+      Требование описывает условие, которое нужно выполнить, а обработчик - один из способов доказать, что оно выполнено.
+    answer: |
+      - **Зачем политики.** Строки ролей в атрибутах размазывают правило доступа по всему коду. Когда правило меняется
+        (новая роль, проверка claim, условие, которое вообще не роль), приходится искать и править каждый атрибут, и
+        пропущенный атрибут становится дырой в безопасности. Именованная политика регистрируется один раз, например
+        `builder.Services.AddAuthorizationBuilder().AddPolicy("CanEditOrders", p => p.RequireRole("Admin", "Manager"))`,
+        а эндпоинты ссылаются только на имя: `[Authorize(Policy = "CanEditOrders")]` или
+        `.RequireAuthorization("CanEditOrders")`. Имя описывает разрешение, а не того, у кого оно есть. В политику можно
+        положить `RequireClaim`, `RequireAuthenticatedUser`, `RequireAssertion` или собственные требования с
+        обработчиками, которые получают сервисы из DI и тестируются отдельно.
+      - **Требования политики - это И.** Авторизация проходит, только если выполнено каждое требование политики.
+      - **Обработчики одного требования - это ИЛИ.** Требование выполнено, если хотя бы один его обработчик вызвал
+        `context.Succeed(requirement)`. Пример: требование «вход в здание» и два обработчика - по пропуску сотрудника
+        и по временному гостевому пропуску. Обработчик, к которому случай не относится, просто ничего не вызывает.
+      - **`Fail` перекрывает всё.** Если любой обработчик вызвал `context.Fail()`, авторизация не проходит, даже если
+        другие обработчики вызвали `Succeed`. Это явный запрет (например, заблокированная учётная запись), а не
+        «моё условие не выполнено». По умолчанию (`InvokeHandlersAfterFailure = true`) остальные обработчики всё равно
+        вызываются.
+      - **Те же правила у атрибутов.** Роли через запятую в одном `[Authorize(Roles = ...)]` - это ИЛИ, несколько
+        атрибутов `[Authorize]` на контроллере и действии - это И: пройти нужно каждый.
+    explanation: |
+      Сервис авторизации вызывает обработчики для всех требований политики. Результат успешен, только если никто не
+      вызвал `Fail` и каждое требование отмечено как выполненное. Отсюда и семантика: требование - это цель, обработчики -
+      альтернативные способы её подтвердить, а политика - список целей, которые нужны все.
+
+      Типичные ошибки следуют из этих правил. Вызов `context.Fail()` в обработчике, когда его собственное условие не
+      выполнено, ломает ИЛИ: другие способы подтвердить требование перестают работать. Ожидание, что две политики на
+      одном эндпоинте дают ИЛИ, тоже ошибочно: они складываются через И. Для альтернатив нужно одно требование с
+      несколькими обработчиками или `RequireAssertion`.
+
+      Главная выгода политик для команды - правило доступа живёт в одном месте, его можно прочитать, протестировать и
+      поменять одним изменением, а на эндпоинтах остаётся только имя разрешения. `AddAuthorizationBuilder` появился в
+      .NET 7; в .NET 10 то же можно записать и через `AddAuthorization(options => options.AddPolicy(...))`.
+    linkTitles:
+      - "Авторизация на основе политик в ASP.NET Core"
+      - "Авторизация на основе ролей в ASP.NET Core"
+  en:
+    title: Why move from roles in [Authorize(Roles = ...)] to policies, and how do requirements and handlers combine in a policy?
+    prompt: |
+      In an ASP.NET Core API (.NET 10) access is expressed with role strings: `[Authorize(Roles = "Admin,Manager")]`
+      on dozens of controllers and endpoints. Why move to named policies? How do several requirements
+      (`IAuthorizationRequirement`) in one policy and several handlers of one requirement combine, and what does a
+      call to `context.Fail()` change?
+    hint: |
+      A requirement describes a condition that must hold, and a handler is one way of proving that it holds.
+    answer: |
+      - **Why policies.** Role strings in attributes scatter the access rule across the whole codebase. When the rule
+        changes (a new role, a claim check, a condition that is not a role at all), you have to find and edit every
+        attribute, and a missed one becomes a security hole. A named policy is registered once, for example
+        `builder.Services.AddAuthorizationBuilder().AddPolicy("CanEditOrders", p => p.RequireRole("Admin", "Manager"))`,
+        and endpoints reference only its name: `[Authorize(Policy = "CanEditOrders")]` or
+        `.RequireAuthorization("CanEditOrders")`. The name describes the permission, not who holds it. A policy can
+        contain `RequireClaim`, `RequireAuthenticatedUser`, `RequireAssertion` or custom requirements with handlers
+        that get services from DI and can be tested on their own.
+      - **Requirements of a policy combine with AND.** Authorization succeeds only if every requirement of the policy
+        is satisfied.
+      - **Handlers of one requirement combine with OR.** A requirement is satisfied if at least one of its handlers
+        calls `context.Succeed(requirement)`. Example: a "building entry" requirement with two handlers, one for an
+        employee badge and one for a temporary visitor sticker. A handler that does not apply simply calls nothing.
+      - **`Fail` overrides everything.** If any handler calls `context.Fail()`, authorization fails even if other
+        handlers called `Succeed`. It is an explicit deny (for example, a blocked account), not "my condition is not
+        met". By default (`InvokeHandlersAfterFailure = true`) the remaining handlers are still called.
+      - **Attributes follow the same rules.** Comma-separated roles in one `[Authorize(Roles = ...)]` mean OR; several
+        `[Authorize]` attributes on a controller and an action mean AND: each one must pass.
+    explanation: |
+      The authorization service calls the handlers for all requirements of the policy. The result is a success only
+      if nobody called `Fail` and every requirement is marked as satisfied. That gives the semantics: a requirement is
+      a goal, handlers are alternative ways to prove it, and a policy is a list of goals that are all needed.
+
+      Typical mistakes follow from these rules. Calling `context.Fail()` in a handler when its own condition is not met
+      breaks the OR: the other ways to prove the requirement stop working. Expecting two policies on one endpoint to
+      mean OR is also wrong: they combine with AND. For alternatives you need one requirement with several handlers,
+      or `RequireAssertion`.
+
+      The main benefit of policies for a team is that the access rule lives in one place: it can be read, tested and
+      changed in one edit, while endpoints carry only the name of the permission. `AddAuthorizationBuilder` appeared in
+      .NET 7; in .NET 10 the same can also be written with `AddAuthorization(options => options.AddPolicy(...))`.
+    linkTitles:
+      - "Policy-based authorization in ASP.NET Core"
+      - "Role-based authorization in ASP.NET Core"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

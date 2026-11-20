@@ -1,0 +1,147 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQ9415D7VWNJDWJPE9
+slug: endpoint-shipped-without-authorize-fallback-policy
+stack: dotnet
+topic: security
+level: lead
+type: situation
+grading: self
+tags: [authorization, fallback-policy, incident-response, aspnet-core, secure-by-default]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/microsoft.aspnetcore.authorization.authorizationoptions.fallbackpolicy
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/security/authorization/secure-data
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Эндпоинт без [Authorize] неделю отдавал данные клиентов: что делает тимлид сейчас и как не допустить повторения?"
+    prompt: |
+      Сервис на ASP.NET Core (.NET 10). Через неделю после релиза выяснилось, что новый эндпоинт
+      `GET /api/customers/{id}/orders` выкатили без `[Authorize]`, и всю неделю он отдавал заказы любого клиента
+      без входа в систему. Пулл-реквест прошёл code review двух человек, и никто не заметил отсутствующий атрибут.
+      Вы тимлид.
+
+      Что вы делаете в первые часы и что меняете, чтобы такое не повторилось ни в одном сервисе команды?
+    hint: |
+      Что происходит с эндпоинтом, на котором нет ни одного атрибута авторизации, и почему защита зависела от
+      того, вспомнит ли кто-то о нём? Можно ли поменять поведение по умолчанию?
+    answer: |
+      1. **Закрыть утечку.** Срочный хотфикс с авторизацией на эндпоинте, а если быстро выкатить нельзя -
+         заблокировать маршрут на шлюзе или выключить функцию флагом. Проверить запросом без учётных данных,
+         что ответ теперь `401`. Сразу перечислить все эндпоинты сервиса (и соседних сервисов команды) и найти
+         другие, на которых нет требований авторизации.
+      2. **Оценить ущерб.** Завести инцидент по процессу безопасности. По логам доступа за неделю выяснить, кто
+         вызывал эндпоинт без аутентификации, с каких адресов, сколько разных `id` перебрали и какие данные ушли.
+         Подключить службу безопасности, ответственного за персональные данные и юристов: законы о персональных
+         данных могут требовать уведомить регулятора и клиентов в сжатые сроки (например, GDPR - 72 часа с
+         момента, когда стало известно об инциденте).
+      3. **Сообщить и разобрать без поиска виноватых.** Держать заинтересованных в курсе фактов, а не
+         догадок. На постмортеме причина - не «разработчик забыл атрибут», а система, в которой эндпоинт открыт
+         по умолчанию и защищён только внимательностью ревьюеров.
+      4. **Сделать закрытость поведением по умолчанию.** В `AddAuthorization` задать
+         `options.FallbackPolicy = new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build()`.
+         Тогда эндпоинт без метаданных авторизации требует вошедшего пользователя, а открыть его можно только
+         явно: `[AllowAnonymous]` или `.AllowAnonymous()` для minimal API. Такое исключение видно в диффе, его
+         легко найти поиском и закрепить за обязательным ревьюером через `CODEOWNERS`.
+      5. **Включить аккуратно.** Перед включением составить список намеренно открытых эндпоинтов (вход,
+         health checks, вебхуки, публичная документация API) и пометить их `AllowAnonymous`. Учесть, что
+         политика по умолчанию касается и запросов, которые обслуживают middleware после `UseAuthorization`,
+         например статических файлов. Проверить на стенде, затем выкатить.
+      6. **Проверять автоматически, а не глазами.** Интеграционный тест через `WebApplicationFactory<Program>`
+         получает `EndpointDataSource`, перебирает все эндпоинты и падает, если эндпоинт без требований
+         авторизации или с `IAllowAnonymous` не входит в явный список разрешённых. Новый открытый эндпоинт
+         тогда требует осознанного изменения этого списка.
+      7. **Закрыть второй слой.** Даже с аутентификацией эндпоинт отдавал бы заказы по любому `id`.
+         Добавить проверку на уровне ресурса: заказы принадлежат клиенту текущего пользователя (политика на
+         ресурсе или фильтр в запросе к данным).
+      8. **Масштабировать на команду.** Вынести настройку авторизации в общий шаблон или библиотеку сервисов,
+         чтобы политика по умолчанию и тест были в каждом сервисе, а не только в пострадавшем.
+    explanation: |
+      `AuthorizationOptions.FallbackPolicy` по умолчанию равна `null`: эндпоинт без `[Authorize]`,
+      `RequireAuthorization` или другой метаданной авторизации middleware авторизации пропускает. Если политику
+      задать, middleware применяет её к каждому ресурсу, у которого нет данных авторизации, а эндпоинты с
+      `[Authorize]` по-прежнему проверяются своими политиками. Так система переходит от «открыто, пока не
+      закрыли» к «закрыто, пока явно не открыли»: забытый атрибут теперь даёт `401` на первом же ручном
+      тесте, а не тихую утечку в production. Поведение описано для .NET 10.
+
+      Code review плохо ловит отсутствие чего-либо: ревьюер видит строки, которые есть в диффе, а не
+      атрибут, которого нет. Тест, который перечисляет эндпоинты, превращает правило в проверку, которая не
+      устаёт и не отвлекается, а `AllowAnonymous` становится видимым решением с владельцем.
+
+      Ограничение политики по умолчанию: `RequireAuthenticatedUser` проверяет только, что пользователь вошёл.
+      Защиту от доступа к чужим данным (IDOR) она не даёт, поэтому проверка владения ресурсом нужна
+      отдельно. Слабый ответ - ограничиться хотфиксом и напоминанием команде «не забывать `[Authorize]`»:
+      причина остаётся на месте, и следующий эндпоинт снова зависит от памяти людей.
+    linkTitles:
+      - "Свойство AuthorizationOptions.FallbackPolicy"
+      - "Веб-приложение ASP.NET Core с пользовательскими данными, защищёнными авторизацией"
+  en:
+    title: "An endpoint without [Authorize] exposed customer data for a week: what does the lead do now, and how do you prevent a repeat?"
+    prompt: |
+      An ASP.NET Core service (.NET 10). A week after a release it turns out that the new endpoint
+      `GET /api/customers/{id}/orders` shipped without `[Authorize]`, and for the whole week it returned the
+      orders of any customer without sign-in. The pull request passed code review by two people, and nobody
+      noticed the missing attribute. You are the team lead.
+
+      What do you do in the first hours, and what do you change so that this does not happen again in any of
+      the team's services?
+    hint: |
+      What happens to an endpoint that has no authorization attribute at all, and why did its protection depend
+      on someone remembering it? Can the default behavior be changed?
+    answer: |
+      1. **Stop the leak.** Ship an urgent hotfix with authorization on the endpoint, or, if a quick deploy is
+         not possible, block the route at the gateway or turn the feature off with a flag. Check with a request
+         without credentials that the response is now `401`. Right away, enumerate all endpoints of the service
+         (and of the team's other services) and find any others that have no authorization requirements.
+      2. **Assess the damage.** Open an incident through the security process. From the access logs for the
+         week, find out who called the endpoint without authentication, from which addresses, how many
+         different `id` values were enumerated and which data left. Involve the security team, the person
+         responsible for personal data and legal: data protection laws may require notifying the regulator and
+         the customers within a short deadline (for example, GDPR: 72 hours after becoming aware of the
+         incident).
+      3. **Communicate and review without blame.** Keep stakeholders informed with facts, not guesses. In the
+         postmortem the cause is not "a developer forgot the attribute" but a system where an endpoint is open
+         by default and protected only by reviewers' attention.
+      4. **Make closed the default.** In `AddAuthorization` set
+         `options.FallbackPolicy = new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build()`.
+         Then an endpoint without authorization metadata requires a signed-in user, and opening it needs an
+         explicit `[AllowAnonymous]` or `.AllowAnonymous()` for minimal APIs. That exception is visible in the
+         diff, easy to find with a search, and can be assigned a mandatory reviewer through `CODEOWNERS`.
+      5. **Turn it on carefully.** Before enabling it, list the endpoints that are meant to be open (sign-in,
+         health checks, webhooks, public API docs) and mark them `AllowAnonymous`. Keep in mind that the
+         fallback policy also covers requests served by middleware after `UseAuthorization`, such as static
+         files. Verify on a staging environment, then roll out.
+      6. **Check automatically, not by eye.** An integration test with `WebApplicationFactory<Program>` gets the
+         `EndpointDataSource`, iterates over all endpoints and fails if an endpoint with no authorization
+         requirements or with `IAllowAnonymous` is not on an explicit allowlist. A new open endpoint then
+         requires a deliberate change to that list.
+      7. **Close the second layer.** Even with authentication, the endpoint would return orders for any `id`.
+         Add a resource-level check: the orders belong to the current user's customer (a resource-based policy
+         or a filter in the data query).
+      8. **Scale it to the team.** Move the authorization setup into a shared service template or library, so
+         the fallback policy and the test exist in every service, not only in the one that leaked.
+    explanation: |
+      `AuthorizationOptions.FallbackPolicy` is `null` by default: the authorization middleware lets through an
+      endpoint without `[Authorize]`, `RequireAuthorization` or other authorization metadata. When the policy is
+      set, the middleware applies it to every resource that has no authorization data, while endpoints with
+      `[Authorize]` are still checked by their own policies. The system moves from "open until someone closes it"
+      to "closed until someone explicitly opens it": a forgotten attribute now produces a `401` on the first
+      manual test instead of a silent leak in production. The behavior is described for .NET 10.
+
+      Code review is bad at catching something that is absent: the reviewer sees the lines in the diff, not the
+      attribute that is not there. A test that enumerates endpoints turns the rule into a check that never gets
+      tired or distracted, and `AllowAnonymous` becomes a visible decision with an owner.
+
+      The limit of the fallback policy: `RequireAuthenticatedUser` only checks that the user is signed in. It
+      does not protect against access to other people's data (IDOR), so an ownership check on the resource is
+      still needed. A weak answer stops at the hotfix and a reminder to the team to "not forget `[Authorize]`":
+      the cause stays in place, and the next endpoint again depends on people's memory.
+    linkTitles:
+      - "AuthorizationOptions.FallbackPolicy property"
+      - "Create an ASP.NET Core web app with user data protected by authorization"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

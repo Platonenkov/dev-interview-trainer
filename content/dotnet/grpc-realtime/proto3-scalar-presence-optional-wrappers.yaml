@@ -1,0 +1,119 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPXQ61KADN1NFRB4RN
+slug: proto3-scalar-presence-optional-wrappers
+stack: dotnet
+topic: grpc-realtime
+level: middle
+type: single
+grading: auto
+tags: [grpc, protobuf, proto3, field-presence, wrappers]
+code:
+  language: protobuf
+  harness: none
+  source: |
+    syntax = "proto3";
+
+    message UpdateStockRequest {
+      string product_id = 1;
+      int32 quantity = 2;
+    }
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: false
+  - id: c
+    correct: false
+  - id: d
+    correct: true
+  - id: e
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/grpc/protobuf
+    lang: en
+    kind: docs
+  - url: https://protobuf.dev/programming-guides/proto3/
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как в proto3 отличить поле int32, явно равное 0, от поля, которое клиент не заполнил?
+    prompt: |
+      Клиент gRPC обновляет остаток товара сообщением `UpdateStockRequest`. Значение `quantity = 0` означает
+      "товара нет", а если клиент поле не заполнил, остаток менять нельзя. Но на сервере `request.Quantity`
+      в обоих случаях равно `0`. Как изменить контракт, чтобы сервис отличал явный ноль от незаданного поля?
+    hint: Что попадает в двоичное сообщение, если поле `int32` равно значению по умолчанию, и какой тип получает свойство в сгенерированном C#-классе?
+    options:
+      a: "Ничего менять не нужно: проверить `request.Quantity == 0`, ведь для незаданного поля клиент ноль не отправляет."
+      b: "Ничего менять не нужно: проверить `request.Quantity == null`, незаданное поле приходит как `null`."
+      c: "Объявить поле как `required int32 quantity = 2;`, чтобы клиент был обязан его заполнить."
+      d: "Объявить поле как `optional int32 quantity = 2;` (появятся `HasQuantity` и `ClearQuantity()`) или использовать обёртку `google.protobuf.Int32Value`, которая в C# становится `int?`."
+      e: "Задать значение по умолчанию `int32 quantity = 2 [default = -1];` и считать `-1` признаком незаданного поля."
+    optionExplanations:
+      a: "Обычное скалярное поле proto3 со значением по умолчанию вообще не записывается в сообщение. Явный `0` и незаданное поле дают одинаковые байты, и обе проверки вернут `true`."
+      b: "Для `int32` генерируется свойство типа `int`, тип значения, который не бывает `null`. Сравнение с `null` всегда ложно и ничего не различает."
+      c: "В proto3 метки `required` нет, `protoc` отклонит такой файл. К тому же обязательность не помогает отличить явный ноль от отсутствия значения."
+      e: "В proto3 нельзя задавать собственные значения по умолчанию, опция `default` была только в proto2. Значение по умолчанию для `int32` всегда `0`."
+    answer: "Объявить поле как `optional int32` (появятся `HasQuantity` и `ClearQuantity()`) или использовать обёртку `google.protobuf.Int32Value`, которая в C# становится `int?`."
+    explanation: |
+      Обычное скалярное поле proto3 не отслеживает наличие значения: если поле равно значению по умолчанию
+      (`0` для `int32`), оно не записывается в сообщение. Получатель видит отсутствие поля и подставляет тот
+      же `0`, поэтому явный ноль и незаданное поле неразличимы.
+
+      Есть два способа вернуть информацию о наличии значения:
+
+      - **`optional int32 quantity = 2;`** Поле получает явное отслеживание наличия: если его задали, оно
+        записывается даже со значением `0`. Свойство `Quantity` остаётся типа `int`, а генератор C# добавляет
+        `HasQuantity` и `ClearQuantity()`.
+      - **Обёртка `google.protobuf.Int32Value`** из `google/protobuf/wrappers.proto`. Это вложенное сообщение
+        со значением внутри, а в C# поле генерируется как `int?`: незаданное поле равно `null`. Цена - чуть
+        больше байтов на вложенное сообщение.
+
+      `optional` проще и обычно предпочтительнее для новых контрактов. Обёртки удобны, когда в C# нужен
+      привычный nullable-тип.
+    linkTitles:
+      - "Создание сообщений Protobuf для приложений .NET"
+      - "Руководство по языку proto3"
+  en:
+    title: In proto3, how do you tell an int32 field explicitly set to 0 from a field the client never set?
+    prompt: |
+      A gRPC client updates the stock of a product with an `UpdateStockRequest` message. The value
+      `quantity = 0` means "out of stock", and if the client did not set the field, the stock must not change.
+      But on the server `request.Quantity` is `0` in both cases. How do you change the contract so that the
+      service can tell an explicit zero from an unset field?
+    hint: What goes into the binary message when an `int32` field holds its default value, and what type does the property get in the generated C# class?
+    options:
+      a: "Nothing needs to change: check `request.Quantity == 0`, because the client does not send zero for an unset field."
+      b: "Nothing needs to change: check `request.Quantity == null`, an unset field arrives as `null`."
+      c: "Declare the field as `required int32 quantity = 2;` so that the client must always set it."
+      d: "Declare the field as `optional int32 quantity = 2;` (this generates `HasQuantity` and `ClearQuantity()`) or use the wrapper `google.protobuf.Int32Value`, which becomes `int?` in C#."
+      e: "Set a default value `int32 quantity = 2 [default = -1];` and treat `-1` as the unset marker."
+    optionExplanations:
+      a: "A plain proto3 scalar field that holds its default value is not written to the message at all. An explicit `0` and an unset field produce the same bytes, and both checks return `true`."
+      b: "For `int32` the generated property is an `int`, a value type that is never `null`. The comparison with `null` is always false and tells nothing apart."
+      c: "proto3 has no `required` label, and `protoc` rejects such a file. Besides, making a field mandatory does not help tell an explicit zero from a missing value."
+      e: "proto3 does not allow custom default values, the `default` option existed only in proto2. The default value of `int32` is always `0`."
+    answer: "Declare the field as `optional int32` (this generates `HasQuantity` and `ClearQuantity()`) or use the wrapper `google.protobuf.Int32Value`, which becomes `int?` in C#."
+    explanation: |
+      A plain proto3 scalar field does not track presence: when the field holds its default value (`0` for
+      `int32`), it is not written to the message. The receiver sees no field and substitutes the same `0`, so
+      an explicit zero and an unset field cannot be told apart.
+
+      There are two ways to get presence back:
+
+      - **`optional int32 quantity = 2;`** The field gets explicit presence tracking: once set, it is written
+        even when its value is `0`. The `Quantity` property stays an `int`, and the C# generator adds
+        `HasQuantity` and `ClearQuantity()`.
+      - **The wrapper `google.protobuf.Int32Value`** from `google/protobuf/wrappers.proto`. It is a nested
+        message that holds the value, and in C# the field is generated as `int?`: an unset field is `null`.
+        The cost is a few extra bytes for the nested message.
+
+      `optional` is simpler and is usually preferred for new contracts. Wrappers are handy when the C# code
+      should see a familiar nullable type.
+    linkTitles:
+      - "Create Protobuf messages for .NET apps"
+      - "Language Guide (proto 3)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  noRunReason: The snippet is a .proto contract, not C#; turning it into code needs protoc and the Grpc.Tools package, which the console sandbox does not provide.

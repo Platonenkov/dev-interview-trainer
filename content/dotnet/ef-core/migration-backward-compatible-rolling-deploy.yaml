@@ -1,0 +1,119 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNGSKM9049FVGKQTA3
+slug: migration-backward-compatible-rolling-deploy
+stack: dotnet
+topic: ef-core
+level: senior
+type: multi
+grading: auto
+tags: [ef-core, migrations, deployment, zero-downtime]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/ef/core/managing-schemas/migrations/managing
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/ef/core/managing-schemas/migrations/applying
+    lang: en
+    kind: docs
+  - url: https://martinfowler.com/bliki/ParallelChange.html
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Какие изменения схемы безопасны для старой версии приложения при поэтапном развёртывании?
+    prompt: |
+      Сервис выкатывается поэтапно (rolling deployment): сначала к базе применяется миграция EF Core 10 для новой
+      версии, затем экземпляры заменяются по одному, и какое-то время старая версия продолжает читать и писать в
+      уже изменённую схему. Её модель `DbContext` описывает прежнюю схему. Выберите все изменения, которые можно
+      включить в такую миграцию, не сломав старую версию.
+    hint: По какой модели старая версия строит SQL и какие столбцы она называет в запросах явно?
+    options:
+      a: "Создать новую таблицу для новой функции, которую старая версия не использует."
+      b: "Добавить в существующую таблицу новый столбец, допускающий `NULL`."
+      c: "Переименовать столбец, который отображён на свойство в модели старой версии (`RenameColumn`)."
+      d: "Удалить столбец, который новая версия больше не использует, но который старая версия ещё отображает на свойство."
+      e: "Сделать существующий столбец `NOT NULL` без значения по умолчанию, хотя старая версия иногда записывает в него `NULL`."
+    optionExplanations:
+      c: "Старая версия строит SQL по своей модели и обращается к столбцу по прежнему имени. После переименования её запросы падают с ошибкой базы о несуществующем столбце. Переименование растягивают на несколько релизов: новый столбец, запись в оба и перенос данных, переключение чтения и только потом удаление старого."
+      d: "EF Core явно перечисляет отображённые столбцы в `SELECT`, `INSERT` и `UPDATE`, поэтому запросы старой версии, которые загружают или вставляют эту сущность, упадут. Удалять столбец можно отдельной миграцией, когда старых экземпляров уже не осталось."
+      e: "Вставки и обновления старой версии с `NULL` в этом столбце начнут нарушать ограничение и падать. К тому же миграция не применится, пока в таблице есть строки с `NULL`. Ограничение ужесточают на шаге сужения, когда весь работающий код записывает значение, а старые данные заполнены."
+    answer: "Новая таблица и новый столбец, допускающий `NULL` (a и b)."
+    explanation: |
+      Старая версия ничего не знает о миграции: EF Core генерирует SQL по модели, скомпилированной вместе с этой
+      версией, и называет столбцы явно. Поэтому для неё безопасны только расширяющие изменения. Новую таблицу она
+      не видит. Новый столбец, допускающий `NULL`, она не читает и не указывает в `INSERT`, и база записывает в
+      него `NULL`. Сужающие изменения - удаление, переименование, ужесточение ограничений - ломают запросы старых
+      экземпляров, которые ещё обслуживают трафик.
+
+      Поэтому такие изменения раскладывают по шаблону expand-contract (parallel change). В первом релизе схему
+      только расширяют, а новая версия работает с обеими структурами, например пишет в старый и новый столбцы, а
+      данные переносятся через `migrationBuilder.Sql`. Когда старых экземпляров не осталось, следующая миграция
+      удаляет лишнее и добавляет ограничения. Пока схема только расширена, приложение можно откатить на
+      предыдущую версию без отката миграции.
+
+      Миграции - обычный код, их стоит проверять перед применением: документация по управлению миграциями
+      показывает, что сгенерированные операции иногда нужно править вручную, например чтобы переименование не
+      превратилось в удаление и добавление столбца с потерей данных. Безопасность для кода не отменяет нагрузки
+      на базу: на больших таблицах проверьте, сколько длится операция и какие блокировки она берёт. Применять
+      миграцию удобно SQL-скриптом или пакетом миграций отдельным шагом до замены экземпляров. Поведение описано
+      для EF Core 10.
+    linkTitles:
+      - "Управление миграциями"
+      - "Применение миграций"
+      - "Martin Fowler: ParallelChange"
+  en:
+    title: Which schema changes are safe for the old app version during a rolling deployment?
+    prompt: |
+      A service is deployed with a rolling deployment: first an EF Core 10 migration for the new version is applied
+      to the database, then instances are replaced one by one, and for a while the old version keeps reading and
+      writing against the already changed schema. Its `DbContext` model describes the previous schema. Select all
+      changes that can go into such a migration without breaking the old version.
+    hint: Which model does the old version build its SQL from, and which columns does it name explicitly in its queries?
+    options:
+      a: "Create a new table for a new feature that the old version does not use."
+      b: "Add a new column that allows `NULL` to an existing table."
+      c: "Rename a column that is mapped to a property in the old version's model (`RenameColumn`)."
+      d: "Drop a column that the new version no longer uses but the old version still maps to a property."
+      e: "Make an existing column `NOT NULL` without a default value, although the old version sometimes writes `NULL` to it."
+    optionExplanations:
+      c: "The old version builds SQL from its own model and refers to the column by its old name. After the rename its queries fail with a database error about a missing column. A rename is spread over several releases: a new column, writes to both and a data copy, switching reads, and only then dropping the old one."
+      d: "EF Core lists the mapped columns explicitly in `SELECT`, `INSERT` and `UPDATE`, so the old version's queries that load or insert this entity fail. The column can be dropped by a separate migration once no old instances are left."
+      e: "The old version's inserts and updates with `NULL` in this column start violating the constraint and fail. Besides, the migration does not apply while the table still has rows with `NULL`. The constraint is tightened in the contract step, when all running code writes a value and the old data is filled in."
+    answer: "The new table and the new column that allows `NULL` (a and b)."
+    explanation: |
+      The old version knows nothing about the migration: EF Core generates SQL from the model compiled with that
+      version and names the columns explicitly. So only additive changes are safe for it. It does not see a new
+      table. It does not read a new column that allows `NULL` and does not mention it in `INSERT`, so the database
+      stores `NULL` there. Narrowing changes - dropping, renaming, tightening constraints - break the queries of
+      old instances that are still serving traffic.
+
+      That is why such changes follow the expand-contract pattern (parallel change). The first release only
+      expands the schema, and the new version works with both structures, for example it writes to the old and
+      the new column while the data is copied with `migrationBuilder.Sql`. Once no old instances are left, the
+      next migration removes what is no longer needed and adds the constraints. While the schema is only
+      expanded, the application can be rolled back to the previous version without rolling back the migration.
+
+      Migrations are ordinary code and should be reviewed before they are applied: the documentation on managing
+      migrations shows that scaffolded operations sometimes need manual edits, for example so that a rename does
+      not become a drop and an add of a column with data loss. Being safe for the code does not remove the load
+      on the database: on large tables check how long the operation takes and which locks it holds. A convenient
+      way to apply the migration is a SQL script or a migration bundle as a separate step before instances are
+      replaced. The behavior is described for EF Core 10.
+    linkTitles:
+      - "Managing migrations"
+      - "Applying migrations"
+      - "Martin Fowler: ParallelChange"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

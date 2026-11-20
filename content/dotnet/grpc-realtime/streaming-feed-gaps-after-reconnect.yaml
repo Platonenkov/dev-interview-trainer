@@ -1,0 +1,131 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RP0DC9VNH7CA6MN2BR
+slug: streaming-feed-gaps-after-reconnect
+stack: dotnet
+topic: grpc-realtime
+level: architect
+type: situation
+grading: self
+tags: [grpc, server-sent-events, streaming, reconnect, sequence-numbers]
+links:
+  - url: https://html.spec.whatwg.org/multipage/server-sent-events.html
+    lang: en
+    kind: spec
+  - url: https://learn.microsoft.com/en-us/aspnet/core/grpc/services
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/grpc/retries
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.net.serversentevents.sseitem-1
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Клиенты потокового фида цен по gRPC и SSE теряют обновления при переподключениях и релизах
+    prompt: |
+      Сервис публикует котировки в реальном времени. Внутренние сервисы и партнёры подписываются через
+      server-streaming метод gRPC, браузерные клиенты - через Server-Sent Events. Фид обслуживают несколько
+      экземпляров за балансировщиком, релизы выкатываются постепенно.
+
+      Клиенты жалуются, что после обрыва сети и во время каждого релиза часть обновлений пропадает: поток
+      переподключается, но продолжается уже с новых цен. Партнёры требуют, чтобы пропусков не было.
+
+      Как вы перепроектируете фид?
+    hint: Что клиент должен сообщить серверу при переподключении и что сервер должен хранить, чтобы на это ответить?
+    answer: |
+      1. **Сначала договориться о контракте.** "Без пропусков" не может означать доставку ровно один раз по сети: соединение TCP рвётся, когда часть сообщений уже записана в буферы, а останавливающийся экземпляр уносит свои потоки с собой. Ни gRPC, ни SSE не восстанавливают пропущенные сообщения сами: SSE лишь передаёт серверу последний id, а досылать должен сервер. Достижимый контракт такой: у каждого обновления есть позиция, клиент либо получает все позиции по порядку, либо явно узнаёт, что должен пересинхронизироваться; дубликаты возможны, но распознаются.
+      2. **Нумеровать обновления в источнике.** Один упорядочивающий источник (ценовой движок или партиционированный лог, например Kafka) присваивает монотонно растущий номер в пределах ключа потока: инструмента или партиции. Экземпляры, которые держат соединения, только передают эти номера. Если бы каждый экземпляр нумеровал свой поток сам, клиент не смог бы продолжить с того же места после переподключения к другому экземпляру.
+      3. **Клиент сам называет позицию продолжения.** SSE: каждое событие несёт поле `id:`, браузерный `EventSource` запоминает последний id и при переподключении отправляет его в заголовке `Last-Event-ID`, а поле `retry:` задаёт задержку переподключения. gRPC: у потокового вызова нет встроенной позиции продолжения, новый вызов - это новый поток, а встроенные повторы клиента gRPC работают только до того, как вызов зафиксирован (получены заголовки ответа). Поэтому позиция передаётся в сообщении запроса: в `Subscribe(SubscribeRequest) returns (stream PriceUpdate)` добавляется поле вроде `resume_after`; когда вызов обрывается с `RpcException`, клиент открывает новый вызов с последним обработанным номером.
+      4. **Досылать из ограниченного буфера, общего для всех экземпляров.** Экземпляр читает обновления после запрошенной позиции из буфера, который не живёт в одном процессе: лог с хранением, поток в Redis или кольцевой буфер на партицию, доступный всем экземплярам. Буфер ограничен по времени или числу сообщений (например, последние 5 минут): этого хватает на переподключения и релизы, но не на клиента, который был офлайн час.
+      5. **Запасной путь - снимок плюс дельты.** Если запрошенная позиция старше буфера или неизвестна, сервер отправляет явный маркер сброса, снимок текущих цен с позицией, которой он соответствует, и затем дельты после этой позиции. Клиент заменяет своё состояние, а не сливает его. Для цен снимка обычно достаточно, потому что важно последнее значение по инструменту; если партнёрам нужен каждый тик (аудит, расчёт VWAP), история отдаётся отдельным пакетным API, а не через живой фид.
+      6. **Сделать клиента строгим.** Отбрасывать обновления с номером не больше последнего обработанного (дубликаты после досылки), считать скачок номера пропуском и переподписываться с последней корректной позиции или запрашивать снимок. Heartbeat-сообщения с текущим номером позволяют заметить зависший поток и пропуск, даже когда цены не меняются.
+      7. **Спланировать релизы.** Останавливающийся экземпляр выводится из балансировщика, перестаёт принимать подписки и сам завершает свои потоки, как только начинается остановка. Одного `ServerCallContext.CancellationToken` для этого мало: он срабатывает при отмене клиентом, истечении deadline или обрыве соединения, а при штатной остановке Kestrel обрывает соединения только после тайм-аута остановки хоста. Поэтому потоковый метод связывает этот токен с `IHostApplicationLifetime.ApplicationStopping` через `CancellationTokenSource.CreateLinkedTokenSource`, по этому сигналу отправляет последнее сообщение (heartbeat с текущим номером или маркер "переподключись") и выходит из метода. SSE-эндпоинт так же следит за `ApplicationStopping` и завершает ответ. Клиенты переподключаются к другим экземплярам с экспоненциальной задержкой и случайным разбросом, чтобы релиз не вызвал шквал переподключений. Досылка из буфера делает такое переподключение без потерь.
+      8. **Отключать медленных потребителей и измерять.** Клиента, отставшего дальше границы буфера, нужно отключить и пересинхронизировать, а не растить очередь на соединение без предела. Метрики: число переподключений, досылок и их глубина, переходы на снимок, пропуски, обнаруженные клиентами, задержка от источника до доставки.
+    explanation: |
+      Транспорт отвечает за доставку только в пределах одного соединения или одного вызова. Когда соединение
+      рвётся, всё, что было в пути, теряется, а новое соединение ничего не знает о старом. Поэтому гарантия
+      "без пропусков" - это свойство прикладного протокола: позиция у каждого сообщения, позиция продолжения
+      от клиента и хранилище, из которого можно дослать недостающее.
+
+      SSE уже содержит половину этого механизма в стандарте: поле `id:`, автоматическое переподключение
+      `EventSource` и заголовок `Last-Event-ID`. Но сервер обязан сам хранить историю и уметь продолжить с
+      присланной позиции, иначе заголовок бесполезен. В gRPC того же добиваются полем в сообщении запроса и
+      логикой повторной подписки на клиенте. В ASP.NET Core в .NET 10 для SSE есть `TypedResults.ServerSentEvents`
+      с элементами `SseItem<T>`, у которых можно задать `EventId`, поэтому поле `id:` не нужно форматировать
+      вручную.
+
+      Штатная остановка тоже требует кода в самом методе: пока потоковый метод не вернул управление, Kestrel
+      ждёт его до тайм-аута остановки, а затем обрывает соединение. Метод, который реагирует на
+      `ApplicationStopping`, завершает поток сразу, и клиент успевает переподключиться к другому экземпляру.
+
+      Ключевые компромиссы:
+
+      - Номер присваивается в одном месте на ключ потока. Глобальный порядок по всем инструментам дорог и
+        ограничивает масштабирование, порядок внутри инструмента или партиции обычно достаточен.
+      - Размер буфера - это баланс между памятью и стоимостью хранения и частотой дорогих переходов на снимок.
+        Его выбирают по реальной длительности переподключений и релизов, а не наугад.
+      - Снимок плюс дельты должен быть согласован: снимок помечается позицией, и дельты начинаются строго после
+        неё, иначе обновление между снимком и потоком потеряется или применится дважды.
+      - Доставка становится "не менее одного раза", поэтому идемпотентность на стороне клиента обязательна.
+    linkTitles:
+      - "HTML Standard: Server-Sent Events"
+      - "Создание служб и методов gRPC"
+      - "Обработка временных сбоев с помощью повторов gRPC"
+      - "Структура SseItem<T>"
+  en:
+    title: Clients of a gRPC and SSE price feed lose updates during reconnects and redeployments
+    prompt: |
+      A service publishes live prices. Internal services and partners subscribe through a gRPC
+      server-streaming method, browser clients through Server-Sent Events. Several instances behind a load
+      balancer serve the feed, and releases are rolled out gradually.
+
+      Clients complain that after a network drop and during every release some updates disappear: the stream
+      reconnects but continues from newer prices. Partners demand that there are no gaps.
+
+      How do you redesign the feed?
+    hint: What must the client tell the server when it reconnects, and what must the server keep to be able to answer?
+    answer: |
+      1. **Agree on the contract first.** "No gaps" cannot mean exactly-once delivery over the network: a TCP connection breaks when some messages are already written into buffers, and a stopping instance takes its streams with it. Neither gRPC nor SSE recovers missed messages by itself: SSE only passes the last id to the server, and the server is the one that must resend. The achievable contract is: every update has a position, and the client either receives every position in order or learns explicitly that it must resynchronise; duplicates are possible but detectable.
+      2. **Number the updates at the source.** A single ordering source (the pricing engine or a partitioned log such as Kafka) assigns a monotonically increasing number per stream key: per instrument or per partition. The instances that hold connections only relay these numbers. If every instance numbered its own stream, a client that reconnects to another instance could not continue from the same place.
+      3. **Let the client name its resume position.** SSE: every event carries an `id:` field, the browser `EventSource` remembers the last id and sends it in the `Last-Event-ID` header on reconnect, and the `retry:` field sets the reconnection delay. gRPC: a streaming call has no built-in resume position, a new call is a new stream, and the built-in gRPC client retries apply only until the call is committed (response headers received). So the position travels in the request message: the request of `Subscribe(SubscribeRequest) returns (stream PriceUpdate)` gets a field such as `resume_after`; when the call breaks with an `RpcException`, the client opens a new call with the last number it processed.
+      4. **Replay from a bounded buffer shared by all instances.** The instance reads the updates after the requested position from a buffer that does not live in one process: a retained log, a Redis stream or a ring buffer per partition that every instance can read. The buffer is bounded by time or count (for example the last 5 minutes): that covers reconnects and releases, but not a client that was offline for an hour.
+      5. **Fall back to a snapshot plus deltas.** If the requested position is older than the buffer or unknown, the server sends an explicit reset marker, a snapshot of current prices tagged with the position it reflects, and then the deltas after that position. The client replaces its state instead of merging it. For prices a snapshot is usually enough, because only the latest value per instrument matters; if partners need every tick (audit, VWAP calculation), the history goes through a separate batch API, not through the live feed.
+      6. **Make the client strict.** Drop updates with a number not greater than the last processed one (duplicates after replay), treat a jump in the number as a gap and resubscribe from the last good position or request a snapshot. Heartbeat messages carrying the current number let the client notice a stalled stream and a gap even when prices do not change.
+      7. **Plan releases.** A stopping instance is taken out of the load balancer, stops accepting subscriptions and ends its streams itself as soon as shutdown begins. `ServerCallContext.CancellationToken` alone is not enough: it fires when the client cancels, the deadline passes or the connection aborts, and during a graceful shutdown Kestrel aborts connections only after the host shutdown timeout. So the streaming method links that token with `IHostApplicationLifetime.ApplicationStopping` through `CancellationTokenSource.CreateLinkedTokenSource`, on that signal sends a final message (a heartbeat with the current number or a "reconnect" marker) and returns from the method. The SSE endpoint observes `ApplicationStopping` the same way and completes the response. Clients reconnect to other instances with exponential backoff and random jitter so that a release does not cause a reconnect storm. Replay from the buffer makes that reconnect lossless.
+      8. **Disconnect slow consumers and measure.** A client that falls behind the buffer boundary is disconnected and resynchronised instead of growing a per-connection queue without limit. Metrics: reconnects, replays and their depth, snapshot fallbacks, gaps detected by clients, the lag from source to delivery.
+    explanation: |
+      A transport is responsible for delivery only within one connection or one call. When the connection
+      breaks, whatever was in flight is lost, and the new connection knows nothing about the old one. So the
+      "no gaps" guarantee is a property of the application protocol: a position on every message, a resume
+      position from the client and a store from which the missing part can be replayed.
+
+      SSE already has half of this mechanism in the standard: the `id:` field, automatic reconnection of
+      `EventSource` and the `Last-Event-ID` header. But the server must keep the history itself and be able to
+      continue from the position it receives, otherwise the header is useless. In gRPC the same is achieved with
+      a field in the request message and resubscription logic on the client. In ASP.NET Core in .NET 10, SSE has
+      `TypedResults.ServerSentEvents` with `SseItem<T>` items that can carry an `EventId`, so the `id:` field
+      does not have to be formatted by hand.
+
+      A graceful shutdown also needs code in the method itself: until a streaming method returns, Kestrel waits
+      for it up to the shutdown timeout and then aborts the connection. A method that reacts to
+      `ApplicationStopping` ends the stream at once, and the client has time to reconnect to another instance.
+
+      Key trade-offs:
+
+      - The number is assigned in one place per stream key. A global order across all instruments is expensive
+        and limits scaling; order within an instrument or partition is usually enough.
+      - The buffer size is a balance between memory and storage cost and how often the expensive snapshot
+        fallback happens. Choose it from the real duration of reconnects and releases, not by guessing.
+      - Snapshot plus deltas must be consistent: the snapshot is tagged with a position and the deltas start
+        strictly after it, otherwise an update between the snapshot and the stream is lost or applied twice.
+      - Delivery becomes at-least-once, so idempotency on the client side is mandatory.
+    linkTitles:
+      - "HTML Standard: Server-sent events"
+      - "Create gRPC services and methods"
+      - "Transient fault handling with gRPC retries"
+      - "SseItem<T> struct"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

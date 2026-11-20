@@ -1,0 +1,105 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPMDEQDEEQB8QXH0S0
+slug: grpc-channel-reuse-per-call-cost
+stack: dotnet
+topic: grpc-realtime
+level: middle
+type: open
+grading: self
+tags: [grpc, grpc-channel, http2, performance, client-factory]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/grpc/performance
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/grpc/clientfactory
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему новый GrpcChannel на каждый вызов замедляет клиента gRPC и что нужно переиспользовать?
+    prompt: |
+      Сервис вызывает другой сервис по gRPC и на каждый входящий запрос делает так:
+      `using var channel = GrpcChannel.ForAddress(address);`, затем создаёт `new Orders.OrdersClient(channel)`
+      и выполняет один вызов. Под нагрузкой вызовы идут заметно дольше, чем сервер тратит на их обработку.
+
+      Почему создание канала на каждый вызов - проблема производительности? Что нужно создать один раз и
+      переиспользовать, а что можно спокойно создавать на каждый вызов?
+    hint: Что должно произойти в сети, прежде чем по только что созданному каналу уйдёт первый вызов?
+    answer: |
+      - **Канал владеет соединениями.** `GrpcChannel` держит HTTP/2-соединение с сервером через свой
+        `HttpMessageHandler`. Новый канал начинает без соединения, поэтому каждый вызов сначала платит за
+        открытие сокета, установку TCP-соединения, согласование TLS и запуск HTTP/2, то есть за несколько
+        обменов по сети, и только потом выполняется сам вызов.
+      - **Переиспользованный канал мультиплексирует вызовы.** Все вызовы идут как отдельные потоки HTTP/2
+        внутри уже открытого соединения, и установка соединения оплачивается один раз.
+      - **Канал потокобезопасен.** Один канал и созданные из него клиенты можно использовать из многих
+        потоков, клиенты могут выполнять несколько вызовов одновременно.
+      - **Клиенты лёгкие.** Сгенерированный клиент (`Orders.OrdersClient`) - тонкая обёртка над каналом, его
+        не нужно кэшировать. Из одного канала можно создать сколько угодно клиентов, в том числе разных типов.
+      - **Как переиспользовать:** создать канал один раз на адрес (например, хранить в singleton) или
+        зарегистрировать клиент через фабрику клиентов gRPC: `AddGrpcClient<Orders.OrdersClient>(o => o.Address = ...)`.
+        Фабрика внедряет клиент как transient, сама переиспользует нижележащие обработчики и соединения и
+        собирает настройку канала в одном месте.
+    explanation: |
+      Вся дорогая часть gRPC-клиента находится в канале: пул соединений, TLS-сессия, состояние HTTP/2.
+      Клиент лишь превращает вызов метода в запрос через канал. Поэтому правило простое: канал долгоживущий,
+      клиент одноразовый.
+
+      При канале на каждый вызов задержка установки соединения добавляется к каждому вызову. Для коротких
+      внутренних вызовов она может быть больше самой обработки: TCP-рукопожатие, рукопожатие TLS и обмен
+      настройками HTTP/2 требуют нескольких обменов по сети, а TLS ещё и нагружает процессор с обеих сторон.
+      `using` в примере не решает проблему: он закрывает соединение после вызова, и следующий вызов снова
+      начинает с нуля. Без `Dispose` было бы хуже: вдобавок накапливались бы открытые соединения.
+
+      Фабрика клиентов gRPC построена на `IHttpClientFactory`: она управляет временем жизни обработчиков,
+      позволяет настроить канал (`ConfigureChannel`), добавить перехватчики и распространение deadline, и при
+      этом разрешает внедрять клиент в любой сервис, не думая о повторном использовании канала.
+    linkTitles:
+      - Рекомендации по производительности gRPC
+      - Интеграция фабрики клиентов gRPC в .NET
+  en:
+    title: Why does a new GrpcChannel per call slow down a gRPC client, and what should be reused?
+    prompt: |
+      A service calls another service over gRPC and, for every incoming request, does this:
+      `using var channel = GrpcChannel.ForAddress(address);`, then creates `new Orders.OrdersClient(channel)`
+      and makes one call. Under load the calls take noticeably longer than the server spends processing them.
+
+      Why is creating a channel for every call a performance problem? What should be created once and reused,
+      and what is fine to create for every call?
+    hint: What has to happen on the network before the first call can travel over a freshly created channel?
+    answer: |
+      - **The channel owns the connections.** `GrpcChannel` holds the HTTP/2 connection to the server through
+        its `HttpMessageHandler`. A new channel starts with no connection, so every call first pays for opening
+        a socket, establishing a TCP connection, negotiating TLS and starting HTTP/2, that is several network
+        round trips, and only then is the call itself made.
+      - **A reused channel multiplexes calls.** All calls travel as separate HTTP/2 streams inside a connection
+        that is already open, so connection setup is paid once.
+      - **The channel is thread-safe.** One channel and the clients created from it can be used from many
+        threads, and clients can make several calls at the same time.
+      - **Clients are lightweight.** A generated client (`Orders.OrdersClient`) is a thin wrapper over the
+        channel and does not need caching. Any number of clients, including clients of different types, can be
+        created from one channel.
+      - **How to reuse:** create the channel once per address (for example, keep it in a singleton) or register
+        the client with the gRPC client factory: `AddGrpcClient<Orders.OrdersClient>(o => o.Address = ...)`.
+        The factory injects the client as transient, reuses the underlying handlers and connections itself, and
+        keeps the channel configuration in one place.
+    explanation: |
+      All the expensive parts of a gRPC client live in the channel: the connection pool, the TLS session, the
+      HTTP/2 state. The client only turns a method call into a request over the channel. Hence the simple rule:
+      the channel is long-lived, the client is disposable.
+
+      With a channel per call, the connection setup latency is added to every call. For short internal calls
+      it can exceed the processing itself: the TCP handshake, the TLS handshake and the HTTP/2 settings exchange
+      take several network round trips, and TLS also costs CPU on both sides. The `using` in the example does
+      not fix this: it closes the connection after the call, and the next call starts from scratch again.
+      Without `Dispose` it would be worse: open connections would pile up as well.
+
+      The gRPC client factory is built on `IHttpClientFactory`: it manages handler lifetimes, lets you configure
+      the channel (`ConfigureChannel`), add interceptors and deadline propagation, and still lets you inject the
+      client into any service without thinking about channel reuse.
+    linkTitles:
+      - Performance best practices with gRPC
+      - gRPC client factory integration in .NET
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

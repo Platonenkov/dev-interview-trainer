@@ -1,0 +1,169 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RK8ZR5ZHSWBCHAA0HN
+slug: background-work-in-api-hosts-vs-workers
+stack: dotnet
+topic: aspnet-core
+level: architect
+type: open
+grading: self
+tags: [hosting, hosted-services, worker-service, background-processing, scaling]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/core/extensions/workers
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/host/hosted-services
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/microsoft.extensions.hosting.backgroundserviceexceptionbehavior
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Где выполнять фоновую обработку - в hosted services внутри API или в отдельных Worker Service?
+    prompt: |
+      На платформе из нескольких десятков сервисов ASP.NET Core фоновая работа (рассылки, обработка очередей,
+      ночные отчёты, синхронизация с внешними системами, прогрев кэша) сейчас запускается как `BackgroundService`
+      прямо в хостах API через `AddHostedService<T>()`. Часть команд предлагает вынести её в отдельные хосты
+      Worker Service.
+
+      Какое правило вы зададите для всей платформы на годы вперёд? Какие компромиссы есть у каждого варианта и по
+      каким признакам работу пора выносить из API?
+    hint: Что изменится для фоновой работы, если процесс с API перезапустят, размножат или перегрузят?
+    answer: |
+      **Hosted service внутри API: всё общее с API**
+
+      1. **Масштабирование.** Hosted service - singleton, который запускается в каждом экземпляре хоста. При N
+         репликах API работа выполняется N раз. Для работы на экземпляр (прогрев локального кэша, сброс локальных
+         буферов) это правильно. Для работы «ровно один раз» (ночной отчёт, отправщик outbox, опрос внешней
+         системы) нужна распределённая блокировка или аренда либо конкурентные потребители очереди. Отдельно
+         масштабировать фон и запросы нельзя.
+      2. **Ресурсы.** Пул потоков, CPU, память, сборщик мусора и пул соединений с базой общие. Тяжёлый пакет
+         поднимает задержку запросов, а автомасштабирование по CPU реагирует на фоновую нагрузку, а не на трафик.
+      3. **Отказы.** Начиная с .NET 6 необработанное исключение из `ExecuteAsync` по умолчанию останавливает весь
+         хост (`BackgroundServiceExceptionBehavior.StopHost`), то есть ошибка в задаче роняет экземпляры API.
+         Значение `Ignore` оставляет API живым, но задача перестаёт работать, а след остаётся только в логе.
+         `StartAsync` вызывается до запуска сервера, поэтому медленный старт службы задерживает готовность API.
+      4. **Выкатки.** Каждый релиз API перезапускает фоновую работу, и у неё тот же бюджет на остановку, что у
+         запросов. Длинные задачи регулярно прерываются, а ритм релизов задач привязан к ритму API.
+      5. **Передача работы.** Очередь в памяти (`Channel<T>`) теряет задания при перезапуске и падении процесса.
+
+      **Отдельный хост Worker Service: независимость за счёт новых частей системы**
+
+      - Тот же `BackgroundService` и тот же универсальный хост (`Host.CreateApplicationBuilder`), но процесс свой:
+        масштабирование по длине очереди, а не по трафику, свои лимиты памяти и CPU, свой график выкаток, отказ
+        задачи не трогает API, можно выдать отдельное удостоверение с другими правами.
+      - Цена: больше развёртываемых единиц (конвейеры, дашборды, алерты, конфигурация, секреты). Нужна явная
+        надёжная передача работы - брокер очереди или таблица outbox. Сообщения становятся контрактом между
+        независимо выкатываемыми частями и должны версионироваться совместимо. Доставка «хотя бы один раз»
+        требует идемпотентных обработчиков. Пользователь видит итоговую согласованность (нужен статус операции).
+
+      **Правило для платформы**
+
+      1. **Классифицировать работу.** Работа на экземпляр - в хосте API. Работа, порождённая запросом и
+         обязанная пережить перезапуск, - через надёжную очередь. Тяжёлая, долгая, плановая или «ровно один раз» -
+         в отдельном worker.
+      2. **Писать задачи переносимыми.** Классы `BackgroundService` и их логика лежат в отдельной библиотеке без
+         зависимости от HTTP, scoped-зависимости берутся через `IServiceScopeFactory`. Тогда перенос между хостами -
+         это смена регистрации, а не переписывание.
+      3. **Надёжная передача работы с самого начала**, даже если потребитель пока живёт в процессе API.
+      4. **Признаки выноса:** задержка API коррелирует с фоновыми задачами, нужен другой профиль масштабирования,
+         выкатки обрывают задачи, задачей владеет другая команда, задача требует других прав.
+      5. **Стандарт worker-хоста:** общий шаблон с health checks, телеметрией, корректной остановкой и
+         идемпотентностью. Workers группируются по профилю нагрузки и владельцу, а не «один хост на задачу», иначе
+         число развёртываемых единиц растёт быстрее пользы.
+    explanation: |
+      Код фоновой службы в обоих вариантах одинаковый: и ASP.NET Core, и шаблон Worker Service построены на одном
+      универсальном хосте и одном `IHostedService`. Поэтому решение не про API, а про границы эксплуатации: с чем
+      работа делит жизненный цикл. В процессе API она получает масштабирование, выкатки, бюджет остановки, ресурсы и
+      отказы самого API. Это дёшево, пока работа лёгкая и её копия на каждом экземпляре уместна, и становится
+      скрытой связностью, когда нагрузка или требования расходятся.
+
+      Отдельный хост превращает эту неявную связь в явный контракт - очередь и формат сообщений. Явный контракт
+      стоит денег: инфраструктура, версионирование, идемпотентность, наблюдаемость ещё одного процесса. Но именно он
+      позволяет годами менять API и обработку независимо.
+
+      Самая дорогая ошибка на длинной дистанции - не выбор одного из вариантов, а задачи, которые опираются на
+      состояние процесса API (данные в памяти, очередь в памяти, `IServiceProvider` хоста). Их уже нельзя вынести
+      без переписывания. Переносимый код и надёжная передача работы с первого дня делают решение обратимым.
+      Поведение по умолчанию при исключениях описано для .NET 10 (оно действует начиная с .NET 6).
+    linkTitles:
+      - "Worker Services в .NET"
+      - "Фоновые задачи с размещёнными службами в ASP.NET Core"
+      - "Перечисление BackgroundServiceExceptionBehavior"
+  en:
+    title: Should background processing run in hosted services inside the API or in dedicated Worker Service hosts?
+    prompt: |
+      On a platform of several dozen ASP.NET Core services, background work (mail sending, queue processing,
+      nightly reports, synchronization with external systems, cache warm-up) currently runs as `BackgroundService`
+      directly inside the API hosts through `AddHostedService<T>()`. Some teams propose moving it into dedicated
+      Worker Service hosts.
+
+      What rule would you set for the whole platform for years ahead? What are the trade-offs of each option, and
+      which signals tell you that work should leave the API?
+    hint: What happens to the background work when the API process is restarted, replicated or put under load?
+    answer: |
+      **A hosted service inside the API: everything is shared with the API**
+
+      1. **Scaling.** A hosted service is a singleton started in every instance of the host. With N API replicas
+         the work runs N times. For per-instance work (warming a local cache, flushing local buffers) that is
+         correct. For "exactly once" work (a nightly report, an outbox dispatcher, polling an external system) you
+         need a distributed lock or lease, or competing consumers on a queue. You cannot scale background work and
+         requests separately.
+      2. **Resources.** The thread pool, CPU, memory, the garbage collector and the database connection pool are
+         shared. A heavy batch raises request latency, and CPU-based autoscaling reacts to background load rather
+         than to traffic.
+      3. **Failures.** Since .NET 6 an unhandled exception from `ExecuteAsync` stops the whole host by default
+         (`BackgroundServiceExceptionBehavior.StopHost`), so a bug in a job takes API instances down. The `Ignore`
+         value keeps the API alive, but the job stops running and only a log entry shows it. `StartAsync` is
+         called before the server starts, so a slow service start delays API readiness.
+      4. **Rollouts.** Every API release restarts the background work, and it gets the same shutdown budget as the
+         requests. Long jobs are interrupted regularly, and the release cadence of jobs is tied to the API.
+      5. **Hand-off.** An in-memory queue (`Channel<T>`) loses work when the process restarts or crashes.
+
+      **A dedicated Worker Service host: independence at the cost of more moving parts**
+
+      - The same `BackgroundService` and the same Generic Host (`Host.CreateApplicationBuilder`), but its own
+        process: scaling by queue length rather than by traffic, its own memory and CPU limits, its own release
+        schedule, a failing job does not touch the API, and it can get a separate identity with different rights.
+      - The cost: more deployables (pipelines, dashboards, alerts, configuration, secrets). You need an explicit,
+        durable hand-off - a message broker or an outbox table. Messages become a contract between independently
+        deployed parts and must be versioned compatibly. At-least-once delivery requires idempotent handlers. Users
+        see eventual consistency (you need an operation status).
+
+      **The platform rule**
+
+      1. **Classify the work.** Per-instance work stays in the API host. Work triggered by a request that must
+         survive a restart goes through a durable queue. Heavy, long, scheduled or "exactly once" work goes to a
+         dedicated worker.
+      2. **Write jobs to be portable.** `BackgroundService` classes and their logic live in a separate library with
+         no HTTP dependency, and scoped dependencies come through `IServiceScopeFactory`. Then moving between hosts
+         is a registration change, not a rewrite.
+      3. **A durable hand-off from the start**, even if the consumer still lives in the API process.
+      4. **Signals to extract:** API latency correlates with background jobs, a different scaling profile is
+         needed, rollouts cut jobs off, another team owns the job, the job needs different rights.
+      5. **A standard worker host:** a shared template with health checks, telemetry, graceful shutdown and
+         idempotency. Group workers by load profile and owner rather than "one host per job", otherwise the number
+         of deployables grows faster than the benefit.
+    explanation: |
+      The background service code is the same in both options: ASP.NET Core and the Worker Service template are
+      built on the same Generic Host and the same `IHostedService`. So the decision is not about APIs but about
+      operational boundaries: what the work shares its lifecycle with. Inside the API process it inherits the API's
+      scaling, rollouts, shutdown budget, resources and failures. That is cheap while the work is light and a copy
+      per instance makes sense, and it becomes hidden coupling once the load or requirements diverge.
+
+      A dedicated host turns this implicit coupling into an explicit contract - a queue and a message format. An
+      explicit contract costs money: infrastructure, versioning, idempotency, observability of one more process. But
+      it is what lets you change the API and the processing independently for years.
+
+      The most expensive mistake over the long run is not picking either option, but jobs that rely on the state of
+      the API process (in-memory data, an in-memory queue, the host's `IServiceProvider`). Those cannot be moved
+      without a rewrite. Portable code and a durable hand-off from day one keep the decision reversible. The default
+      exception behaviour is described for .NET 10 (it applies since .NET 6).
+    linkTitles:
+      - "Worker Services in .NET"
+      - "Background tasks with hosted services in ASP.NET Core"
+      - "BackgroundServiceExceptionBehavior enum"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

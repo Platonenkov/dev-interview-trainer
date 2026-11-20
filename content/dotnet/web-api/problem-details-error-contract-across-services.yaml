@@ -1,0 +1,157 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RRB37QH4PPNJTNCY8Y
+slug: problem-details-error-contract-across-services
+stack: dotnet
+topic: web-api
+level: lead
+type: open
+grading: self
+tags: [problem-details, rfc-9457, error-handling, api-contract, aspnet-core]
+links:
+  - url: https://www.rfc-editor.org/rfc/rfc9457
+    lang: en
+    kind: spec
+  - url: https://learn.microsoft.com/en-us/aspnet/core/web-api/handle-errors
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как унифицировать контракт ошибок в десяти сервисах, если клиенты разбирают текст сообщений?
+    prompt: |
+      В компании десять HTTP-сервисов, и каждый возвращает ошибки в своём формате: где-то `{"error": "..."}`,
+      где-то `{"message": "...", "code": 17}`, где-то простая строка, а шлюз отдаёт свою HTML-страницу.
+      Команды клиентов отличают «нет товара на складе» от «карта отклонена» по тексту сообщения, и любая
+      правка формулировки в сервисе ломает клиентов.
+
+      Вы технический лидер. Как вы унифицируете контракт ошибок и как добьётесь, чтобы все сервисы его соблюдали?
+    hint: |
+      По какому полю клиент должен ветвиться, чтобы текст ошибки можно было свободно менять? И что будет проверять
+      формат автоматически, а не на честном слове?
+    answer: |
+      - **Один формат - Problem Details (RFC 9457).** Любой ответ с ошибкой от любого сервиса, включая шлюз, имеет
+        тип содержимого `application/problem+json` и поля `type`, `title`, `status`, `detail`, `instance`. Код
+        состояния HTTP остаётся правильным, а поле `status` его повторяет.
+      - **Машинный контракт - это `type`.** Каждый вид ошибки получает стабильный абсолютный URI в пространстве имён
+        компании, например `https://errors.example.com/payments/card-declined`, лучше всего ведущий на страницу
+        документации. Клиенты ветвятся по `type`, а при неизвестном типе - по коду состояния. `about:blank` означает
+        «ничего сверх кода состояния». Если командам удобнее короткий код, его добавляют полем-расширением `code`,
+        строго один к одному с `type`, чтобы не было двух конкурирующих идентификаторов.
+      - **Текст - только для людей.** `title` - стабильное краткое описание типа, `detail` - пояснение к конкретному
+        случаю. Оба можно менять и локализовать, клиенты их не разбирают. Данные, нужные программе (остаток
+        баланса, идентификатор конфликтующей записи, ошибки валидации по полям), передаются в задокументированных
+        полях-расширениях, например `errors` для валидации.
+      - **Никаких внутренностей.** В production в ответе нет стек-трейсов, SQL и внутренних имён хостов. Вместо них
+        `traceId` или `instance`, по которым поддержка находит запрос в логах и трассировке.
+      - **Каталог ошибок - часть контракта API.** Типы ошибок каждой операции описаны в OpenAPI и в общем каталоге
+        с владельцем. Добавить тип - совместимое изменение; переименовать, удалить или поменять смысл типа -
+        несовместимое, по правилам версионирования. Клиенты обязаны игнорировать неизвестные поля-расширения и
+        обрабатывать неизвестный `type` как общую ошибку по коду состояния.
+      - **Платформа, а не регламент.** Общий пакет или шаблон сервиса (ASP.NET Core в .NET 10): `AddProblemDetails`
+        с `CustomizeProblemDetails` (добавляет `traceId` и имя сервиса), `UseExceptionHandler` и `IExceptionHandler`,
+        который отображает доменные исключения на типы, `UseStatusCodePages` для пустых ответов с ошибкой. В
+        контроллерах с `[ApiController]` автоматические ответы `400` уже приходят как `ValidationProblemDetails`.
+        Свои ответы `401`, `429` и `502` шлюз тоже отдаёт в этом формате.
+      - **Автоматическая проверка.** Контрактные тесты в CI вызывают эндпоинты с неверными данными, без прав и с
+        несуществующим идентификатором и проверяют тип содержимого, обязательные поля и то, что `type` есть в
+        каталоге. Линтер OpenAPI требует, чтобы каждая операция описывала ответы с ошибками.
+      - **Миграция.** Начать с ошибок, которые клиенты разбирают чаще всего (спросить команды клиентов, посмотреть
+        логи), и переводить сервисы по одному. Если смена формы тела или `Content-Type` ломает действующих клиентов,
+        выпустить формат в следующей версии API или на переходный период оставить старые поля рядом с новыми как
+        поля-расширения. Дать клиентам общую библиотеку чтения Problem Details и вести сводную таблицу прогресса
+        по сервисам.
+    explanation: |
+      Разбор текста привязывает клиента к формулировке: исправление опечатки, локализация или перефразирование
+      становятся несовместимым изменением, и эту связь никто не видит при code review сервиса. Кода состояния тоже
+      мало: под `409` или `422` скрываются десятки разных бизнес-причин.
+
+      RFC 9457 (заменяет RFC 7807) разделяет эти роли. `type` - основной идентификатор вида проблемы, `title` и
+      `detail` - текст для человека, и RFC прямо говорит, что потребителям не следует извлекать информацию из
+      `detail`: для машиночитаемых данных есть поля-расширения. Получатель игнорирует неизвестные расширения,
+      поэтому формат развивается добавлением полей, не ломая клиентов. RFC также предупреждает, что Problem Details -
+      не инструмент отладки реализации, отсюда запрет на стек-трейсы, и описывает, как сообщить о нескольких
+      проблемах сразу и как регистрировать общие типы проблем.
+
+      На уровне лида главное не формат, а внедрение в десяти командах. Стандарт без общей реализации и
+      автоматических проверок расползается за несколько месяцев. Поэтому правильный вариант делают вариантом по
+      умолчанию: шаблон сервиса уже пишет Problem Details для необработанных исключений, пустых ответов с ошибкой и
+      ошибок валидации, и командам остаётся только отобразить доменные ошибки на типы из каталога. Отклонения
+      ловят контрактные тесты в CI, а каталог типов проходит то же ревью API, что и остальной контракт.
+
+      Сильный ответ называет `type` (или эквивалентный ему код) единственной точкой ветвления для клиентов,
+      оставляет текст людям, относится к каталогу ошибок как к версионируемому контракту и закрепляет всё это
+      общей конфигурацией и тестами, а не договорённостью.
+    linkTitles:
+      - "RFC 9457: Problem Details для HTTP API"
+      - "Обработка ошибок в веб-API ASP.NET Core на основе контроллеров"
+  en:
+    title: How do you standardize the error contract of ten services when clients parse error messages?
+    prompt: |
+      A company has ten HTTP services, and each returns errors in its own shape: somewhere `{"error": "..."}`,
+      somewhere `{"message": "...", "code": 17}`, somewhere a plain string, and the gateway sends its own HTML page.
+      Client teams tell "out of stock" from "card declined" by the message text, and every wording change in a
+      service breaks them.
+
+      You are the tech lead. How do you standardize the error contract, and how do you make every service keep it?
+    hint: |
+      Which field should a client branch on so that the error text can change freely? And what checks the shape
+      automatically rather than on trust?
+    answer: |
+      - **One format - Problem Details (RFC 9457).** Every error response from every service, the gateway included,
+        has the content type `application/problem+json` and the members `type`, `title`, `status`, `detail`,
+        `instance`. The HTTP status code stays correct, and the `status` member repeats it.
+      - **The machine contract is `type`.** Each kind of error gets a stable absolute URI in a company-owned
+        namespace, for example `https://errors.example.com/payments/card-declined`, ideally resolving to a docs page.
+        Clients branch on `type`, and on the status code when the type is unknown. `about:blank` means "nothing
+        beyond the status code". If teams prefer a short code, add it as a `code` extension member mapped one to
+        one to `type`, so there are never two competing identifiers.
+      - **Text is for humans only.** `title` is a stable short summary of the type, `detail` explains this
+        occurrence. Both may change and be localized, and clients do not parse them. Data a program needs (the
+        remaining balance, the id of a conflicting record, validation errors per field) goes into documented
+        extension members, for example `errors` for validation.
+      - **No internals.** In production a response carries no stack traces, SQL or internal host names. Instead it
+        carries a `traceId` or `instance` that support uses to find the request in logs and traces.
+      - **The error catalog is part of the API contract.** The error types of each operation are described in
+        OpenAPI and in a shared catalog with an owner. Adding a type is a compatible change; renaming, removing or
+        changing the meaning of a type is breaking and follows the versioning rules. Clients must ignore unknown
+        extension members and treat an unknown `type` as a generic error by status code.
+      - **A platform, not a memo.** A shared package or service template (ASP.NET Core in .NET 10):
+        `AddProblemDetails` with `CustomizeProblemDetails` (adds `traceId` and the service name),
+        `UseExceptionHandler` with an `IExceptionHandler` that maps domain exceptions to types, `UseStatusCodePages`
+        for empty error responses. In controllers with `[ApiController]` the automatic `400` responses already come
+        as `ValidationProblemDetails`. The gateway sends its own `401`, `429` and `502` in the same format.
+      - **Automatic checks.** Contract tests in CI call endpoints with invalid input, without permissions and with a
+        missing id, and check the content type, the required members and that `type` exists in the catalog. An
+        OpenAPI linter requires every operation to declare its error responses.
+      - **Migration.** Start with the errors clients parse most (ask the client teams, read the logs) and move the
+        services one by one. If changing the body shape or the `Content-Type` breaks existing clients, ship the
+        format in the next API version, or keep the old fields next to the standard members as extension members
+        for a transition period. Give clients a shared library that reads Problem Details, and track progress per
+        service on a scorecard.
+    explanation: |
+      Parsing text ties a client to the wording: a typo fix, localization or rephrasing becomes a breaking change,
+      and nobody sees that coupling when reviewing the service. The status code alone is not enough either: `409` or
+      `422` covers dozens of different business reasons.
+
+      RFC 9457 (which obsoletes RFC 7807) separates these roles. `type` is the primary identifier of the problem
+      type, `title` and `detail` are text for a human, and the RFC states directly that consumers should not parse
+      `detail` for information: extension members exist for machine-readable data. Receivers ignore unknown
+      extensions, so the format evolves by adding members without breaking clients. The RFC also warns that problem
+      details are not a debugging tool for the implementation, hence no stack traces, and it describes how to report
+      several problems at once and how to register common problem types.
+
+      At the lead level the hard part is not the format but adoption across ten teams. A standard without a shared
+      implementation and automatic checks drifts within months. So the right thing is made the default: the service
+      template already writes Problem Details for unhandled exceptions, empty error responses and validation
+      errors, and teams only have to map their domain errors to types from the catalog. Contract tests in CI catch
+      deviations, and the type catalog goes through the same API review as the rest of the contract.
+
+      A strong answer makes `type` (or an equivalent code) the single branching point for clients, leaves the text
+      to people, treats the error catalog as a versioned contract, and backs it all with shared configuration and
+      tests rather than an agreement.
+    linkTitles:
+      - "RFC 9457: Problem Details for HTTP APIs"
+      - "Handle errors in ASP.NET Core controller-based web APIs"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

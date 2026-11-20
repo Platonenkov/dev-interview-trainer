@@ -1,0 +1,109 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RN5N8T4FT3HKRY05TC
+slug: cosmos-db-session-consistency-guarantees
+stack: dotnet
+topic: databases
+level: senior
+type: multi
+grading: auto
+tags: [azure-cosmos-db, nosql, consistency-levels, session-consistency]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: true
+  - id: d
+    correct: true
+  - id: e
+    correct: false
+  - id: f
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/azure/cosmos-db/consistency-levels
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что гарантирует уровень согласованности Session в Azure Cosmos DB?
+    prompt: |
+      Учётная запись Azure Cosmos DB использует уровень согласованности `Session`. Приложение развёрнуто в
+      нескольких экземплярах за балансировщиком нагрузки. Выберите все верные утверждения об этом уровне.
+    hint: Что переносит гарантию от одного запроса к следующему и у кого эта вещь есть?
+    options:
+      a: "В пределах одного сеанса (с общим токеном сеанса) клиент читает собственные записи, а последовательные чтения не возвращают более старые версии, чем уже прочитанные."
+      b: "Гарантия чтения своих записей распространяется на всех клиентов учётной записи, независимо от токена сеанса."
+      c: "Другой клиент без этого токена сеанса, например другой экземпляр приложения, может прочитать более старую версию документа, который только что записали."
+      d: "При одном и том же бюджете единиц запроса (RU) пропускная способность чтения на уровнях `Strong` и `Bounded staleness` примерно вдвое ниже, чем на уровне `Session`, потому что каждое чтение обслуживают две реплики, а не одна."
+      e: "По умолчанию учётная запись работает на уровне `Session`, но отдельный запрос может потребовать для себя уровень `Strong`."
+      f: "На уровне `Session` запись подтверждается только после того, как её зафиксировали все регионы учётной записи."
+    optionExplanations:
+      b: "Гарантии `Session` действуют только в рамках токена сеанса. Клиенты вне сеанса получают более слабые гарантии (в лучшем случае согласованный префикс, а при записи в несколько регионов учётной записи с несколькими регионами записи - только итоговую согласованность) и могут видеть устаревшие данные."
+      e: "Уровень согласованности по умолчанию можно переопределить для клиента или запроса, но только в сторону ослабления. Усилить его до `Strong` для отдельного запроса нельзя."
+      f: "Синхронное подтверждение записи во всех регионах - свойство уровня `Strong`. На уровне `Session` запись реплицируется в другие регионы асинхронно."
+    answer: "Варианты a, c и d: гарантии действуют только в пределах токена сеанса, клиенты без токена могут читать устаревшие данные, а чтение на более сильных уровнях обходится примерно вдвое дороже по RU."
+    explanation: |
+      На уровне `Session` каждая запись возвращает токен сеанса, и SDK отправляет его со следующими запросами.
+      Реплика, которая обслуживает чтение, должна догнать состояние, отмеченное токеном. Поэтому внутри сеанса
+      выполняются чтение своих записей, монотонные чтения и порядок «запись после чтения». Документация
+      оговаривает, что гарантия рассчитана на одного пишущего или на общий токен сеанса у нескольких.
+
+      Токен по умолчанию хранится в экземпляре клиента SDK. Другой экземпляр приложения за балансировщиком или
+      другой сервис его не знает, и гарантии для такого клиента слабее. Если у учётной записи один регион записи,
+      клиент вне сеанса получает согласованный префикс (`Consistent prefix`): порядок записей не нарушается, но
+      данные могут отставать. Если учётная запись принимает записи в нескольких регионах и клиент пишет в
+      несколько регионов, остаётся только итоговая согласованность (`Eventual`): возможны и устаревшие чтения, и
+      нарушение порядка, в котором видны записи. Если пользователь пишет через один экземпляр, а читает через
+      другой, токен сеанса нужно передавать явно, иначе он может не увидеть собственное изменение.
+
+      Чтение на уровне `Session` обслуживает одна реплика, как и на уровнях `Consistent prefix` и `Eventual`.
+      `Strong` и `Bounded staleness` читают из двух реплик (кворум меньшинства), поэтому при том же бюджете RU
+      пропускная способность чтения у них примерно вдвое ниже. `Strong` в нескольких регионах вдобавок
+      увеличивает задержку записи: запись синхронно реплицируется во все регионы учётной записи. `Session` -
+      уровень по умолчанию для новых учётных записей: он даёт пользователю согласованное представление его
+      данных без цены сильных уровней.
+    linkTitles:
+      - "Уровни согласованности в Azure Cosmos DB"
+  en:
+    title: What does the Session consistency level guarantee in Azure Cosmos DB?
+    prompt: |
+      An Azure Cosmos DB account uses the `Session` consistency level. The application is deployed as several
+      instances behind a load balancer. Select every true statement about this level.
+    hint: What carries the guarantee from one request to the next, and who has it?
+    options:
+      a: "Within one session (sharing one session token), a client reads its own writes, and consecutive reads never return older versions than the ones already read."
+      b: "The read-your-writes guarantee covers every client of the account, regardless of the session token."
+      c: "Another client without this session token, for example another instance of the application, can read an older version of a document that was just written."
+      d: "For the same budget of request units (RU), read throughput under `Strong` and `Bounded staleness` is about half of that under `Session`, because each read is served by two replicas instead of one."
+      e: "The account runs at `Session` by default, but a single request can ask for `Strong` for itself."
+      f: "Under `Session`, a write is acknowledged only after every region of the account has committed it."
+    optionExplanations:
+      b: "`Session` guarantees hold only within the scope of a session token. Clients outside the session get weaker guarantees (consistent prefix at best, and only eventual consistency when writing to several regions of an account with multiple write regions) and can see stale data."
+      e: "The default consistency level can be overridden for a client or a request, but only to a weaker level. A single request cannot strengthen it to `Strong`."
+      f: "Synchronous acknowledgement of a write in all regions is a property of `Strong`. Under `Session`, a write is replicated to other regions asynchronously."
+    answer: "Options a, c and d: the guarantees hold only within a session token, clients without the token can read stale data, and reads under the stronger levels cost about twice as much in RU."
+    explanation: |
+      Under `Session`, every write returns a session token, and the SDK sends it with the following requests. The
+      replica that serves a read must have caught up with the state the token marks. That is why, inside a
+      session, you get read-your-writes, monotonic reads and write-follows-reads. The documentation notes that
+      the guarantee assumes a single writer, or several writers sharing the session token.
+
+      By default the token lives in the SDK client instance. Another application instance behind the load
+      balancer, or another service, does not know it, and such a client gets weaker guarantees. On an account
+      with a single write region, a client outside the session gets consistent prefix (`Consistent prefix`): the
+      order of writes is preserved, but the data can lag behind. On an account with multiple write regions, a
+      client that writes to several regions gets only eventual consistency (`Eventual`): both stale reads and
+      out-of-order visibility of writes are possible. If a user writes through one instance and reads through
+      another, the session token has to be passed explicitly, otherwise the user may not see their own change.
+
+      A `Session` read is served by one replica, the same as under `Consistent prefix` and `Eventual`. `Strong`
+      and `Bounded staleness` read from two replicas (a minority quorum), so for the same RU budget their read
+      throughput is about half. `Strong` across several regions also adds write latency: a write is replicated
+      synchronously to every region of the account. `Session` is the default level for new accounts: it gives a
+      user a consistent view of their own data without the price of the strong levels.
+    linkTitles:
+      - "Consistency levels in Azure Cosmos DB"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

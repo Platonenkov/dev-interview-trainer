@@ -1,0 +1,108 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPJCFK9BSYSYS9Z1NC
+slug: signalr-ihubcontext-send-from-background
+stack: dotnet
+topic: grpc-realtime
+level: middle
+type: single
+grading: auto
+tags: [signalr, ihubcontext, background-service, dependency-injection]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/signalr/hubcontext
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/signalr/hubs
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как отправить сообщение клиентам SignalR из BackgroundService или контроллера?
+    prompt: |
+      В приложении ASP.NET Core (.NET 10) есть хаб `NotificationHub`. Фоновый сервис, унаследованный от
+      `BackgroundService`, раз в минуту проверяет новые заказы и должен уведомлять подключённых клиентов.
+      Как правильно отправить сообщение клиентам SignalR из такого сервиса или из контроллера?
+    hint: "Кто создаёт экземпляр хаба, кто заполняет его свойство `Clients` и сколько живёт этот экземпляр?"
+    options:
+      a: "Создать хаб через `new NotificationHub()` и вызвать у него `Clients.All.SendAsync(...)`."
+      b: "Внедрить в конструктор `IHubContext<NotificationHub>` и вызывать `Clients.All.SendAsync(...)` или `Clients.Group(...).SendAsync(...)` у этого контекста."
+      c: "Создать хаб через `ActivatorUtilities.CreateInstance<NotificationHub>(serviceProvider)`, чтобы внедрились зависимости конструктора, и вызвать `Clients.All.SendAsync(...)`."
+      d: "В `OnConnectedAsync` сохранить ссылку на экземпляр хаба в статическое поле и позже использовать его `Clients` из фонового сервиса."
+      e: "Никак: отправлять сообщения можно только внутри метода хаба, поэтому клиенты должны периодически вызывать метод хаба и забирать уведомления."
+    optionExplanations:
+      a: "Свойства `Clients`, `Groups` и `Context` (контекст соединения) SignalR присваивает экземпляру хаба, который сам создаёт для вызова метода хаба. У объекта, созданного через `new`, они не заданы, поэтому отправить через него ничего нельзя."
+      c: "DI заполнит только параметры конструктора. `Clients`, `Groups` и `Context` присваивает SignalR, когда обрабатывает вызов метода хаба от соединения, а этот экземпляр создан в обход этого механизма, и свойства остаются не заданными."
+      d: "Экземпляр хаба живёт только на время одного вызова, после него SignalR его освобождает. Ссылка в статическом поле указывает на уже освобождённый объект, и пользоваться ею из фонового сервиса нельзя. К тому же она удерживает в памяти экземпляр завершённого вызова."
+      e: "Отправка вне хаба поддерживается штатно через `IHubContext<THub>`. Периодический опрос лишает смысла доставку сообщений по инициативе сервера и нагружает сервер."
+    answer: "Внедрить `IHubContext<NotificationHub>` и отправлять сообщения через его `Clients` и `Groups`."
+    explanation: |
+      Хабы в ASP.NET Core SignalR временные: каждый вызов метода хаба выполняется на новом экземпляре хаба.
+      SignalR создаёт этот экземпляр, присваивает ему контекст соединения (`Context`), а также `Clients` и
+      `Groups`, и освобождает экземпляр после вызова. Поэтому собственный экземпляр хаба, созданный вне этого
+      механизма или сохранённый после вызова, для отправки бесполезен.
+
+      Для отправки вне хаба есть сервис `IHubContext<THub>`. Его получают через DI и можно внедрить в
+      контроллер, middleware или фоновый сервис. У контекста есть `Clients` (`All`, `Group`, `User`, `Client`
+      и другие) и `Groups` для управления группами. Вызывать через него методы самого хаба нельзя: он нужен
+      только для отправки клиентам. У такой отправки нет вызывающего соединения, поэтому `Caller`, `Others` и
+      `ConnectionId` недоступны: адресата выбирают явно.
+
+      Если хаб строго типизирован (`NotificationHub : Hub<INotificationClient>`), внедряют
+      `IHubContext<NotificationHub, INotificationClient>` и вызывают методы интерфейса, например
+      `Clients.All.OrderCreated(order)`, вместо `SendAsync` со строковым именем: опечатка в имени метода
+      клиента становится ошибкой компиляции.
+    linkTitles:
+      - "Отправка сообщений вне хаба"
+      - "Использование хабов в ASP.NET Core SignalR"
+  en:
+    title: How do you send a message to SignalR clients from a BackgroundService or a controller?
+    prompt: |
+      An ASP.NET Core (.NET 10) app has a hub `NotificationHub`. A background service derived from
+      `BackgroundService` checks for new orders once a minute and must notify the connected clients.
+      What is the correct way to send a message to SignalR clients from such a service or from a controller?
+    hint: "Who creates a hub instance, who fills in its `Clients` property, and how long does that instance live?"
+    options:
+      a: "Create the hub with `new NotificationHub()` and call `Clients.All.SendAsync(...)` on it."
+      b: "Inject `IHubContext<NotificationHub>` into the constructor and call `Clients.All.SendAsync(...)` or `Clients.Group(...).SendAsync(...)` on that context."
+      c: "Create the hub with `ActivatorUtilities.CreateInstance<NotificationHub>(serviceProvider)` so that constructor dependencies are injected, and call `Clients.All.SendAsync(...)`."
+      d: "In `OnConnectedAsync`, store a reference to the hub instance in a static field and later use its `Clients` from the background service."
+      e: "You cannot: messages can only be sent inside a hub method, so clients must call a hub method periodically to fetch notifications."
+    optionExplanations:
+      a: "SignalR assigns `Clients`, `Groups` and the connection's `Context` to the hub instance it creates itself for a hub method call. On an object created with `new` they are not set, so nothing can be sent through it."
+      c: "DI fills only the constructor parameters. SignalR assigns `Clients`, `Groups` and `Context` when it dispatches a hub method call from a connection, and this instance was created outside that mechanism, so the properties stay unset."
+      d: "A hub instance lives only for one invocation, and SignalR disposes it afterwards. A reference kept in a static field points to a disposed object and cannot be used from the background service. It also keeps the instance of a finished call alive."
+      e: "Sending from outside a hub is supported out of the box through `IHubContext<THub>`. Periodic polling defeats the purpose of server-initiated delivery and loads the server."
+    answer: "Inject `IHubContext<NotificationHub>` and send messages through its `Clients` and `Groups`."
+    explanation: |
+      Hubs in ASP.NET Core SignalR are transient: each hub method call runs on a new hub instance. SignalR
+      creates that instance, assigns it the connection's `Context` together with `Clients` and `Groups`, and
+      disposes it after the call. So a hub instance you create outside that mechanism, or keep after the call,
+      is useless for sending.
+
+      For sending outside a hub there is the `IHubContext<THub>` service. You get it through DI and can inject
+      it into a controller, middleware or a background service. The context has `Clients` (`All`, `Group`,
+      `User`, `Client` and others) and `Groups` for managing groups. It cannot be used to call methods on the
+      hub itself: it is only for sending to clients. Such a send has no calling connection, so `Caller`,
+      `Others` and `ConnectionId` are not available: the target is chosen explicitly.
+
+      If the hub is strongly typed (`NotificationHub : Hub<INotificationClient>`), inject
+      `IHubContext<NotificationHub, INotificationClient>` and call interface methods such as
+      `Clients.All.OrderCreated(order)` instead of `SendAsync` with a string name: a typo in the client
+      method name becomes a compile error.
+    linkTitles:
+      - "Send messages from outside a hub"
+      - "Use hubs in ASP.NET Core SignalR"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

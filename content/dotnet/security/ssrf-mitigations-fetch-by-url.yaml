@@ -1,0 +1,129 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQ0BY0MVD1Y76NQXN3
+slug: ssrf-mitigations-fetch-by-url
+stack: dotnet
+topic: security
+level: senior
+type: multi
+grading: auto
+tags: [ssrf, owasp, httpclient]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: true
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+  - id: f
+    correct: false
+links:
+  - url: https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html
+    lang: en
+    kind: article
+  - url: https://owasp.org/Top10/A10_2021-Server-Side_Request_Forgery_%28SSRF%29/
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.net.http.socketshttphandler.connectcallback
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какие меры действительно защищают от SSRF при загрузке картинки по URL пользователя?
+    prompt: |
+      Пользователь указывает URL аватара, а сервер скачивает картинку через `HttpClient` и сохраняет её у себя.
+      Сервис работает в облаке: рядом есть сервис метаданных экземпляра и внутренние административные API.
+
+      Выберите все меры, которые действительно предотвращают SSRF в этой функции.
+    hint: Для каждой меры спросите себя, контролирует ли она адрес, к которому сервер в итоге подключится.
+    options:
+      a: "Список разрешённых хостов (например, только известные хостинги картинок), только схема `https` и отключённые автоматические перенаправления; разобранный `Uri.Host` сравнивается со списком точно."
+      b: "Разрешить имя хоста в IP-адреса и отклонять частные (10/8, 172.16/12, 192.168/16), loopback и link-local (169.254/16, включая адрес метаданных 169.254.169.254) адреса и их IPv6-аналоги; подключаться именно к проверенному адресу, а автоматические перенаправления отключить или проверять каждую цель перенаправления так же."
+      c: "Ограничить исходящий трафик сервиса на уровне сети: загрузчику доступен только интернет, а внутренние подсети и сервис метаданных закрыты файрволом или egress-прокси."
+      d: "Отклонять URL, в тексте которых встречаются `localhost`, `127.0.0.1` или `169.254.169.254`."
+      e: "Настроить политику CORS так, чтобы разрешать запросы только с origin собственного фронтенда."
+      f: "После загрузки проверять, что ответ имеет `Content-Type: image/*`, и отбрасывать остальное."
+    optionExplanations:
+      d: "Один и тот же адрес записывается многими способами: `127.1`, `2130706433`, `[::1]`, `[::ffff:127.0.0.1]`, имя домена, которое разрешается во внутренний адрес, или перенаправление с внешнего сайта. Проверка текста URL не видит, куда сервер подключится на самом деле."
+      e: "CORS - механизм браузера: он решает, может ли скрипт другого origin прочитать ответ. Запрос, который сервер делает сам через `HttpClient`, CORS никак не ограничивает."
+      f: "Проверка выполняется уже после того, как запрос дошёл до внутреннего сервиса: побочные эффекты случились, а время и коды ошибок раскрывают устройство сети (слепой SSRF). Ограничивать нужно цель запроса, а не его результат."
+    answer: "Список разрешённых хостов без автоматических перенаправлений (a), проверка разрешённых IP-адресов с контролем перенаправлений (b) и сетевые ограничения исходящего трафика (c)."
+    explanation: |
+      SSRF - это запрос, который сервер выполняет изнутри сети по адресу, выбранному атакующим: к сервису
+      метаданных облака (169.254.169.254), выдающему учётные данные, к внутренним административным API, к
+      сервисам на `localhost`, которые доверяют локальным вызовам. Защита должна контролировать, куда
+      в действительности уходит подключение.
+
+      - **Список разрешённых хостов (a)** - самая сильная мера, когда набор источников известен. Перенаправления
+        при этом отключают: иначе открытый редирект на разрешённом хосте уведёт запрос во внутреннюю сеть.
+      - **Проверка IP-адресов (b)** нужна, если поддерживается любой URL из интернета. Проверять нужно адреса,
+        а не текст URL, включая IPv6 и IPv4, отображённые в IPv6. Проверка должна относиться к адресу, к
+        которому происходит подключение: иначе её обходит DNS rebinding, когда первый ответ DNS публичный, а
+        второй внутренний. В .NET для этого подходит `SocketsHttpHandler.ConnectCallback`: в нём можно
+        разрешить имя, проверить адрес и самому открыть сокет. У колбэка есть ограничения: он вызывается только
+        для соединений на основе потока (HTTP/1.1 и HTTP/2) и не вызывается для HTTP/3, поэтому HTTP/3 для
+        такого клиента не включают; при работе через прокси соединение открывается с прокси, поэтому такому
+        клиенту прокси отключают (`UseProxy = false`) или проверку адресов выполняет сам прокси. Каждое
+        перенаправление - новый запрос, поэтому `AllowAutoRedirect = false` либо такая же проверка каждого
+        `Location`.
+      - **Сетевые ограничения (c)** - эшелонированная защита, которая страхует и от ошибок в коде приложения.
+
+      Чёрный список строк обходится другими записями того же адреса, и OWASP прямо советует не защищаться от
+      SSRF чёрными списками и регулярными выражениями. CORS ограничивает только браузер, а проверка
+      `Content-Type` выполняется, когда запрос уже ушёл.
+    linkTitles:
+      - "OWASP: памятка по предотвращению SSRF"
+      - "OWASP Top 10 (2021): A10 Server-Side Request Forgery"
+      - "Свойство SocketsHttpHandler.ConnectCallback"
+  en:
+    title: Which measures actually prevent SSRF when downloading an image from a user-supplied URL?
+    prompt: |
+      A user supplies an avatar URL, and the server downloads the image with `HttpClient` and stores it.
+      The service runs in the cloud next to the instance metadata service and internal admin APIs.
+
+      Select every measure that actually prevents SSRF in this feature.
+    hint: For each measure, ask whether it controls the address the server finally connects to.
+    options:
+      a: "An allowlist of hosts (for example only known image hosting services), only the `https` scheme and automatic redirects disabled; the parsed `Uri.Host` is compared with the list exactly."
+      b: "Resolve the host name to IP addresses and reject private (10/8, 172.16/12, 192.168/16), loopback and link-local (169.254/16, including the metadata address 169.254.169.254) addresses and their IPv6 equivalents; connect to the validated address itself, and disable automatic redirects or validate every redirect target the same way."
+      c: "Restrict the service's outbound traffic at the network level: the downloader can reach only the internet, while internal subnets and the metadata service are blocked by a firewall or an egress proxy."
+      d: "Reject URLs whose text contains `localhost`, `127.0.0.1` or `169.254.169.254`."
+      e: "Configure a CORS policy that allows requests only from the origin of your own frontend."
+      f: "After the download, check that the response has `Content-Type: image/*` and discard anything else."
+    optionExplanations:
+      d: "The same address has many spellings: `127.1`, `2130706433`, `[::1]`, `[::ffff:127.0.0.1]`, a domain name that resolves to an internal address, or a redirect from an external site. Checking the URL text does not show where the server actually connects."
+      e: "CORS is a browser mechanism: it decides whether a script from another origin may read a response. A request that the server makes itself with `HttpClient` is not restricted by CORS at all."
+      f: "The check runs after the request has already reached the internal service: the side effects have happened, and timing and error codes reveal the network layout (blind SSRF). You have to restrict the target of the request, not its result."
+    answer: "A host allowlist without automatic redirects (a), validation of the resolved IP addresses with control of redirects (b), and network egress restrictions (c)."
+    explanation: |
+      SSRF is a request that the server makes from inside the network to an address chosen by the attacker: to
+      the cloud metadata service (169.254.169.254) that hands out credentials, to internal admin APIs, to
+      services on `localhost` that trust local callers. Protection has to control where the connection actually
+      goes.
+
+      - **A host allowlist (a)** is the strongest measure when the set of sources is known. Redirects are
+        disabled with it: otherwise an open redirect on an allowed host sends the request into the internal network.
+      - **IP address validation (b)** is needed when any internet URL must be supported. Check the addresses,
+        not the URL text, including IPv6 and IPv4-mapped IPv6 addresses. The check must apply to the address
+        that is actually connected to: otherwise DNS rebinding, where the first DNS answer is public and the
+        second internal, bypasses it. In .NET, `SocketsHttpHandler.ConnectCallback` fits this: in it you can
+        resolve the name, validate the address and open the socket yourself. The callback has limits: it is
+        invoked only for stream-based connections (HTTP/1.1 and HTTP/2) and not for HTTP/3, so HTTP/3 stays off
+        for such a client; behind a proxy the connection is opened to the proxy, so such a client disables the
+        proxy (`UseProxy = false`) or the proxy itself validates the addresses. Every redirect is a new request,
+        so use `AllowAutoRedirect = false` or validate every `Location` the same way.
+      - **Network restrictions (c)** are defence in depth that also covers mistakes in application code.
+
+      A string blocklist is bypassed by other spellings of the same address, and OWASP explicitly advises
+      against mitigating SSRF with deny lists or regular expressions. CORS restricts only browsers, and a
+      `Content-Type` check runs after the request has already been sent.
+    linkTitles:
+      - "OWASP Server-Side Request Forgery Prevention Cheat Sheet"
+      - "OWASP Top 10 (2021): A10 Server-Side Request Forgery"
+      - "SocketsHttpHandler.ConnectCallback property"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

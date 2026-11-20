@@ -1,0 +1,123 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RP5QGAY17GYVSY7X06
+slug: grpc-interceptors-cross-cutting-standard
+stack: dotnet
+topic: grpc-realtime
+level: lead
+type: single
+grading: auto
+tags: [grpc, interceptors, error-handling, logging]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: false
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/grpc/interceptors
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/grpc/error-handling
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какой механизм сделать стандартом для логирования и обработки ошибок в двадцати gRPC-сервисах?
+    prompt: |
+      В компании около двадцати gRPC-сервисов на ASP.NET Core (.NET 10). Каждая команда логирует вызовы и
+      превращает исключения в коды статуса gRPC по-своему: где-то `try/catch` в каждом методе, где-то клиенту
+      уходит `StatusCode.Unknown` без пояснений. Как техлид вы хотите закрепить один общий механизм для всех
+      сервисов. Что выбрать?
+    hint: На каком уровне работает каждый вариант - HTTP-запрос, отдельный метод или вызов gRPC целиком? И что произойдёт, когда в одном из сервисов появится новый метод?
+    options:
+      a: "Общий базовый класс или статический помощник, которым каждый метод сервиса оборачивает свою логику в `try/catch`, плюс правило в code review."
+      b: "Общий middleware ASP.NET Core в конвейере (`app.Use(...)` или `UseExceptionHandler`), который логирует запрос и переводит исключения в коды ответа."
+      c: "Общий серверный перехватчик - наследник `Interceptor` из общей библиотеки, зарегистрированный для всех сервисов через `AddGrpc(options => options.Interceptors.Add<T>())`."
+      d: "Клиентские перехватчики во всех сервисах-потребителях, которые логируют вызовы и переводят ответы с ошибками в понятные исключения."
+      e: "Фильтры MVC (`IExceptionFilter`, `IActionFilter`), зарегистрированные глобально через `AddControllers(options => options.Filters.Add(...))`."
+    optionExplanations:
+      a: "Стандарт держится только на дисциплине: в двадцати сервисах обязательно найдётся метод, который забыли обернуть, а code review этого не гарантирует. Логика дублируется в каждом методе, и потоковые методы обычно оборачивают по-разному."
+      b: "Middleware работает на уровне HTTP/2-запроса: он не видит десериализованных сообщений и контекста метода gRPC. Исключение из метода сервиса перехватывает сам фреймворк gRPC и превращает его в статус в trailers, поэтому до middleware оно не доходит, а HTTP-статус ответа gRPC обычно 200."
+      d: "Это решает проблему не на той стороне: серверы по-прежнему отдают несогласованные статусы и могут раскрывать детали исключений, серверного логирования нет, а каждый потребитель дублирует одну и ту же логику."
+      e: "Сервисы gRPC - не контроллеры MVC, и конвейер фильтров MVC к их методам не применяется. Такие фильтры просто не сработают."
+    answer: "Общий серверный перехватчик (`Interceptor`), зарегистрированный один раз через `AddGrpc(options => options.Interceptors.Add<T>())`."
+    explanation: |
+      Серверный перехватчик - наследник `Grpc.Core.Interceptors.Interceptor` - работает на уровне абстракции
+      gRPC. В переопределённом `UnaryServerHandler` (и в `ClientStreamingServerHandler`,
+      `ServerStreamingServerHandler`, `DuplexStreamingServerHandler` для потоковых методов) он получает
+      десериализованное сообщение запроса, `ServerCallContext` с именем метода, deadline и метаданными, и
+      делегат `continuation`, который вызывает следующий перехватчик или сам метод сервиса. Вокруг вызова
+      `continuation` удобно логировать начало, длительность и результат вызова, а пойманное исключение
+      переводить в `RpcException` с нужным `Status`: фреймворк отправит клиенту именно этот код статуса.
+
+      Регистрация в `AddGrpc(options => options.Interceptors.Add<T>())` применяет перехватчик ко всем
+      сервисам приложения, поэтому новый метод или новый сервис получает стандарт автоматически. Для одного
+      сервиса есть `AddServiceOptions<TService>(...)`. По умолчанию серверный перехватчик создаётся на каждый
+      запрос и получает зависимости через конструктор.
+
+      Решение уровня техлида - не просто выбрать механизм, а сделать его общим артефактом:
+
+      - внутренний пакет с перехватчиком и одним методом расширения для регистрации;
+      - единая таблица сопоставления: ошибка валидации -> `InvalidArgument`, "не найдено" -> `NotFound`,
+        прочее -> `Internal` без текста исключения (подробности только в логе, `EnableDetailedErrors`
+        включают лишь при разработке);
+      - обработка всех четырёх видов методов, иначе потоковые вызовы останутся без стандарта;
+      - тесты пакета и проверка в шаблоне сервиса, что регистрация на месте.
+    linkTitles:
+      - "Перехватчики gRPC в .NET"
+      - "Обработка ошибок в gRPC"
+  en:
+    title: Which mechanism should be the standard for logging and error handling across twenty gRPC services?
+    prompt: |
+      A company runs about twenty gRPC services on ASP.NET Core (.NET 10). Each team logs calls and turns
+      exceptions into gRPC status codes its own way: some use `try/catch` in every method, others let clients
+      receive `StatusCode.Unknown` with no explanation. As the tech lead you want one shared mechanism for all
+      services. What do you choose?
+    hint: At what level does each option work - the HTTP request, a single method, or the whole gRPC call? And what happens when one of the services gets a new method?
+    options:
+      a: "A shared base class or static helper that every service method uses to wrap its logic in `try/catch`, plus a code review rule."
+      b: "A shared ASP.NET Core middleware in the pipeline (`app.Use(...)` or `UseExceptionHandler`) that logs the request and turns exceptions into response codes."
+      c: "A shared server interceptor - a class derived from `Interceptor` in a common library, registered for all services with `AddGrpc(options => options.Interceptors.Add<T>())`."
+      d: "Client interceptors in every consuming service that log calls and turn error responses into meaningful exceptions."
+      e: "MVC filters (`IExceptionFilter`, `IActionFilter`) registered globally with `AddControllers(options => options.Filters.Add(...))`."
+    optionExplanations:
+      a: "The standard depends on discipline alone: across twenty services some method will be left unwrapped, and code review does not guarantee otherwise. The logic is duplicated in every method, and streaming methods usually end up wrapped differently."
+      b: "Middleware works at the level of the HTTP/2 request: it sees neither deserialized messages nor the gRPC method context. An exception from a service method is caught by the gRPC framework itself and turned into a status in the trailers, so it never reaches the middleware, and the HTTP status of a gRPC response is usually 200."
+      d: "This fixes the problem on the wrong side: servers still return inconsistent statuses and may expose exception details, there is no server-side logging, and every consumer duplicates the same logic."
+      e: "gRPC services are not MVC controllers, and the MVC filter pipeline does not apply to their methods. Such filters simply never run."
+    answer: "A shared server interceptor (`Interceptor`) registered once with `AddGrpc(options => options.Interceptors.Add<T>())`."
+    explanation: |
+      A server interceptor, a class derived from `Grpc.Core.Interceptors.Interceptor`, works at the gRPC
+      abstraction level. In an overridden `UnaryServerHandler` (and `ClientStreamingServerHandler`,
+      `ServerStreamingServerHandler`, `DuplexStreamingServerHandler` for streaming methods) it receives the
+      deserialized request message, a `ServerCallContext` with the method name, deadline and metadata, and a
+      `continuation` delegate that calls the next interceptor or the service method itself. Around the call to
+      `continuation` it is easy to log the start, duration and result of the call, and to turn a caught
+      exception into an `RpcException` with the chosen `Status`: the framework sends exactly that status code
+      to the client.
+
+      Registering it in `AddGrpc(options => options.Interceptors.Add<T>())` applies the interceptor to every
+      service in the app, so a new method or a new service gets the standard automatically. For a single
+      service there is `AddServiceOptions<TService>(...)`. By default a server interceptor is created per
+      request and receives its dependencies through the constructor.
+
+      The tech lead's decision is not only to pick the mechanism but to make it a shared artifact:
+
+      - an internal package with the interceptor and one extension method for registration;
+      - one mapping table: validation error -> `InvalidArgument`, "not found" -> `NotFound`, anything else
+        -> `Internal` without the exception text (details go only to the log, and `EnableDetailedErrors` is
+        turned on only in development);
+      - handling of all four method kinds, otherwise streaming calls stay outside the standard;
+      - tests for the package and a check in the service template that the registration is present.
+    linkTitles:
+      - "gRPC interceptors on .NET"
+      - "Error handling with gRPC"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

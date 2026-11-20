@@ -1,0 +1,183 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNXNXXFTDRQNPK83YP
+slug: json-column-vs-normalized-attributes
+stack: dotnet
+topic: databases
+level: lead
+type: open
+grading: self
+tags: [json, normalization, schema-design, sql-server, computed-columns]
+links:
+  - url: https://learn.microsoft.com/en-us/sql/relational-databases/json/json-data-sql-server
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/sql/relational-databases/json/index-json-data
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Хранить переменные атрибуты товара в JSON-столбце или в нормализованных таблицах?
+    prompt: |
+      У товаров каталога разный набор атрибутов в зависимости от категории: у ноутбука - диагональ и объём
+      памяти, у куртки - размер, материал и сезон. Половина команды хочет хранить их в JSON-столбце таблицы
+      `Products` (SQL Server), другая половина - в нормализованных таблицах. Спор идёт уже неделю.
+      Как вы как лид разрешите его и какие правила зафиксируете для команды, чтобы не возвращаться к нему
+      при каждом новом атрибуте? Учтите, что часть окружений работает на SQL Server 2022, а часть - на
+      SQL Server 2025 или Azure SQL Database.
+    hint: Для каждого атрибута спросите, что база данных должна с ним делать, кроме того чтобы сохранить и отдать его целиком.
+    answer: |
+      1. **Перевести спор из вкусов в факты.** Не выбирать «всё в JSON» или «всё в таблицы», а решать по
+         каждому атрибуту или группе атрибутов. Выписать реальные запросы: фильтры каталога, сортировки,
+         отчёты, интеграции, бизнес-правила - и для каждого атрибута отметить, кто его читает и что с ним
+         делает база.
+      2. **Правило для столбцов и таблиц.** Всё, по чему база должна фильтровать, сортировать, агрегировать,
+         соединять, что нужно индексировать, проверять по типу или защищать ограничениями (`NOT NULL`,
+         `CHECK`, `UNIQUE`, внешний ключ), хранится в типизированных столбцах или таблицах. Обычно это
+         ядро: артикул, цена, категория, остаток, статус.
+      3. **Правило для JSON.** В JSON-столбец идут атрибуты, которые различаются по категориям, читаются и
+         записываются целиком вместе с карточкой товара и не участвуют в запросах и инвариантах: описательные
+         характеристики, которые только показываются пользователю.
+      4. **Тип хранения зависит от версии сервера.**
+         - В SQL Server 2022 и более ранних JSON хранится в `nvarchar(max)` и для сервера это обычный текст.
+           Нужен `CHECK (ISJSON(Attributes) = 1)`, чтобы в столбец не попадал невалидный текст.
+         - В SQL Server 2025, Azure SQL Database и Azure SQL Managed Instance (с политикой обновления
+           SQL Server 2025 или Always-up-to-date) есть встроенный тип `json`: он сам отвергает невалидный
+           документ, поэтому `CHECK (ISJSON(...))` для него не нужен. Правило команды: на этих платформах
+           новые JSON-столбцы создавать с типом `json`.
+      5. **Путь продвижения для горячих атрибутов.** Если по атрибуту из JSON начали фильтровать:
+         - на столбце типа `json` сначала проверить `CREATE JSON INDEX`: один такой индекс покрывает многие
+           запросы с `JSON_VALUE`, `JSON_PATH_EXISTS` и `JSON_CONTAINS` без отдельного столбца на каждое
+           свойство;
+         - на `nvarchar`-хранении, а также когда свойство нужно как строго типизированный столбец для
+           фильтрации и сортировки, - вычисляемый столбец с индексом, например
+           `ALTER TABLE dbo.Products ADD Color AS CAST(JSON_VALUE(Attributes, '$.color') AS nvarchar(50))` и
+           `CREATE INDEX IX_Products_Color ON dbo.Products (Color)`. Запросы должны фильтровать по столбцу
+           `Color` или повторять точно то же выражение, включая `CAST`: голый `JSON_VALUE(Attributes, '$.color')`
+           может не сопоставиться с вычисляемым столбцом, и индекс не будет использован.
+         - Если атрибут становится частью бизнес-логики или ему нужны ограничения, его переносят в обычный
+           столбец миграцией.
+      6. **Правила для самого документа.**
+         - Схема документа описана и проверяется в приложении (типизированная модель), в документе есть
+           номер версии схемы, имена ключей согласованы: путь в `JSON_VALUE` чувствителен к регистру.
+         - Документ обычно перезаписывается целиком, поэтому при одновременном редактировании нужна защита от
+           потерянных обновлений. Надёжный вариант - токен параллелизма (`rowversion`). Точечный
+           `UPDATE ... SET Attributes = JSON_MODIFY(...)` по одному пути не затирает другие пути, но не
+           обнаруживает конфликт, если два пользователя меняют один и тот же путь: выигрывает последний.
+         - Ограничение на размер документа и запрет класть в него связи с другими сущностями.
+      7. **Не EAV по умолчанию.** Нормализованная альтернатива для динамических атрибутов - таблица вида
+         `ProductAttributeValues (ProductId, AttributeId, Value)`. Она теряет типы и превращает каждый
+         запрос в набор соединений. Её стоит выбирать осознанно, например когда администраторы сами заводят
+         атрибуты и по ним нужны фасетные фильтры; при большом числе фасетов часто разумнее поисковый движок.
+      8. **Закрепить решение.** Записать правила в архитектурное решение (ADR), добавить пункт в чек-лист
+         code review («по этому полю будут фильтровать?») и следить за запросами, где `JSON_VALUE` стоит в
+         `WHERE` без подходящего индекса и приводит к сканированию.
+    explanation: |
+      Граница проходит по тому, нужно ли базе данных понимать значение. В SQL Server 2022 и ранее JSON
+      хранится в `varchar` или `nvarchar` и индексируется как обычный текст, поэтому фильтр по `JSON_VALUE`
+      без индекса по вычисляемому столбцу разбирает документ в каждой строке. В SQL Server 2025 и Azure SQL
+      встроенный тип `json` и JSON-индекс заметно сокращают эту цену: сервер проверяет документ при записи, а
+      один индекс по путям обслуживает многие предикаты. Но и тогда у путей внутри документа нет объявленных
+      типов, `NOT NULL` и внешних ключей: база не следит за ними, если вы сами не написали проверки.
+      Взамен JSON даёт гибкость: новый атрибут не требует миграции схемы, а карточка товара читается одним
+      обращением. Нормализованные столбцы дают обратное: целостность обеспечивает сама база, оптимизатор
+      видит типы и распределение значений, но каждый новый атрибут - это изменение схемы.
+
+      Поэтому обе стороны спора правы для разных атрибутов, и задача лида - не выбрать победителя, а дать
+      правило, которое разработчик применит сам. Важная часть правила - путь продвижения: JSON-индекс или
+      вычисляемый столбец над JSON-путём с индексом делают атрибут быстрым для поиска без переделки хранения,
+      а перенос в обычный столбец остаётся обычной миграцией. Так решение «положить в JSON» перестаёт быть
+      необратимым, и спорить о нём заранее уже не нужно.
+
+      Со стороны .NET EF Core (в .NET 10) умеет отображать вложенные типы в JSON-столбец через `ToJson()` и
+      переводит запросы к их свойствам в JSON-функции SQL Server. Это удобно, но не отменяет правил: запрос
+      LINQ по свойству внутри JSON на стороне базы всё равно останется разбором документа, если для пути нет
+      подходящего индекса.
+    linkTitles:
+      - "Работа с данными JSON в SQL Server"
+      - "Индексирование данных JSON"
+  en:
+    title: Should variable product attributes go into a JSON column or into normalized tables?
+    prompt: |
+      Catalog products have different attributes depending on the category: a laptop has a screen size and
+      memory size, a jacket has a size, material and season. Half of the team wants to store them in a JSON
+      column of the `Products` table (SQL Server), the other half wants normalized tables. The argument has
+      gone on for a week. As the lead, how do you settle it, and which rules do you set for the team so the
+      argument does not come back with every new attribute? Keep in mind that some environments run
+      SQL Server 2022 and others run SQL Server 2025 or Azure SQL Database.
+    hint: For each attribute, ask what the database has to do with it besides storing it and returning it as a whole.
+    answer: |
+      1. **Turn the argument from taste into facts.** Do not choose "everything in JSON" or "everything in
+         tables"; decide per attribute or group of attributes. List the real queries: catalog filters, sorts,
+         reports, integrations, business rules, and for each attribute note who reads it and what the
+         database does with it.
+      2. **The rule for columns and tables.** Anything the database must filter, sort, aggregate or join on,
+         anything that needs an index, a type check or a constraint (`NOT NULL`, `CHECK`, `UNIQUE`, a foreign
+         key) is stored in typed columns or tables. Usually this is the core: SKU, price, category, stock,
+         status.
+      3. **The rule for JSON.** The JSON column holds attributes that differ by category, are read and written
+         as a whole together with the product card, and take no part in queries or invariants: descriptive
+         characteristics that are only shown to the user.
+      4. **The storage type depends on the server version.**
+         - In SQL Server 2022 and earlier, JSON is stored in `nvarchar(max)` and is plain text to the server.
+           Add `CHECK (ISJSON(Attributes) = 1)` so invalid text never gets into the column.
+         - SQL Server 2025, Azure SQL Database and Azure SQL Managed Instance (with the SQL Server 2025 or
+           Always-up-to-date update policy) have the native `json` type: it rejects an invalid document by
+           itself, so `CHECK (ISJSON(...))` is unnecessary for it. Team rule: on these platforms new JSON
+           columns use the `json` type.
+      5. **A promotion path for hot attributes.** When a JSON attribute starts being filtered on:
+         - on a `json` column, first consider `CREATE JSON INDEX`: one such index serves many queries with
+           `JSON_VALUE`, `JSON_PATH_EXISTS` and `JSON_CONTAINS` without a separate column per property;
+         - with `nvarchar` storage, or when the property is needed as a strongly typed column for filtering
+           and sorting, use an indexed computed column, for example
+           `ALTER TABLE dbo.Products ADD Color AS CAST(JSON_VALUE(Attributes, '$.color') AS nvarchar(50))` and
+           `CREATE INDEX IX_Products_Color ON dbo.Products (Color)`. Queries should filter on the `Color`
+           column or repeat exactly the same expression, including the `CAST`: a bare
+           `JSON_VALUE(Attributes, '$.color')` may not match the computed column, and the index is not used.
+         - When the attribute becomes part of the business logic or needs constraints, it moves to a regular
+           column with a migration.
+      6. **Rules for the document itself.**
+         - The document schema is described and validated in the application (a typed model), the document
+           carries a schema version number, and key names follow one convention: the path in `JSON_VALUE` is
+           case-sensitive.
+         - The document is usually rewritten as a whole, so concurrent edits need protection from lost
+           updates. The reliable option is a concurrency token (`rowversion`). A targeted
+           `UPDATE ... SET Attributes = JSON_MODIFY(...)` on a single path does not overwrite other paths, but
+           it does not detect a conflict when two users change the same path: the last writer wins.
+         - A limit on document size, and no relationships to other entities inside the document.
+      7. **No EAV by default.** The normalized alternative for dynamic attributes is a table such as
+         `ProductAttributeValues (ProductId, AttributeId, Value)`. It loses types and turns every query into a
+         set of joins. Choose it deliberately, for example when administrators define attributes themselves
+         and faceted filters on them are required; with many facets a search engine is often the better fit.
+      8. **Lock the decision in.** Write the rules down in an architecture decision record (ADR), add an item
+         to the code review checklist ("will anyone filter on this field?"), and watch for queries that put
+         `JSON_VALUE` in `WHERE` without a suitable index and cause scans.
+    explanation: |
+      The boundary is whether the database needs to understand the value. In SQL Server 2022 and earlier,
+      JSON is stored in `varchar` or `nvarchar` and is indexed as plain text, so a filter on `JSON_VALUE`
+      without an index on a computed column parses the document in every row. In SQL Server 2025 and Azure
+      SQL the native `json` type and the JSON index reduce that cost a lot: the server validates the document
+      on write, and one index over the paths serves many predicates. Even then the paths inside the document
+      have no declared types, `NOT NULL` or foreign keys: the database does not enforce them unless you write
+      the checks yourself. In return JSON gives flexibility: a new attribute needs no schema migration, and
+      the product card is read in one call. Normalized columns give the opposite: the database itself
+      enforces integrity and the optimizer sees types and value distribution, but every new attribute is a
+      schema change.
+
+      So both sides of the argument are right for different attributes, and the lead's job is not to pick a
+      winner but to give a rule that a developer can apply alone. An important part of the rule is the
+      promotion path: a JSON index, or a computed column over a JSON path with an index on it, makes the
+      attribute fast to search without changing how it is stored, and moving it to a regular column remains
+      an ordinary migration. That makes "put it in JSON" a reversible decision, so there is no need to argue
+      about it up front.
+
+      On the .NET side, EF Core (in .NET 10) can map nested types to a JSON column with `ToJson()` and
+      translates queries on their properties into SQL Server JSON functions. This is convenient but does not
+      replace the rules: a LINQ query on a property inside the JSON is still document parsing in the database
+      if the path has no suitable index.
+    linkTitles:
+      - "Work with JSON data in SQL Server"
+      - "Index JSON data"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

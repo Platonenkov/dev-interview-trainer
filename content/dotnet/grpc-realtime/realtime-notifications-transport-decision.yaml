@@ -1,0 +1,171 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPK37DW3B46EFFVE9Q
+slug: realtime-notifications-transport-decision
+stack: dotnet
+topic: grpc-realtime
+level: lead
+type: open
+grading: self
+tags: [signalr, server-sent-events, polling, notifications, architecture-decision]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/signalr/introduction
+    lang: en
+    kind: docs
+  - url: https://html.spec.whatwg.org/multipage/server-sent-events.html
+    lang: en
+    kind: spec
+  - url: https://learn.microsoft.com/en-us/aspnet/core/signalr/scale
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/signalr/configuration
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как техлиду выбрать между SignalR, Server-Sent Events и периодическим опросом для уведомлений в браузере?
+    prompt: |
+      Продукту нужны уведомления внутри веб-приложения: сервер должен сообщать пользователю в браузере о новых
+      событиях, например о новом комментарии или смене статуса заказа. Бэкенд написан на ASP.NET Core (.NET 10)
+      и работает на нескольких экземплярах за балансировщиком нагрузки.
+
+      Команда обсуждает три варианта: ASP.NET Core SignalR, Server-Sent Events без SignalR и периодический опрос
+      HTTP-эндпоинта. По каким критериям вы как техлид выберете вариант и что зафиксируете в решении?
+    hint: Что вы хотели бы узнать о самих уведомлениях, прежде чем называть какую-либо технологию, и во что обходится эксплуатация каждого варианта?
+    answer: |
+      - **Сначала требования, потом транспорт.** Направление сообщений (только сервер -> клиент или в обе
+        стороны), частота и объём событий, допустимая задержка (секунды или минуты), число одновременно открытых
+        вкладок, нужна ли доставка без потерь, есть ли у клиентов корпоративные прокси.
+      - **Источник истины - хранилище уведомлений.** Уведомления сохраняются в базе, а обычный REST-эндпоинт
+        отдаёт непрочитанные или всё после известного идентификатора. Push-канал только ускоряет доставку:
+        после переподключения или перезапуска сервера клиент дочитывает пропущенное запросом. Так транспорт
+        можно заменить, не трогая модель данных.
+      - **Периодический опрос.** Подходит, если задержка в десятки секунд приемлема. Это обычный stateless HTTP:
+        работает через любой балансировщик и прокси, поддерживает кэширование и `ETag` с ответом `304`, легко
+        тестируется и наблюдается. Минусы: задержка равна интервалу, а нагрузка растёт с числом клиентов и
+        частотой опроса, а не с числом событий.
+      - **Server-Sent Events.** Односторонний поток сервер -> клиент в одном долгом HTTP-ответе с типом
+        `text/event-stream`. В браузере есть встроенный `EventSource` без сторонних библиотек: он сам
+        переподключается и отправляет заголовок `Last-Event-ID`, по которому сервер может дослать пропущенное.
+        Действия пользователя идут обычными HTTP-запросами, для уведомлений этого достаточно. Цена: долгие
+        соединения требуют настроить прокси (буферизация, тайм-аут простоя), только текстовые данные, нативный
+        `EventSource` не позволяет задать свой заголовок `Authorization` (обычно используют аутентификацию через
+        куки), а браузеры ограничивают число одновременных соединений HTTP/1.1 к одному хосту, и каждая вкладка
+        держит своё. При нескольких экземплярах событие должно попасть на тот, где открыто соединение
+        пользователя, поэтому нужна шина публикации (например, Redis pub/sub или брокер). В .NET 10 ответ SSE
+        можно вернуть через `TypedResults.ServerSentEvents`.
+      - **SignalR.** Оправдан, когда нужно двустороннее взаимодействие (чат, совместное редактирование,
+        присутствие), адресация пользователей и групп (`Clients.User`, `Clients.Group`), автоматический откат
+        транспортов WebSockets -> Server-Sent Events -> Long Polling и готовое переподключение в клиенте. Цена:
+        клиентская библиотека и собственный протокол; при нескольких экземплярах - либо Redis backplane вместе со
+        sticky sessions (без них можно обойтись, только если все клиенты работают исключительно через WebSockets
+        с `SkipNegotiation`), либо Azure SignalR Service, которому sticky sessions не нужны; мониторинг
+        соединений и совместимость методов хаба при выкладках.
+      - **Типичный вывод.** Для редких односторонних уведомлений достаточно SSE или опроса поверх хранилища
+        уведомлений. SignalR выбирают, если двусторонние real-time функции уже есть в продукте или в дорожной
+        карте, тогда его эксплуатационная цена окупается.
+      - **Что зафиксировать.** ADR с критериями и условиями пересмотра (например, появление чата или требование
+        задержки меньше секунды), нагрузочный тест с реальным числом соединений, метрики: открытые соединения,
+        переподключения, задержка доставки. Учесть опыт команды и то, кто будет сопровождать решение.
+    explanation: |
+      Вопрос не в том, какая технология "более real-time", а в том, какая форма трафика и какие затраты на
+      эксплуатацию. Три варианта по-разному распределяют стоимость:
+
+      - опрос платит запросами: 10 000 пользователей с интервалом 30 секунд - это около 333 запросов в секунду,
+        даже если событий нет, зато каждый запрос независим и инфраструктура обычная;
+      - SSE и SignalR платят долгими соединениями: память и сокеты на сервере, настройка прокси и
+        балансировщика, обрыв всех соединений экземпляра при выкладке и доставка событий между экземплярами;
+      - доставка между экземплярами нужна при любом push-канале, но SignalR решает её готовыми средствами:
+        Redis backplane (вместе со sticky sessions) или Azure SignalR Service (без них). Взамен он даёт
+        двусторонний RPC, группы и откат транспортов, которые иначе пришлось бы писать самим.
+
+      По умолчанию SignalR не буферизует сообщения для отключённых клиентов. Начиная с .NET 8 есть
+      опциональный режим переподключения с сохранением состояния (`WithStatefulReconnect()` в клиенте и
+      `AllowStatefulReconnects` на сервере), но он буферизует сообщения только на время кратковременного обрыва
+      того же соединения и не переживает перезапуск сервера или выкладку. `Last-Event-ID` в SSE полезен, только
+      если сервер умеет дослать события после этого идентификатора. Поэтому сильный ответ отделяет хранение
+      уведомлений от канала доставки. Тогда начать можно с самого дешёвого варианта и перейти на SignalR, когда
+      появятся двусторонние сценарии, без переделки модели.
+
+      Решение уровня техлида включает и командную часть: явные критерии, условия пересмотра, нагрузочный тест и
+      метрики, а не выбор по привычке или по моде.
+    linkTitles:
+      - "Введение в ASP.NET Core SignalR"
+      - "Спецификация HTML: Server-Sent Events"
+      - "Размещение и масштабирование ASP.NET Core SignalR"
+      - "Настройка ASP.NET Core SignalR"
+  en:
+    title: How does a tech lead choose between SignalR, Server-Sent Events and polling for in-app browser notifications?
+    prompt: |
+      A product needs in-app notifications: the server must tell a user in the browser about new events, for
+      example a new comment or a change of order status. The backend is ASP.NET Core (.NET 10) and runs on several
+      instances behind a load balancer.
+
+      The team is discussing three options: ASP.NET Core SignalR, Server-Sent Events without SignalR, and periodic
+      polling of an HTTP endpoint. As the tech lead, by which criteria do you choose, and what do you record in
+      the decision?
+    hint: What would you want to know about the notifications themselves before naming any technology, and what does each option cost to run?
+    answer: |
+      - **Requirements first, transport second.** Message direction (server -> client only, or both ways),
+        frequency and volume of events, acceptable latency (seconds or minutes), number of concurrently open tabs,
+        whether delivery must be lossless, whether clients sit behind corporate proxies.
+      - **The notification store is the source of truth.** Notifications are saved in the database, and a plain
+        REST endpoint returns the unread ones or everything after a known id. The push channel only speeds up
+        delivery: after a reconnect or a server restart the client fetches what it missed. This keeps the
+        transport replaceable without touching the data model.
+      - **Periodic polling.** Fits when a latency of tens of seconds is acceptable. It is ordinary stateless HTTP:
+        it works through any load balancer and proxy, supports caching and `ETag` with a `304` response, and is
+        easy to test and observe. Downsides: latency equals the interval, and load grows with the number of
+        clients and the polling rate, not with the number of events.
+      - **Server-Sent Events.** A one-way server -> client stream in one long HTTP response of type
+        `text/event-stream`. The browser has the built-in `EventSource` with no third-party library: it reconnects
+        by itself and sends the `Last-Event-ID` header, which lets the server resend what was missed. User actions
+        go as ordinary HTTP requests, which is enough for notifications. Cost: long connections require proxy
+        tuning (buffering, idle timeout), text data only, the native `EventSource` cannot set a custom
+        `Authorization` header (cookie authentication is the usual choice), and browsers limit concurrent HTTP/1.1
+        connections per host while every tab holds its own. With several instances an event must reach the
+        instance that holds the user's connection, so a publish channel is needed (for example Redis pub/sub or a
+        broker). In .NET 10 an SSE response can be returned with `TypedResults.ServerSentEvents`.
+      - **SignalR.** Justified when you need two-way interaction (chat, collaborative editing, presence),
+        addressing of users and groups (`Clients.User`, `Clients.Group`), automatic transport fallback WebSockets ->
+        Server-Sent Events -> Long Polling and ready-made reconnection in the client. Cost: a client library and its
+        own protocol; with several instances, either the Redis backplane together with sticky sessions (you can do
+        without them only if every client uses WebSockets exclusively with `SkipNegotiation`), or Azure SignalR
+        Service, which does not need sticky sessions; connection monitoring and hub method compatibility across
+        deployments.
+      - **Typical conclusion.** For infrequent one-way notifications, SSE or polling on top of the notification
+        store is enough. SignalR is chosen when two-way real-time features already exist in the product or are on
+        the roadmap, so its operating cost pays off.
+      - **What to record.** An ADR with the criteria and the triggers for revisiting (for example a chat feature, or
+        a sub-second latency requirement), a load test with the real number of connections, and metrics: open
+        connections, reconnects, delivery latency. Take into account the team's experience and who will maintain
+        the solution.
+    explanation: |
+      The question is not which technology is "more real-time", but which traffic shape you have and what
+      operating cost you accept. The three options spread the cost differently:
+
+      - polling pays in requests: 10,000 users with a 30-second interval is about 333 requests per second even when
+        nothing happens, but every request is independent and the infrastructure is ordinary;
+      - SSE and SignalR pay in long-lived connections: memory and sockets on the server, proxy and load balancer
+        tuning, all of an instance's connections dropping on deployment, and delivering events across instances;
+      - delivery across instances is needed for any push channel, but SignalR solves it with ready-made options:
+        the Redis backplane (together with sticky sessions) or Azure SignalR Service (without them). In return it
+        gives two-way RPC, groups and transport fallback that you would otherwise have to build yourself.
+
+      By default SignalR does not buffer messages for disconnected clients. Since .NET 8 there is an opt-in
+      stateful reconnect mode (`WithStatefulReconnect()` on the client and `AllowStatefulReconnects` on the
+      server), but it buffers messages only across a brief drop of the same connection and does not survive a
+      server restart or a redeployment. `Last-Event-ID` in SSE helps only if the server can resend events after
+      that id. That is why a strong answer separates storing notifications from the delivery channel. Then you can
+      start with the cheapest option and move to SignalR when two-way scenarios appear, without reworking the model.
+
+      A tech lead's decision also covers the team side: explicit criteria, triggers for revisiting, a load test and
+      metrics, rather than a choice made out of habit or fashion.
+    linkTitles:
+      - "Introduction to ASP.NET Core SignalR"
+      - "HTML Standard: Server-sent events"
+      - "ASP.NET Core SignalR production hosting and scaling"
+      - "ASP.NET Core SignalR configuration"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

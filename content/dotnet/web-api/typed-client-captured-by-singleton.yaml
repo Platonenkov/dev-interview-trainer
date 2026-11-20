@@ -1,0 +1,135 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RRH95PW8DHMCFQ72AG
+slug: typed-client-captured-by-singleton
+stack: dotnet
+topic: web-api
+level: senior
+type: find-bug
+grading: auto
+tags: [httpclient, ihttpclientfactory, typed-client, dependency-injection, dns]
+code:
+  language: csharp
+  harness: none
+  source: |
+    var builder = WebApplication.CreateBuilder(args);
+
+    builder.Services.AddHttpClient<CatalogClient>(client =>
+        {
+            client.BaseAddress = new Uri("https://catalog.internal/");
+        })
+        .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+        {
+            AllowAutoRedirect = false
+        });
+    builder.Services.AddSingleton<PriceService>();
+
+    var app = builder.Build();
+    app.MapGet("/prices/{sku}", (string sku, PriceService prices) => prices.GetAsync(sku));
+    app.Run();
+
+    public class CatalogClient(HttpClient httpClient)
+    {
+        public Task<decimal> GetPriceAsync(string sku) =>
+            httpClient.GetFromJsonAsync<decimal>($"prices/{sku}");
+    }
+
+    public class PriceService(CatalogClient catalog)
+    {
+        public Task<decimal> GetAsync(string sku) => catalog.GetPriceAsync(sku);
+    }
+bugLineSets: [[11]]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/core/extensions/httpclient-factory
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/fundamentals/networking/http/httpclient-guidelines
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строку, из-за которой типизированный HttpClient не замечает смену DNS
+    prompt: |
+      Сервис цен на .NET 10 под постоянной нагрузкой обращается к каталогу через типизированный клиент
+      `CatalogClient`. Каталог переезжает в новый кластер: запись DNS `catalog.internal` переключили на новый
+      адрес, а старый кластер пока оставили работать. Все остальные сервисы перешли на новый адрес за несколько
+      минут, а этот несколько дней продолжал отправлять запросы в старый кластер, пока его поды не перезапустили.
+      В метриках нового кластера трафика от этого сервиса до перезапуска не было.
+      Код не выполняется (нужен ASP.NET Core). Щёлкните по строке с дефектом.
+    hint: Сколько раз за жизнь процесса создаётся `PriceService` и сколько экземпляров `CatalogClient` он успевает получить?
+    answer: |
+      Строка 11: `PriceService` зарегистрирован как singleton и навсегда захватывает один экземпляр
+      типизированного клиента, а с ним один обработчик `HttpMessageHandler`, который фабрика уже не может заменить.
+    explanation: |
+      `AddHttpClient<CatalogClient>` регистрирует типизированный клиент как transient: при каждом разрешении
+      `IHttpClientFactory` создаёт новый `HttpClient`, а обработчик берёт из своего кэша. Обработчик
+      переиспользуется в течение `HandlerLifetime` (по умолчанию 2 минуты), после чего новые клиенты получают
+      новый обработчик с новым пулом соединений, а новые соединения заново разрешают DNS. Документация фабрики
+      подчёркивает: клиенты из неё рассчитаны на короткую жизнь, `HttpClient` привязан к своему обработчику с
+      момента создания, поэтому новые экземпляры нужно запрашивать своевременно, иначе клиент не получит
+      обновлённый обработчик.
+
+      Строка 11 делает `PriceService` singleton: он создаётся один раз, получает один `CatalogClient`, а с ним
+      один `HttpClient` и один обработчик на всё время жизни процесса. Фабрика освобождает обработчик с истёкшим
+      сроком только тогда, когда его больше не использует ни один `HttpClient`, поэтому этот обработчик продолжает
+      жить со своим пулом соединений. Первичный обработчик здесь - `HttpClientHandler`, заданный через
+      `ConfigurePrimaryHttpMessageHandler`. Он не ограничивает время жизни соединения: у `SocketsHttpHandler`, на
+      котором он работает, `PooledConnectionLifetime` по умолчанию бесконечен. При постоянной нагрузке соединение
+      не простаивает и не закрывается по тайм-ауту простоя, поэтому запросы идут по старым соединениям на старый
+      IP, пока процесс не перезапустят. Строки 7-10 сами по себе не ошибка: пока фабрика своевременно меняет
+      обработчики, бесконечное время жизни соединения не мешает.
+
+      Проверка областей видимости DI такую ошибку не ловит: transient-зависимость в singleton разрешена,
+      проверяются только scoped-сервисы. Поведение описано для .NET 10.
+
+      Исправления: зарегистрировать `PriceService` через `AddScoped` или `AddTransient`. Если сервис обязан быть
+      singleton, не держать в нём типизированный клиент: получать клиента из `IHttpClientFactory` на каждый
+      вызов или использовать один долгоживущий `HttpClient` на `SocketsHttpHandler` с ограниченным
+      `PooledConnectionLifetime`.
+    linkTitles:
+      - "IHttpClientFactory в .NET"
+      - "Рекомендации по использованию HttpClient"
+  en:
+    title: Find the line that stops a typed HttpClient from noticing a DNS change
+    prompt: |
+      A .NET 10 price service under constant load calls the catalog through the typed client `CatalogClient`.
+      The catalog is moving to a new cluster: the DNS record `catalog.internal` was switched to a new address,
+      and the old cluster was left running for now. All other services moved to the new address within minutes,
+      but this one kept sending requests to the old cluster for several days, until its pods were restarted.
+      Metrics of the new cluster showed no traffic from this service before the restart.
+      The code is not executed (it needs ASP.NET Core). Click the line that contains the defect.
+    hint: How many times during the life of the process is `PriceService` created, and how many `CatalogClient` instances does it get?
+    answer: |
+      Line 11: `PriceService` is registered as a singleton and captures one typed client instance forever, and
+      with it one `HttpMessageHandler` that the factory can no longer replace.
+    explanation: |
+      `AddHttpClient<CatalogClient>` registers the typed client as transient: on every resolution
+      `IHttpClientFactory` creates a new `HttpClient` and takes a handler from its cache. A handler is reused for
+      `HandlerLifetime` (2 minutes by default), after which new clients get a new handler with a new connection
+      pool, and new connections resolve DNS again. The factory documentation stresses that its clients are
+      intended to be short-lived: an `HttpClient` is tied to its handler from the moment it is created, so new
+      instances must be requested in a timely manner, otherwise the client never gets the updated handler.
+
+      Line 11 makes `PriceService` a singleton: it is created once and gets one `CatalogClient`, and with it one
+      `HttpClient` and one handler for the whole life of the process. The factory disposes an expired handler
+      only when no `HttpClient` uses it any more, so this handler stays alive with its connection pool. The
+      primary handler here is an `HttpClientHandler` set with `ConfigurePrimaryHttpMessageHandler`. It does not
+      limit connection lifetime: the `SocketsHttpHandler` it runs on has an infinite `PooledConnectionLifetime`
+      by default. Under constant load the connection never sits idle and is not closed by the idle timeout, so
+      requests keep going over the old connections to the old IP until the process is restarted. Lines 7-10 are
+      not a defect by themselves: as long as the factory rotates handlers in time, an unlimited connection
+      lifetime does no harm.
+
+      DI scope validation does not catch this: a transient dependency in a singleton is allowed, only scoped
+      services are checked. The behaviour described is for .NET 10.
+
+      Fixes: register `PriceService` with `AddScoped` or `AddTransient`. If the service must be a singleton, do not
+      keep a typed client in it: get a client from `IHttpClientFactory` on every call, or use one long-lived
+      `HttpClient` on a `SocketsHttpHandler` with a bounded `PooledConnectionLifetime`.
+    linkTitles:
+      - "IHttpClientFactory with .NET"
+      - "Guidelines for using HttpClient"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"
+  noRunReason: The snippet needs ASP.NET Core hosting, dependency injection and a real DNS change, which the BCL-only sandbox cannot provide.

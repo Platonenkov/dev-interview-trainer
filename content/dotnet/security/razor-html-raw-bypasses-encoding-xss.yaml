@@ -1,0 +1,104 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQGMY1G47SPHAHH1SD
+slug: razor-html-raw-bypasses-encoding-xss
+stack: dotnet
+topic: security
+level: middle
+type: single
+grading: auto
+tags: [xss, razor, html-encoding, owasp]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/security/cross-site-scripting
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/microsoft.aspnetcore.mvc.rendering.ihtmlhelper.raw
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какой способ вывести комментарий пользователя в Razor создаёт уязвимость XSS?
+    prompt: |
+      На странице товара пользователи оставляют комментарии. Текст сохраняется как есть и попадает в
+      представление Razor через `Model.Comment`. Какой из вариантов вывода комментария создаёт уязвимость
+      межсайтового скриптинга (XSS)?
+    hint: |
+      Что Razor делает со строкой перед записью в HTML, и во всех ли вариантах результат выражения остаётся обычной строкой?
+    options:
+      a: '`<p>@Model.Comment</p>`'
+      b: '`<p>@Html.Raw(Model.Comment)</p>`'
+      c: '`<p title="@Model.Comment">Comment</p>`'
+      d: '`<p>@Model.Comment.Replace("\n", "<br />")</p>`'
+    optionExplanations:
+      a: "Выражение `@` с обычной строкой Razor кодирует: `<`, `>`, `&` и кавычки превращаются в HTML-сущности, поэтому `<script>` из комментария показывается как текст и не выполняется."
+      c: "Значение атрибута Razor тоже кодирует, включая кавычки. Закрыть атрибут в кавычках и дописать свою разметку комментарий не может."
+      d: "`Replace` возвращает обычную строку, и Razor кодирует её целиком, вместе со вставленными `<br />`. Пользователь увидит теги как текст: это ошибка отображения, а не XSS."
+    answer: "`<p>@Html.Raw(Model.Comment)</p>`: `Html.Raw` отключает HTML-кодирование, и введённая пользователем разметка попадает в страницу как есть."
+    explanation: |
+      Razor кодирует всё, что выводится через `@`, если значение - обычная строка. Поэтому комментарий
+      `<script>...</script>` в вариантах с `@Model.Comment` превращается в безопасный текст `&lt;script&gt;...`.
+
+      `Html.Raw` возвращает `IHtmlContent`, то есть значение, которое Razor считает уже готовой разметкой и
+      записывает в ответ без кодирования. Тот же эффект даёт обёртка `new HtmlString(...)`. Если внутри
+      пользовательский текст, получается хранимый XSS: скрипт сохраняется в базе и выполняется в браузере каждого,
+      кто откроет страницу, от имени сайта. Он может читать данные страницы, отправлять запросы с cookie
+      пользователя и забирать токены из `localStorage`.
+
+      Правило: не передавать в `Html.Raw` недоверенные данные. Если комментариям нужна разметка, её очищают на
+      сервере санитайзером со списком разрешённых тегов и атрибутов и только потом выводят без кодирования. Для
+      переносов строк достаточно CSS `white-space: pre-line` при обычном `@Model.Comment`.
+
+      Кодирование HTML защищает в контексте HTML-текста и атрибутов в кавычках. В других контекстах, например в
+      `href` (URL вида `javascript:`) или внутри `<script>`, нужны свои меры: проверка схемы URL или кодирование
+      для JavaScript.
+    linkTitles:
+      - "Предотвращение межсайтового скриптинга (XSS) в ASP.NET Core"
+      - "Метод IHtmlHelper.Raw"
+  en:
+    title: Which way of rendering a user comment in Razor creates an XSS vulnerability?
+    prompt: |
+      On a product page users leave comments. The text is stored as is and reaches a Razor view through
+      `Model.Comment`. Which of these ways of rendering the comment creates a cross-site scripting (XSS)
+      vulnerability?
+    hint: |
+      What does Razor do with a string before writing it into HTML, and does the expression result stay a plain string in every option?
+    options:
+      a: '`<p>@Model.Comment</p>`'
+      b: '`<p>@Html.Raw(Model.Comment)</p>`'
+      c: '`<p title="@Model.Comment">Comment</p>`'
+      d: '`<p>@Model.Comment.Replace("\n", "<br />")</p>`'
+    optionExplanations:
+      a: "Razor encodes an `@` expression whose value is a plain string: `<`, `>`, `&` and quotes become HTML entities, so a `<script>` in the comment is shown as text and does not run."
+      c: "Razor encodes attribute values as well, including quotes. The comment cannot close the quoted attribute and append its own markup."
+      d: "`Replace` returns a plain string, and Razor encodes all of it, including the inserted `<br />`. The user sees the tags as text: a display bug, not XSS."
+    answer: "`<p>@Html.Raw(Model.Comment)</p>`: `Html.Raw` turns off HTML encoding, and the markup the user typed goes into the page as is."
+    explanation: |
+      Razor encodes everything written with `@` when the value is a plain string. That is why a comment
+      `<script>...</script>` in the `@Model.Comment` options turns into the harmless text `&lt;script&gt;...`.
+
+      `Html.Raw` returns `IHtmlContent`, a value that Razor treats as ready-made markup and writes to the response
+      without encoding. Wrapping the value in `new HtmlString(...)` has the same effect. With user text inside, this
+      is stored XSS: the script is saved in the database and runs in the browser of everyone who opens the page, on
+      behalf of the site. It can read page data, send requests with the user's cookies and take tokens from
+      `localStorage`.
+
+      The rule: do not pass untrusted data to `Html.Raw`. If comments need markup, sanitize it on the server with an
+      allowlist of tags and attributes, and only then render it unencoded. For line breaks, CSS
+      `white-space: pre-line` with a plain `@Model.Comment` is enough.
+
+      HTML encoding protects HTML text and quoted attributes. Other contexts, such as `href` (a `javascript:` URL)
+      or the inside of `<script>`, need their own measures: checking the URL scheme or JavaScript encoding.
+    linkTitles:
+      - "Prevent Cross-Site Scripting (XSS) in ASP.NET Core"
+      - "IHtmlHelper.Raw method"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

@@ -1,0 +1,106 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RN9N7NKPK1WRZ1TREB
+slug: filtered-include-tracking-fixup
+stack: dotnet
+topic: ef-core
+level: middle
+type: single
+grading: auto
+tags: [ef-core, filtered-include, eager-loading, change-tracking]
+code:
+  language: csharp
+  harness: none
+  source: |
+    // Blog 1 has five posts: 1, 2 and 3 are published, 10 and 11 are drafts.
+    // Both queries run on the same DbContext instance with default tracking.
+    var draft = await db.Posts.SingleAsync(p => p.Id == 10);
+
+    var blog = await db.Blogs
+        .Include(b => b.Posts.Where(p => p.Published))
+        .SingleAsync(b => b.Id == 1);
+
+    // What does blog.Posts contain here?
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/ef/core/querying/related-data/eager
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/ef/core/querying/tracking
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что окажется в коллекции после фильтрованного Include в отслеживающем запросе?
+    prompt: |
+      В блоге 1 пять записей: 1, 2 и 3 опубликованы, 10 и 11 - черновики. В одном экземпляре `DbContext`
+      сначала загрузили черновик 10, затем блог с фильтрованным `Include`, как показано в коде. Оба запроса
+      отслеживающие (поведение по умолчанию). Что будет в коллекции `blog.Posts` в EF Core 10?
+    hint: Что делает контекст со связями между только что загруженной сущностью и сущностями, которые он уже отслеживает?
+    options:
+      a: "Записи 1, 2 и 3: фильтр в `Include` определяет содержимое коллекции."
+      b: "Записи 1, 2, 3 и 10: отслеживаемый черновик добавляется в коллекцию при исправлении навигаций (fixup)."
+      c: "Все пять записей: в отслеживающем запросе фильтр в `Include` игнорируется."
+      d: "Исключение `InvalidOperationException`: фильтрованный `Include` нельзя применять, если связанные сущности уже отслеживаются."
+    optionExplanations:
+      a: "Так будет в запросе без отслеживания или в новом контексте. Здесь черновик 10 уже отслеживается, и контекст связывает его с блогом независимо от фильтра."
+      c: "Фильтр переводится в SQL, и база возвращает только опубликованные записи. Черновик 11 никто не загружал, контекст о нём не знает, поэтому в коллекцию он попасть не может."
+      d: "EF Core не запрещает такой запрос. Ограничения фильтрованного `Include` касаются самого запроса (какие операторы допустимы в фильтре), а не состояния трекера изменений."
+    answer: "Записи 1, 2, 3 и 10: отслеживаемый черновик добавляется в коллекцию при исправлении навигаций (fixup)."
+    explanation: |
+      Фильтр в `Include` ограничивает только то, какие строки запрос загрузит из базы: SQL вернёт записи 1, 2 и 3.
+      Но в отслеживающем запросе каждая материализованная сущность попадает в трекер изменений, и контекст
+      выполняет исправление навигаций (navigation fixup): связывает её со всеми уже отслеживаемыми связанными
+      сущностями. Черновик 10 отслеживается с первого запроса, его `BlogId` равен 1, поэтому, как только блог 1
+      начинает отслеживаться, черновик тоже оказывается в `blog.Posts`.
+
+      Документация прямо предупреждает: в отслеживающих запросах результат фильтрованного `Include` может
+      содержать ранее загруженные сущности, которые не подходят под фильтр. Такую ошибку легко пропустить,
+      например показать черновики на публичной странице. Решение - `AsNoTracking()` для такого запроса или новый
+      короткоживущий контекст: тогда коллекция содержит ровно то, что вернул фильтр. Поведение описано для EF Core 10.
+    linkTitles:
+      - "Жадная загрузка связанных данных (фильтрованный Include)"
+      - "Запросы с отслеживанием и без отслеживания"
+  en:
+    title: What does a collection contain after a filtered Include in a tracking query?
+    prompt: |
+      Blog 1 has five posts: 1, 2 and 3 are published, 10 and 11 are drafts. On one `DbContext` instance the code
+      first loads draft 10, then the blog with a filtered `Include`, as shown. Both queries are tracking queries
+      (the default behavior). What does the `blog.Posts` collection contain in EF Core 10?
+    hint: What does the context do about relationships between an entity it has just loaded and entities it already tracks?
+    options:
+      a: "Posts 1, 2 and 3: the `Include` filter defines the contents of the collection."
+      b: "Posts 1, 2, 3 and 10: the tracked draft is added to the collection by navigation fixup."
+      c: "All five posts: in a tracking query the `Include` filter is ignored."
+      d: "`InvalidOperationException`: a filtered `Include` cannot be used when related entities are already tracked."
+    optionExplanations:
+      a: "That is what a no-tracking query or a fresh context returns. Here draft 10 is already tracked, and the context links it to the blog regardless of the filter."
+      c: "The filter is translated to SQL, and the database returns only the published posts. Nobody loaded draft 11, the context does not know about it, so it cannot appear in the collection."
+      d: "EF Core does not forbid this query. The restrictions of filtered `Include` concern the query itself (which operators the filter may use), not the state of the change tracker."
+    answer: "Posts 1, 2, 3 and 10: the tracked draft is added to the collection by navigation fixup."
+    explanation: |
+      The `Include` filter only limits which rows the query loads from the database: the SQL returns posts 1, 2
+      and 3. But in a tracking query every materialized entity goes into the change tracker, and the context
+      performs navigation fixup: it links the entity to every related entity it already tracks. Draft 10 has been
+      tracked since the first query and its `BlogId` is 1, so as soon as blog 1 is tracked, the draft also ends up
+      in `blog.Posts`.
+
+      The documentation warns about exactly this: in tracking queries the result of a filtered `Include` may
+      contain previously loaded entities that do not match the filter. The mistake is easy to miss, for example
+      showing drafts on a public page. The fix is `AsNoTracking()` for such a query, or a new short-lived context:
+      then the collection contains exactly what the filter returned. The behavior is described for EF Core 10.
+    linkTitles:
+      - "Eager loading of related data (filtered include)"
+      - "Tracking vs. no-tracking queries"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"
+  noRunReason: The snippet uses EF Core types and needs a DbContext with a database, which the sandbox does not have.

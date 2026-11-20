@@ -1,0 +1,132 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNQRN70Y64XF78FXDP
+slug: large-table-index-creation-risk-practices
+stack: dotnet
+topic: databases
+level: lead
+type: multi
+grading: auto
+tags: [sql-server, indexes, online-index-operations, resumable-index, production]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: true
+  - id: c
+    correct: true
+  - id: d
+    correct: true
+  - id: e
+    correct: false
+  - id: f
+    correct: false
+  - id: g
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/sql/relational-databases/indexes/perform-index-operations-online
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/sql/t-sql/statements/create-index-transact-sql
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как снизить риск при создании индекса на таблице SQL Server в 500 миллионов строк под боевой нагрузкой?
+    prompt: |
+      Команде нужно добавить некластеризованный индекс в таблицу SQL Server на 500 миллионов строк, которая
+      круглосуточно обслуживает запросы приложения. Вы отвечаете за то, чтобы изменение не положило сервис.
+      Выберите все практики, которые действительно снижают риск этой операции.
+    hint: "Что построение индекса держит на таблице и как долго, и что будет, если его придётся остановить на середине?"
+    options:
+      a: "Строить индекс с `ONLINE = ON` (если редакция или служба это поддерживает), чтобы таблица оставалась доступной для чтения и записи на время построения."
+      b: "Добавить `RESUMABLE = ON` (вместе с `ONLINE = ON`) и при необходимости `MAX_DURATION`, чтобы построение можно было приостановить в часы пик и продолжить позже, не теряя сделанной работы."
+      c: "Заранее оценить место: свободное место в файлах данных под новый индекс и сортировку, рост журнала транзакций и нагрузку на `tempdb` (хранилище версий при онлайн-построении, а также сортировка, если задан `SORT_IN_TEMPDB = ON`)."
+      d: "Отрепетировать операцию на восстановленной копии с объёмом данных как в production, чтобы измерить длительность и рост журнала, а затем запускать в окно низкой нагрузки с мониторингом блокировок и планом отката."
+      e: "Запустить обычный `CREATE INDEX` без опций прямо в часы пик: некластеризованный индекс только читает таблицу, поэтому никому не мешает."
+      f: "Выполнить `CREATE INDEX` после `SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED`, чтобы построение индекса не брало блокировок."
+      g: "Положиться на то, что онлайн-построение вообще не берёт блокировок на таблицу, поэтому долгие открытые транзакции на ней ему не помешают."
+    optionExplanations:
+      e: "Офлайн-создание некластеризованного индекса держит разделяемую (S) блокировку таблицы всё время построения, поэтому все `INSERT`, `UPDATE` и `DELETE` ждут. На 500 миллионах строк это может занять часы, и запросы приложения начнут падать по таймауту."
+      f: "Уровень изоляции влияет на чтение данных обычными запросами, а не на блокировки, которые берёт DDL-операция построения индекса. `CREATE INDEX` возьмёт те же блокировки при любом уровне изоляции сессии."
+      g: "Онлайн-построение держит блокировки очень коротко, но не обходится без них: в начале берётся кратковременная разделяемая блокировка таблицы, в конце - разделяемая или блокировка изменения схемы (Sch-M). Чтобы их получить, операция ждёт завершения транзакций с несовместимыми блокировками, и долгая открытая транзакция может задержать её, а за ней выстроится очередь других запросов."
+    answer: "Варианты a, b, c и d: онлайн-построение, возобновляемая операция, планирование места под данные, журнал и `tempdb`, а также репетиция на копии и запуск в окно низкой нагрузки с мониторингом."
+    explanation: |
+      Главный риск - долгая блокировка. Обычный (офлайн) `CREATE INDEX` для некластеризованного индекса держит
+      разделяемую блокировку таблицы всё время построения и блокирует любые изменения, а для кластеризованного
+      индекса берёт блокировку изменения схемы и блокирует даже чтение. `ONLINE = ON` переносит основную работу
+      в фазу, где таблица доступна для чтения и записи, а изменения, сделанные во время построения, применяются
+      и к новому индексу. Онлайн-операции доступны не во всех редакциях SQL Server: перед планированием
+      проверьте таблицу возможностей редакций для своей версии SQL Server. Azure SQL Database и Azure SQL
+      Managed Instance их поддерживают.
+
+      Второй риск - многочасовая операция, которую нельзя безопасно прервать: отмена обычного построения
+      откатывает всю работу. `RESUMABLE = ON` (для `CREATE INDEX` начиная с SQL Server 2019, только вместе с
+      `ONLINE = ON`) позволяет приостановить построение через `ALTER INDEX ... PAUSE` или по `MAX_DURATION`
+      и продолжить через `ALTER INDEX ... RESUME`, в том числе после сбоя. Возобновляемая операция также
+      позволяет усекать журнал транзакций во время построения, а не держать его до самого конца.
+
+      Третий риск - нехватка места. Нужны свободное место под сам индекс и под сортировку (по умолчанию она идёт
+      в пользовательской базе, а при `SORT_IN_TEMPDB = ON` - в `tempdb`), рост журнала (его ещё нужно доставить
+      на реплики группы доступности и в резервные копии журнала) и `tempdb`: онлайн-построение использует
+      управление версиями строк, и хранилище версий растёт вместе с потоком изменений. Если в базе включено
+      ускоренное восстановление (ADR), версии хранятся в постоянном хранилище версий в самой базе, и расти
+      будут её файлы. Поэтому операцию сначала репетируют на копии того же объёма, а в production запускают
+      в окно низкой нагрузки, следят за блокировками, журналом и местом под версии и заранее решают, при каких
+      признаках её приостановить.
+
+      Даже онлайн-построение кратко берёт блокировки в начале и в конце, поэтому долгая открытая транзакция
+      может его задержать. Перед запуском стоит проверить, нет ли на таблице таких транзакций.
+    linkTitles:
+      - "Выполнение операций с индексами в оперативном режиме"
+      - "CREATE INDEX (Transact-SQL)"
+  en:
+    title: How do you reduce the risk of creating an index on a 500-million-row SQL Server table under live traffic?
+    prompt: |
+      The team needs to add a nonclustered index to a SQL Server table with 500 million rows that serves
+      application requests around the clock. You are responsible for making sure the change does not take the
+      service down. Select every practice that really reduces the risk of this operation.
+    hint: "What does the build hold on the table and for how long, and what happens if you have to stop it halfway?"
+    options:
+      a: "Build the index with `ONLINE = ON` (if the edition or service supports it), so the table stays readable and writable while the index is built."
+      b: "Add `RESUMABLE = ON` (together with `ONLINE = ON`) and, if needed, `MAX_DURATION`, so the build can be paused at peak hours and continued later without losing the work done."
+      c: "Estimate space up front: free space in the data files for the new index and the sort, transaction log growth, and the load on `tempdb` (the version store during an online build, and sorting if `SORT_IN_TEMPDB = ON` is set)."
+      d: "Rehearse the operation on a restored copy with production-sized data to measure the duration and log growth, then run it in a low-traffic window with blocking monitoring and a rollback plan."
+      e: "Run a plain `CREATE INDEX` with no options right at peak time: a nonclustered index only reads the table, so it gets in nobody's way."
+      f: "Run `CREATE INDEX` after `SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED`, so the index build takes no locks."
+      g: "Rely on the fact that an online build takes no locks on the table at all, so long open transactions on it cannot get in its way."
+    optionExplanations:
+      e: "An offline nonclustered index build holds a shared (S) lock on the table for the whole build, so every `INSERT`, `UPDATE` and `DELETE` waits. On 500 million rows this can take hours, and application requests start failing with timeouts."
+      f: "The isolation level affects how ordinary queries read data, not the locks taken by the index build DDL operation. `CREATE INDEX` takes the same locks whatever the session isolation level is."
+      g: "An online build holds locks only very briefly, but it does not avoid them: a short shared lock on the table at the start, and a shared or schema modification (Sch-M) lock at the end. To get them, the operation waits for transactions with incompatible locks to finish, so a long open transaction can delay it, and other requests queue up behind it."
+    answer: "Options a, b, c and d: an online build, a resumable operation, planning space for data, log and `tempdb`, and a rehearsal on a copy plus a low-traffic run with monitoring."
+    explanation: |
+      The main risk is a long lock. A plain (offline) `CREATE INDEX` of a nonclustered index holds a shared lock
+      on the table for the whole build and blocks every modification, and for a clustered index it takes a schema
+      modification lock and blocks even reads. `ONLINE = ON` moves the main work into a phase where the table is
+      readable and writable, and changes made during the build are applied to the new index too. Online
+      operations are not available in every SQL Server edition: before planning, check the edition feature table
+      for your SQL Server version. Azure SQL Database and Azure SQL Managed Instance support them.
+
+      The second risk is an operation lasting hours that cannot be stopped safely: cancelling a plain build rolls
+      back all the work. `RESUMABLE = ON` (for `CREATE INDEX` since SQL Server 2019, only together with
+      `ONLINE = ON`) lets you pause the build with `ALTER INDEX ... PAUSE` or by `MAX_DURATION` and continue it
+      with `ALTER INDEX ... RESUME`, including after a failure. A resumable operation also allows the transaction
+      log to be truncated during the build instead of holding it until the very end.
+
+      The third risk is running out of space. You need free space for the index itself and for sorting (by
+      default the sort runs in the user database, and with `SORT_IN_TEMPDB = ON` in `tempdb`), log growth (which
+      also has to reach availability group replicas and log backups), and `tempdb`: an online build uses row
+      versioning, and the version store grows with the stream of changes. If the database has accelerated
+      database recovery (ADR) enabled, versions are kept in the persistent version store inside the database
+      itself, so its files grow instead. That is why the operation is first rehearsed on a copy of the same size,
+      and in production it runs in a low-traffic window while you watch blocking, the log and the version space,
+      having decided in advance which signs make you pause it.
+
+      Even an online build takes brief locks at the start and at the end, so a long open transaction can delay
+      it. Before starting, check that the table has no such transactions.
+    linkTitles:
+      - "Perform index operations online"
+      - "CREATE INDEX (Transact-SQL)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

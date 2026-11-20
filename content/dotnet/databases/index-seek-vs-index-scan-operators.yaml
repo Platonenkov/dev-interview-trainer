@@ -1,0 +1,97 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNAJCKJ0W7WZGJQKE7
+slug: index-seek-vs-index-scan-operators
+stack: dotnet
+topic: databases
+level: junior
+type: single
+grading: auto
+tags: [sql-server, indexes, execution-plans, index-seek, index-scan]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: false
+  - id: c
+    correct: true
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/sql/relational-databases/showplan-logical-and-physical-operators-reference
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/sql/relational-databases/sql-server-index-design-guide
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Чем оператор Index Seek отличается от Index Scan в плане выполнения SQL Server?
+    prompt: |
+      В плане выполнения запроса SQL Server встречаются операторы `Index Seek` и `Index Scan`.
+      Какое утверждение верно описывает разницу между ними?
+    hint: Подумайте, сколько страниц листового уровня индекса приходится прочитать каждому оператору и во что обходится дополнительное обращение за каждой найденной строкой.
+    options:
+      a: "`Index Seek` всегда быстрее `Index Scan`, поэтому `Index Scan` в плане всегда означает, что не хватает индекса и его нужно добавить."
+      b: "`Index Seek` возвращает только одну строку по условию равенства, а для диапазонных условий вроде `>` или `BETWEEN` SQL Server всегда вынужден использовать `Index Scan`."
+      c: "`Index Seek` спускается по B-дереву от корня сразу к началу подходящего диапазона ключей и читает только этот диапазон, а `Index Scan` читает листовой уровень индекса от начала до конца. Если запросу нужна большая доля строк, просмотр может оказаться дешевле."
+      d: "`Index Scan` вообще не использует индекс и читает страницы данных таблицы, а `Index Seek` читает страницы индекса."
+    optionExplanations:
+      a: "Это не так. Когда запросу нужна большая доля строк, поиск по некластеризованному индексу с отдельным `Key Lookup` за каждой строкой обходится дороже, чем последовательный просмотр, и оптимизатор по оценке стоимости сознательно выбирает `Scan`. Кроме того, просмотр маленькой таблицы - нормальный и дешёвый план."
+      b: "Поиск умеет читать диапазоны: движок находит в B-дереве первую подходящую запись и читает листовой уровень подряд, пока ключ остаётся в диапазоне. Условия `>`, `<` и `BETWEEN` по ведущему столбцу индекса как раз дают `Index Seek` с диапазоном."
+      d: "`Index Scan` читает страницы именно того индекса, который указан в плане, только все. Чтение таблицы целиком - это отдельные операторы: `Table Scan` для кучи и `Clustered Index Scan` для таблицы с кластеризованным индексом."
+    answer: "`Index Seek` спускается по B-дереву к началу диапазона ключей и читает только его, `Index Scan` читает весь листовой уровень индекса. Просмотр может быть дешевле, если нужна большая доля строк."
+    explanation: |
+      Индекс в SQL Server - это B-дерево: корневая страница, промежуточные уровни и листовой уровень, где
+      записи упорядочены по ключу. `Index Seek` использует эту упорядоченность: за несколько чтений страниц
+      движок спускается от корня к первой записи, удовлетворяющей условию поиска, и читает листовой уровень
+      подряд, пока ключ остаётся в нужном диапазоне. Остальные страницы листового уровня не читаются.
+
+      `Index Scan` не ищет начало диапазона, а читает все страницы листового уровня и проверяет условие на
+      каждой строке. Если в запросе есть, например, `TOP`, просмотр может остановиться раньше, но в общем случае
+      он проходит индекс целиком.
+
+      Просмотр не всегда хуже. Допустим, запросу нужна треть строк таблицы, а некластеризованный индекс не
+      покрывает запрос. Тогда поиск даст отдельное обращение к кластеризованному индексу (`Key Lookup`) за каждой
+      найденной строкой, то есть множество случайных чтений. Последовательный просмотр кластеризованного индекса
+      в такой ситуации дешевле, и оптимизатор выбирает его по оценке стоимости. Поэтому `Scan` в плане - повод
+      проверить, сколько строк реально нужно запросу, а не автоматический признак ошибки.
+    linkTitles:
+      - "Справочник по логическим и физическим операторам Showplan"
+      - "Руководство по архитектуре и проектированию индексов SQL Server"
+  en:
+    title: How does an Index Seek differ from an Index Scan in a SQL Server execution plan?
+    prompt: |
+      A SQL Server execution plan can contain the `Index Seek` and `Index Scan` operators.
+      Which statement correctly describes the difference between them?
+    hint: Think about how many leaf pages of the index each operator has to read, and what an extra lookup for every row found costs.
+    options:
+      a: "An `Index Seek` is always faster than an `Index Scan`, so an `Index Scan` in a plan always means an index is missing and must be added."
+      b: "An `Index Seek` returns only one row for an equality condition, and for range conditions such as `>` or `BETWEEN` SQL Server always has to use an `Index Scan`."
+      c: "An `Index Seek` navigates the B-tree from the root straight to the start of the qualifying key range and reads only that range, while an `Index Scan` reads the leaf level of the index from start to end. When the query needs a large share of the rows, the scan can be cheaper."
+      d: "An `Index Scan` does not use the index at all and reads the data pages of the table, while an `Index Seek` reads the index pages."
+    optionExplanations:
+      a: "That is not true. When the query needs a large share of the rows, a seek on a nonclustered index with a separate `Key Lookup` for every row costs more than a sequential scan, and the optimizer deliberately picks the `Scan` based on its cost estimate. Scanning a small table is also a normal and cheap plan."
+      b: "A seek can read ranges: the engine finds the first qualifying entry in the B-tree and reads the leaf level forward while the key stays in the range. Conditions such as `>`, `<` and `BETWEEN` on the leading index column produce exactly a range `Index Seek`."
+      d: "An `Index Scan` reads the pages of the very index named in the plan, just all of them. Reading the whole table is a different operator: `Table Scan` for a heap and `Clustered Index Scan` for a table with a clustered index."
+    answer: "An `Index Seek` navigates the B-tree to the start of a key range and reads only that range, an `Index Scan` reads the whole leaf level of the index. A scan can be cheaper when a large share of the rows is needed."
+    explanation: |
+      An index in SQL Server is a B-tree: a root page, intermediate levels and a leaf level where entries are
+      ordered by the key. An `Index Seek` uses that order: with a few page reads the engine descends from the root
+      to the first entry that satisfies the seek condition and reads the leaf level forward while the key stays in
+      the needed range. The other leaf pages are not read.
+
+      An `Index Scan` does not look for the start of a range: it reads every page of the leaf level and checks the
+      condition on each row. If the query has, for example, a `TOP`, the scan can stop early, but in general it
+      goes through the whole index.
+
+      A scan is not always worse. Suppose the query needs a third of the table's rows and the nonclustered index
+      does not cover the query. A seek then causes a separate lookup into the clustered index (`Key Lookup`) for
+      every row found, which means many random reads. A sequential scan of the clustered index is cheaper in that
+      case, and the optimizer picks it based on its cost estimate. So a `Scan` in a plan is a reason to check how
+      many rows the query really needs, not an automatic sign of a mistake.
+    linkTitles:
+      - "Showplan logical and physical operators reference"
+      - "SQL Server index architecture and design guide"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

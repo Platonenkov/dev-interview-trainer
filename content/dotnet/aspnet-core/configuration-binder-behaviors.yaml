@@ -1,0 +1,124 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RKE0ZRX2AW6YC5ZZ4R
+slug: configuration-binder-behaviors
+stack: dotnet
+topic: aspnet-core
+level: senior
+type: multi
+grading: auto
+tags: [configuration, options-pattern, configuration-binder]
+code:
+  language: csharp
+  harness: none
+  source: |
+    public class CacheOptions
+    {
+        public int SizeLimit { get; set; } = 100;
+        public string Region { get; set; } = "eu";
+        public TimeSpan Ttl { get; set; }
+        public string ApiKey { get; private set; }
+    }
+
+    // appsettings.json contains:
+    // "Cache": { "sizelimit": 500, "Ttl": "00:05:00", "ApiKey": "secret", "Mode": "fast" }
+
+    var options = builder.Configuration.GetSection("Cache").Get<CacheOptions>();
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: true
+  - id: e
+    correct: false
+  - id: f
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/core/extensions/configuration
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/microsoft.extensions.configuration.binderoptions
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как ConfigurationBinder привязывает секцию конфигурации к классу настроек?
+    prompt: |
+      Приложение на ASP.NET Core (.NET 10) привязывает секцию `Cache` к классу `CacheOptions` (код ниже) через
+      `ConfigurationBinder` с параметрами по умолчанию. Выберите все верные утверждения о результате привязки.
+    hint: Сравните, что происходит со свойством, когда ключа нет, когда ключ лишний, когда у свойства нет открытого `set` и когда значение не удаётся преобразовать.
+    options:
+      a: "`SizeLimit` получит значение 500, хотя ключ в JSON записан как `sizelimit`."
+      b: "`Region` сохранит значение `eu` из инициализатора: ключа `Region` в секции нет, и связыватель это свойство не трогает."
+      c: "Ключ `Mode`, которому не соответствует ни одно свойство, по умолчанию приводит к исключению при привязке."
+      d: "`ApiKey` останется `null`, потому что у свойства закрытый `set`; с перегрузкой `Get<CacheOptions>(o => o.BindNonPublicProperties = true)` оно получит значение `secret`."
+      e: "Если значение `sizelimit` заменить на `many`, связыватель молча пропустит его и оставит `SizeLimit` равным 100."
+      f: "`Ttl` останется `TimeSpan.Zero`: связыватель умеет преобразовывать только строки и числовые типы."
+    optionExplanations:
+      c: "По умолчанию ключи без подходящего свойства игнорируются. Исключение появляется, только если включить `BinderOptions.ErrorOnUnknownConfiguration = true`."
+      e: "Значение, которое не удаётся преобразовать к типу свойства, не пропускается: привязка завершается исключением с указанием пути ключа и целевого типа."
+      f: "Связыватель преобразует строковые значения через `TypeConverter` целевого типа, поэтому `00:05:00` превращается в `TimeSpan` длиной 5 минут. Так же привязываются `Guid`, `Uri`, перечисления и другие типы с конвертером."
+    answer: "Верны a, b и d: сопоставление ключей нечувствительно к регистру, отсутствующие ключи оставляют значения по умолчанию, а свойства с закрытым `set` привязываются только с `BindNonPublicProperties`."
+    explanation: |
+      Ключи конфигурации в .NET нечувствительны к регистру, поэтому `sizelimit`, `SizeLimit` и `SIZELIMIT` -
+      один и тот же ключ, и связыватель находит свойство без учёта регистра.
+
+      Связыватель обходит свойства объекта и ищет для каждого ключ в секции. Если ключа нет, свойство не
+      меняется: остаётся значение из инициализатора или конструктора. Обратная ситуация - ключ без свойства -
+      по умолчанию тоже молча игнорируется. Это удобно, но опечатка в имени ключа (`SizeLimt`) пройдёт
+      незамеченной; `BinderOptions.ErrorOnUnknownConfiguration = true` превращает такие ключи в исключение.
+
+      По умолчанию (`BindNonPublicProperties = false`) связыватель устанавливает значения только через
+      открытый `set`. С `BindNonPublicProperties = true` он устанавливает и свойства с закрытым `set`.
+
+      Строковые значения преобразуются через `TypeConverter` целевого типа. Если преобразование невозможно,
+      привязка выбрасывает исключение, а не пропускает значение, поэтому ошибка конфигурации всплывает в месте
+      привязки. Поведение описано для .NET 10.
+    linkTitles:
+      - "Конфигурация в .NET"
+      - "Класс BinderOptions"
+  en:
+    title: How does ConfigurationBinder bind a configuration section to an options class?
+    prompt: |
+      An ASP.NET Core application (.NET 10) binds the `Cache` section to the `CacheOptions` class (code below)
+      through `ConfigurationBinder` with default settings. Select all true statements about the result of binding.
+    hint: Compare what happens to a property when its key is missing, when a key is extra, when the property has no public `set`, and when a value cannot be converted.
+    options:
+      a: "`SizeLimit` gets the value 500 even though the key in JSON is written as `sizelimit`."
+      b: "`Region` keeps the value `eu` from its initializer: the section has no `Region` key, and the binder leaves the property alone."
+      c: "The `Mode` key, which matches no property, causes an exception during binding by default."
+      d: "`ApiKey` stays `null` because the property has a private `set`; with the overload `Get<CacheOptions>(o => o.BindNonPublicProperties = true)` it gets the value `secret`."
+      e: "If the `sizelimit` value is replaced with `many`, the binder silently skips it and leaves `SizeLimit` at 100."
+      f: "`Ttl` stays `TimeSpan.Zero`: the binder can only convert strings and numeric types."
+    optionExplanations:
+      c: "By default keys without a matching property are ignored. An exception appears only if you set `BinderOptions.ErrorOnUnknownConfiguration = true`."
+      e: "A value that cannot be converted to the property type is not skipped: binding ends with an exception that names the key path and the target type."
+      f: "The binder converts string values with the `TypeConverter` of the target type, so `00:05:00` becomes a 5-minute `TimeSpan`. `Guid`, `Uri`, enums and other types with a converter bind the same way."
+    answer: "a, b and d are true: key matching is case-insensitive, missing keys leave default values, and properties with a private `set` are bound only with `BindNonPublicProperties`."
+    explanation: |
+      Configuration keys in .NET are case-insensitive, so `sizelimit`, `SizeLimit` and `SIZELIMIT` are the same
+      key, and the binder finds the property regardless of case.
+
+      The binder walks the properties of the object and looks up a key for each one. If the key is missing, the
+      property is not changed: it keeps the value from its initializer or constructor. The opposite case, a key
+      without a property, is also silently ignored by default. That is convenient, but a typo in a key name
+      (`SizeLimt`) goes unnoticed; `BinderOptions.ErrorOnUnknownConfiguration = true` turns such keys into an
+      exception.
+
+      By default (`BindNonPublicProperties = false`) the binder sets values only through a public `set`. With
+      `BindNonPublicProperties = true` it also sets properties with a private `set`.
+
+      String values are converted with the `TypeConverter` of the target type. If conversion is impossible,
+      binding throws instead of skipping the value, so a configuration error surfaces where binding happens. The
+      behaviour is described for .NET 10.
+    linkTitles:
+      - "Configuration in .NET"
+      - "BinderOptions class"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"
+  noRunReason: "Needs Microsoft.Extensions.Configuration.Binder and an appsettings.json file, which are not part of the BCL-only sandbox."

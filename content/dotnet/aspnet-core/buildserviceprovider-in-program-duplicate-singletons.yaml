@@ -1,0 +1,150 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RKNE7PF0ZWBRRRZNZ2
+slug: buildserviceprovider-in-program-duplicate-singletons
+stack: dotnet
+topic: aspnet-core
+level: senior
+type: situation
+grading: self
+tags: [dependency-injection, singleton, hosting, startup, diagnostics]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/diagnostics/asp0000
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/configuration/options
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/core/extensions/dependency-injection/guidelines
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Синглтон-кэш существует в двух экземплярах, а в Program.cs вызывается BuildServiceProvider: что делать?"
+    prompt: |
+      Сервис на ASP.NET Core (.NET 10). `PriceCache` зарегистрирован как синглтон через
+      `builder.Services.AddSingleton<IPriceCache, PriceCache>()`, но фоновое обновление курсов через
+      `RatesUpdater` пишет в кэш, а контроллеры читают старые данные. По логам конструктор `PriceCache`
+      вызывается дважды. Сразу после регистрации кэша в `Program.cs` идут три строки:
+
+      1. `var provider = builder.Services.BuildServiceProvider();`
+      2. `var cache = provider.GetRequiredService<IPriceCache>();`
+      3. `builder.Services.AddSingleton<IRatesUpdater>(new RatesUpdater(cache));`
+
+      Затем регистрируются контроллеры и вызывается `builder.Build()`. Как вы подтвердите причину, исправите
+      код и не дадите ошибке повториться?
+    hint: "Где именно создаётся экземпляр, который получает `RatesUpdater`, и тот ли это объект, что получают контроллеры?"
+    answer: |
+      1. **Подтвердить причину.** Добавить в `PriceCache` поле с `Guid`, которое создаётся в конструкторе, и
+         выводить его в лог при создании и при обращении из `RatesUpdater` и из контроллера. Два разных
+         значения подтверждают два экземпляра. Найти в решении все вызовы `BuildServiceProvider`.
+      2. **Понять механизм.** `BuildServiceProvider()` строит отдельный контейнер из уже добавленных
+         регистраций. Синглтон - это один экземпляр на контейнер, поэтому `RatesUpdater` получает кэш из
+         временного контейнера, а контроллеры - из контейнера, который строит `builder.Build()`. Именно это
+         последствие описывает правило ASP0000: вызов `BuildServiceProvider` из кода приложения создаёт
+         больше одной копии синглтонов.
+      3. **Оценить побочные эффекты.** Временный контейнер никто не освобождает, поэтому его
+         `IDisposable`-синглтоны (подключения, таймеры) не освобождаются. Экземпляр `RatesUpdater`, переданный
+         в `AddSingleton` готовым объектом, создан не контейнером, и контейнер не освободит его сам. Временный
+         контейнер построен с параметрами по умолчанию, без `ValidateScopes`, и scoped-сервис, полученный из
+         него, тихо живёт всё время работы приложения.
+      4. **Исправить: отложить разрешение зависимостей.** Не строить контейнер при регистрации, а дать это
+         сделать основному контейнеру: `AddSingleton<IRatesUpdater, RatesUpdater>()` с внедрением через
+         конструктор или фабрика `AddSingleton<IRatesUpdater>(sp => new RatesUpdater(sp.GetRequiredService<IPriceCache>()))`.
+         Если сервис нужен для настройки параметров, использовать `AddOptions<T>().Configure<TDep>((o, dep) => ...)`
+         или класс, реализующий `IConfigureOptions<T>`.
+      5. **Разделить случаи, когда значение нужно раньше.** Если при регистрации нужно только значение
+         конфигурации (например, выбор реализации), читать его из `builder.Configuration`, а не через
+         `IOptions<T>`. Если нужно что-то выполнить при запуске (прогреть кэш), делать это через
+         `app.Services` после `builder.Build()` или в `IHostedService`.
+      6. **Закрепить.** Не полагаться только на анализатор ASP0000: правило описано для кода запуска
+         (`ConfigureServices`), поэтому стоит проверить в выводе сборки, сообщает ли он об этом коде в
+         `Program.cs`, и если да - повысить его до ошибки. Надёжнее запретить сам API в веб-проекте через
+         пакет BannedApiAnalyzers (файл `BannedSymbols.txt` с
+         `ServiceCollectionContainerBuilderExtensions.BuildServiceProvider`). Добавить интеграционный тест,
+         который через `WebApplicationFactory` проверяет, что `IPriceCache` у разных потребителей - один и
+         тот же экземпляр, и пункт в чек-листе code review.
+    explanation: |
+      Время жизни синглтона привязано к контейнеру, а не к процессу. Каждый вызов `BuildServiceProvider()`
+      создаёт новый корневой контейнер со своими синглтонами, поэтому код, который берёт зависимость из
+      временного контейнера и передаёт её готовым экземпляром в регистрацию, получает «второй мир»: состояние,
+      записанное в одном экземпляре, не видно в другом. Основной контейнер позже создаёт свой `PriceCache`
+      для контроллеров, отсюда два вызова конструктора. Для кэша это выглядит как устаревшие данные, для пулов
+      соединений - как двойной расход ресурсов.
+
+      Правильное решение - не разрешать сервисы во время регистрации вообще. Фабричные перегрузки
+      (`sp => ...`), `OptionsBuilder<T>.Configure<TDep>` и `IConfigureOptions<T>` получают `IServiceProvider`
+      основного контейнера в момент первого разрешения, когда контейнер уже построен, поэтому все потребители
+      видят одни и те же синглтоны, а контейнер сам создаёт их и управляет их освобождением. Анализатор ASP0000
+      помогает найти такие вызовы, но его описание сформулировано для `ConfigureServices`, поэтому защиту лучше
+      строить на запрете API и тесте. Ответ дан для .NET 10.
+    linkTitles:
+      - "ASP0000: не вызывайте 'IServiceCollection.BuildServiceProvider' в 'ConfigureServices'"
+      - "Шаблон параметров в ASP.NET Core"
+      - "Рекомендации по внедрению зависимостей"
+  en:
+    title: "A singleton cache exists in two instances and Program.cs calls BuildServiceProvider: what do you do?"
+    prompt: |
+      An ASP.NET Core service (.NET 10). `PriceCache` is registered as a singleton with
+      `builder.Services.AddSingleton<IPriceCache, PriceCache>()`, but the background rate refresh through
+      `RatesUpdater` writes to the cache while the controllers read stale data. The logs show that the
+      `PriceCache` constructor runs twice. Right after the cache registration, `Program.cs` has three lines:
+
+      1. `var provider = builder.Services.BuildServiceProvider();`
+      2. `var cache = provider.GetRequiredService<IPriceCache>();`
+      3. `builder.Services.AddSingleton<IRatesUpdater>(new RatesUpdater(cache));`
+
+      Then controllers are registered and `builder.Build()` is called. How do you confirm the cause, fix the
+      code and keep the mistake from coming back?
+    hint: "Where is the instance that `RatesUpdater` receives created, and is it the same object the controllers get?"
+    answer: |
+      1. **Confirm the cause.** Add a `Guid` field to `PriceCache` that is created in the constructor, and log it
+         at creation and on access from `RatesUpdater` and from a controller. Two different values confirm two
+         instances. Find every `BuildServiceProvider` call in the solution.
+      2. **Understand the mechanism.** `BuildServiceProvider()` builds a separate container from the
+         registrations added so far. A singleton is one instance per container, so `RatesUpdater` gets the cache
+         from the temporary container, and the controllers get it from the container built by
+         `builder.Build()`. This is exactly the consequence that rule ASP0000 describes: calling
+         `BuildServiceProvider` from application code creates more than one copy of singleton services.
+      3. **Assess the side effects.** Nobody disposes the temporary container, so its `IDisposable` singletons
+         (connections, timers) are never released. The `RatesUpdater` instance passed to `AddSingleton` as a
+         ready object was not created by the container, and the container does not dispose it. The temporary
+         container is built with default settings, without `ValidateScopes`, so a scoped service resolved from
+         it silently lives for the whole lifetime of the application.
+      4. **Fix it: defer resolution.** Do not build a container during registration; let the main container do
+         it: `AddSingleton<IRatesUpdater, RatesUpdater>()` with constructor injection, or a factory
+         `AddSingleton<IRatesUpdater>(sp => new RatesUpdater(sp.GetRequiredService<IPriceCache>()))`. If a
+         service is needed to configure options, use `AddOptions<T>().Configure<TDep>((o, dep) => ...)` or a
+         class that implements `IConfigureOptions<T>`.
+      5. **Separate the cases where a value is needed earlier.** If registration only needs a configuration
+         value (for example to choose an implementation), read it from `builder.Configuration`, not through
+         `IOptions<T>`. If something must run at startup (warming the cache), do it through `app.Services` after
+         `builder.Build()` or in an `IHostedService`.
+      6. **Lock it in.** Do not rely on the ASP0000 analyzer alone: the rule is described for startup code
+         (`ConfigureServices`), so check in the build output whether it reports this code in `Program.cs`, and
+         if it does, raise it to an error. A more reliable guard is to ban the API in the web project with the
+         BannedApiAnalyzers package (a `BannedSymbols.txt` entry for
+         `ServiceCollectionContainerBuilderExtensions.BuildServiceProvider`). Add an integration test that uses
+         `WebApplicationFactory` to check that `IPriceCache` is the same instance for different consumers, and
+         an item in the code review checklist.
+    explanation: |
+      A singleton's lifetime is tied to its container, not to the process. Every `BuildServiceProvider()` call
+      creates a new root container with its own singletons, so code that takes a dependency from a temporary
+      container and passes it as a ready instance into a registration gets a "second world": state written to
+      one instance is invisible in the other. The main container later creates its own `PriceCache` for the
+      controllers, hence the two constructor calls. For a cache this looks like stale data; for connection
+      pools it looks like doubled resource usage.
+
+      The right fix is not to resolve services during registration at all. Factory overloads (`sp => ...`),
+      `OptionsBuilder<T>.Configure<TDep>` and `IConfigureOptions<T>` receive the `IServiceProvider` of the main
+      container at first resolution, when the container is already built, so every consumer sees the same
+      singletons, and the container creates them and manages their disposal. The ASP0000 analyzer helps find
+      such calls, but its description is phrased for `ConfigureServices`, so the guard is better built on an API
+      ban and a test. The answer is stated for .NET 10.
+    linkTitles:
+      - "ASP0000: Do not call 'IServiceCollection.BuildServiceProvider' in 'ConfigureServices'"
+      - "Options pattern in ASP.NET Core"
+      - "Dependency injection guidelines"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

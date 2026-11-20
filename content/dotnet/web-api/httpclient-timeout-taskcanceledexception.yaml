@@ -1,0 +1,114 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RR1N2758QGD45BQM3J
+slug: httpclient-timeout-taskcanceledexception
+stack: dotnet
+topic: web-api
+level: senior
+type: single
+grading: auto
+tags: [httpclient, timeout, cancellation, task-canceled-exception]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+  - id: e
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.net.http.httpclient.timeout
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.net.http.httpclient.getasync
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как в .NET 10 отличить тайм-аут HttpClient от отмены запроса вызывающим кодом?
+    prompt: |
+      Сервис на .NET 10 вызывает `await client.GetAsync(url, cancellationToken)`. У клиента задан
+      `HttpClient.Timeout` в 10 секунд, а `cancellationToken` приходит от вызывающего кода и отменяется,
+      например, когда исходный запрос пользователя прерван. Тайм-аут нужно залогировать как сбой внешнего
+      сервиса, а отмену вызывающим кодом - нет. Как надёжно различить эти два случая?
+    hint: В обоих случаях запрос отменяется. Чем эти случаи отличаются?
+    options:
+      a: "Перехватить `TimeoutException`: при истечении `HttpClient.Timeout` выбрасывается именно оно."
+      b: "При тайм-ауте у исключения отмены `InnerException` имеет тип `TimeoutException`; при отмене вызывающим кодом у его токена `IsCancellationRequested` равно `true`."
+      c: "Перехватить `HttpRequestException` с `StatusCode`, равным `HttpStatusCode.RequestTimeout`."
+      d: "Никак: в обоих случаях приходит одинаковое исключение отмены, поэтому нужно отказаться от `HttpClient.Timeout` и использовать свой `CancellationTokenSource` с `CancelAfter`."
+      e: "Тайм-аут ловить через `catch (TaskCanceledException)`, а отмену вызывающим кодом - следующим блоком `catch (OperationCanceledException)`."
+    optionExplanations:
+      a: "Исключение `TimeoutException` напрямую не выбрасывается. Начиная с .NET 5 оно вложено во `InnerException` исключения отмены (`OperationCanceledException`, на практике его наследника `TaskCanceledException`), поэтому такой `catch` не сработает."
+      c: "`HttpRequestException` со статусом 408 относится к ответу сервера, а `GetAsync` вообще не выбрасывает исключение из-за кода состояния. Истечение `HttpClient.Timeout` - это отмена на стороне клиента, ответа нет."
+      d: "Так было в .NET Core до .NET 5: там при тайм-ауте приходило `OperationCanceledException` без вложенного исключения. Начиная с .NET 5 тайм-аут отличим по `InnerException` типа `TimeoutException`, а отмену вызывающим кодом видно по его собственному токену."
+      e: "`TaskCanceledException` - наследник `OperationCanceledException`, и отмена вызывающим кодом обычно тоже приходит как `TaskCanceledException`. В любом случае `catch (TaskCanceledException)` не различает причины: тип исключения ничего не говорит о том, почему запрос отменён."
+    answer: "При тайм-ауте исключение отмены содержит во `InnerException` объект `TimeoutException`; отмена вызывающим кодом видна по `cancellationToken.IsCancellationRequested == true`."
+    explanation: |
+      `HttpClient` реализует `Timeout` через отмену: запрос отменяется либо токеном вызывающего кода, либо по
+      истечении `Timeout`, и действует тот срок, что короче. Поэтому в обоих случаях исключение - это отмена
+      операции. Документация `GetAsync` описывает тайм-аут так: начиная с .NET 5 выбрасывается
+      `OperationCanceledException`, в которое вложено `TimeoutException`; в .NET Core до .NET 5 вложенного
+      исключения не было, а в .NET Framework выбрасывалось `HttpRequestException`. На практике `HttpClient` в
+      .NET 10 выбрасывает наследника `OperationCanceledException` - `TaskCanceledException`, поэтому перехват
+      `OperationCanceledException` работает в обоих случаях. По умолчанию `Timeout` равен 100 секундам.
+
+      Надёжный признак отмены вызывающим кодом - его собственный токен: если `cancellationToken.IsCancellationRequested`
+      равно `true`, запрос отменил вызывающий. Типичный код:
+
+      - `catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)` - отмена вызывающим, не ошибка;
+      - `catch (OperationCanceledException ex) when (ex.InnerException is TimeoutException)` - тайм-аут, сбой внешнего сервиса.
+
+      Проверка токена идёт первой: если вызывающий отменил запрос, это не сбой зависимости. Различать важно:
+      тайм-аут говорит о проблеме зависимости и попадает в метрики и логи ошибок, а отмена вызывающим кодом -
+      штатная ситуация, которую не стоит повторять и считать сбоем.
+    linkTitles:
+      - "Свойство HttpClient.Timeout"
+      - "Метод HttpClient.GetAsync"
+  en:
+    title: How do you tell an HttpClient timeout from caller cancellation in .NET 10?
+    prompt: |
+      A .NET 10 service calls `await client.GetAsync(url, cancellationToken)`. The client has
+      `HttpClient.Timeout` set to 10 seconds, and `cancellationToken` comes from the caller and is cancelled,
+      for example, when the user's original request is aborted. A timeout must be logged as a failure of the
+      external service, while caller cancellation must not. How do you reliably tell the two cases apart?
+    hint: Both cases cancel the request. What differs between them?
+    options:
+      a: "Catch `TimeoutException`: that is exactly what is thrown when `HttpClient.Timeout` elapses."
+      b: "On a timeout the cancellation exception has a `TimeoutException` as its `InnerException`; on caller cancellation the caller's token has `IsCancellationRequested` equal to `true`."
+      c: "Catch `HttpRequestException` with `StatusCode` equal to `HttpStatusCode.RequestTimeout`."
+      d: "You cannot: both cases produce the same cancellation exception, so you must drop `HttpClient.Timeout` and use your own `CancellationTokenSource` with `CancelAfter`."
+      e: "Catch the timeout with `catch (TaskCanceledException)` and caller cancellation with a following `catch (OperationCanceledException)` block."
+    optionExplanations:
+      a: "`TimeoutException` is not thrown directly. Since .NET 5 it is nested as the `InnerException` of a cancellation exception (`OperationCanceledException`, in practice its subclass `TaskCanceledException`), so this `catch` never runs."
+      c: "An `HttpRequestException` with status 408 is about a server response, and `GetAsync` does not throw because of a status code at all. `HttpClient.Timeout` elapsing is a client-side cancellation, there is no response."
+      d: "That was the case in .NET Core before .NET 5: a timeout produced an `OperationCanceledException` with no inner exception. Since .NET 5 a timeout is recognisable by an `InnerException` of type `TimeoutException`, and caller cancellation is visible on the caller's own token."
+      e: "`TaskCanceledException` derives from `OperationCanceledException`, and caller cancellation also usually arrives as a `TaskCanceledException`. Either way, `catch (TaskCanceledException)` does not tell the causes apart: the exception type says nothing about why the request was cancelled."
+    answer: "On a timeout the cancellation exception holds a `TimeoutException` in `InnerException`; caller cancellation shows as `cancellationToken.IsCancellationRequested == true`."
+    explanation: |
+      `HttpClient` implements `Timeout` through cancellation: the request is cancelled either by the caller's token
+      or when `Timeout` elapses, and whichever is shorter applies. So in both cases the exception is a cancellation.
+      The `GetAsync` documentation describes a timeout like this: since .NET 5 an `OperationCanceledException` that
+      nests a `TimeoutException` is thrown; in .NET Core before .NET 5 there was no inner exception, and .NET
+      Framework threw `HttpRequestException`. In practice `HttpClient` in .NET 10 throws the subclass of
+      `OperationCanceledException` called `TaskCanceledException`, so catching `OperationCanceledException` works
+      in both cases. The default `Timeout` is 100 seconds.
+
+      The reliable sign of caller cancellation is the caller's own token: if `cancellationToken.IsCancellationRequested`
+      is `true`, the caller cancelled the request. Typical code:
+
+      - `catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)` - the caller cancelled, not an error;
+      - `catch (OperationCanceledException ex) when (ex.InnerException is TimeoutException)` - a timeout, a failure of the external service.
+
+      The token check comes first: if the caller cancelled the request, it is not a dependency failure. The
+      distinction matters: a timeout signals a problem with a dependency and belongs in error metrics and logs,
+      while caller cancellation is a normal situation that should not be retried or counted as a failure.
+    linkTitles:
+      - "HttpClient.Timeout property"
+      - "HttpClient.GetAsync method"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

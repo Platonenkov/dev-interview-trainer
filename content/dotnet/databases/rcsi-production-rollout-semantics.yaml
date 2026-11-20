@@ -1,0 +1,173 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RN1HZGS9QAM8A8ZB8H
+slug: rcsi-production-rollout-semantics
+stack: dotnet
+topic: databases
+level: lead
+type: situation
+grading: self
+tags: [sql-server, isolation-levels, rcsi, row-versioning, tempdb]
+links:
+  - url: https://learn.microsoft.com/en-us/sql/relational-databases/sql-server-transaction-locking-and-row-versioning-guide
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/sql/t-sql/statements/alter-database-transact-sql-set-options
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Читатели и писатели блокируют друг друга, команда хочет завтра включить READ_COMMITTED_SNAPSHOT. Как принять решение и внедрить?
+    prompt: |
+      Большая боевая база SQL Server: в часы пик запросы на чтение ждут транзакции записи, а записи ждут
+      читателей, API отвечает с таймаутами. Команда нашла в интернете совет «просто включите
+      `READ_COMMITTED_SNAPSHOT`» и хочет сделать это завтра одной командой `ALTER DATABASE`. Базу используют
+      несколько сервисов на EF Core и ADO.NET, плюс хранимые процедуры и фоновые обработчики очередей.
+
+      Вы технический лидер. Как вы решите, включать ли RCSI, что проверите до включения и как проведёте само
+      включение так, чтобы его можно было откатить?
+    hint: Что видит чтение под `READ COMMITTED`, если строку в этот момент меняет незафиксированная транзакция, - до включения параметра и после? И где сервер хранит старые версии строк?
+    answer: |
+      1. **Подтвердить диагноз, а не лечить симптом.**
+         - По `sys.dm_exec_requests` (`blocking_session_id`, `wait_type`) и отчёту о заблокированных процессах
+           (blocked process report) выяснить, кто кого ждёт.
+         - RCSI помогает, когда `SELECT` под `READ COMMITTED` ждут писателей (ожидания `LCK_M_S`) или писатели
+           ждут S-блокировок читателей. Конфликты писатель-писатель (`LCK_M_U`, `LCK_M_X`) он не убирает: запись
+           по-прежнему блокирует запись.
+         - Проверить, нет ли более дешёвой причины: длинные транзакции, сканирование без индекса, эскалация
+           блокировок.
+      2. **Понять, что меняется семантика каждого чтения.** После включения любой оператор под
+         `READ COMMITTED` (уровень по умолчанию, в том числе для EF Core и ADO.NET) не ждёт писателя, а читает
+         версию строки, зафиксированную на момент начала оператора. Код, который неявно рассчитывал на ожидание,
+         ломается тихо, без ошибок:
+         - **таблицы-очереди**: `SELECT TOP (1) ... WHERE Status = 'New'`, затем `UPDATE` - два обработчика
+           теперь берут один и тот же элемент. Исправление - атомарный `UPDATE ... OUTPUT` с хинтами
+           `UPDLOCK, READPAST`;
+         - **«проверить, затем действовать»**: прочитать остаток, баланс или наличие записи и затем записать
+           на основе прочитанного. Раньше чтение дожидалось фиксации чужой записи и видело новое значение,
+           теперь видит старое - перепродажа, дубликаты. Исправление - ограничения в схеме, условный атомарный
+           `UPDATE ... WHERE Stock >= @qty`, `UPDLOCK` или точечный хинт `READCOMMITTEDLOCK`;
+         - триггеры и процедуры, которые проверяют правила данных чтением других таблиц.
+
+         Провести аудит кода и процедур на эти шаблоны вместе с владельцами каждого сервиса, найденные места
+         исправить до включения.
+      3. **Оценить стоимость версий.**
+         - Версии строк хранятся в хранилище версий в `tempdb` (при включённом Accelerated Database Recovery в
+           SQL Server 2019 и новее - в persistent version store самой базы): больше операций ввода-вывода и места.
+         - К изменяемым строкам добавляется до 14 байт служебной информации: расщепления страниц, рост
+           фрагментации и размера базы.
+         - Длинные транзакции не дают очищать старые версии, и хранилище растёт. Заранее увеличить `tempdb` и
+           найти самые длинные транзакции.
+      4. **Отрепетировать под нагрузкой.** На копии с объёмом данных, близким к боевому, включить RCSI и прогнать
+         нагрузочный тест плюс конкурентные тесты инвариантов (очереди, остатки, уникальность). Сравнить
+         блокировки и задержки, следить за `sys.dm_tran_version_store_space_usage` и счётчиками
+         `Version Store Size (KB)`, `Version Generation rate (KB/s)`, `Version Cleanup rate (KB/s)`,
+         `Longest Transaction Running Time`.
+      5. **Включить управляемо и с планом отката.**
+         - `ALTER DATABASE ... SET READ_COMMITTED_SNAPSHOT ON` требует, чтобы в базе не было других активных
+           подключений, кроме выполняющего команду. На нагруженной базе команда будет ждать, а
+           `WITH ROLLBACK IMMEDIATE` откатит чужие транзакции, поэтому нужно окно обслуживания, объявленное
+           заранее, и повторные попытки в приложениях.
+         - Откат - `SET READ_COMMITTED_SNAPSHOT OFF` с тем же требованием. Критерии отката записать до
+           включения: рост хранилища версий, нехватка места в `tempdb`, нарушения инвариантов.
+         - Менее рискованная альтернатива: `ALLOW_SNAPSHOT_ISOLATION ON` и явный уровень `SNAPSHOT` только для
+           выбранных запросов (например, отчётов). Семантика остального кода не меняется, но версии для всех
+           изменений начинают создаваться так же.
+      6. **Закрепить.** Мониторинг хранилища версий после релиза, постепенное удаление ставших ненужными
+         хинтов `NOLOCK`, пункт в чек-листе code review: «база работает под RCSI, чтение не ждёт писателя».
+    explanation: |
+      RCSI - не настройка производительности, а изменение уровня изоляции по умолчанию для всей базы. Читатели
+      перестают брать S-блокировки и читают зафиксированные версии строк, поэтому блокировки читатель-писатель
+      исчезают. Но вместе с ними исчезает и побочный эффект, на котором держалась часть логики: чтение больше
+      не дожидается фиксации чужой транзакции. Такой код и раньше был хрупким, однако ожидание делало гонку
+      редкой; после включения она становится частой, и ошибки проявляются в данных, а не в логах.
+
+      Вторая сторона - ресурсы. Каждое изменение строки создаёт её версию, которая живёт, пока она может
+      понадобиться активным транзакциям. Нагрузка на `tempdb` (или на хранилище версий в базе при ADR) растёт
+      пропорционально интенсивности записи и длине транзакций, а сами строки становятся шире.
+
+      Поэтому задача лидера - не запретить RCSI (для OLTP он часто правильный выбор, в Azure SQL Database
+      он включён по умолчанию), а превратить «включим завтра» в управляемое изменение: подтверждённый диагноз,
+      аудит кода с владельцами сервисов, репетиция под нагрузкой, окно обслуживания и заранее оговорённые
+      критерии отката.
+    linkTitles:
+      - "Руководство по блокировкам транзакций и управлению версиями строк"
+      - "Параметры ALTER DATABASE SET (Transact-SQL)"
+  en:
+    title: Readers and writers block each other and the team wants to enable READ_COMMITTED_SNAPSHOT tomorrow. How do you decide and roll it out?
+    prompt: |
+      A large production SQL Server database: at peak hours read queries wait for write transactions, writes
+      wait for readers, and the API times out. The team found the advice "just turn on
+      `READ_COMMITTED_SNAPSHOT`" online and wants to do it tomorrow with a single `ALTER DATABASE` statement.
+      The database is used by several services on EF Core and ADO.NET, plus stored procedures and background
+      queue workers.
+
+      You are the tech lead. How do you decide whether to enable RCSI, what do you check before enabling it,
+      and how do you carry out the change so that it can be rolled back?
+    hint: What does a read under `READ COMMITTED` see when an uncommitted transaction is changing the row at that moment, before the option is enabled and after? And where does the server keep old row versions?
+    answer: |
+      1. **Confirm the diagnosis instead of treating the symptom.**
+         - Use `sys.dm_exec_requests` (`blocking_session_id`, `wait_type`) and the blocked process report to
+           find out who waits for whom.
+         - RCSI helps when `SELECT` statements under `READ COMMITTED` wait for writers (`LCK_M_S` waits) or
+           writers wait for readers' S locks. It does not remove writer-writer conflicts (`LCK_M_U`, `LCK_M_X`):
+           a write still blocks a write.
+         - Check for a cheaper cause: long transactions, scans without an index, lock escalation.
+      2. **Understand that the semantics of every read change.** Once enabled, any statement under
+         `READ COMMITTED` (the default level, including for EF Core and ADO.NET) does not wait for a writer but
+         reads the row version committed when the statement started. Code that implicitly relied on waiting
+         breaks silently, without errors:
+         - **queue tables**: `SELECT TOP (1) ... WHERE Status = 'New'`, then `UPDATE` - two workers now take
+           the same item. The fix is an atomic `UPDATE ... OUTPUT` with the `UPDLOCK, READPAST` hints;
+         - **check-then-act**: read stock, a balance or the existence of a row, then write based on what was
+           read. Before, the read waited for the other write to commit and saw the new value; now it sees the
+           old one - overselling, duplicates. The fix is schema constraints, a conditional atomic
+           `UPDATE ... WHERE Stock >= @qty`, `UPDLOCK`, or a targeted `READCOMMITTEDLOCK` hint;
+         - triggers and procedures that enforce data rules by reading other tables.
+
+         Audit the code and procedures for these patterns together with the owners of each service, and fix
+         what you find before enabling.
+      3. **Estimate the cost of versions.**
+         - Row versions are kept in the version store in `tempdb` (with Accelerated Database Recovery enabled in
+           SQL Server 2019 and later, in the persistent version store of the database itself): more I/O and space.
+         - Modified rows get up to 14 bytes of versioning information: page splits, more fragmentation, a
+           larger database.
+         - Long transactions prevent old versions from being cleaned up, and the store grows. Grow `tempdb` in
+           advance and find the longest transactions.
+      4. **Rehearse under load.** On a copy with production-sized data, enable RCSI and run a load test plus
+         concurrent tests of the invariants (queues, stock, uniqueness). Compare blocking and latency, and watch
+         `sys.dm_tran_version_store_space_usage` and the counters `Version Store Size (KB)`,
+         `Version Generation rate (KB/s)`, `Version Cleanup rate (KB/s)`, `Longest Transaction Running Time`.
+      5. **Enable it in a controlled way, with a rollback plan.**
+         - `ALTER DATABASE ... SET READ_COMMITTED_SNAPSHOT ON` requires that there are no active connections
+           to the database except the one running the command. On a busy database the statement waits, and
+           `WITH ROLLBACK IMMEDIATE` rolls back other transactions, so you need a maintenance window announced
+           in advance and retries in the applications.
+         - Rollback is `SET READ_COMMITTED_SNAPSHOT OFF` with the same requirement. Write down the rollback
+           criteria before enabling: version store growth, low `tempdb` space, invariant violations.
+         - A lower-risk alternative: `ALLOW_SNAPSHOT_ISOLATION ON` and an explicit `SNAPSHOT` level only for
+           selected queries (for example, reports). The semantics of the rest of the code do not change, but
+           versions start being generated for all modifications all the same.
+      6. **Lock it in.** Monitor the version store after the release, gradually remove `NOLOCK` hints that are
+         no longer needed, and add a code review checklist item: "the database runs under RCSI, a read does not
+         wait for a writer".
+    explanation: |
+      RCSI is not a performance setting but a change of the default isolation level for the whole database.
+      Readers stop taking S locks and read committed row versions, so reader-writer blocking disappears. But
+      with it disappears a side effect that part of the logic depended on: a read no longer waits for another
+      transaction to commit. Such code was fragile before as well, but the waiting made the race rare; after
+      the change it becomes frequent, and the errors show up in the data, not in the logs.
+
+      The other side is resources. Every row modification creates a version that lives as long as active
+      transactions may need it. The load on `tempdb` (or on the in-database version store with ADR) grows with
+      the write rate and the length of transactions, and the rows themselves get wider.
+
+      So the lead's job is not to forbid RCSI (for OLTP it is often the right choice, and Azure SQL Database
+      enables it by default), but to turn "we enable it tomorrow" into a managed change: a confirmed diagnosis,
+      a code audit with the service owners, a rehearsal under load, a maintenance window and rollback criteria
+      agreed in advance.
+    linkTitles:
+      - "Transaction locking and row versioning guide"
+      - "ALTER DATABASE SET options (Transact-SQL)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

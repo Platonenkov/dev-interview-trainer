@@ -1,0 +1,152 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPM5YKGR465BSSC11N
+slug: default-no-tracking-team-decision
+stack: dotnet
+topic: ef-core
+level: lead
+type: open
+grading: self
+tags: [ef-core, change-tracking, asnotracking, performance, team-process]
+links:
+  - url: https://learn.microsoft.com/en-us/ef/core/querying/tracking
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/ef/core/performance/efficient-querying
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Стоит ли делать NoTracking поведением по умолчанию для единственного DbContext приложения?
+    prompt: |
+      В приложении на EF Core 10 один `DbContext`, через него идут и чтение, и запись. Разработчик предлагает
+      включить в его настройке `UseQueryTrackingBehavior(QueryTrackingBehavior.NoTracking)`, чтобы ускорить
+      чтение. Как вы как лид оцените это предложение, какое решение скорее всего примете и какие правила
+      установите для команды?
+    hint: "Что станет с уже написанным кодом, который загружает сущность, меняет свойство и вызывает `SaveChanges`?"
+    answer: |
+      **Оценка предложения.**
+
+      - **Запросить цифры.** Какие именно чтения медленные и сколько даст отказ от отслеживания? Замерить
+        типичные эндпоинты чтения на реальной базе: профилировщик, время ответа и аллокации до и после.
+        Стоимость отслеживания растёт с числом материализованных сущностей. Для запроса с десятками сущностей
+        выигрыш часто незаметен, а настоящая причина медленного чтения - лишние столбцы, N+1 или отсутствующий
+        индекс.
+      - **Оценить риск.** Глобальная настройка меняет смысл уже написанного кода. Каждый путь записи вида
+        «загрузить, поменять свойство, вызвать `SaveChanges`» перестаёт сохранять данные, причём без исключения:
+        `SaveChanges` просто не находит изменений. Попытка «починить» это вызовом `Update` помечает изменёнными
+        все свойства сущности и достижимого графа: в `UPDATE` попадают все столбцы, и параллельные правки
+        других столбцов затираются. При смешении режимов `Attach`/`Update` может упасть, если экземпляр с тем же
+        ключом уже отслеживается. Меняются и результаты чтения: без разрешения идентичности одна и та же строка в
+        `Include` превращается в разные объекты.
+      - **Оценить охват.** Изменение - одна строка, но проверять придётся все пути записи. Тесты, которые
+        проверяют только возвращаемое значение и не перечитывают данные из базы, потерю правок не поймают.
+
+      **Обычное решение.**
+
+      - **Оставить отслеживание по умолчанию, а чтение сделать явным.** Проекции в DTO через `Select` (они не
+        создают отслеживаемых сущностей) или `AsNoTracking()` там, где возвращаются сущности. Начинать с горячих
+        эндпоинтов, найденных замерами.
+      - **Отдельный контекст только для чтения**, если сторона чтения большая и обособленная (обработчики
+        запросов, отчёты): отдельный тип контекста с `UseQueryTrackingBehavior(QueryTrackingBehavior.NoTracking)`,
+        который используют только запросы. Его `SaveChanges` можно переопределить так, чтобы он выбрасывал
+        исключение, и записать через него по ошибке не получится. Позже такой контекст легко направить на
+        реплику для чтения.
+      - **Глобальный NoTracking на единственном контексте** допустим, только если записей мало и они собраны в
+        известных местах: тогда каждый путь записи явно вызывает `AsTracking()` или использует
+        `ExecuteUpdate`/`ExecuteDelete`, и это проверяется.
+
+      **Правила для команды.**
+
+      1. Чтение: проекция или `AsNoTracking()`; `AsNoTrackingWithIdentityResolution()`, если важно, чтобы одна
+         строка давала один объект.
+      2. Запись: только через отслеживающие запросы; `Update` над сущностями из неотслеживающего чтения - лишь
+         осознанно, для отсоединённых сценариев.
+      3. На каждый сценарий записи - интеграционный тест на реальной СУБД, который проверяет результат через
+         новый экземпляр контекста.
+      4. Пункт в чек-листе code review, а при отдельном контексте - архитектурный тест: обработчики запросов не
+         зависят от контекста записи.
+      5. Решение и замеры записать в ADR и пересмотреть, если профиль нагрузки изменится.
+    explanation: |
+      У двух вариантов умолчания разная цена ошибки. При отслеживании по умолчанию забытый `AsNoTracking()`
+      стоит немного производительности, и это видно в профилировщике. При NoTracking по умолчанию забытый
+      `AsTracking()` стоит потерянных данных: приложение отвечает успехом, а правка не сохранилась, и
+      узнают об этом пользователи, а не CI. Задача лида - выбрать умолчание, ошибка в котором дешевле и
+      заметнее, а оптимизацию сделать явной там, где она измеримо нужна.
+
+      Поэтому предложение оценивают не по принципу «быстрее или медленнее», а как обмен: измеренный выигрыш
+      на чтении против риска во всех путях записи и стоимости их проверки. Чаще всего выигрыш получают
+      точечно - проекциями и `AsNoTracking()` на горячих запросах - или разделяют чтение и запись по разным
+      контекстам, где режим отслеживания следует из назначения контекста, а не из памяти разработчика.
+      Ответ описывает поведение EF Core 10.
+    linkTitles:
+      - "Отслеживающие и неотслеживающие запросы"
+      - "Эффективные запросы в EF Core"
+  en:
+    title: Should NoTracking be the default for an application's only DbContext?
+    prompt: |
+      An application on EF Core 10 has a single `DbContext` used for both reads and writes. A developer proposes
+      adding `UseQueryTrackingBehavior(QueryTrackingBehavior.NoTracking)` to its configuration to speed up reads.
+      As a lead, how do you evaluate the proposal, what decision are you likely to make, and what rules do you
+      set for the team?
+    hint: "What happens to existing code that loads an entity, changes a property and calls `SaveChanges`?"
+    answer: |
+      **Evaluating the proposal.**
+
+      - **Ask for numbers.** Which reads are slow, and how much does dropping tracking give? Measure typical
+        read endpoints against a real database: profiler, response time and allocations before and after.
+        The cost of tracking grows with the number of materialized entities. For a request with tens of
+        entities the gain is often invisible, and the real cause of slow reads is extra columns, N+1 or a
+        missing index.
+      - **Assess the risk.** A global setting changes the meaning of existing code. Every write path of the
+        form "load, change a property, call `SaveChanges`" stops saving, and without an exception:
+        `SaveChanges` simply finds no changes. "Fixing" it with `Update` marks every property of the entity and
+        its reachable graph as modified: the `UPDATE` includes all columns, and concurrent edits of other
+        columns are overwritten. When modes are mixed, `Attach`/`Update` can fail if an instance with the same
+        key is already tracked. Read results change too: without identity resolution the same row in an
+        `Include` becomes different objects.
+      - **Assess the blast radius.** The change is one line, but every write path has to be checked. Tests that
+        check only the returned value and do not re-read the data from the database will not catch lost edits.
+
+      **The usual decision.**
+
+      - **Keep tracking as the default and make reads explicit.** Projections into DTOs with `Select` (they
+        create no tracked entities) or `AsNoTracking()` where entities are returned. Start with the hot
+        endpoints found by measurement.
+      - **A separate read-only context**, when the read side is large and distinct (query handlers, reports): a
+        separate context type with `UseQueryTrackingBehavior(QueryTrackingBehavior.NoTracking)`, used only by
+        queries. Its `SaveChanges` can be overridden to throw, so nobody writes through it by mistake. Later
+        such a context is easy to point at a read replica.
+      - **A global NoTracking on the only context** is acceptable only if writes are few and live in known
+        places: then every write path explicitly calls `AsTracking()` or uses `ExecuteUpdate`/`ExecuteDelete`,
+        and this is enforced.
+
+      **Rules for the team.**
+
+      1. Reads: a projection or `AsNoTracking()`; `AsNoTrackingWithIdentityResolution()` when one row must give
+         one object.
+      2. Writes: only through tracking queries; `Update` on entities from a no-tracking read only deliberately,
+         for disconnected scenarios.
+      3. Every write scenario has an integration test on the real database engine that checks the result
+         through a new context instance.
+      4. An item in the code review checklist and, with a separate context, an architecture test: query
+         handlers do not depend on the write context.
+      5. The decision and the measurements go into an ADR and are revisited if the load profile changes.
+    explanation: |
+      The two defaults have different costs of a mistake. With tracking as the default, a forgotten
+      `AsNoTracking()` costs some performance, and a profiler shows it. With NoTracking as the default, a
+      forgotten `AsTracking()` costs lost data: the application reports success, the edit is not saved, and
+      users find out, not CI. The lead's job is to pick the default whose failure is cheaper and more visible,
+      and to make the optimization explicit where it is measurably needed.
+
+      So the proposal is judged not as "faster or slower" but as a trade: the measured gain on reads against
+      the risk in every write path and the cost of checking them. Most often the gain is taken locally, with
+      projections and `AsNoTracking()` on hot queries, or reads and writes are split into different contexts,
+      where the tracking mode follows from the purpose of the context rather than from a developer's memory.
+      The answer describes EF Core 10.
+    linkTitles:
+      - "Tracking vs. no-tracking queries"
+      - "Efficient querying in EF Core"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

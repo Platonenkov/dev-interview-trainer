@@ -1,0 +1,128 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RRVDCZGVRVJ488QMQ3
+slug: httpclient-getasync-no-throw-on-error-status
+stack: dotnet
+topic: web-api
+level: middle
+type: find-bug
+grading: auto
+tags: [httpclient, status-codes, error-handling, json]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    using System.Net;
+    using System.Text.Json;
+
+    using HttpClient client = new(new NotFoundHandler());
+
+    HttpResponseMessage response = await client.GetAsync("https://api.example.com/orders/42");
+    string json = await response.Content.ReadAsStringAsync();
+    Order order = JsonSerializer.Deserialize<Order>(json);
+    Console.WriteLine(order.Id);
+
+    record Order(int Id, decimal Total);
+
+    class NotFoundHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound)
+            {
+                Content = new StringContent("Order not found")
+            });
+        }
+    }
+bugLineSets: [[6], [7]]
+fixedSource: |
+  using System.Net;
+  using System.Text.Json;
+
+  using HttpClient client = new(new NotFoundHandler());
+
+  HttpResponseMessage response = await client.GetAsync("https://api.example.com/orders/42");
+  if (!response.IsSuccessStatusCode)
+  {
+      Console.WriteLine($"Request failed: {(int)response.StatusCode}");
+      return;
+  }
+
+  string json = await response.Content.ReadAsStringAsync();
+  Order order = JsonSerializer.Deserialize<Order>(json);
+  Console.WriteLine(order.Id);
+
+  record Order(int Id, decimal Total);
+
+  class NotFoundHandler : HttpMessageHandler
+  {
+      protected override Task<HttpResponseMessage> SendAsync(
+          HttpRequestMessage request, CancellationToken cancellationToken)
+      {
+          return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound)
+          {
+              Content = new StringContent("Order not found")
+          });
+      }
+  }
+fixedExpect: { kind: output, value: "Request failed: 404" }
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.net.http.httpresponsemessage.ensuresuccessstatuscode
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/fundamentals/networking/http/httpclient
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строку, где HttpClient читает тело ответа без проверки кода состояния
+    prompt: |
+      Программа запрашивает заказ и должна вывести его идентификатор, а если сервер вернул ошибку - сообщить
+      код состояния. Обработчик-заглушка вместо сети отвечает `404 Not Found` с текстовым телом
+      `Order not found`, и программа завершается необработанным исключением `System.Text.Json.JsonException`.
+      Щёлкните по строке с дефектом.
+    hint: Что делает `GetAsync`, когда сервер отвечает кодом `4xx` или `5xx`, и что после этого лежит в теле ответа?
+    answer: Строка 6 или 7, ответ `GetAsync` используется без проверки `IsSuccessStatusCode` (или вызова `EnsureSuccessStatusCode`) перед чтением тела.
+    explanation: |
+      `HttpClient.GetAsync` возвращает `HttpResponseMessage` для любого кода состояния, который прислал
+      сервер. Исключение `HttpRequestException` он выбрасывает только при сбое самого запроса, например при
+      ошибке соединения или DNS, но не из-за `404` или `500`. Поэтому код читает тело ответа с ошибкой
+      (`Order not found`) как данные, и `JsonSerializer.Deserialize` падает на строке 8. Строка 8 лишь
+      показывает симптом: дефект в том, что между получением ответа (строка 6) и чтением тела (строка 7) нет
+      проверки статуса.
+
+      Исправление - проверить `response.IsSuccessStatusCode` перед чтением тела и обработать ошибку, как в
+      исправленном коде: тогда программа выводит `Request failed: 404`. Другой вариант - вызвать
+      `response.EnsureSuccessStatusCode()`: он выбрасывает `HttpRequestException`, если код не из диапазона
+      `2xx`, а свойство `StatusCode` исключения сообщает код. Методы-обёртки вроде `GetStringAsync` и
+      `GetFromJsonAsync` проверяют статус сами, а `GetAsync` и `SendAsync` - нет.
+    linkTitles:
+      - "Метод HttpResponseMessage.EnsureSuccessStatusCode"
+      - "Выполнение HTTP-запросов с помощью класса HttpClient"
+  en:
+    title: Find the line where HttpClient reads the response body without checking the status code
+    prompt: |
+      The program requests an order and should print its id, or report the status code if the server returned
+      an error. A stub handler answers `404 Not Found` with the text body `Order not found` instead of going to
+      the network, and the program ends with an unhandled `System.Text.Json.JsonException`.
+      Click the line that contains the defect.
+    hint: What does `GetAsync` do when the server answers with a `4xx` or `5xx` code, and what is in the response body then?
+    answer: Line 6 or 7, the `GetAsync` response is used without checking `IsSuccessStatusCode` (or calling `EnsureSuccessStatusCode`) before reading the body.
+    explanation: |
+      `HttpClient.GetAsync` returns an `HttpResponseMessage` for any status code the server sent. It throws
+      `HttpRequestException` only when the request itself fails, for example on a connection or DNS error, not
+      because of a `404` or a `500`. So the code reads the error body (`Order not found`) as data, and
+      `JsonSerializer.Deserialize` fails on line 8. Line 8 only shows the symptom: the defect is that nothing
+      checks the status between receiving the response (line 6) and reading the body (line 7).
+
+      The fix is to check `response.IsSuccessStatusCode` before reading the body and handle the error, as in
+      the corrected code: the program then prints `Request failed: 404`. Another option is to call
+      `response.EnsureSuccessStatusCode()`: it throws `HttpRequestException` when the code is outside the `2xx`
+      range, and the exception's `StatusCode` property reports the code. Wrapper methods such as
+      `GetStringAsync` and `GetFromJsonAsync` check the status themselves, while `GetAsync` and `SendAsync` do not.
+    linkTitles:
+      - "HttpResponseMessage.EnsureSuccessStatusCode method"
+      - "Make HTTP requests with the HttpClient class"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

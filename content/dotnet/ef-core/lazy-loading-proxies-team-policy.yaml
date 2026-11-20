@@ -1,0 +1,149 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RN1S142FWRW390MMW6
+slug: lazy-loading-proxies-team-policy
+stack: dotnet
+topic: ef-core
+level: lead
+type: situation
+grading: self
+tags: [ef-core, lazy-loading, n-plus-one, performance, team-process]
+links:
+  - url: https://learn.microsoft.com/en-us/ef/core/querying/related-data/lazy
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/ef/core/performance/efficient-querying
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/ef/core/logging-events-diagnostics/interceptors
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Команда включила ленивую загрузку через прокси, и нагрузка на базу растёт с каждым релизом - что решает тимлид
+    prompt: |
+      Проект на EF Core 10. Год назад, чтобы быстрее выпускать функциональность, команда включила
+      `UseLazyLoadingProxies` и сделала все навигационные свойства `virtual`. С каждым релизом добавляются
+      страницы и эндпоинты API, а загрузка CPU базы данных и время ответа (p95) продолжают расти. В логе SQL
+      на один запрос к API приходятся сотни одинаковых мелких запросов, которые отличаются только значением
+      ключа в параметре.
+
+      Вы - тимлид. Что вы решаете насчёт ленивой загрузки, в каком порядке действуете и как не допустить,
+      чтобы проблема вернулась?
+    hint: Видно ли лишний запрос к базе в diff на code review? И что станет с навигационным свойством, если ленивую загрузку просто выключить?
+    answer: |
+      1. **Подтвердить и измерить.** По трассировке (APM, OpenTelemetry) и логам EF Core найти эндпоинты с
+         наибольшим числом SQL-запросов и суммарным временем в базе. Убедиться, что лишние запросы порождает
+         именно ленивая загрузка: EF Core пишет событие `CoreEventId.NavigationLazyLoading` при каждой ленивой
+         загрузке навигации. Зафиксировать исходные цифры: запросов на запрос к API, время ответа, CPU базы.
+      2. **Принять решение: целевое состояние - без ленивой загрузки, но не «большим взрывом».** Отключение
+         прокси не приводит к исключениям: незагруженная навигация остаётся `null` или пустой коллекцией, и код
+         молча считает неверный результат (например, сумма заказа без позиций равна нулю). Поэтому удалять
+         `UseLazyLoadingProxies` одним коммитом по всему коду - высокий риск. Решение и его причины записать в
+         ADR, согласовать с командой и владельцем продукта выделенную долю времени на исправления.
+      3. **Чинить горячие пути первыми.** Для чтения - проекции в DTO через `Select` с нужными полями. Где нужны
+         сущности для изменения - `Include` и `ThenInclude`, при нескольких коллекциях `AsSplitQuery()`. Вместо
+         запроса на каждую строку - один запрос по списку ключей. Каждое исправление подтверждать замером до и
+         после.
+      4. **Сделать скрытые зависимости громкими, потом выключать.** В тестовом окружении настроить
+         `ConfigureWarnings(w => w.Throw(CoreEventId.NavigationLazyLoading))`: любая ленивая загрузка в тестах
+         падает с исключением, и становится видно, какой код на неё опирается. В исправленных участках
+         отключать её явно: `ChangeTracker.LazyLoadingEnabled = false` для экземпляра контекста или
+         `EnableLazyLoading(false)` для отдельной навигации в модели. Когда тесты больше не находят ленивых
+         загрузок, убрать `UseLazyLoadingProxies` и пакет `Microsoft.EntityFrameworkCore.Proxies`.
+      5. **Поставить защиту от возврата.**
+         - Интеграционные тесты ключевых эндпоинтов считают SQL-команды через `DbCommandInterceptor`: число
+           запросов не должно превышать бюджет и не должно меняться при росте данных (тест на 1 и на 50 строк).
+         - Ленивая загрузка в тестах и CI остаётся ошибкой (пункт 4).
+         - В чек-листе code review: не возвращать сущности из API (сериализатор обходит навигации), не
+           обращаться к навигациям в циклах по сущностям, показывать форму запроса в PR.
+         - В production - метрика «SQL-запросов на запрос к API» с алертом на рост.
+      6. **Обучить и закрепить.** Короткий разбор для команды: почему обращение к свойству может быть походом
+         в базу, примеры исправлений из этого проекта, правило для нового кода.
+    explanation: |
+      Ленивая загрузка прячет проблему N+1 в обычном обращении к свойству: `order.Customer.Name` выглядит как
+      чтение поля, а на деле выполняет запрос к базе. В diff на code review этого не видно, поэтому каждый
+      релиз добавляет новые такие места. Стоимость растёт вместе с объёмом данных: чем больше строк в списке,
+      тем больше запросов, поэтому нагрузка ухудшается постепенно, а не ломается сразу. Документация EF Core
+      по эффективным запросам прямо предупреждает, что ленивая загрузка легко приводит к N+1, и советует
+      загружать связанные данные заранее, если известно, что они понадобятся. Отдельный риск - сериализация
+      сущностей в ответ API: сериализатор обходит все навигации и запускает загрузку целых графов.
+
+      Для тимлида главное здесь - управление риском изменения. Исходное решение было разумным компромиссом
+      ради скорости, но его цена стала видна только со временем. Выключить прокси технически просто, опасно
+      другое: поведение меняется молча, без исключений. Поэтому порядок такой: сначала замеры и превращение
+      ленивых загрузок в ошибки в тестах, затем исправление по приоритету нагрузки, и только в конце удаление
+      прокси. Защита в CI и review нужна потому, что без неё N+1 возвращается с первым же новым циклом по
+      сущностям, даже если ленивую загрузку уже убрали: явная загрузка в цикле даёт тот же эффект.
+
+      Ответ описывает поведение EF Core 10.
+    linkTitles:
+      - "Ленивая загрузка связанных данных"
+      - "Эффективные запросы в EF Core"
+      - "Перехватчики в EF Core"
+  en:
+    title: A team turned on lazy loading proxies and database load grows with every release - what does the lead decide
+    prompt: |
+      The project uses EF Core 10. A year ago, to ship features faster, the team turned on
+      `UseLazyLoadingProxies` and made every navigation property `virtual`. Every release adds pages and API
+      endpoints, and database CPU and request latency (p95) keep rising. The SQL log shows hundreds of
+      identical small queries per API request that differ only in the key value of a parameter.
+
+      You are the tech lead. What do you decide about lazy loading, in what order do you act, and how do you
+      keep the problem from coming back?
+    hint: Can a reviewer see the extra database query in a code review diff? And what happens to a navigation property if lazy loading is simply turned off?
+    answer: |
+      1. **Confirm and measure.** Use tracing (APM, OpenTelemetry) and EF Core logs to find the endpoints with
+         the most SQL queries and the most total database time. Confirm that lazy loading produces the extra
+         queries: EF Core logs the `CoreEventId.NavigationLazyLoading` event every time a navigation is lazy
+         loaded. Record the baseline: queries per API request, latency, database CPU.
+      2. **Decide: the target state is no lazy loading, but not a big bang.** Turning off the proxies throws
+         no exceptions: an unloaded navigation stays `null` or an empty collection, and the code silently
+         computes a wrong result (for example, an order total of zero because no items were loaded). So
+         removing `UseLazyLoadingProxies` in one commit across the codebase is a high risk. Record the decision
+         and its reasons in an ADR, and agree a share of capacity for the fixes with the team and the product
+         owner.
+      3. **Fix the hot paths first.** For reads, projections into DTOs with `Select` and only the needed fields.
+         Where entities are needed for updates, `Include` and `ThenInclude`, with `AsSplitQuery()` for several
+         collections. Instead of a query per row, one query by a list of keys. Confirm every fix with a
+         before-and-after measurement.
+      4. **Make hidden dependencies loud, then switch off.** In the test environment configure
+         `ConfigureWarnings(w => w.Throw(CoreEventId.NavigationLazyLoading))`: any lazy load in tests throws,
+         which shows which code relies on it. Turn it off explicitly in fixed areas:
+         `ChangeTracker.LazyLoadingEnabled = false` for a context instance, or `EnableLazyLoading(false)` for a
+         single navigation in the model. When the tests find no more lazy loads, remove `UseLazyLoadingProxies`
+         and the `Microsoft.EntityFrameworkCore.Proxies` package.
+      5. **Add guards against a relapse.**
+         - Integration tests of key endpoints count SQL commands with a `DbCommandInterceptor`: the count must
+           stay within a budget and must not change as data grows (a test with 1 row and with 50 rows).
+         - Lazy loading stays an error in tests and CI (step 4).
+         - The code review checklist: do not return entities from the API (the serializer walks navigations),
+           do not touch navigations in loops over entities, show the query shape in the PR.
+         - In production, a "SQL queries per API request" metric with an alert on growth.
+      6. **Teach and lock it in.** A short session for the team: why a property access can be a database round
+         trip, examples of fixes from this project, the rule for new code.
+    explanation: |
+      Lazy loading hides the N+1 problem inside an ordinary property access: `order.Customer.Name` looks like a
+      field read but actually runs a database query. A code review diff does not show it, so every release adds
+      new places like this. The cost grows with the data: the more rows in a list, the more queries, so load
+      degrades gradually instead of breaking at once. The EF Core documentation on efficient querying warns
+      that lazy loading easily leads to N+1 and recommends loading related data up front when you know it will
+      be needed. A separate risk is serializing entities into API responses: the serializer walks every
+      navigation and triggers loading of whole graphs.
+
+      For a lead the core of the task is managing the risk of change. The original decision was a reasonable
+      trade-off for speed, but its cost became visible only over time. Turning off the proxies is technically
+      easy; the danger is that behavior changes silently, without exceptions. Hence the order: first
+      measurements and turning lazy loads into test failures, then fixes by load priority, and only at the end
+      removing the proxies. Guards in CI and review are needed because without them N+1 returns with the first
+      new loop over entities, even after lazy loading is gone: explicit loading inside a loop has the same
+      effect.
+
+      The answer describes EF Core 10.
+    linkTitles:
+      - "Lazy loading of related data"
+      - "Efficient querying in EF Core"
+      - "Interceptors in EF Core"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

@@ -1,0 +1,172 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPRP05FN9P56X8XF0F
+slug: dbcontext-per-module-cross-context-transaction
+stack: dotnet
+topic: ef-core
+level: architect
+type: open
+grading: self
+tags: [ef-core, transactions, modular-monolith, outbox, eventual-consistency, architecture]
+links:
+  - url: https://learn.microsoft.com/en-us/ef/core/saving/transactions
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/architecture/microservices/multi-container-microservice-net-applications/subscribe-events
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как сохранить согласованность записи, которая затрагивает два модуля с отдельными DbContext в модульном монолите?
+    prompt: |
+      Модульный монолит на EF Core 10: у каждого модуля (например, Orders и Inventory) свой `DbContext`, все
+      контексты работают с одной базой данных. Оформление заказа должно создать заказ в модуле Orders и
+      зарезервировать товар в модуле Inventory. Как обеспечить согласованность таких записей, затрагивающих
+      два модуля? Сравните варианты и оцените, во что каждый обойдётся за годы развития системы.
+    hint: "Что именно должно быть общим у двух контекстов, чтобы запись была атомарной на уровне базы, и что станет с этим требованием, когда один модуль переедет в свою базу?"
+    answer: |
+      **Вариант 1. Одна транзакция на несколько контекстов.**
+
+      - **Как.** В EF Core 10 контексты могут разделять транзакцию только с реляционным провайдером и только
+        при общем `DbConnection`. Соединение создаётся один раз на запрос и передаётся обоим контекстам
+        (например, `UseSqlServer(connection)`), первый контекст начинает `Database.BeginTransaction()`, второй
+        присоединяется через `Database.UseTransaction(transaction.GetDbTransaction())`, оба вызывают
+        `SaveChanges`, затем `Commit`.
+      - **Что даёт.** Атомарность и немедленную согласованность: всё или ничего, простая обработка ошибок.
+      - **Цена за годы.** Модули привязаны к одной базе и одному процессу: вынести модуль в свою базу или
+        сервис значит переписать каждую такую операцию. В DI появляется общее соединение со временем жизни
+        scoped и межмодульная единица работы, от которой зависят все. Транзакция удлиняется, держит блокировки
+        в таблицах обоих модулей, появляются deadlock между модулями. Стратегия повторов
+        (`EnableRetryOnFailure`) должна оборачивать работу обоих контекстов целиком. `TransactionScope` с двумя
+        разными соединениями - не замена: транзакция может быть повышена до распределённой, а их .NET
+        поддерживает только на Windows (начиная с .NET 7), и такой путь лучше не выбирать.
+      - **Промежуточный вариант.** Доменные события, обработанные внутри процесса в той же транзакции,
+        развязывают код модулей, но не данные: это всё ещё вариант 1, зато обработчики потом проще перевести
+        на outbox.
+
+      **Вариант 2. Согласованность в конечном счёте через события и outbox.**
+
+      - **Как.** Модуль Orders меняет свои данные и тем же `SaveChanges` записывает интеграционное событие в
+        свою таблицу outbox: один контекст, одна локальная транзакция. Фоновый диспетчер читает outbox и
+        доставляет событие в Inventory (внутри процесса или через брокер). Inventory обрабатывает его в своей
+        транзакции и запоминает идентификатор обработанного сообщения для идемпотентности. Если резерв
+        невозможен, Inventory публикует событие об отказе, и Orders выполняет компенсацию (сага).
+      - **Что даёт.** Модули зависят только от контрактов событий, каждый владеет своими таблицами. Вынос
+        модуля в сервис меняет транспорт, а не бизнес-процесс.
+      - **Цена.** Промежуточные состояния (заказ «ожидает резерва») нужно моделировать, показывать
+        пользователю и покрывать тестами. Вместо отката - компенсации. Доставка «как минимум один раз»
+        требует идемпотентных обработчиков. Нужны мониторинг outbox, повторы, обработка «ядовитых» сообщений,
+        порядок доставки, сквозные идентификаторы корреляции и трассировка для отладки.
+
+      **Вариант 3. Проверить границу модулей.** Если бизнес-инвариант требует, чтобы два модуля всегда
+      менялись атомарно, граница, скорее всего, проведена неверно: эти данные принадлежат одному модулю или
+      агрегату. Объединить их дешевле любого механизма.
+
+      **Чего не делать.** Отображать таблицы чужого модуля в свой `DbContext` и писать в них напрямую: это
+      атомарно, но незаметно уничтожает границы модулей.
+
+      **Решение.** По умолчанию одна бизнес-операция меняет один модуль в одной локальной транзакции, а
+      последствия для других модулей идут через события и outbox. Общая транзакция допускается как
+      задокументированное исключение (ADR) для инвариантов, где промежуточное состояние недопустимо: она
+      инкапсулирована в одном инфраструктурном компоненте, другие её использования запрещены архитектурными
+      тестами, а сама она записана как долг, который придётся отдать при выносе модуля. Отдельная схема на
+      модуль (`HasDefaultSchema`, своя таблица истории миграций через `MigrationsHistoryTable`) держит базу
+      готовой к разделению.
+    explanation: |
+      Выбор идёт между согласованностью сейчас и разделяемостью потом. Локальная транзакция - гарантия базы
+      данных, а не модулей. Общая транзакция на два контекста работает только потому, что модули сидят на
+      одном соединении к одной базе, поэтому она делает модульный монолит монолитом именно на уровне данных.
+      Сегодня это дёшево: несколько строк инфраструктуры и привычная семантика «всё или ничего». Но каждая
+      новая межмодульная транзакция - ещё одно место, которое придётся переписывать в день, когда модулю
+      понадобится своя база, своё масштабирование или своя команда.
+
+      События с outbox платят эту цену заранее: сложность переносится в модель предметной области
+      (промежуточные статусы, компенсации) и в эксплуатацию (доставка, повторы, идемпотентность). Взамен
+      модули действительно независимы, и система ведёт себя одинаково, где бы модуль ни жил. Outbox нужен
+      потому, что запись данных и публикация события иначе не атомарны: событие может уйти без записи или
+      запись остаться без события.
+
+      Сильный ответ архитектора - не «всегда события» и не «всегда транзакция», а правило по умолчанию,
+      осознанные исключения с границей их распространения и проверка, не указывает ли потребность в
+      атомарности на ошибку в границах модулей. Ответ описывает EF Core 10.
+    linkTitles:
+      - "Использование транзакций в EF Core"
+      - "Подписка на события и атомарная публикация интеграционных событий"
+  en:
+    title: How do you keep a write that spans two modules with separate DbContexts consistent in a modular monolith?
+    prompt: |
+      A modular monolith on EF Core 10: each module (for example Orders and Inventory) has its own `DbContext`,
+      and all contexts work with one database. Placing an order must create the order in the Orders module and
+      reserve stock in the Inventory module. How do you keep such writes that span two modules consistent?
+      Compare the options and judge what each one costs over years of development.
+    hint: "What exactly must two contexts share for a write to be atomic at the database level, and what happens to that requirement when one module moves to its own database?"
+    answer: |
+      **Option 1. One transaction across contexts.**
+
+      - **How.** In EF Core 10 contexts can share a transaction only with a relational provider and only when
+        they share a `DbConnection`. The connection is created once per request and passed to both contexts
+        (for example `UseSqlServer(connection)`), the first context starts `Database.BeginTransaction()`, the
+        second joins it with `Database.UseTransaction(transaction.GetDbTransaction())`, both call
+        `SaveChanges`, then `Commit`.
+      - **What it gives.** Atomicity and immediate consistency: all or nothing, simple error handling.
+      - **Cost over years.** The modules are tied to one database and one process: moving a module to its own
+        database or service means rewriting every such operation. DI gains a shared scoped connection and a
+        cross-module unit of work that everybody depends on. The transaction gets longer, holds locks in the
+        tables of both modules, and deadlocks between modules appear. The retry strategy
+        (`EnableRetryOnFailure`) must wrap the work of both contexts as a whole. `TransactionScope` with two
+        separate connections is not a replacement: the transaction can be promoted to a distributed one, which
+        .NET supports only on Windows (since .NET 7), and that path is best avoided.
+      - **Intermediate variant.** Domain events handled in process inside the same transaction decouple the
+        modules' code, but not their data: it is still option 1, though the handlers are easier to move to an
+        outbox later.
+
+      **Option 2. Eventual consistency through events and an outbox.**
+
+      - **How.** The Orders module changes its data and, in the same `SaveChanges`, writes an integration event
+        to its outbox table: one context, one local transaction. A background dispatcher reads the outbox and
+        delivers the event to Inventory (in process or through a broker). Inventory handles it in its own
+        transaction and records the id of the processed message for idempotency. If the reservation is
+        impossible, Inventory publishes a failure event, and Orders compensates (a saga).
+      - **What it gives.** Modules depend only on event contracts, each module owns its tables. Moving a module
+        into a service changes the transport, not the business process.
+      - **Cost.** Intermediate states (an order "awaiting reservation") must be modeled, shown to users and
+        covered by tests. Compensations replace rollback. At-least-once delivery requires idempotent handlers.
+        You need outbox monitoring, retries, poison message handling, delivery ordering, correlation ids and
+        tracing for debugging.
+
+      **Option 3. Check the module boundary.** If a business invariant requires two modules to always change
+      atomically, the boundary is most likely wrong: the data belongs to one module or aggregate. Merging them
+      is cheaper than any mechanism.
+
+      **What not to do.** Map another module's tables into your own `DbContext` and write to them directly: it
+      is atomic, but it silently destroys the module boundaries.
+
+      **Decision.** By default one business operation changes one module in one local transaction, and the
+      effects on other modules go through events and an outbox. A shared transaction is allowed as a documented
+      exception (ADR) for invariants where an intermediate state is unacceptable: it is encapsulated in one
+      infrastructure component, architecture tests forbid any other use, and it is recorded as debt to be paid
+      when the module is extracted. A separate schema per module (`HasDefaultSchema`, its own migrations history
+      table through `MigrationsHistoryTable`) keeps the database ready to be split.
+    explanation: |
+      The choice is between consistency now and separability later. A local transaction is a guarantee of the
+      database, not of the modules. A shared transaction across two contexts works only because the modules use
+      one connection to one database, so it makes the modular monolith a monolith exactly at the data level.
+      Today it is cheap: a few lines of infrastructure and the familiar all-or-nothing semantics. But every new
+      cross-module transaction is one more place to rewrite on the day a module needs its own database, its own
+      scaling or its own team.
+
+      Events with an outbox pay that cost up front: the complexity moves into the domain model (intermediate
+      statuses, compensations) and into operations (delivery, retries, idempotency). In return the modules are
+      truly independent, and the system behaves the same wherever a module lives. The outbox is needed because
+      otherwise writing the data and publishing the event are not atomic: the event can go out without the
+      write, or the write can stay without the event.
+
+      A strong architect's answer is neither "always events" nor "always a transaction", but a default rule,
+      deliberate exceptions with a limit on how far they spread, and a check whether the need for atomicity
+      points to a mistake in the module boundaries. The answer describes EF Core 10.
+    linkTitles:
+      - "Using transactions in EF Core"
+      - "Subscribing to events and publishing integration events atomically"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

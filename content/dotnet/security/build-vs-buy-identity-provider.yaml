@@ -1,0 +1,163 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQYS2QZHW2FJP0XMMK
+slug: build-vs-buy-identity-provider
+stack: dotnet
+topic: security
+level: architect
+type: open
+grading: self
+tags: [identity-provider, openid-connect, oauth, aspnet-core-identity, architecture]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/security/identity-management-solutions
+    lang: en
+    kind: docs
+  - url: https://openid.net/specs/openid-connect-core-1_0.html
+    lang: en
+    kind: spec
+  - url: https://learn.microsoft.com/en-us/aspnet/core/security/authentication/identity
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Управляемый провайдер удостоверений, свой OIDC-сервер или ASP.NET Core Identity в каждом приложении - как выбрать?
+    prompt: |
+      В компании около десятка приложений на .NET: внутренние сервисы для сотрудников, клиентский портал и
+      мобильное приложение. Сейчас у каждого приложения своя база пользователей на ASP.NET Core Identity.
+      Вам как архитектору нужно выбрать целевую схему: управляемый (облачный) провайдер удостоверений,
+      собственный OIDC-сервер или оставить ASP.NET Core Identity в каждом приложении. По каким критериям вы
+      будете решать и что заложите в архитектуру независимо от выбора?
+    hint: |
+      Какие требования управляемый провайдер может не закрыть и какую ответственность вы берёте на себя при
+      каждом из трёх вариантов?
+    answer: |
+      - **Сначала - централизовать.** Для десятка приложений нужен один провайдер удостоверений (IdP), а не
+        десять баз пользователей. Отдельная база в каждом приложении - это десять хранилищ хешей паролей, которые
+        надо защищать, десять реализаций MFA, блокировки и сброса пароля, нет единого входа (SSO) и нет одной
+        точки, где можно отключить уволенного сотрудника или посмотреть журнал входов. ASP.NET Core Identity
+        уместен для одного изолированного приложения: это библиотека хранилища пользователей и входа внутри
+        этого приложения, а не OIDC-провайдер для других приложений. Для защиты API и SPA документация ASP.NET Core
+        направляет к Microsoft Entra ID или OIDC-серверу вроде Duende IdentityServer.
+      - **По умолчанию - управляемый провайдер** (например, Microsoft Entra ID для сотрудников, Entra External ID
+        или другой CIAM-сервис для клиентов). IdP - критичная для безопасности инфраструктура: исправления
+        уязвимостей, ротация ключей подписи, защита от подбора паролей, отказоустойчивость в нескольких регионах,
+        аудит и сертификации. Управляемый провайдер переносит эту работу на вендора. Цена: оплата обычно за
+        активного пользователя в месяц, ограничения в настройке потоков и страниц входа, зависимость от вендора и
+        его регионов хранения данных.
+      - **Свой OIDC-сервер** (Duende IdentityServer, OpenIddict, Keycloak и т. п.) оправдан только конкретными
+        требованиями, которые управляемый провайдер не закрывает:
+        - резидентность данных, если ни один вендор не хранит данные в нужной юрисдикции;
+        - работа без интернета или в изолированном контуре;
+        - нестандартные потоки (обмен токенов между доменами, устаревшие учётные данные, особые требования
+          регулятора);
+        - очень большое число пользователей, при котором оплата за пользователя заметно дороже собственной команды.
+      - **Обязательное условие для своего сервера** - команда с выделенным бюджетом: дежурства 24/7, обновления
+        самого сервера и зависимостей, ротация ключей, пентесты, резервирование и восстановление, мониторинг
+        входов, переходы на новые мажорные версии, лицензия (у Duende IdentityServer она коммерческая). Без такой
+        команды свой IdP постепенно становится самым уязвимым компонентом компании.
+      - **Что заложить независимо от выбора:**
+        - приложения говорят только на стандартных OIDC и OAuth 2.0 (discovery-метаданные, authorization code
+          flow с PKCE, проверка `aud` access token для своего API) и не зависят от SDK конкретного вендора;
+        - пользователь в приложениях привязан к паре `iss` + `sub`, отображённой на внутренний идентификатор, а
+          не к email;
+        - бизнес-права хранятся в приложениях или отдельном сервисе авторизации, а не в специфичных для вендора
+          claims;
+        - план миграции: перенос хешей паролей или поэтапный перевод пользователей при входе;
+        - отказ IdP означает, что никто не может войти и обновить токены во всех приложениях сразу, поэтому SLA и
+          сценарий аварии - часть решения.
+      - **Итог фиксируется в ADR:** требования, совокупная стоимость владения за 3-5 лет (лицензии плюс люди),
+        риски, план выхода от вендора.
+    explanation: |
+      Главная ошибка в этом вопросе - сравнивать варианты по усилиям на старте. Поднять OIDC-сервер на готовой
+      библиотеке можно за несколько недель, но затем его нужно годами обновлять, проверять и держать доступным,
+      и любая уязвимость в нём открывает сразу все приложения. Поэтому решение по сути о том, кто несёт
+      эксплуатационную ответственность, а не о технологии. Управляемый провайдер - разумный выбор по умолчанию,
+      а собственный сервер требует названной причины и людей, которые будут его вести.
+
+      Стандартный протокол снижает цену ошибки выбора. Если приложения зависят только от OIDC, сменить
+      провайдера можно без переписывания приложений. Но по спецификации OIDC Core `sub` уникален и не
+      переназначается только в пределах издателя, поэтому положиться как на стабильный идентификатор
+      пользователя можно лишь на пару `iss` и `sub` вместе (раздел 5.7 говорит об этом прямо, а email такой
+      гарантии не даёт). При смене провайдера меняется `iss`, а `sub` обычно тоже, поэтому приложения, которые
+      используют `sub` или email как первичный ключ, при миграции потеряют связь с данными. Внутренний
+      идентификатор с таблицей соответствия делает смену провайдера управляемой операцией.
+
+      Отдельное хранилище пользователей в каждом приложении выглядит независимым, но умножает поверхность атаки и
+      работу: каждое приложение должно правильно хешировать пароли, реализовать MFA и блокировку и вовремя
+      удалять уволенных. Сильный ответ отделяет аутентификацию (общая, в IdP) от авторизации (своя в каждом
+      приложении) и называет условия, при которых выбор надо пересмотреть.
+    linkTitles:
+      - "Решения для управления удостоверениями в веб-приложениях .NET"
+      - "Спецификация OpenID Connect Core 1.0"
+      - "Введение в Identity в ASP.NET Core"
+  en:
+    title: Managed identity provider, self-hosted OIDC server or ASP.NET Core Identity per app - how do you choose?
+    prompt: |
+      A company has about a dozen .NET applications: internal services for employees, a customer portal and a
+      mobile app. Today each application has its own user database on ASP.NET Core Identity. As the architect
+      you have to choose the target setup: a managed (cloud) identity provider, a self-hosted OIDC server, or
+      keeping ASP.NET Core Identity in each application. Which criteria do you decide by, and what do you build
+      into the architecture whatever the choice?
+    hint: |
+      Which requirements might a managed provider fail to meet, and what responsibility do you take on with each
+      of the three options?
+    answer: |
+      - **Centralize first.** A dozen applications need one identity provider (IdP), not ten user databases. A
+        separate database per application means ten stores of password hashes to protect, ten implementations of
+        MFA, lockout and password reset, no single sign-on (SSO), and no single place to disable a departing
+        employee or review the sign-in log. ASP.NET Core Identity fits one isolated application: it is a library
+        for a user store and sign-in inside that application, not an OIDC provider for other applications. To
+        secure APIs and SPAs, the ASP.NET Core documentation points to Microsoft Entra ID or an OIDC server such as
+        Duende IdentityServer.
+      - **Default to a managed provider** (for example Microsoft Entra ID for employees, and Entra External ID or
+        another CIAM service for customers). An IdP is security-critical infrastructure: vulnerability fixes,
+        signing key rotation, protection against password guessing, availability across several regions, audits
+        and certifications. A managed provider moves that work to the vendor. Cost: usually a price per monthly
+        active user, limits on customizing flows and sign-in pages, and dependence on the vendor and its data
+        regions.
+      - **A self-hosted OIDC server** (Duende IdentityServer, OpenIddict, Keycloak and similar) is justified only
+        by concrete requirements a managed provider does not meet:
+        - data residency, when no vendor stores data in the required jurisdiction;
+        - offline operation or an isolated network;
+        - custom flows (token exchange across domains, legacy credentials, specific regulatory requirements);
+        - a very large user count at which per-user pricing clearly exceeds the cost of your own team.
+      - **A precondition for self-hosting** is a team with a dedicated budget: 24/7 on-call, patching the server
+        and its dependencies, key rotation, penetration tests, redundancy and recovery, sign-in monitoring, major
+        version upgrades, and licensing (Duende IdentityServer has a commercial licence). Without such a team a
+        self-hosted IdP gradually becomes the most vulnerable component in the company.
+      - **What to build in whatever the choice:**
+        - applications speak only standard OIDC and OAuth 2.0 (discovery metadata, the authorization code flow
+          with PKCE, checking the `aud` of access tokens for their own API) and do not depend on a vendor SDK;
+        - a user in the applications is bound to the pair `iss` + `sub`, mapped to an internal id, not to an email;
+        - business permissions live in the applications or a separate authorization service, not in
+          vendor-specific claims;
+        - a migration plan: importing password hashes or moving users over gradually at sign-in;
+        - an IdP outage means nobody can sign in or refresh tokens in any application, so the SLA and the
+          disaster scenario are part of the decision.
+      - **Record the outcome in an ADR:** requirements, total cost of ownership over 3-5 years (licences plus
+        people), risks, and an exit plan from the vendor.
+    explanation: |
+      The main mistake here is comparing the options by the effort at the start. Standing up an OIDC server on a
+      ready-made library takes a few weeks, but then it has to be patched, audited and kept available for years,
+      and any vulnerability in it opens every application at once. So the decision is really about who carries the
+      operational responsibility, not about technology. A managed provider is the sensible default, and a
+      self-hosted server needs a named reason and people who will run it.
+
+      A standard protocol lowers the cost of a wrong choice. If the applications depend only on OIDC, the provider
+      can be replaced without rewriting them. But by the OIDC Core specification `sub` is unique and never
+      reassigned only within its issuer, so only the pair `iss` and `sub` together can be relied on as a stable
+      user identifier (section 5.7 says so explicitly, and email carries no such guarantee). Switching providers
+      changes `iss`, and usually `sub` too, so applications that use `sub` or the email as a primary key lose the
+      link to their data during migration. An internal id with a mapping table turns a provider switch into a
+      managed operation.
+
+      A separate user store in each application looks independent but multiplies the attack surface and the work:
+      every application must hash passwords correctly, implement MFA and lockout, and remove departing users on
+      time. A strong answer separates authentication (shared, in the IdP) from authorization (owned by each
+      application) and names the conditions under which the choice must be revisited.
+    linkTitles:
+      - "Identity management solutions for .NET web apps"
+      - "OpenID Connect Core 1.0 specification"
+      - "Introduction to Identity on ASP.NET Core"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

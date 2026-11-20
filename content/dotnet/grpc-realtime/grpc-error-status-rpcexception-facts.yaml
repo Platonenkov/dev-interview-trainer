@@ -1,0 +1,114 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RP941GW9YBA6V5GBTG
+slug: grpc-error-status-rpcexception-facts
+stack: dotnet
+topic: grpc-realtime
+level: senior
+type: multi
+grading: auto
+tags: [grpc, error-handling, rpcexception, status-codes, trailers]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: true
+  - id: d
+    correct: true
+  - id: e
+    correct: false
+  - id: f
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/grpc/error-handling
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/grpc/configuration
+    lang: en
+    kind: docs
+  - url: https://github.com/grpc/grpc/blob/master/doc/PROTOCOL-HTTP2.md
+    lang: en
+    kind: spec
+locales:
+  ru:
+    title: Как ошибки передаются в gRPC на .NET и что видит клиент?
+    prompt: |
+      Сервис на ASP.NET Core gRPC вызывается клиентом `Grpc.Net.Client`. Выберите все верные утверждения о том,
+      как ошибка вызова передаётся от сервера к клиенту.
+    hint: Как ответ gRPC сообщает об итоге вызова и сколько сервер должен рассказывать вызывающим о своих внутренних сбоях?
+    options:
+      a: "Код и сообщение статуса gRPC передаются в trailers (`grpc-status`, `grpc-message`), а HTTP-статус ответа обычно `200`, даже если вызов завершился ошибкой."
+      b: "Если метод сервиса упал, сервер отвечает HTTP-статусом `500`, а клиент переводит этот HTTP-статус в `StatusCode`."
+      c: "На клиенте неуспешный вызов выбрасывает `RpcException`: в `StatusCode` лежит код статуса, а в `Trailers` - метаданные, которые прислал сервер."
+      d: "Необработанное исключение, отличное от `RpcException`, превращается на сервере в `StatusCode.Unknown` с общим сообщением; текст исходного исключения клиент увидит, только если включён `EnableDetailedErrors`."
+      e: "Фреймворк сам сопоставляет стандартные исключения .NET со статусами: `KeyNotFoundException` становится `NotFound`, а `ArgumentException` - `InvalidArgument`."
+      f: "`RpcException` переносит только код статуса и текст, поэтому любые дополнительные данные об ошибке приходится упаковывать в строку сообщения."
+    optionExplanations:
+      b: "Падение метода не меняет HTTP-статус: сервер отвечает `200` и передаёт ошибку статусом gRPC в trailers. Другой HTTP-статус обычно приходит, когда запрос не дошёл до обработчика gRPC, например ответил прокси или адрес неверный; только тогда клиент выводит статус gRPC из HTTP-статуса."
+      e: "Автоматического сопоставления нет. Другие необработанные исключения становятся `Unknown` с общим сообщением. Чтобы вернуть `NotFound`, сервис выбрасывает `RpcException` с `new Status(StatusCode.NotFound, ...)` или сопоставляет исключения в общем перехватчике."
+      f: "Кроме кода и текста, `RpcException` несёт `Trailers` с метаданными сервера. Для сложной структурированной информации об ошибке есть расширенная обработка ошибок (rich error handling): сервер передаёт `google.rpc.Status` с типизированными деталями, а не строку."
+    answer: "Верны утверждения a, c и d."
+    explanation: |
+      Статус gRPC - это не HTTP-статус. Ответ может состоять из потока сообщений, а итог вызова известен только
+      в конце, поэтому по спецификации gRPC поверх HTTP/2 код и описание статуса идут в trailers `grpc-status` и
+      `grpc-message`. HTTP-статус при этом `200`: на уровне HTTP запрос обработан, а успех или ошибку вызова
+      определяет `grpc-status`. Если сервер падает до отправки первого сообщения, статус приходит в единственном
+      кадре заголовков, который играет роль trailers (ответ Trailers-Only), но HTTP-статус всё равно `200`.
+
+      Клиент `Grpc.Net.Client` превращает любой статус, кроме `OK`, в `RpcException`. У него есть `StatusCode`,
+      `Status` с описанием и `Trailers` с метаданными сервера. Так же клиент видит и собственные ситуации, например
+      `DeadlineExceeded` при истёкшем deadline или `Cancelled` при отмене.
+
+      На сервере ожидаемые ошибки сообщают явно: `throw new RpcException(new Status(StatusCode.NotFound, "..."))`.
+      Другое необработанное исключение тоже завершает вызов ошибкой, но клиенту уходит `StatusCode.Unknown` с общим
+      сообщением `Exception was thrown by handler`, чтобы не раскрывать внутреннее устройство. Опция
+      `AddGrpc(options => options.EnableDetailedErrors = true)` добавляет в ответ текст исключения; её включают для
+      разработки, а не в production.
+    linkTitles:
+      - "Обработка ошибок в gRPC"
+      - "Настройка gRPC для .NET"
+      - "Протокол gRPC поверх HTTP/2"
+  en:
+    title: How do errors travel in gRPC on .NET, and what does the client see?
+    prompt: |
+      An ASP.NET Core gRPC service is called by a `Grpc.Net.Client` client. Select all true statements about how
+      a call error travels from the server to the client.
+    hint: How does a gRPC response report the outcome of a call, and how much about its own failures should a server reveal to callers?
+    options:
+      a: "The gRPC status code and message are sent in trailers (`grpc-status`, `grpc-message`), and the HTTP response status is usually `200` even when the call failed."
+      b: "When a service method fails, the server answers with HTTP status `500`, and the client converts that HTTP status into a `StatusCode`."
+      c: "On the client a failed call throws `RpcException`: `StatusCode` holds the status code and `Trailers` holds the metadata the server sent."
+      d: "An unhandled exception other than `RpcException` becomes `StatusCode.Unknown` with a generic message on the server; the client sees the original exception text only when `EnableDetailedErrors` is on."
+      e: "The framework maps standard .NET exceptions to statuses by itself: `KeyNotFoundException` becomes `NotFound` and `ArgumentException` becomes `InvalidArgument`."
+      f: "`RpcException` carries only a status code and text, so any extra error data has to be packed into the message string."
+    optionExplanations:
+      b: "A failing method does not change the HTTP status: the server answers `200` and reports the error with the gRPC status in trailers. A different HTTP status usually means the request never reached the gRPC handler, for example a proxy answered or the address is wrong; only then does the client derive a gRPC status from the HTTP status."
+      e: "There is no automatic mapping. Other unhandled exceptions become `Unknown` with a generic message. To return `NotFound` the service throws `RpcException` with `new Status(StatusCode.NotFound, ...)` or maps exceptions in a shared interceptor."
+      f: "Besides the code and text, `RpcException` carries `Trailers` with the server metadata. For complex, structured error information there is rich error handling: the server sends a `google.rpc.Status` with typed details, not a string."
+    answer: "Statements a, c and d are true."
+    explanation: |
+      A gRPC status is not an HTTP status. A response can be a stream of messages and the outcome of the call is
+      known only at the end, so according to the gRPC over HTTP/2 specification the status code and description
+      travel in the `grpc-status` and `grpc-message` trailers. The HTTP status is `200`: at the HTTP level the
+      request was processed, and `grpc-status` decides whether the call succeeded. If the server fails before
+      sending the first message, the status comes in a single headers frame that acts as trailers (a
+      Trailers-Only response), but the HTTP status is still `200`.
+
+      The `Grpc.Net.Client` client turns any status other than `OK` into an `RpcException`. It exposes
+      `StatusCode`, `Status` with the detail text and `Trailers` with the server metadata. The client reports its
+      own situations the same way, for example `DeadlineExceeded` when the deadline passes or `Cancelled` on
+      cancellation.
+
+      On the server expected errors are reported explicitly:
+      `throw new RpcException(new Status(StatusCode.NotFound, "..."))`. Any other unhandled exception also fails
+      the call, but the client receives `StatusCode.Unknown` with the generic message `Exception was thrown by handler`,
+      so internals are not exposed. The option `AddGrpc(options => options.EnableDetailedErrors = true)` adds the
+      exception text to the response; it is meant for development, not production.
+    linkTitles:
+      - "Error handling with gRPC"
+      - "gRPC for .NET configuration"
+      - "gRPC over HTTP2 protocol"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

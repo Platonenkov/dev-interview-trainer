@@ -1,0 +1,124 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPKE7JPNSREHBVK3XX
+slug: grpc-stream-concurrent-writes
+stack: dotnet
+topic: grpc-realtime
+level: senior
+type: find-bug
+grading: auto
+tags: [grpc, server-streaming, thread-safety, channels]
+code:
+  language: csharp
+  harness: none
+  source: |
+    using Grpc.Core;
+
+    public class PriceService : Prices.PricesBase
+    {
+        private readonly IPriceLookup _lookup;
+
+        public PriceService(IPriceLookup lookup) => _lookup = lookup;
+
+        public override async Task StreamPrices(
+            PriceRequest request,
+            IServerStreamWriter<PriceReply> responseStream,
+            ServerCallContext context)
+        {
+            PriceReply[] replies = await Task.WhenAll(
+                request.Skus.Select(sku => _lookup.GetPriceAsync(sku, context.CancellationToken)));
+
+            await Task.WhenAll(replies.Select(reply => responseStream.WriteAsync(reply)));
+        }
+    }
+bugLineSets: [[17]]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/grpc/services
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строку, из-за которой server-streaming метод gRPC нерегулярно падает
+    prompt: |
+      Server-streaming метод gRPC получает список артикулов, параллельно запрашивает цены и отправляет их
+      клиенту потоком. Контракт: `rpc StreamPrices (PriceRequest) returns (stream PriceReply);`, где
+      `PriceRequest` содержит `repeated string skus`, а `IPriceLookup.GetPriceAsync` возвращает `Task<PriceReply>`.
+
+      Локально на нескольких артикулах всё работает, но в production часть вызовов завершается ошибкой:
+      клиент получает `RpcException`, а в логах сервера видно `InvalidOperationException` о том, что
+      предыдущая запись ещё не завершена. Щёлкните по строке с дефектом.
+    hint: Какие объекты в этом методе используются несколькими операциями одновременно и все ли они это допускают?
+    answer: Строка 17, `Task.WhenAll` запускает все вызовы `responseStream.WriteAsync` одновременно.
+    explanation: |
+      `IServerStreamWriter<T>` (как и `IAsyncStreamReader<T>`) можно использовать только из одного потока за
+      раз: следующий `WriteAsync` нельзя начинать, пока не завершилась предыдущая запись. Выражение
+      `replies.Select(reply => responseStream.WriteAsync(reply))` при перечислении внутри `Task.WhenAll`
+      запускает все записи подряд, не дожидаясь завершения предыдущих.
+
+      Ошибка нерегулярная, потому что запись часто завершается синхронно: сообщение сразу попадает в буфер
+      ответа, и следующий вызов застаёт поток свободным. Когда клиент читает медленно или сеть загружена,
+      отправка ждёт (управление потоком HTTP/2, обратное давление), задача записи остаётся незавершённой, и
+      следующий `WriteAsync` падает. Поэтому на малых данных и быстрой локальной сети дефект не виден.
+
+      Строки 14-15 корректны: параллельные запросы цен не трогают поток ответа, а `context.CancellationToken`
+      можно передавать в несколько операций.
+
+      Исправления:
+
+      - проще всего писать последовательно: `foreach` по `replies` с `await responseStream.WriteAsync(reply)`;
+      - если каждую цену нужно отправлять сразу, как только она готова, подходит схема производитель-потребитель
+        на `System.Threading.Channels`: задачи поиска пишут результаты в `Channel<PriceReply>` через
+        `channel.Writer.WriteAsync`, после их завершения вызывается `channel.Writer.Complete()` (с исключением,
+        если поиск упал), а единственный цикл `await foreach` по `channel.Reader.ReadAllAsync(context.CancellationToken)`
+        пишет в `responseStream` по одному сообщению;
+      - допустимо и сериализовать записи через `SemaphoreSlim(1, 1)`, но канал явно разделяет параллельную
+        работу и единственного писателя.
+
+      В любом варианте все записи должны завершиться до выхода из метода: писать в поток ответа после того,
+      как метод сервиса вернул управление, нельзя.
+    linkTitles:
+      - Создание сервисов и методов gRPC
+  en:
+    title: Find the line that makes a gRPC server-streaming method fail intermittently
+    prompt: |
+      A gRPC server-streaming method receives a list of SKUs, looks up their prices in parallel and streams
+      them to the client. The contract is `rpc StreamPrices (PriceRequest) returns (stream PriceReply);`, where
+      `PriceRequest` has `repeated string skus`, and `IPriceLookup.GetPriceAsync` returns `Task<PriceReply>`.
+
+      Locally with a few SKUs everything works, but in production some calls fail: the client gets an
+      `RpcException`, and the server logs show an `InvalidOperationException` saying that the previous write is
+      still in progress. Click the line that contains the defect.
+    hint: Which objects in this method are used by several operations at the same time, and do all of them allow it?
+    answer: Line 17, `Task.WhenAll` starts all the `responseStream.WriteAsync` calls at the same time.
+    explanation: |
+      `IServerStreamWriter<T>` (like `IAsyncStreamReader<T>`) can be used by only one thread at a time: the next
+      `WriteAsync` must not start until the previous write has completed. The expression
+      `replies.Select(reply => responseStream.WriteAsync(reply))`, enumerated inside `Task.WhenAll`, starts all
+      the writes one after another without waiting for the previous ones to finish.
+
+      The failure is intermittent because a write often completes synchronously: the message goes straight into
+      the response buffer, and the next call finds the stream free. When the client reads slowly or the network
+      is busy, sending has to wait (HTTP/2 flow control, backpressure), the write task stays incomplete, and the
+      next `WriteAsync` fails. That is why the defect is invisible with small data on a fast local network.
+
+      Lines 14-15 are fine: the parallel price lookups do not touch the response stream, and
+      `context.CancellationToken` can be passed to several operations.
+
+      Fixes:
+
+      - the simplest is to write sequentially: a `foreach` over `replies` with `await responseStream.WriteAsync(reply)`;
+      - if each price must be sent as soon as it is ready, use a producer-consumer setup with
+        `System.Threading.Channels`: the lookup tasks write results into a `Channel<PriceReply>` with
+        `channel.Writer.WriteAsync`, once they finish `channel.Writer.Complete()` is called (with the exception if
+        a lookup failed), and a single `await foreach` loop over `channel.Reader.ReadAllAsync(context.CancellationToken)`
+        writes to `responseStream` one message at a time;
+      - serializing writes with a `SemaphoreSlim(1, 1)` also works, but a channel clearly separates the parallel
+        work from the single writer.
+
+      In every variant all writes must finish before the method returns: writing to the response stream after
+      the service method has returned is not allowed.
+    linkTitles:
+      - Create gRPC services and methods
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  noRunReason: A gRPC service needs the ASP.NET Core shared framework, the Grpc.AspNetCore package with code generated from a .proto file, a running host and a connected client, which the console sandbox does not provide.

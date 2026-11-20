@@ -1,0 +1,145 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RKAFYHDEHX1VXP1EK1
+slug: replace-builtin-di-container-pr
+stack: dotnet
+topic: aspnet-core
+level: lead
+type: situation
+grading: self
+tags: [dependency-injection, di-container, code-review, adr]
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/core/extensions/dependency-injection-guidelines
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/dependency-injection
+    lang: en
+    kind: docs
+  - url: https://github.com/khellang/Scrutor
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "PR заменяет встроенный DI-контейнер на сторонний ради сканирования сборок и декораторов: как поступить?"
+    prompt: |
+      Решение на ASP.NET Core (.NET 10) из нескольких сервисов использует встроенный контейнер
+      `Microsoft.Extensions.DependencyInjection`. Разработчик открыл pull request, который заменяет его на
+      сторонний контейнер во всех сервисах. Цель: регистрировать сервисы сканированием сборок по соглашениям
+      вместо сотен строк `AddScoped` и навешивать сквозную логику (кэширование, логирование) через декораторы.
+      PR большой, тесты проходят. Вы техлид. Что вы будете делать с этим PR и как примете решение?
+    hint: Какие из нужных автору возможностей относятся к регистрации сервисов, а какие - к самому контейнеру, который создаёт объекты и управляет их временем жизни?
+    answer: |
+      1. **Отделить решение от PR.** Замена контейнера - архитектурное решение для всего решения, а не деталь
+         одного PR. Не мержить и не отклонять молча: признать реальную боль автора (однотипные регистрации,
+         сквозная логика), выяснить, какую именно проблему он решает, перенести обсуждение в RFC или ADR, а PR
+         поставить на паузу.
+      2. **Сверить потребности со встроенным контейнером.** В .NET 10 он умеет время жизни singleton, scoped
+         и transient, открытые обобщённые типы, получение всех реализаций через `IEnumerable<T>`, регистрацию
+         фабрикой, keyed services (с .NET 8: `AddKeyedScoped` и др., `[FromKeyedServices]`) и проверки
+         `ValidateScopes` и `ValidateOnBuild`. Не умеет: регистрацию по соглашениям (сканирование сборок),
+         декораторы, внедрение через свойства, дочерние контейнеры, `Func<T>` для ленивого создания.
+         Рекомендация Microsoft - оставаться на встроенном контейнере, пока не нужна конкретная недостающая
+         возможность.
+      3. **Рассмотреть более дешёвые варианты.** Сканирование и декораторы - это возможности регистрации, их
+         можно получить без замены контейнера: библиотека Scrutor добавляет к `IServiceCollection` методы
+         `Scan` и `Decorate`, а объекты по-прежнему создаёт встроенный провайдер. Ещё дешевле - свой код:
+         методы расширения на модуль (`AddOrdering()`) и декоратор через регистрацию фабрикой, которая
+         оборачивает конкретную реализацию. Отдельно оценить само сканирование: регистрации становятся неявными
+         (класс попадает в контейнер из-за имени или папки), а рефлексия при старте замедляет запуск и плохо
+         совместима с trimming и Native AOT.
+      4. **Если замена всё-таки нужна, назвать цену.** Ещё одна зависимость и адаптер, которые должны успевать
+         за каждым релизом .NET. Другая семантика: времена жизни и области видимости сопоставляются не один к
+         одному, отличаются правила освобождения (disposal), поведение при получении scoped-сервиса из
+         корневого контейнера и сообщения об ошибках. Проверки `ValidateScopes` и `ValidateOnBuild` - опции
+         встроенного провайдера, с другим контейнером они не работают, нужны его собственные средства
+         диагностики. Наконец, обучение: новые разработчики знают встроенный API, а не API конкретного
+         контейнера, и в коде появятся два стиля регистраций.
+      5. **Принять решение командой и записать его.** ADR: проблема, рассмотренные варианты (оставить как
+         есть, свои методы расширения, Scrutor, замена контейнера), критерии, решение и дата пересмотра. Спорные
+         варианты проверить на одном сервисе: объём регистраций, время запуска, понятность ошибок.
+      6. **Внедрять контролируемо.** Если замена принята: одна точка композиции (`UseServiceProviderFactory`),
+         таблица соответствия времён жизни, интеграционный тест, который поднимает хост и разрешает все корневые
+         сервисы (контроллеры, hosted services, обработчики), владелец обновлений зависимости. Если отклонена:
+         объяснить автору причины и помочь закрыть его настоящую цель более дешёвым способом, например
+         отдельным небольшим PR со Scrutor или методами расширения.
+    explanation: |
+      Контейнер - это инфраструктура, от которой неявно зависит каждый класс, поэтому откат дорог, а ошибки
+      в сопоставлении времён жизни проявляются во время выполнения, а не компиляции. Отсюда задача лида:
+      превратить «хочу другой контейнер» в цепочку «проблема - варианты - критерии - решение».
+
+      Документация Microsoft прямо советует использовать встроенный контейнер, если не нужна конкретная
+      возможность, которой у него нет, и перечисляет такие возможности, в том числе регистрацию по соглашениям.
+      Одна из старых причин замены, именованные регистрации, исчезла с появлением keyed services в .NET 8.
+      Сканирование и декораторы действительно отсутствуют, но они относятся к этапу регистрации, поэтому
+      закрываются надстройкой над `IServiceCollection` без смены контейнера, создающего объекты. Замена
+      оправдана, когда нужны возможности самого контейнера (например, дочерние контейнеры или особое
+      управление временем жизни) и команда готова платить за другую семантику, зависимость и обучение.
+      Ответ дан для .NET 10.
+    linkTitles:
+      - "Рекомендации по внедрению зависимостей"
+      - "Внедрение зависимостей в ASP.NET Core"
+      - "Репозиторий Scrutor на GitHub"
+  en:
+    title: "A PR replaces the built-in DI container with a third-party one for assembly scanning and decorators: how do you handle it?"
+    prompt: |
+      A solution of several ASP.NET Core (.NET 10) services uses the built-in
+      `Microsoft.Extensions.DependencyInjection` container. A developer opened a pull request that replaces it
+      with a third-party container in every service. The goal: register services by scanning assemblies by
+      convention instead of hundreds of `AddScoped` lines, and add cross-cutting logic (caching, logging)
+      through decorators. The PR is large and the tests pass. You are the tech lead. What do you do with this
+      PR, and how do you make the decision?
+    hint: Which of the features the author wants belong to service registration, and which belong to the container itself, which creates objects and manages their lifetimes?
+    answer: |
+      1. **Separate the decision from the PR.** Replacing the container is an architectural decision for the
+         whole solution, not a detail of one PR. Do not merge it and do not reject it silently: acknowledge the
+         author's real pain (repetitive registrations, cross-cutting logic), find out which problem exactly they
+         are solving, move the discussion to an RFC or ADR, and put the PR on hold.
+      2. **Compare the needs with the built-in container.** In .NET 10 it supports singleton, scoped and
+         transient lifetimes, open generic types, resolving all implementations through `IEnumerable<T>`,
+         factory registrations, keyed services (since .NET 8: `AddKeyedScoped` and others,
+         `[FromKeyedServices]`) and the `ValidateScopes` and `ValidateOnBuild` checks. It does not support
+         convention-based registration (assembly scanning), decorators, property injection, child containers or
+         `Func<T>` for lazy creation. Microsoft recommends staying with the built-in container until you need a
+         specific missing feature.
+      3. **Consider cheaper options.** Scanning and decorators are registration features, so you can get them
+         without replacing the container: the Scrutor library adds `Scan` and `Decorate` methods to
+         `IServiceCollection`, and the built-in provider still creates the objects. Cheaper still is your own
+         code: extension methods per module (`AddOrdering()`) and a decorator through a factory registration
+         that wraps the concrete implementation. Assess scanning itself too: registrations become implicit (a
+         class lands in the container because of its name or folder), and reflection at startup slows the start
+         and works poorly with trimming and Native AOT.
+      4. **If a replacement is really needed, name the cost.** One more dependency and an adapter that must
+         keep up with every .NET release. Different semantics: lifetimes and scopes do not map one to one, and
+         disposal rules, the behaviour when a scoped service is resolved from the root container, and error
+         messages differ. `ValidateScopes` and `ValidateOnBuild` are options of the built-in provider; they do
+         not work with another container, so you need that container's own diagnostics. Finally, onboarding:
+         new developers know the built-in API, not the API of a particular container, and the code gets two
+         registration styles.
+      5. **Decide as a team and write it down.** An ADR: the problem, the options considered (keep as is, own
+         extension methods, Scrutor, replace the container), the criteria, the decision and a review date. Try
+         disputed options on one service: amount of registration code, startup time, clarity of errors.
+      6. **Roll it out in a controlled way.** If the replacement is accepted: one composition root
+         (`UseServiceProviderFactory`), a lifetime mapping table, an integration test that starts the host and
+         resolves every root service (controllers, hosted services, handlers), and an owner for dependency
+         updates. If it is rejected: explain the reasons to the author and help them reach their real goal in a
+         cheaper way, for example a separate small PR with Scrutor or extension methods.
+    explanation: |
+      The container is infrastructure that every class depends on implicitly, so a rollback is expensive, and
+      lifetime mapping mistakes show up at run time, not at compile time. That is why the lead's job is to turn
+      "I want another container" into a chain of "problem - options - criteria - decision".
+
+      The Microsoft documentation explicitly advises using the built-in container unless you need a specific
+      feature it lacks, and lists such features, including convention-based registration. One of the old
+      reasons for a replacement, named registrations, went away with keyed services in .NET 8. Scanning and
+      decorators really are missing, but they belong to the registration stage, so an add-on over
+      `IServiceCollection` covers them without changing the container that creates objects. A replacement is
+      justified when you need features of the container itself (for example child containers or custom
+      lifetime management) and the team is ready to pay for different semantics, a dependency and onboarding.
+      The answer is stated for .NET 10.
+    linkTitles:
+      - "Dependency injection guidelines"
+      - "Dependency injection in ASP.NET Core"
+      - "Scrutor repository on GitHub"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

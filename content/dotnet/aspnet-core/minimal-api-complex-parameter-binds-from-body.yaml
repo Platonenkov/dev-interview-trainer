@@ -1,0 +1,116 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RKRXKVDKV0YGQY8HN2
+slug: minimal-api-complex-parameter-binds-from-body
+stack: dotnet
+topic: aspnet-core
+level: junior
+type: single
+grading: auto
+tags: [minimal-apis, parameter-binding, json]
+code:
+  language: csharp
+  harness: none
+  source: |
+    var builder = WebApplication.CreateBuilder(args);
+    var app = builder.Build();
+
+    app.MapPost("/customers/{customerId}/orders", (int customerId, CreateOrderRequest request) =>
+        Results.Ok(new { customerId, request.ProductId, request.Quantity }));
+
+    app.Run();
+
+    public class CreateOrderRequest
+    {
+        public string ProductId { get; set; }
+        public int Quantity { get; set; }
+    }
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/minimal-apis/parameter-binding
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/minimal-apis
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Откуда minimal API берёт значение параметра пользовательского класса в MapPost?
+    prompt: |
+      В обработчике `MapPost` есть два параметра без атрибутов привязки: `int customerId` и
+      `CreateOrderRequest request`. Класс `CreateOrderRequest` не зарегистрирован в DI-контейнере и не объявляет
+      ни `TryParse`, ни `BindAsync`. Откуда ASP.NET Core в .NET 10 по умолчанию возьмёт значение параметра `request`?
+    hint: Чем `int customerId` отличается от `CreateOrderRequest` с точки зрения того, можно ли получить значение из одной строки текста?
+    options:
+      a: "Из тела запроса: JSON десериализуется в `CreateOrderRequest`"
+      b: "Из строки запроса: каждое свойство ищется по имени, например `?productId=...&quantity=...`"
+      c: "Из полей HTML-формы, как в контроллерах MVC"
+      d: "Из DI-контейнера: каждый параметр типа класса разрешается как сервис"
+    optionExplanations:
+      b: "Из строки запроса без атрибутов берутся простые типы: `string` и типы со статическим `TryParse`. Чтобы разложить свойства сложного типа по отдельным источникам, нужен атрибут `[AsParameters]`."
+      c: "Сложный тип из формы minimal API привязывает только при явном `[FromForm]`. Без атрибута форма для такого параметра не рассматривается."
+      d: "Параметр берётся из DI только если его тип там зарегистрирован. `CreateOrderRequest` не зарегистрирован, поэтому источником становится тело запроса."
+    answer: "Из тела запроса: minimal API десериализует JSON из тела в `CreateOrderRequest`."
+    explanation: |
+      Когда у параметра нет атрибута `[FromRoute]`, `[FromQuery]`, `[FromBody]` и подобных, minimal API выводит
+      источник по типу параметра:
+
+      - специальные типы вроде `HttpContext` и `CancellationToken` подставляются напрямую;
+      - тип со статическим `BindAsync` привязывается этим методом;
+      - `string` и типы с `TryParse` берутся из маршрута, если имя совпадает с параметром шаблона, иначе из строки
+        запроса: поэтому `customerId` приходит из `{customerId}`;
+      - тип, зарегистрированный в DI, разрешается из контейнера;
+      - всё остальное считается телом запроса и десериализуется из JSON через `System.Text.Json`.
+
+      `CreateOrderRequest` не подходит ни под одно из первых правил, поэтому его значение берётся из тела.
+      Если тела нет или JSON не читается, обработчик не вызывается, и клиент получает ошибку 400. Описание
+      соответствует ASP.NET Core в .NET 10.
+    linkTitles:
+      - "Привязка параметров в minimal API"
+      - "Обзор minimal API"
+  en:
+    title: Where does a minimal API take the value of a custom class parameter in MapPost from?
+    prompt: |
+      A `MapPost` handler has two parameters without binding attributes: `int customerId` and
+      `CreateOrderRequest request`. The `CreateOrderRequest` class is not registered in the DI container and declares
+      neither `TryParse` nor `BindAsync`. Where does ASP.NET Core in .NET 10 take the value of `request` from by default?
+    hint: How does `int customerId` differ from `CreateOrderRequest` in terms of whether the value can be produced from a single string of text?
+    options:
+      a: "From the request body: JSON is deserialized into `CreateOrderRequest`"
+      b: "From the query string: each property is looked up by name, for example `?productId=...&quantity=...`"
+      c: "From HTML form fields, as in MVC controllers"
+      d: "From the DI container: every class-type parameter is resolved as a service"
+    optionExplanations:
+      b: "Without attributes, only simple types come from the query string: `string` and types with a static `TryParse`. To spread the properties of a complex type over separate sources you need the `[AsParameters]` attribute."
+      c: "Minimal APIs bind a complex type from a form only with an explicit `[FromForm]`. Without the attribute the form is not considered for such a parameter."
+      d: "A parameter comes from DI only if its type is registered there. `CreateOrderRequest` is not registered, so the request body becomes the source."
+    answer: "From the request body: the minimal API deserializes the JSON body into `CreateOrderRequest`."
+    explanation: |
+      When a parameter has no `[FromRoute]`, `[FromQuery]`, `[FromBody]` or similar attribute, a minimal API infers
+      the source from the parameter type:
+
+      - special types such as `HttpContext` and `CancellationToken` are supplied directly;
+      - a type with a static `BindAsync` is bound by that method;
+      - `string` and types with `TryParse` come from the route if the name matches a template parameter, otherwise
+        from the query string: that is why `customerId` comes from `{customerId}`;
+      - a type registered in DI is resolved from the container;
+      - everything else is treated as the request body and deserialized from JSON with `System.Text.Json`.
+
+      `CreateOrderRequest` matches none of the earlier rules, so its value is taken from the body. If the body is
+      missing or the JSON cannot be read, the handler is not called and the client gets a 400 error. The
+      description matches ASP.NET Core in .NET 10.
+    linkTitles:
+      - "Parameter binding in minimal APIs"
+      - "Minimal APIs overview"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"
+  noRunReason: "Minimal API code needs the ASP.NET Core shared framework and an HTTP request, which the sandbox console project does not provide."

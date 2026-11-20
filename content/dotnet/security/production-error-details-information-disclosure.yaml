@@ -1,0 +1,111 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQFEZ3F9EE9Y3SD4H3
+slug: production-error-details-information-disclosure
+stack: dotnet
+topic: security
+level: senior
+type: multi
+grading: auto
+tags: [owasp, security-misconfiguration, error-handling, problem-details]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+  - id: e
+    correct: true
+links:
+  - url: https://top10.owasp.org/A05_2021-Security_Misconfiguration/
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/error-handling
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Какие настройки обработки ошибок в ASP.NET Core раскрывают внутренние детали клиентам в production?
+    prompt: |
+      API на ASP.NET Core (.NET 10) развёрнуто в production. Какие из перечисленных конфигураций обработки
+      ошибок раскрывают клиенту внутренние детали приложения, когда при обработке запроса возникает
+      исключение? Выберите все подходящие варианты.
+    hint: Для каждого варианта представьте тело ответа, которое получит клиент после исключения, и спросите, что из него узнает злоумышленник.
+    options:
+      a: "Сервер production запущен с `ASPNETCORE_ENVIRONMENT=Development`, чтобы видеть более подробные логи. `Program.cs` построен на `WebApplication.CreateBuilder` и сам страницу исключений разработчика не включает."
+      b: "Обработчик в `app.UseExceptionHandler(errorApp => ...)` получает `IExceptionHandlerFeature` и записывает в тело ответа `feature.Error.ToString()`."
+      c: "`builder.Services.AddProblemDetails()` и `app.UseExceptionHandler()` в окружении Production: клиент получает `ProblemDetails` со статусом 500 и общим заголовком, без сообщения исключения и трассировки стека, а исключение пишется в лог."
+      d: "`app.UseHsts()`, вызванный вне окружения Development."
+      e: "Действие контроллера оборачивает работу с базой в `try`/`catch` и в блоке `catch (Exception ex)` возвращает `Problem(detail: ex.Message)`."
+    optionExplanations:
+      c: "Ответ содержит только код состояния и общий текст. Подробности исключения остаются в логе сервера, а связать запись лога с конкретным запросом можно по идентификатору запроса (например, `HttpContext.TraceIdentifier`), ничего не раскрывая клиенту. Это и есть рекомендуемая конфигурация."
+      d: "HSTS добавляет заголовок `Strict-Transport-Security`, который велит браузеру обращаться к сайту только по HTTPS. Он не влияет на тело ответов об ошибках и ничего о приложении не раскрывает."
+    answer: "Утечку дают варианты a, b и e: окружение Development на production-сервере, `Exception.ToString()` в ответе и `ex.Message` в `Problem(detail: ...)`."
+    explanation: |
+      OWASP Top 10 2021 относит к категории A05 (Security Misconfiguration) обработку ошибок, которая показывает
+      пользователям трассировку стека или слишком подробные сообщения. Такие детали не ломают систему сами по
+      себе, но экономят злоумышленнику разведку: имена типов и сборок, версии библиотек, пути к файлам, структуру
+      SQL-запросов.
+
+      - **a.** Начиная с .NET 6, `WebApplication` сам включает страницу исключений разработчика, когда окружение -
+        Development. Эта страница показывает трассировку стека и подробности запроса. Поэтому
+        `ASPNETCORE_ENVIRONMENT` - это настройка безопасности, а не только переключатель логирования.
+      - **b.** `Exception.ToString()` включает тип исключения, сообщение, вложенные исключения и трассировку
+        стека, а при наличии PDB-файлов ещё и пути к исходникам с номерами строк.
+      - **e.** Даже одно сообщение исключения бывает опасным: ошибка SQL Server называет таблицы, столбцы и
+        ограничения, `FileNotFoundException` - путь на сервере, ошибка подключения - имя хоста базы.
+
+      Безопасный вариант - `UseExceptionHandler` с общим ответом `ProblemDetails`, а подробности - только в логе
+      сервера. Чтобы найти запись лога по обращению клиента, достаточно идентификатора запроса: шаблон страницы
+      ошибок в документации показывает `Activity.Current?.Id ?? HttpContext.TraceIdentifier`, а не текст
+      исключения. Документация прямо предупреждает: не отдавайте клиентам чувствительную информацию об ошибках.
+      Важен не формат `ProblemDetails`, а его содержимое: тот же формат с `ex.Message` в поле `detail` раскрывает
+      столько же. HSTS к теме ошибок не относится, это защита транспорта.
+    linkTitles:
+      - "OWASP Top 10 2021: A05 Security Misconfiguration"
+      - "Обработка ошибок в ASP.NET Core"
+  en:
+    title: Which ASP.NET Core error-handling settings leak internal details to clients in production?
+    prompt: |
+      An ASP.NET Core (.NET 10) API is deployed to production. Which of these error-handling configurations
+      disclose internal details of the application to the client when a request fails with an exception?
+      Select all that apply.
+    hint: For each option, picture the response body the client receives after an exception and ask what an attacker learns from it.
+    options:
+      a: "The production server runs with `ASPNETCORE_ENVIRONMENT=Development` to get more verbose logs. `Program.cs` uses `WebApplication.CreateBuilder` and never enables the developer exception page itself."
+      b: "A handler in `app.UseExceptionHandler(errorApp => ...)` gets `IExceptionHandlerFeature` and writes `feature.Error.ToString()` to the response body."
+      c: "`builder.Services.AddProblemDetails()` and `app.UseExceptionHandler()` in the Production environment: the client receives `ProblemDetails` with status 500 and a generic title, with no exception message or stack trace, and the exception is logged."
+      d: "`app.UseHsts()` called outside the Development environment."
+      e: "A controller action wraps database work in `try`/`catch` and in `catch (Exception ex)` returns `Problem(detail: ex.Message)`."
+    optionExplanations:
+      c: "The response holds only the status code and a generic text. The exception details stay in the server log, and a request identifier (for example `HttpContext.TraceIdentifier`) lets you correlate the log entry with the request without showing anything to the client. This is the recommended configuration."
+      d: "HSTS adds the `Strict-Transport-Security` header, which tells the browser to use only HTTPS for the site. It does not affect error response bodies and discloses nothing about the application."
+    answer: "Options a, b and e leak: the Development environment on a production server, `Exception.ToString()` in the response, and `ex.Message` in `Problem(detail: ...)`."
+    explanation: |
+      The OWASP Top 10 2021 puts error handling that shows users stack traces or overly informative messages under
+      A05 (Security Misconfiguration). Such details do not break the system by themselves, but they save the
+      attacker reconnaissance work: type and assembly names, library versions, file paths, the shape of SQL queries.
+
+      - **a.** Since .NET 6, `WebApplication` enables the developer exception page by itself when the environment
+        is Development. The page shows the stack trace and details of the request. That makes
+        `ASPNETCORE_ENVIRONMENT` a security setting, not just a logging switch.
+      - **b.** `Exception.ToString()` includes the exception type, the message, inner exceptions and the stack
+        trace, and with PDB files present also source paths and line numbers.
+      - **e.** Even the message alone can be dangerous: a SQL Server error names tables, columns and constraints,
+        `FileNotFoundException` reveals a path on the server, a connection error the database host name.
+
+      The safe option is `UseExceptionHandler` with a generic `ProblemDetails` response, and the details only in
+      the server log. To find the log entry when a client reports a problem, a request identifier is enough: the
+      error page template in the documentation shows `Activity.Current?.Id ?? HttpContext.TraceIdentifier`, not
+      the exception text. The documentation warns explicitly: do not serve sensitive error information to clients.
+      What matters is the content, not the `ProblemDetails` format: the same format with `ex.Message` in the
+      `detail` field leaks just as much. HSTS is unrelated to errors, it protects the transport.
+    linkTitles:
+      - "OWASP Top 10 2021: A05 Security Misconfiguration"
+      - "Handle errors in ASP.NET Core"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

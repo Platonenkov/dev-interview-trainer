@@ -1,0 +1,162 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNSRXF18SZGK41N9RC
+slug: transaction-held-across-payment-gateway-call
+stack: dotnet
+topic: ef-core
+level: senior
+type: situation
+grading: self
+tags: [ef-core, transactions, locking, blocking, idempotency, compensation]
+links:
+  - url: https://learn.microsoft.com/en-us/ef/core/saving/transactions
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/sql/relational-databases/sql-server-transaction-locking-and-row-versioning-guide
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/azure/architecture/patterns/compensating-transaction
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/ef/core/miscellaneous/connection-resiliency
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Оформление заказа под нагрузкой упирается в блокировки: транзакция открыта на время вызова платёжного шлюза"
+    prompt: |
+      Интернет-магазин на ASP.NET Core и EF Core 10 с SQL Server. Во время распродажи запросы оформления заказа
+      завершаются по тайм-ауту, а мониторинг базы показывает длинные цепочки блокировок на строках таблицы
+      `Products`. Обработчик оформления открывает транзакцию через `BeginTransactionAsync`, читает товар,
+      проверяет свободный остаток, увеличивает `Reserved`, добавляет заказ и вызывает `SaveChangesAsync`
+      (`UPDATE Products` и `INSERT Orders`). Затем, не закрывая транзакцию, он вызывает внешний платёжный шлюз
+      по HTTP, помечает заказ оплаченным, снова вызывает `SaveChangesAsync` и только после этого фиксирует
+      транзакцию. Обычно шлюз отвечает за 300 мс, под нагрузкой - за несколько секунд. Что вы измените и в
+      каком порядке?
+    hint: "Когда освобождается блокировка строки, изменённой `UPDATE` внутри транзакции, и что сможет отменить `Rollback`, если шлюз уже списал деньги?"
+    answer: |
+      1. **Подтвердить причину.** Найти источник блокировок (на SQL Server - столбец `blocking_session_id` в
+         `sys.dm_exec_requests`, отчёт о заблокированных процессах) и сравнить длительность транзакций с временем
+         ответа шлюза в трассировке. Если сессия-источник простаивает (`sleeping`) с открытой транзакцией, то есть
+         ждёт не базу, а приложение, и её транзакция длится столько же, сколько вызов шлюза, причина найдена.
+      2. **Вынести внешний вызов из транзакции.** Разбить оформление на три шага:
+         - **Шаг 1, короткая транзакция только с базой.** Создать заказ в статусе `PendingPayment` и зарезервировать
+           товар атомарным условным обновлением, например `ExecuteUpdateAsync` над
+           `Where(p => p.Id == productId && p.Stock - p.Reserved >= quantity)` с
+           `SetProperty(p => p.Reserved, p => p.Reserved + quantity)`; 0 изменённых строк означает, что товара
+           не хватает. Зафиксировать. Если включён `EnableRetryOnFailure`, явную транзакцию оборачивают в
+           `db.Database.CreateExecutionStrategy().ExecuteAsync(...)`.
+         - **Шаг 2, вызов шлюза вне транзакции.** С тайм-аутом, токеном отмены и ключом идемпотентности (например,
+           id заказа), если шлюз его поддерживает, чтобы повтор запроса не списал деньги дважды.
+         - **Шаг 3, короткая транзакция.** По результату перевести заказ в `Paid` или в `PaymentFailed` со снятием
+           резерва (компенсация). Переход делать условным (`WHERE Status = 'PendingPayment'` или токен
+           параллелизма), чтобы повторная обработка не применила его дважды.
+      3. **Сделать шаги восстанавливаемыми.** Процесс может упасть между шагами. Фоновая задача находит заказы,
+         которые слишком долго находятся в `PendingPayment`, запрашивает у шлюза статус платежа по ключу
+         идемпотентности и завершает или компенсирует заказ; уведомление от шлюза (webhook) ускоряет то же самое.
+         Резерв с истёкшим сроком освобождается. Если о результате нужно сообщить другим сервисам, событие
+         записывается в той же транзакции через outbox.
+      4. **Чего не делать.** Не увеличивать тайм-ауты команд и не переходить на `READ UNCOMMITTED` или `NOLOCK`:
+         блокировки записи останутся, а чтения станут грязными. Не пытаться включить шлюз в распределённую
+         транзакцию: HTTP-API в ней не участвует.
+      5. **Проверить.** Нагрузочный тест с медленной заглушкой шлюза: длительность транзакций не зависит от
+         времени ответа шлюза, цепочек блокировок нет; метрики длительности транзакций и числа заказов в
+         `PendingPayment` выведены в мониторинг.
+    explanation: |
+      Эксклюзивная блокировка строки, изменённой `UPDATE`, держится до `Commit` или `Rollback` при любом уровне
+      изоляции. При оптимизированной блокировке (Azure SQL Database, SQL Server 2025) блокировки строк снимаются
+      раньше, но до конца транзакции держится блокировка её идентификатора (TID), и запрос, который хочет
+      изменить ту же строку, ждёт уже её, так что вывод не меняется. В описанном обработчике первый
+      `SaveChangesAsync` уже отправил `UPDATE` резерва, поэтому строка популярного товара заблокирована на всё
+      время HTTP-вызова. Остальные оформления этого товара встают в очередь, ожидание каждого складывается из
+      ожиданий всех впереди стоящих, и под нагрузкой цепочка доходит до тайм-аутов. Вдобавок каждая такая
+      транзакция всё это время занимает соединение из пула.
+
+      Важнее другое: транзакция здесь не давала той атомарности, ради которой её завели. `Rollback` отменяет
+      только изменения в базе, списание денег на стороне шлюза он не отменит. Если шлюз списал деньги, а
+      фиксация упала, покупатель заплатил, а заказа нет. Согласованность между базой и внешней системой всё
+      равно приходится обеспечивать статусами, идемпотентностью и компенсирующими действиями. Разбиение на шаги
+      делает это явным и сокращает транзакции до миллисекунд.
+
+      Цена решения - промежуточные состояния: заказ может находиться в `PendingPayment`, резерв временно уменьшает
+      доступный остаток, и нужна фоновая сверка со шлюзом. Это обычная плата за операцию, которая затрагивает
+      систему вне базы. Попутно атомарное условное обновление устраняет потерю обновления: в описанном
+      обработчике без токена параллелизма два запроса могли прочитать одинаковое `Reserved`, и второй `UPDATE`
+      перезаписал бы результат первого. Ответ описывает EF Core 10.
+    linkTitles:
+      - "Транзакции в EF Core"
+      - "Руководство по блокировкам транзакций и управлению версиями строк в SQL Server"
+      - "Паттерн компенсирующей транзакции"
+      - "Устойчивость подключений в EF Core"
+  en:
+    title: "Checkout under load hits blocking: a transaction stays open during the payment gateway call"
+    prompt: |
+      An online shop runs on ASP.NET Core and EF Core 10 with SQL Server. During a sale, checkout requests time out
+      and database monitoring shows long blocking chains on rows of the `Products` table. The checkout handler opens
+      a transaction with `BeginTransactionAsync`, reads the product, checks the free stock, increments `Reserved`,
+      adds the order and calls `SaveChangesAsync` (`UPDATE Products` and `INSERT Orders`). Then, with the
+      transaction still open, it calls an external payment gateway over HTTP, marks the order as paid, calls
+      `SaveChangesAsync` again and only then commits the transaction. Normally the gateway answers in 300 ms, under
+      load it takes several seconds. What do you change, and in what order?
+    hint: "When is the lock on a row changed by an `UPDATE` inside a transaction released, and what can `Rollback` undo if the gateway has already charged the card?"
+    answer: |
+      1. **Confirm the cause.** Find the head of the blocking chain (on SQL Server, the `blocking_session_id`
+         column of `sys.dm_exec_requests`, or the blocked process report) and compare transaction duration with
+         the gateway response time in the trace. If the head session is idle (`sleeping`) with an open
+         transaction, meaning it waits for the application rather than the database, and its transaction lasts as
+         long as the gateway call, the cause is found.
+      2. **Move the external call out of the transaction.** Split checkout into three steps:
+         - **Step 1, a short transaction with database work only.** Create the order with status `PendingPayment`
+           and reserve stock with an atomic conditional update, for example `ExecuteUpdateAsync` over
+           `Where(p => p.Id == productId && p.Stock - p.Reserved >= quantity)` with
+           `SetProperty(p => p.Reserved, p => p.Reserved + quantity)`; 0 affected rows means there is not
+           enough stock. Commit. If `EnableRetryOnFailure` is on, wrap the explicit transaction in
+           `db.Database.CreateExecutionStrategy().ExecuteAsync(...)`.
+         - **Step 2, the gateway call outside any transaction.** With a timeout, a cancellation token and an
+           idempotency key (for example, the order id) if the gateway supports one, so that a retry does not
+           charge twice.
+         - **Step 3, a short transaction.** Depending on the result, move the order to `Paid`, or to
+           `PaymentFailed` and release the reservation (compensation). Make the transition conditional
+           (`WHERE Status = 'PendingPayment'` or a concurrency token) so that repeated processing cannot apply
+           it twice.
+      3. **Make the steps recoverable.** The process can crash between steps. A background job finds orders that
+         have stayed in `PendingPayment` too long, asks the gateway for the payment status by the idempotency key,
+         and completes or compensates the order; a notification from the gateway (webhook) does the same sooner.
+         Expired reservations are released. If other services must learn the result, the event is written in the
+         same transaction through an outbox.
+      4. **What not to do.** Do not raise command timeouts and do not switch to `READ UNCOMMITTED` or `NOLOCK`: the
+         write locks stay, and reads become dirty. Do not try to enlist the gateway in a distributed transaction:
+         an HTTP API does not take part in one.
+      5. **Verify.** A load test with a slow gateway stub: transaction duration no longer depends on the gateway
+         response time and there are no blocking chains; metrics for transaction duration and for the number of
+         orders in `PendingPayment` go to monitoring.
+    explanation: |
+      An exclusive lock on a row changed by an `UPDATE` is held until `Commit` or `Rollback` at any isolation
+      level. With optimized locking (Azure SQL Database, SQL Server 2025) row locks are released earlier, but the
+      transaction ID (TID) lock is held until the end of the transaction, and a request that wants to modify the
+      same row waits on it instead, so the conclusion does not change. In the described handler the first
+      `SaveChangesAsync` has already sent the reservation `UPDATE`, so the row of a popular product stays locked
+      for the whole HTTP call. Every other checkout of that product queues up, each wait adds up the waits of
+      everyone ahead, and under load the chain reaches the timeouts. On top of that, every such transaction
+      occupies a pooled connection the whole time.
+
+      More importantly, the transaction never gave the atomicity it was introduced for. `Rollback` undoes only
+      database changes; it cannot undo a charge made by the gateway. If the gateway charged the card and the
+      commit failed, the customer paid and there is no order. Consistency between the database and an external
+      system has to come from statuses, idempotency and compensating actions anyway. Splitting the steps makes
+      that explicit and shortens the transactions to milliseconds.
+
+      The price is intermediate states: an order can sit in `PendingPayment`, a reservation temporarily lowers
+      the available stock, and a background reconciliation with the gateway is needed. That is the usual cost of
+      an operation that touches a system outside the database. As a side effect, the atomic conditional update
+      removes a lost update: in the described handler, without a concurrency token, two requests could read the
+      same `Reserved` value and the second `UPDATE` would overwrite the result of the first. The answer describes
+      EF Core 10.
+    linkTitles:
+      - "Transactions in EF Core"
+      - "SQL Server transaction locking and row versioning guide"
+      - "Compensating Transaction pattern"
+      - "Connection resiliency in EF Core"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

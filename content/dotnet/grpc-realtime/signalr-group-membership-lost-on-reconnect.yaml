@@ -1,0 +1,115 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RP620PPNFHE4ZWV91W
+slug: signalr-group-membership-lost-on-reconnect
+stack: dotnet
+topic: grpc-realtime
+level: middle
+type: open
+grading: self
+tags: [signalr, groups, reconnect, connection-id]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/signalr/groups
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/signalr/javascript-client
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему после автоматического переподключения клиент SignalR перестаёт получать сообщения группы?
+    prompt: |
+      В приложении на ASP.NET Core SignalR (.NET 10) клиент при входе в комнату чата вызывает метод хаба
+      `JoinRoom`, который выполняет `Groups.AddToGroupAsync(Context.ConnectionId, room)`. На клиенте включено
+      `withAutomaticReconnect()`.
+
+      После кратковременного обрыва сети клиент успешно переподключается и может вызывать методы хаба, но
+      сообщения, которые сервер отправляет через `Clients.Group(room)`, до него больше не доходят. Почему так
+      происходит и где правильно восстанавливать членство в группах?
+    hint: "Кого на самом деле хранит группа SignalR - пользователя или соединение? И считает ли сервер переподключившегося клиента тем же самым соединением?"
+    answer: |
+      - Группа хранит идентификаторы соединений, а не пользователей: `AddToGroupAsync` добавил в группу
+        конкретный `ConnectionId`.
+      - После автоматического переподключения сервер считает клиента новым соединением с новым `ConnectionId`
+        и вызывает для него `OnConnectedAsync`. Старое соединение закрывается отдельно (`OnDisconnectedAsync`),
+        возможно чуть позже. В документации SignalR о группах прямо сказано, что членство в группах при
+        переподключении не сохраняется и соединение должно заново войти в группу.
+      - Восстанавливать членство лучше на сервере, в переопределённом `OnConnectedAsync`: по
+        `Context.UserIdentifier` прочитать из постоянного хранилища (база данных, кэш), в каких комнатах состоит
+        пользователь, и для каждой вызвать `Groups.AddToGroupAsync(Context.ConnectionId, room)`. Так одинаково
+        обрабатываются первое подключение, переподключение, второе устройство и перезапуск сервера.
+      - Допустимая альтернатива - клиент в обработчике `onreconnected` снова вызывает `JoinRoom`. Тогда клиент
+        сам помнит свои комнаты, а сервер обязан заново проверить право на вход в каждую из них.
+      - Сообщения, отправленные группе во время обрыва, потеряны: после переподключения клиент должен запросить
+        актуальное состояние, например последние сообщения комнаты.
+    explanation: |
+      Группа в SignalR - это механизм доставки, а не бизнес-состояние. Сервер хранит в памяти сопоставление
+      "имя группы -> набор идентификаторов соединений" и ничего не знает о том, что пользователь "состоит в
+      комнате". Для сервера автоматическое переподключение выглядит как совершенно новое соединение: клиент
+      получает новый `ConnectionId` (JavaScript-клиент передаёт его в обработчик `onreconnected`). Новое
+      соединение не добавлено ни в одну группу, поэтому `Clients.Group(room)` до него не доходит, хотя вызовы
+      методов хаба работают.
+
+      Отсюда правило: членство в комнатах - это состояние приложения, которое хранится по пользователю, а
+      группы SignalR строятся из него заново для каждого соединения. `OnConnectedAsync` - единая точка, через
+      которую проходит любое новое соединение, поэтому восстановление там не зависит от того, правильно ли
+      клиент обработал переподключение. Если же входом в группу управляет клиент, это ещё и вопрос
+      безопасности: группы не являются механизмом защиты, и право на доступ к комнате проверяется при каждом
+      добавлении.
+
+      Есть и другие причины не считать группы источником истины. Группы хранятся в памяти, поэтому не
+      переживают перезапуск сервера. Узнать число участников группы нельзя, потому что при нескольких серверах
+      эта информация недоступна. Поэтому список комнат пользователя хранят в собственном хранилище, а группы
+      из него восстанавливают.
+    linkTitles:
+      - "Управление пользователями и группами в SignalR"
+      - "Клиент JavaScript для ASP.NET Core SignalR"
+  en:
+    title: Why does a SignalR client stop receiving group messages after an automatic reconnect?
+    prompt: |
+      In an ASP.NET Core SignalR (.NET 10) app, a client that enters a chat room calls the hub method
+      `JoinRoom`, which runs `Groups.AddToGroupAsync(Context.ConnectionId, room)`. The client has
+      `withAutomaticReconnect()` turned on.
+
+      After a short network blip the client reconnects successfully and can call hub methods, but messages
+      that the server sends through `Clients.Group(room)` no longer reach it. Why does this happen, and where
+      should group membership be restored?
+    hint: "What does a SignalR group actually hold - a user or a connection? And does the server treat a reconnected client as the same connection?"
+    answer: |
+      - A group holds connection ids, not users: `AddToGroupAsync` added one specific `ConnectionId` to the
+        group.
+      - After an automatic reconnect the server treats the client as a new connection with a new
+        `ConnectionId` and calls `OnConnectedAsync` for it. The old connection is closed separately
+        (`OnDisconnectedAsync`), possibly a little later. The SignalR groups documentation states that group
+        membership isn't preserved when a connection reconnects and the connection has to rejoin the group.
+      - The best place to restore membership is the server, in an overridden `OnConnectedAsync`: use
+        `Context.UserIdentifier` to read from durable storage (a database, a cache) which rooms the user
+        belongs to, and call `Groups.AddToGroupAsync(Context.ConnectionId, room)` for each. This handles the
+        first connection, a reconnect, a second device and a server restart the same way.
+      - An acceptable alternative is for the client to call `JoinRoom` again in its `onreconnected` handler.
+        The client then has to remember its rooms, and the server must check access to every room again.
+      - Messages sent to the group during the blip are lost: after reconnecting the client must fetch the
+        current state, for example the latest messages of the room.
+    explanation: |
+      A SignalR group is a delivery mechanism, not business state. The server keeps an in-memory mapping
+      "group name -> set of connection ids" and knows nothing about a user "being in a room". To the server an
+      automatic reconnect looks like an entirely new connection: the client receives a new `ConnectionId`
+      (the JavaScript client passes it to the `onreconnected` handler). The new connection is in no group, so
+      `Clients.Group(room)` does not reach it, even though hub method calls work.
+
+      Hence the rule: room membership is application state stored per user, and SignalR groups are rebuilt
+      from it for every connection. `OnConnectedAsync` is the single point every new connection passes
+      through, so restoring there does not depend on the client handling the reconnect correctly. If the
+      client controls joining, it is also a security matter: groups are not a security feature, and access to
+      a room must be checked on every join.
+
+      There are more reasons not to treat groups as the source of truth. Groups are kept in memory, so they do
+      not survive a server restart. You cannot count the members of a group, because that information is not
+      available when the app is scaled to several servers. So the list of a user's rooms lives in your own
+      storage, and groups are restored from it.
+    linkTitles:
+      - "Manage users and groups in SignalR"
+      - "ASP.NET Core SignalR JavaScript client"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

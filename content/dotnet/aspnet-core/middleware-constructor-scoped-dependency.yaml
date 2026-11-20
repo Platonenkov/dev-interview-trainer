@@ -1,0 +1,116 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RK4WBEW1DDKXNNZ73B
+slug: middleware-constructor-scoped-dependency
+stack: dotnet
+topic: aspnet-core
+level: middle
+type: find-bug
+grading: auto
+tags: [middleware, dependency-injection, service-lifetimes, dbcontext]
+code:
+  language: csharp
+  harness: none
+  source: |
+    public class AuditMiddleware
+    {
+        private readonly RequestDelegate _next;
+        private readonly AppDbContext _db;
+
+        public AuditMiddleware(RequestDelegate next, AppDbContext db)
+        {
+            _next = next;
+            _db = db;
+        }
+
+        public async Task InvokeAsync(HttpContext context)
+        {
+            _db.AuditEntries.Add(new AuditEntry
+            {
+                Path = context.Request.Path.Value,
+                CreatedAt = DateTime.UtcNow
+            });
+            await _db.SaveChangesAsync();
+
+            await _next(context);
+        }
+    }
+bugLineSets: [[6]]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/middleware/write
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/middleware/extensibility
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строку middleware, из-за которой один DbContext обслуживает все запросы
+    prompt: |
+      Middleware записывает в базу путь каждого запроса. `AppDbContext` зарегистрирован через
+      `builder.Services.AddDbContext<AppDbContext>(...)`, middleware подключён через
+      `app.UseMiddleware<AuditMiddleware>()`. В окружении Development приложение падает при старте с
+      `InvalidOperationException`: scoped-сервис нельзя разрешить из корневого провайдера. В Production оно
+      запускается, но под нагрузкой в логе появляется `InvalidOperationException` о том, что на этом экземпляре
+      контекста началась вторая операция до завершения предыдущей, а память процесса растёт.
+      Щёлкните по строке с дефектом.
+    hint: Сколько раз создаётся объект такого middleware и сколько запросов обслуживает один экземпляр?
+    answer: Строка 6, конструктор, который принимает scoped-сервис `AppDbContext`.
+    explanation: |
+      Middleware на основе соглашений (класс с `RequestDelegate` в конструкторе и методом `InvokeAsync`) создаётся
+      один раз, при построении конвейера на старте приложения, и живёт столько же, сколько приложение. Его
+      конструктор получает зависимости из корневого провайдера, а не из области запроса. `AddDbContext`
+      регистрирует контекст как scoped, поэтому:
+
+      - в Development включена проверка областей (`ValidateScopes`), и разрешение scoped-сервиса из корня
+        выбрасывает исключение уже на старте;
+      - без проверки корневой провайдер создаёт один `AppDbContext` на всё время жизни приложения. Все
+        параллельные запросы работают с одним экземпляром, а `DbContext` не потокобезопасен, отсюда ошибка о
+        второй операции. Трекер изменений копит все добавленные записи, и память растёт.
+
+      Строки 4 и 9 только хранят полученную ссылку, а сама неверная зависимость объявлена в строке 6.
+
+      Исправление - принимать scoped-сервисы параметрами `InvokeAsync`:
+      `public async Task InvokeAsync(HttpContext context, AppDbContext db)`. Эти параметры разрешаются из области
+      текущего запроса при каждом вызове. Другой вариант - фабричный middleware, который реализует `IMiddleware`
+      и регистрируется в DI как scoped или transient: такой экземпляр создаётся на каждый запрос.
+    linkTitles:
+      - "Написание собственного middleware ASP.NET Core"
+      - "Фабричный middleware в ASP.NET Core"
+  en:
+    title: Find the middleware line that makes one DbContext serve every request
+    prompt: |
+      The middleware writes the path of every request to the database. `AppDbContext` is registered with
+      `builder.Services.AddDbContext<AppDbContext>(...)`, and the middleware is added with
+      `app.UseMiddleware<AuditMiddleware>()`. In the Development environment the application fails at startup with
+      an `InvalidOperationException`: a scoped service cannot be resolved from the root provider. In Production it
+      starts, but under load the log shows an `InvalidOperationException` saying that a second operation started on
+      this context instance before a previous one completed, and the process memory keeps growing.
+      Click the line that contains the defect.
+    hint: How many times is an object of this middleware created, and how many requests does one instance serve?
+    answer: Line 6, the constructor that takes the scoped service `AppDbContext`.
+    explanation: |
+      Convention-based middleware (a class with `RequestDelegate` in the constructor and an `InvokeAsync` method) is
+      created once, when the pipeline is built at application startup, and lives as long as the application. Its
+      constructor receives dependencies from the root provider, not from the request scope. `AddDbContext`
+      registers the context as scoped, so:
+
+      - in Development scope validation (`ValidateScopes`) is on, and resolving a scoped service from the root
+        throws already at startup;
+      - without validation the root provider creates one `AppDbContext` for the whole application lifetime. All
+        concurrent requests share that instance, and `DbContext` is not thread-safe, hence the second-operation
+        error. The change tracker keeps every added entry, so memory grows.
+
+      Lines 4 and 9 only store the received reference; the wrong dependency itself is declared on line 6.
+
+      The fix is to take scoped services as parameters of `InvokeAsync`:
+      `public async Task InvokeAsync(HttpContext context, AppDbContext db)`. These parameters are resolved from the
+      scope of the current request on every call. Another option is factory-based middleware that implements
+      `IMiddleware` and is registered in DI as scoped or transient: such an instance is created per request.
+    linkTitles:
+      - "Write custom ASP.NET Core middleware"
+      - "Factory-based middleware activation in ASP.NET Core"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"
+  noRunReason: "ASP.NET Core middleware with an EF Core DbContext needs the web host, the Microsoft.AspNetCore.App shared framework and EF Core packages, which the sandbox console project does not provide."

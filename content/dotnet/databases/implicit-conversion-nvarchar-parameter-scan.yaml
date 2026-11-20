@@ -1,0 +1,103 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNMF088DRQTRX5V0QW
+slug: implicit-conversion-nvarchar-parameter-scan
+stack: dotnet
+topic: databases
+level: senior
+type: find-bug
+grading: auto
+tags: [sql-server, implicit-conversion, indexes, execution-plans, sqlclient]
+code:
+  language: csharp
+  harness: none
+  source: |
+    // dbo.Accounts: AccountNumber varchar(20) NOT NULL, Balance decimal(18, 2) NOT NULL
+    // IX_Accounts_AccountNumber ON dbo.Accounts (AccountNumber); column collation SQL_Latin1_General_CP1_CI_AS
+    public async Task<decimal?> GetBalanceAsync(SqlConnection connection, string accountNumber)
+    {
+        const string sql = "SELECT Balance FROM dbo.Accounts WHERE AccountNumber = @accountNumber";
+        await using var command = new SqlCommand(sql, connection);
+        command.Parameters.Add("@accountNumber", SqlDbType.NVarChar, 20).Value = accountNumber;
+        return (decimal?)await command.ExecuteScalarAsync();
+    }
+bugLineSets: [[7]]
+links:
+  - url: https://learn.microsoft.com/en-us/sql/t-sql/data-types/data-type-precedence-transact-sql
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/sql/relational-databases/showplan-logical-and-physical-operators-reference
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строку, из-за которой поиск счёта по индексированному столбцу сканирует весь индекс
+    prompt: |
+      Метод читает баланс по номеру счёта из SQL Server. Столбец `AccountNumber` имеет тип `varchar(20)` и
+      параметры сортировки SQL (`SQL_Latin1_General_CP1_CI_AS`), по нему построен индекс `IX_Accounts_AccountNumber`.
+      Таблица большая, и под нагрузкой этот запрос заметно загружает CPU: в фактическом плане выполнения вместо
+      `Index Seek` стоит `Index Scan` по `IX_Accounts_AccountNumber`, а на операторе `SELECT` есть предупреждение
+      о `CONVERT_IMPLICIT`. Щёлкните по строке с дефектом.
+    hint: Если типы двух сторон сравнения различаются, к какому из них SQL Server приводит обе стороны, и какая сторона в итоге преобразуется?
+    answer: "Строка 7: параметр объявлен как `SqlDbType.NVarChar`, хотя столбец имеет тип `varchar(20)`."
+    explanation: |
+      При сравнении значений разных типов SQL Server приводит тип с меньшим приоритетом к типу с большим.
+      У `nvarchar` приоритет выше, чем у `varchar`, поэтому в условии `AccountNumber = @accountNumber` с параметром
+      `nvarchar` преобразуется не параметр, а столбец: в плане появляется
+      `CONVERT_IMPLICIT(nvarchar(20), [AccountNumber], 0)` и предупреждение о том, что преобразование типа может
+      повлиять на выбор плана с поиском (`SeekPlan`).
+
+      Индекс упорядочен по исходным значениям `varchar` в порядке сортировки SQL-коллации. Для такой коллации
+      порядок строк `varchar` не совпадает с порядком тех же строк, преобразованных в Unicode, поэтому оптимизатор
+      не может превратить условие над преобразованным столбцом в диапазон ключей индекса. Он читает индекс целиком
+      и преобразует каждое значение: `Index Scan` и расход CPU на каждую строку вместо поиска одной строки. Это та
+      же проблема, что и с функцией над столбцом: условие перестаёт быть sargable. При Windows-коллации правила
+      сравнения `varchar` и `nvarchar` согласованы, и оптимизатор обычно сохраняет поиск по вычисленному диапазону,
+      но лишнее преобразование всё равно стоит убрать.
+
+      Исправление - объявить параметр того же типа и длины, что и столбец:
+      `command.Parameters.Add("@accountNumber", SqlDbType.VarChar, 20).Value = accountNumber;`.
+      Та же ловушка встречается неявно: `AddWithValue` для `string` выводит тип `NVarChar`, а EF Core по умолчанию
+      отображает строку на `nvarchar` и отправляет параметр этого типа, если в модели не указаны `IsUnicode(false)`
+      и `HasMaxLength(20)` (или `HasColumnType("varchar(20)")`). Обратная ситуация безопасна: если столбец
+      `nvarchar`, а параметр `varchar`, преобразуется параметр, и поиск по индексу сохраняется.
+    linkTitles:
+      - "Приоритет типов данных (Transact-SQL)"
+      - "Справочник по логическим и физическим операторам Showplan"
+  en:
+    title: Find the line that makes an account lookup on an indexed column scan the whole index
+    prompt: |
+      The method reads a balance by account number from SQL Server. The `AccountNumber` column is `varchar(20)` with
+      a SQL collation (`SQL_Latin1_General_CP1_CI_AS`), and the index `IX_Accounts_AccountNumber` is built on it.
+      The table is large, and under load this query uses a lot of CPU: the actual execution plan shows an
+      `Index Scan` of `IX_Accounts_AccountNumber` instead of an `Index Seek`, and the `SELECT` operator carries a
+      `CONVERT_IMPLICIT` warning. Click the line that contains the defect.
+    hint: When the two sides of a comparison have different types, which type does SQL Server convert both sides to, and which side ends up converted?
+    answer: "Line 7: the parameter is declared as `SqlDbType.NVarChar`, while the column is `varchar(20)`."
+    explanation: |
+      When it compares values of different types, SQL Server converts the type with lower precedence to the type
+      with higher precedence. `nvarchar` has higher precedence than `varchar`, so in `AccountNumber = @accountNumber`
+      with an `nvarchar` parameter it is the column, not the parameter, that gets converted: the plan shows
+      `CONVERT_IMPLICIT(nvarchar(20), [AccountNumber], 0)` and a warning that the type conversion may affect the
+      choice of a seek plan (`SeekPlan`).
+
+      The index is ordered by the original `varchar` values in the sort order of the SQL collation. For such a
+      collation the order of `varchar` strings differs from the order of the same strings converted to Unicode, so
+      the optimizer cannot turn a condition on the converted column into a range of index keys. It reads the whole
+      index and converts every value: an `Index Scan` and CPU spent on every row instead of a seek to one row. This
+      is the same problem as a function over a column: the predicate is no longer sargable. With a Windows collation
+      the comparison rules of `varchar` and `nvarchar` agree, and the optimizer usually keeps a seek over a computed
+      range, but the extra conversion is still worth removing.
+
+      The fix is to declare the parameter with the same type and length as the column:
+      `command.Parameters.Add("@accountNumber", SqlDbType.VarChar, 20).Value = accountNumber;`.
+      The same trap appears implicitly: `AddWithValue` infers `NVarChar` for a `string`, and EF Core maps strings to
+      `nvarchar` by default and sends a parameter of that type unless the model specifies `IsUnicode(false)` and
+      `HasMaxLength(20)` (or `HasColumnType("varchar(20)")`). The reverse case is safe: if the column is `nvarchar`
+      and the parameter is `varchar`, the parameter is converted and the index seek is kept.
+    linkTitles:
+      - "Data type precedence (Transact-SQL)"
+      - "Showplan logical and physical operators reference"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  noRunReason: The snippet needs the Microsoft.Data.SqlClient package and a SQL Server instance to show the execution plan, and the sandbox has neither.

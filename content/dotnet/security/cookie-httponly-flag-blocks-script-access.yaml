@@ -1,0 +1,102 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQF2M489RMFPH0XZY5
+slug: cookie-httponly-flag-blocks-script-access
+stack: dotnet
+topic: security
+level: junior
+type: single
+grading: auto
+tags: [cookies, httponly, xss, csrf]
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html
+    lang: en
+    kind: article
+  - url: https://developer.mozilla.org/en-US/docs/Web/HTTP/Cookies
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: От чего защищает атрибут HttpOnly у аутентификационной cookie?
+    prompt: |
+      После входа приложение ASP.NET Core выдаёт браузеру аутентификационную cookie с атрибутом `HttpOnly`.
+      От чего именно защищает этот атрибут?
+    hint: |
+      Кто теряет доступ к cookie с этим атрибутом: сервер, браузер при отправке запросов или код на странице?
+    options:
+      a: "Скрипты на странице не могут прочитать cookie через `document.cookie`, поэтому код, внедрённый через XSS, не украдёт её и не отправит злоумышленнику."
+      b: "Браузер не отправляет cookie с запросами, которые запускают другие сайты, поэтому атака CSRF не сработает."
+      c: "Браузер отправляет cookie только по HTTPS, поэтому её нельзя перехватить в сети."
+      d: "Значение cookie шифруется, поэтому пользователь не может увидеть или изменить его в инструментах разработчика браузера."
+    optionExplanations:
+      b: "`HttpOnly` не влияет на отправку: браузер прикладывает cookie ко всем подходящим запросам, в том числе к тем, которые запускает чужая страница. От CSRF защищают `SameSite` и antiforgery-токены."
+      c: "Это задача атрибута `Secure`. Cookie, у которой есть только `HttpOnly`, браузер отправит и по обычному HTTP."
+      d: "`HttpOnly` ничего не шифрует, и инструменты разработчика показывают такие cookie. Содержимое аутентификационной cookie в ASP.NET Core защищает Data Protection, а не этот атрибут."
+    answer: "От чтения cookie скриптами на странице: внедрённый через XSS код не может получить её через `document.cookie` и унести злоумышленнику."
+    explanation: |
+      Cookie с атрибутом `HttpOnly` недоступна через `document.cookie` и другие API, которыми пользуется
+      JavaScript на странице: браузер только отправляет её серверу. Поэтому если на странице есть XSS, внедрённый
+      скрипт не может прочитать идентификатор сессии и переслать его на свой сервер, чтобы потом пользоваться
+      сессией жертвы со своей машины. OWASP рекомендует ставить этот атрибут на все cookie сессии, а обработчик
+      аутентификации по cookie в ASP.NET Core включает его по умолчанию.
+
+      Важно понимать границы этой защиты:
+
+      - браузер по-прежнему прикладывает cookie ко всем подходящим запросам, включая запросы с чужих сайтов,
+        поэтому от CSRF `HttpOnly` не защищает: для этого нужны `SameSite` и antiforgery-токены;
+      - внедрённый скрипт не прочитает cookie, но может сам отправлять запросы к сайту с этой cookie, пока
+        страница открыта, поэтому XSS остаётся серьёзной уязвимостью и закрывается кодированием вывода;
+      - от перехвата в сети защищает атрибут `Secure` вместе с HTTPS.
+
+      Для аутентификационной cookie обычно задают все три атрибута: `HttpOnly`, `Secure` и `SameSite`.
+    linkTitles:
+      - "OWASP: памятка по управлению сессиями"
+      - "MDN: HTTP-cookie"
+  en:
+    title: What does the HttpOnly attribute protect an authentication cookie against?
+    prompt: |
+      After sign-in an ASP.NET Core application gives the browser an authentication cookie with the `HttpOnly`
+      attribute. What exactly does this attribute protect against?
+    hint: |
+      Who loses access to a cookie with this attribute: the server, the browser when it sends requests, or the
+      code on the page?
+    options:
+      a: "Scripts on the page cannot read the cookie through `document.cookie`, so code injected through XSS cannot steal it and send it to the attacker."
+      b: "The browser does not send the cookie with requests that other sites trigger, so a CSRF attack fails."
+      c: "The browser sends the cookie only over HTTPS, so it cannot be intercepted on the network."
+      d: "The cookie value is encrypted, so the user cannot see or change it in the browser developer tools."
+    optionExplanations:
+      b: "`HttpOnly` does not affect sending: the browser attaches the cookie to every matching request, including the ones a foreign page triggers. `SameSite` and antiforgery tokens protect against CSRF."
+      c: "That is the job of the `Secure` attribute. A cookie that has only `HttpOnly` is still sent over plain HTTP."
+      d: "`HttpOnly` encrypts nothing, and developer tools do show such cookies. In ASP.NET Core the content of the authentication cookie is protected by Data Protection, not by this attribute."
+    answer: "Against scripts on the page reading the cookie: code injected through XSS cannot get it through `document.cookie` and carry it off to the attacker."
+    explanation: |
+      A cookie with the `HttpOnly` attribute is not available through `document.cookie` or other APIs that
+      JavaScript on the page uses: the browser only sends it to the server. So if the page has an XSS hole, the
+      injected script cannot read the session identifier and forward it to its own server to reuse the victim's
+      session from the attacker's machine later. OWASP recommends setting this attribute on every session cookie,
+      and the ASP.NET Core cookie authentication handler turns it on by default.
+
+      It is important to know the limits of this protection:
+
+      - the browser still attaches the cookie to every matching request, including requests from other sites,
+        so `HttpOnly` does not protect against CSRF: that needs `SameSite` and antiforgery tokens;
+      - an injected script cannot read the cookie, but it can send requests to the site with that cookie itself
+        while the page is open, so XSS stays a serious vulnerability and is fixed by output encoding;
+      - protection against interception on the network comes from the `Secure` attribute together with HTTPS.
+
+      An authentication cookie usually gets all three attributes: `HttpOnly`, `Secure` and `SameSite`.
+    linkTitles:
+      - "OWASP Session Management Cheat Sheet"
+      - "MDN: Using HTTP cookies"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

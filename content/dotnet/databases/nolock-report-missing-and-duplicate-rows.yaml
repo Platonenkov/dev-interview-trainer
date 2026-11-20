@@ -1,0 +1,95 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNB3WQC8P5HVDKSX8B
+slug: nolock-report-missing-and-duplicate-rows
+stack: dotnet
+topic: databases
+level: middle
+type: find-bug
+grading: auto
+tags: [sql-server, t-sql, nolock, isolation-levels, dirty-read]
+code:
+  language: sql
+  harness: none
+  source: |
+    -- dbo.Orders: clustered primary key on Id (uniqueidentifier from NEWID()), heavy concurrent inserts and updates
+    DECLARE @from date = '2024-06-01';
+    DECLARE @to date = '2024-07-01';
+
+    SELECT o.Region,
+           COUNT(*) AS OrderCount,
+           SUM(o.Total) AS Revenue
+    FROM dbo.Orders AS o WITH (NOLOCK)
+    WHERE o.CreatedAt >= @from
+      AND o.CreatedAt < @to
+      AND o.Status = 'Paid'
+    GROUP BY o.Region
+    ORDER BY o.Region;
+bugLineSets: [[8]]
+links:
+  - url: https://learn.microsoft.com/en-us/sql/t-sql/queries/hints-transact-sql-table
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/sql/t-sql/statements/set-transaction-isolation-level-transact-sql
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Найдите строку, из-за которой отчёт о выручке теряет и дублирует заказы
+    prompt: |
+      Отчёт о выручке за июнь 2024 года выполняется в SQL Server, пока в таблицу `dbo.Orders` идёт поток
+      вставок и изменений. Иногда итоги не совпадают ни с одним зафиксированным состоянием базы: сверка находит
+      заказы, посчитанные дважды, пропущенные заказы и суммы заказов, изменение которых потом было откачено.
+      Щёлкните по строке с дефектом.
+    hint: Какая часть запроса меняет то, как чтение взаимодействует с параллельными изменениями таблицы?
+    answer: "Строка 8, табличная подсказка `WITH (NOLOCK)` на просматриваемой таблице."
+    explanation: |
+      `NOLOCK` - это то же самое, что `READUNCOMMITTED` для этой таблицы: запрос не берёт разделяемые блокировки
+      и не ждёт эксклюзивных блокировок писателей. Отсюда первая проблема - грязное чтение: в сумму попадают
+      значения транзакций, которые ещё не зафиксированы и могут откатиться.
+
+      Вторая проблема менее очевидна. Без блокировок движок может читать страницы в порядке их размещения в файле,
+      а не в порядке ключа. Ключ `NEWID()` вставляет строки в случайные места индекса и часто вызывает расщепление
+      страниц: половина строк переезжает на новую страницу. Если она оказалась позади текущей позиции просмотра,
+      эти строки не будут прочитаны; если впереди - уже прочитанные строки встретятся второй раз. Документация
+      табличных подсказок прямо предупреждает, что при грязном чтении записи можно увидеть дважды или не увидеть
+      вовсе. Остальные строки запроса корректны: полуоткрытый диапазон дат и группировка ни к чему такому не ведут.
+
+      Исправление - убрать `NOLOCK`. Если подсказку добавили, чтобы отчёт не блокировался писателями, лучше
+      включить для базы `READ_COMMITTED_SNAPSHOT` или выполнять отчёт на уровне `SNAPSHOT`: чтение не берёт
+      разделяемые блокировки, но видит согласованный снимок только зафиксированных данных на момент начала
+      инструкции (для `SNAPSHOT` - транзакции), без пропусков и повторов.
+    linkTitles:
+      - "Табличные подсказки (Transact-SQL)"
+      - "SET TRANSACTION ISOLATION LEVEL (Transact-SQL)"
+  en:
+    title: Find the line that makes a revenue report lose and duplicate orders
+    prompt: |
+      A revenue report for June 2024 runs in SQL Server while the `dbo.Orders` table receives a stream of inserts
+      and updates. Sometimes the totals match no committed state of the database: reconciliation finds orders
+      counted twice, missing orders and order amounts from changes that were later rolled back.
+      Click the line that contains the defect.
+    hint: Which part of the query changes how the read interacts with concurrent changes to the table?
+    answer: "Line 8, the table hint `WITH (NOLOCK)` on the scanned table."
+    explanation: |
+      `NOLOCK` is the same as `READUNCOMMITTED` for that table: the query takes no shared locks and does not wait
+      for the exclusive locks of writers. The first problem is the dirty read: the sum includes values of
+      transactions that are not committed yet and may roll back.
+
+      The second problem is less obvious. Without locks the engine may read pages in the order they are allocated
+      in the file rather than in key order. A `NEWID()` key inserts rows at random places of the index and often
+      causes page splits: half of the rows move to a new page. If that page lies behind the current scan position,
+      those rows are never read; if it lies ahead, rows already read are met a second time. The table hints
+      documentation warns explicitly that dirty reads can make users see records twice or not at all. The other
+      lines of the query are correct: the half-open date range and the grouping cause nothing of the kind.
+
+      The fix is to remove `NOLOCK`. If the hint was added so that the report is not blocked by writers, turn on
+      `READ_COMMITTED_SNAPSHOT` for the database or run the report under `SNAPSHOT` isolation instead: the read
+      takes no shared locks but sees a consistent snapshot of committed data only, as of the start of the
+      statement (of the transaction for `SNAPSHOT`), with no missing or repeated rows.
+    linkTitles:
+      - "Table hints (Transact-SQL)"
+      - "SET TRANSACTION ISOLATION LEVEL (Transact-SQL)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  noRunReason: The snippet is a T-SQL query that needs SQL Server with concurrent writing sessions, while the sandbox runs only C# code.

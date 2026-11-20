@@ -1,0 +1,162 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNZJP48SGFFAPS4TPN
+slug: snapshot-isolation-update-conflict-write-skew
+stack: dotnet
+topic: databases
+level: senior
+type: open
+grading: self
+tags: [sql-server, isolation-levels, snapshot-isolation, rcsi, row-versioning, write-skew]
+code:
+  language: sql
+  harness: none
+  source: |
+    -- Invariant: at least one doctor stays on call for every shift
+    SET TRANSACTION ISOLATION LEVEL SNAPSHOT;
+    BEGIN TRANSACTION;
+
+    IF (SELECT COUNT(*) FROM dbo.OnCall
+        WHERE ShiftId = @shiftId AND IsOnCall = 1) >= 2
+    BEGIN
+        UPDATE dbo.OnCall
+        SET IsOnCall = 0
+        WHERE ShiftId = @shiftId AND DoctorId = @doctorId;
+    END;
+
+    COMMIT TRANSACTION;
+links:
+  - url: https://learn.microsoft.com/en-us/sql/relational-databases/sql-server-transaction-locking-and-row-versioning-guide
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/sql/t-sql/statements/set-transaction-isolation-level-transact-sql
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Чем уровень SNAPSHOT в SQL Server отличается от READ_COMMITTED_SNAPSHOT для пишущих транзакций и какую аномалию он всё ещё допускает?
+    prompt: |
+      Оба режима в SQL Server основаны на версиях строк: и `READ_COMMITTED_SNAPSHOT` (RCSI), и уровень
+      изоляции `SNAPSHOT`. Чем они отличаются для читающих и особенно для пишущих транзакций? Что произойдёт,
+      если транзакцию из примера одновременно выполнят две сессии для двух разных врачей одной смены, когда
+      на дежурстве ровно двое, и как защитить такой инвариант?
+    hint: "Две транзакции прочитали одни и те же данные, а затем каждая меняет свою строку. Что именно сравнивает `SNAPSHOT`, когда каждая из них пишет?"
+    answer: |
+      - **RCSI.** Это параметр базы данных, который меняет поведение обычного `READ COMMITTED`: каждая
+        инструкция читает снимок данных на момент своего начала, без разделяемых блокировок. Пишущие
+        инструкции работают как раньше: `UPDATE` и `DELETE` ищут строки с блокировками обновления, берут
+        монопольные блокировки, при занятой строке ждут и затем работают с последней зафиксированной версией.
+        Конфликтов обновления нет, но разные инструкции одной транзакции видят разные снимки, поэтому схема
+        "прочитать в одной инструкции, записать в другой" может потерять чужое обновление.
+      - **SNAPSHOT.** Требует `ALLOW_SNAPSHOT_ISOLATION ON` у базы и явного
+        `SET TRANSACTION ISOLATION LEVEL SNAPSHOT` в сессии. Все чтения транзакции видят один
+        согласованный снимок на момент её начала (строго говоря, на момент первого обращения к данным после
+        `BEGIN TRANSACTION`). Запись по-прежнему берёт монопольные блокировки, и писатели блокируют
+        писателей. Если транзакция пытается изменить строку, которую другая транзакция изменила и
+        зафиксировала после начала снимка, SQL Server прерывает её с ошибкой **3960** (конфликт обновления) и
+        откатывает. Если другая транзакция ещё не завершена, наша ждёт её исхода. Так потерянное обновление
+        обнаруживается, но приложение должно повторить всю транзакцию целиком (в .NET это `SqlException` с
+        `Number == 3960`).
+      - **Чего SNAPSHOT не ловит - перекоса записи (write skew).** Конфликт проверяется только по
+        изменяемым строкам. В примере обе сессии в своих снимках видят двух дежурных, каждая снимает с
+        дежурства своего врача, то есть меняет другую строку. Конфликта нет, обе транзакции фиксируются, и
+        на смене не остаётся никого. SNAPSHOT не равен `SERIALIZABLE`.
+      - **Как защитить инвариант через несколько строк.**
+        - Выполнять критическую транзакцию не под SNAPSHOT: под `SERIALIZABLE` или под `READ COMMITTED`,
+          читая проверяемые строки с подсказками `UPDLOCK, HOLDLOCK`. Тогда вторая сессия либо ждёт на чтении
+          (блокировки обновления несовместимы между собой), либо становится жертвой взаимоблокировки и
+          повторяет попытку, а после повтора видит одного дежурного и ничего не меняет.
+        - Материализовать конфликт: обе транзакции обновляют общую строку (например, столбец версии строки
+          смены в `dbo.Shifts`), и тогда SNAPSHOT сам выдаст 3960 одной из них.
+        - Где возможно, сделать правило декларативным: ограничение, уникальный или фильтрованный индекс,
+          индексированное представление, при которых нарушение невозможно. Правило через несколько строк
+          вроде "хотя бы один дежурный на смене" так обычно не выразить, поэтому здесь остаются блокировки
+          или общая строка.
+    explanation: |
+      Оба режима убирают блокировки между читателями и писателями за счёт хранилища версий, но отличаются
+      областью снимка и правилом для записи. RCSI даёт согласованность на уровне инструкции и не меняет
+      семантику записи: инструкция изменения всегда работает с последними зафиксированными данными. Поэтому
+      RCSI не требует логики повторов для конфликтов обновления (ошибку 3960 он не выдаёт). Но семантика
+      чтения меняется: чтение больше не ждёт писателя, и код, который рассчитывал на это ожидание (таблицы-очереди,
+      схема "проверить, затем действовать"), нужно проверить перед включением.
+
+      SNAPSHOT даёт согласованность на уровне транзакции и, чтобы не записать изменение поверх данных, которых
+      транзакция не видела, применяет правило "побеждает первый изменивший": строку держит монопольной
+      блокировкой тот, кто изменил её первым, второй писатель ждёт его исхода и, если первый зафиксировался,
+      получает 3960. Если первый откатился, второй продолжает работу.
+
+      Это правило проверяет пересечение множеств записи, а не зависимость "я прочитал то, что ты изменил".
+      Перекос записи возникает именно там, где решение принято по прочитанным данным, а изменены разные
+      строки, поэтому снимок его не видит. Для сериализуемости нужно, чтобы конфликт стал видимым: блокировки
+      на прочитанном диапазоне, общая изменяемая строка или ограничение в схеме.
+
+      Цена SNAPSHOT: длинные транзакции дольше удерживают версии строк в хранилище версий, а каждая пишущая
+      транзакция должна быть готова к повтору. Поэтому SNAPSHOT удобен для многоинструкционных согласованных
+      чтений (отчётов), а для конкурентной записи нужен продуманный механизм повторов и защиты инвариантов.
+    linkTitles:
+      - "Руководство по блокировкам транзакций и управлению версиями строк"
+      - "SET TRANSACTION ISOLATION LEVEL (Transact-SQL)"
+  en:
+    title: How does SNAPSHOT isolation in SQL Server differ from READ_COMMITTED_SNAPSHOT for writers, and which anomaly does it still allow?
+    prompt: |
+      Both modes in SQL Server rely on row versioning: `READ_COMMITTED_SNAPSHOT` (RCSI) and the `SNAPSHOT`
+      isolation level. How do they differ for readers and especially for writing transactions? What happens if
+      two sessions run the transaction from the example at the same time for two different doctors of the same
+      shift, when exactly two are on call, and how do you protect such an invariant?
+    hint: "Two transactions read the same data, and then each one changes its own row. What exactly does `SNAPSHOT` compare when each of them writes?"
+    answer: |
+      - **RCSI.** A database option that changes the behavior of ordinary `READ COMMITTED`: each statement
+        reads a snapshot of the data as of its own start, without shared locks. Writing statements work as
+        before: `UPDATE` and `DELETE` find rows with update locks, take exclusive locks, wait if a row is locked
+        and then work with the latest committed version. There are no update conflicts, but different
+        statements of one transaction see different snapshots, so a "read in one statement, write in another"
+        pattern can lose someone else's update.
+      - **SNAPSHOT.** Requires `ALLOW_SNAPSHOT_ISOLATION ON` on the database and an explicit
+        `SET TRANSACTION ISOLATION LEVEL SNAPSHOT` in the session. All reads of the transaction see one
+        consistent snapshot as of its start (strictly, as of the first data access after `BEGIN TRANSACTION`).
+        Writes still take exclusive locks, and writers still block writers. If the transaction tries to modify
+        a row that another transaction modified and committed after the snapshot started, SQL Server aborts it
+        with error **3960** (update conflict) and rolls it back. If the other transaction is still active, ours
+        waits for its outcome. Lost updates are detected this way, but the application must retry the whole
+        transaction (in .NET this is a `SqlException` with `Number == 3960`).
+      - **What SNAPSHOT does not catch: write skew.** Conflicts are checked only on the modified rows. In the
+        example both sessions see two doctors on call in their snapshots, and each takes its own doctor off
+        call, so each modifies a different row. There is no conflict, both transactions commit, and nobody is
+        left on the shift. SNAPSHOT is not `SERIALIZABLE`.
+      - **How to protect an invariant across rows.**
+        - Run the critical transaction outside SNAPSHOT: under `SERIALIZABLE`, or under `READ COMMITTED`
+          reading the checked rows with the `UPDLOCK, HOLDLOCK` hints. Then the second session either waits on
+          the read (update locks are incompatible with each other) or becomes a deadlock victim and retries,
+          and after the retry it sees one doctor on call and changes nothing.
+        - Materialize the conflict: both transactions update a common row (for example a version column of
+          the shift row in `dbo.Shifts`), and SNAPSHOT itself raises 3960 for one of them.
+        - Where possible, make the rule declarative: a constraint, a unique or filtered index, an indexed view
+          that makes the violation impossible. A cross-row rule such as "at least one doctor on call per
+          shift" usually cannot be expressed this way, so here the lock or common-row approach remains.
+    explanation: |
+      Both modes remove blocking between readers and writers by using the version store, but they differ in
+      the scope of the snapshot and in the rule for writes. RCSI gives statement-level consistency and does not
+      change write semantics: a modifying statement always works on the latest committed data. That is why RCSI
+      does not require retry logic for update conflicts (it never raises 3960). It is not free of code risk,
+      though: reads no longer wait for writers, so code that relied on that waiting (queue tables,
+      "check, then act" logic) must be reviewed before it is enabled.
+
+      SNAPSHOT gives transaction-level consistency, and to avoid writing over data the transaction did not see,
+      it applies a "first updater wins" rule: the writer that modified the row first holds the exclusive lock,
+      the other writer waits for its outcome and, if the first one commits, gets 3960. If the first one rolls
+      back, the second continues.
+
+      This rule checks overlapping write sets, not the dependency "I read what you changed". Write skew
+      appears exactly where a decision is made from data that was read while different rows are modified, so
+      the snapshot does not see it. Serializability requires making the conflict visible: locks on the range
+      that was read, a common row that both transactions modify, or a constraint in the schema.
+
+      The cost of SNAPSHOT: long transactions keep row versions in the version store longer, and every writing
+      transaction must be ready to be retried. So SNAPSHOT suits consistent multi-statement reads (reports),
+      while concurrent writes need a deliberate retry mechanism and explicit protection of invariants.
+    linkTitles:
+      - "Transaction locking and row versioning guide"
+      - "SET TRANSACTION ISOLATION LEVEL (Transact-SQL)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  noRunReason: "The snippet is T-SQL and needs a SQL Server database with two concurrent sessions, while the sandbox runs only C#."

@@ -1,0 +1,136 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQZE3YSFJFQKQAPYEW
+slug: webhook-signature-fixed-time-comparison
+stack: dotnet
+topic: security
+level: senior
+type: single
+grading: auto
+tags: [hmac, webhooks, timing-attack, cryptography]
+code:
+  language: csharp
+  harness: statements
+  source: |
+    using System.Security.Cryptography;
+    using System.Text;
+
+    byte[] secret = Encoding.UTF8.GetBytes("shared-webhook-secret");
+    byte[] body = Encoding.UTF8.GetBytes("event=payment-succeeded");
+    string header = Convert.ToHexString(HMACSHA256.HashData(secret, body));
+    Console.WriteLine(IsValidSignature(body, header, secret));
+
+    static bool IsValidSignature(byte[] body, string signatureHex, byte[] secret)
+    {
+        byte[] expected = HMACSHA256.HashData(secret, body);
+        byte[] received = Convert.FromHexString(signatureHex);
+        return expected.SequenceEqual(received);
+    }
+options:
+  - id: a
+    correct: true
+  - id: b
+    correct: false
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.security.cryptography.cryptographicoperations.fixedtimeequals
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.security.cryptography.hmacsha256.hashdata
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему подпись вебхука сравнивают через CryptographicOperations.FixedTimeEquals?
+    prompt: |
+      API принимает вебхуки. Отправитель подписывает тело запроса HMAC-SHA256 общим секретом и передаёт
+      подпись в заголовке в шестнадцатеричном виде. API проверяет подпись функцией `IsValidSignature` из
+      примера кода; первые строки примера лишь вызывают её для корректной подписи и выводят `True`.
+
+      На ревью безопасности просят заменить строку `return expected.SequenceEqual(received);` на
+      `return CryptographicOperations.FixedTimeEquals(expected, received);`. Зачем?
+    hint: Зависит ли время работы сравнения от самих данных, и кто управляет одним из сравниваемых массивов?
+    options:
+      a: "Обычные сравнения (`SequenceEqual`, `==` для строк) прекращают работу на первом различии, поэтому время ответа зависит от длины совпавшего префикса подписи; измеряя много запросов, атакующий подбирает верную подпись для своего тела по частям. `FixedTimeEquals` тратит одинаковое время при любом содержимом буферов одной длины."
+      b: "`FixedTimeEquals` быстрее `SequenceEqual`, потому что векторизован, и это защищает конечную точку от отказа в обслуживании при большом потоке вебхуков."
+      c: "`SequenceEqual` для массивов сравнивает ссылки, а не содержимое, поэтому верная подпись была бы отклонена."
+      d: "`FixedTimeEquals` дополнительно проверяет ключ HMAC, поэтому подпись, вычисленная с чужим ключом, будет отклонена, даже если байты совпали."
+    optionExplanations:
+      b: "Цель `FixedTimeEquals` - не скорость, а одинаковое время: метод намеренно не выходит досрочно и в среднем работает не быстрее обычного сравнения. К защите от отказа в обслуживании он отношения не имеет."
+      c: "`SequenceEqual` сравнивает элементы последовательностей, а не ссылки на массивы, поэтому код функционально верен и правильную подпись принимает: пример выводит `True`. Проблема в том, сколько времени занимает отказ."
+      d: "`FixedTimeEquals` просто сравнивает два диапазона байтов и ничего не знает о ключах. Если байты подписи совпали с вычисленными, подпись и так верна."
+    answer: "Сравнение с ранним выходом выдаёт через время ответа, какая часть подписи совпала, и позволяет подобрать подпись по частям; `FixedTimeEquals` работает одинаковое время независимо от того, где байты различаются (вариант a)."
+    explanation: |
+      `Enumerable.SequenceEqual`, перегрузка для span `MemoryExtensions.SequenceEqual` и `==` для строк
+      оптимизированы на скорость: они возвращают `false`, как только находят первое различие. Поэтому запрос,
+      подпись которого совпадает с верной на более длинном префиксе, отклоняется чуть позже. Атакующий управляет
+      `received` и знает тело запроса: перебирая первый байт и усредняя время ответа по множеству запросов, он
+      находит значение, при котором сравнение идёт дальше, затем следующий байт и так далее. Для HMAC-SHA256 это
+      32 байта по 256 вариантов вместо перебора 2^256, а результат - верная подпись для произвольного тела без
+      знания секрета. Разница измеряется наносекундами, и шум сети велик, но шум снимается статистикой, поэтому
+      такую утечку считают реальной уязвимостью.
+
+      В .NET 10 сравнение массивов байтов и строк векторизовано: данные сравниваются блоками размером с векторный
+      регистр, и выход происходит после первого отличающегося блока. Поэтому утечка грубее побайтной и зависит от
+      процессора. Но эти методы не обещают ничего о времени работы, их реализация меняется от версии к версии, и
+      время всё равно зависит от данных. Полагаться на такие детали в защите нельзя.
+
+      `CryptographicOperations.FixedTimeEquals(ReadOnlySpan<byte>, ReadOnlySpan<byte>)` даёт гарантию: время
+      зависит только от длины последовательностей, а не от их значений. Досрочно метод возвращает `false` лишь
+      при разной длине буферов, и это безопасно: длина подписи HMAC-SHA256 (32 байта) не секрет. Сравнивать
+      стоит именно байты, а не строки в hex или Base64, а заголовок, который не удаётся декодировать, считать
+      неверной подписью.
+    linkTitles:
+      - "Метод CryptographicOperations.FixedTimeEquals"
+      - "Метод HMACSHA256.HashData"
+  en:
+    title: Why compare a webhook signature with CryptographicOperations.FixedTimeEquals?
+    prompt: |
+      An API receives webhooks. The sender signs the request body with HMAC-SHA256 using a shared secret and
+      sends the signature in a header as hex. The API checks the signature with the `IsValidSignature` function
+      in the code sample; the first lines of the sample only call it for a correct signature and print `True`.
+
+      A security review asks to replace the line `return expected.SequenceEqual(received);` with
+      `return CryptographicOperations.FixedTimeEquals(expected, received);`. Why?
+    hint: Does the time the comparison takes depend on the data itself, and who controls one of the compared arrays?
+    options:
+      a: "Ordinary comparisons (`SequenceEqual`, string `==`) stop at the first difference, so the response time depends on the length of the matching prefix of the signature; by measuring many requests an attacker finds a valid signature for their own body piece by piece. `FixedTimeEquals` takes the same time for any contents of equal-length buffers."
+      b: "`FixedTimeEquals` is faster than `SequenceEqual` because it is vectorized, and this protects the endpoint from denial of service under a heavy stream of webhooks."
+      c: "`SequenceEqual` on arrays compares references, not contents, so a correct signature would be rejected."
+      d: "`FixedTimeEquals` also checks the HMAC key, so a signature computed with someone else's key is rejected even if the bytes match."
+    optionExplanations:
+      b: "The goal of `FixedTimeEquals` is constant time, not speed: it deliberately does not exit early and on average is no faster than an ordinary comparison. It has nothing to do with denial-of-service protection."
+      c: "`SequenceEqual` compares the elements of the sequences, not the array references, so the code is functionally correct and accepts the right signature: the sample prints `True`. The problem is how long a rejection takes."
+      d: "`FixedTimeEquals` only compares two byte spans and knows nothing about keys. If the signature bytes match the computed ones, the signature is valid anyway."
+    answer: "An early-exit comparison reveals through the response time how much of the signature matched, which lets an attacker recover the signature piece by piece; `FixedTimeEquals` takes the same time wherever the bytes differ (option a)."
+    explanation: |
+      `Enumerable.SequenceEqual`, the span overload `MemoryExtensions.SequenceEqual` and string `==` are
+      optimized for speed: they return `false` as soon as they find the first difference. So a request whose
+      signature shares a longer prefix with the correct one is rejected slightly later. The attacker controls
+      `received` and knows the body: by varying the first byte and averaging the response time over many
+      requests, they find the value at which the comparison goes further, then the next byte, and so on. For
+      HMAC-SHA256 that is 32 bytes of 256 candidates each instead of searching 2^256 values, and the result is a
+      valid signature for an arbitrary body without knowing the secret. The difference is measured in nanoseconds
+      and network noise is large, but noise is removed statistically, so this leak is treated as a real
+      vulnerability.
+
+      In .NET 10, comparing byte arrays and strings is vectorized: the data is compared in blocks the size of a
+      vector register, and the method exits after the first differing block. So the leak is coarser than per byte
+      and depends on the processor. But these methods promise nothing about their running time, their
+      implementation changes between versions, and the time still depends on the data. A security control must
+      not rely on such details.
+
+      `CryptographicOperations.FixedTimeEquals(ReadOnlySpan<byte>, ReadOnlySpan<byte>)` gives a guarantee: the
+      time depends only on the length of the sequences, not on their values. It returns `false` early only when
+      the buffer lengths differ, which is safe: the length of an HMAC-SHA256 signature (32 bytes) is not a secret.
+      Compare the bytes, not hex or Base64 strings, and treat a header that cannot be decoded as an invalid
+      signature.
+    linkTitles:
+      - "CryptographicOperations.FixedTimeEquals method"
+      - "HMACSHA256.HashData method"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

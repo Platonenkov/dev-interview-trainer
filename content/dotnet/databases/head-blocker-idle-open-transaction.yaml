@@ -1,0 +1,169 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RNQSX91Z87RZY20P0N
+slug: head-blocker-idle-open-transaction
+stack: dotnet
+topic: databases
+level: senior
+type: situation
+grading: self
+tags: [sql-server, blocking, locks, transactions, dmv]
+links:
+  - url: https://learn.microsoft.com/en-us/troubleshoot/sql/database-engine/performance/understand-resolve-blocking
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/sql/relational-databases/system-dynamic-management-objects/sys-dm-exec-requests-transact-sql
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/sql/database-engine/configure-windows/blocked-process-threshold-server-configuration-option
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: "Запросы API волнами падают по тайм-ауту, а во главе цепочки блокировок спящая сессия с открытой транзакцией: что делать?"
+    prompt: |
+      Несколько раз в день запросы API к SQL Server начинают массово завершаться по тайм-ауту, через несколько
+      минут всё восстанавливается само, а потом повторяется. Во время очередной волны вы смотрите цепочку
+      блокировок: десятки сессий ждут друг друга, а в её начале стоит сессия одного из сервисов, которая находится
+      в состоянии `sleeping`, не выполняет ни одного запроса, но держит открытую транзакцию.
+
+      Как вы проведёте диагностику, что сделаете прямо сейчас и что исправите, чтобы волны прекратились?
+    hint: Если сессия ничего не выполняет, кто должен завершить её транзакцию, и что происходит с её блокировками, пока этого не случилось?
+    answer: |
+      1. **Сначала сохранить улики, потом снимать блокировку.**
+         - По `sys.dm_exec_requests` пройти по цепочке: у заблокированных запросов заполнены `blocking_session_id`,
+           `wait_type` вида `LCK_M_*` и `wait_resource`. У головной сессии строки в `sys.dm_exec_requests` нет:
+           она не выполняет запрос.
+         - Для головной сессии записать из `sys.dm_exec_sessions` поля `status`, `open_transaction_count`,
+           `host_name`, `program_name`, `login_name`, `last_request_end_time`; из `sys.dm_tran_session_transactions`
+           и `sys.dm_tran_active_transactions` - время начала транзакции; из `sys.dm_exec_input_buffer` - последний
+           оператор; из `sys.dm_tran_locks` - какие ресурсы она держит.
+         - Только после этого, если нужно срочно вернуть сервис, выполнить `KILL` для головной сессии. Это
+           аварийная мера, а не исправление: её транзакция откатится (откат может занять заметное время), и
+           изменения, которые она успела сделать, пропадут.
+      2. **Понять, почему транзакция висит.** Разница между `last_request_end_time` и текущим временем показывает,
+         сколько транзакция открыта без работы. Её блокировки держатся до `COMMIT` или `ROLLBACK`, а сервер сам
+         транзакцию не завершит. Волны объясняются тем, что цепочка рассасывается, когда приложение наконец
+         завершает транзакцию или соединение закрывается, и снова собирается при следующем таком случае.
+         Типичные причины в приложении:
+         - пакет прервался по тайм-ауту команды или по ошибке, но транзакция осталась открытой, а код поймал
+           исключение и продолжил жить с тем же соединением без `ROLLBACK` (долгоживущее или статическое
+           соединение, `DbContext` с неправильным временем жизни, соединение, которое не освобождается);
+         - внутри транзакции идёт ожидание: HTTP-вызов другого сервиса, публикация в брокер, повтор с задержкой,
+           долгие вычисления между операторами или ожидание действия пользователя.
+      3. **Найти конкретный код.** `program_name` (задать `Application Name` в строке подключения каждого сервиса),
+         `host_name`, последний оператор и время начала транзакции сопоставить с логами и трассировкой сервиса.
+         Чтобы ловить волны без дежурства у консоли, включить параметр сервера `blocked process threshold` и сессию
+         Extended Events с событием `blocked_process_report`.
+      4. **Исправить в приложении.**
+         - Соединение и транзакция живут в `using` / `await using` на одну операцию; освобождение (`Dispose`)
+           транзакции без `Commit` выполняет откат. `DbContext` регистрируется как scoped, а не singleton.
+         - Внутри транзакции только работа с базой: данные готовятся до неё, внешние вызовы и публикации
+           выполняются после фиксации (например, через outbox).
+         - В процедурах и пакетах, которые сами открывают транзакцию, `SET XACT_ABORT ON`, чтобы и ошибка,
+           прервавшая пакет, и тайм-аут команды на клиенте откатывали транзакцию; в обработчике ошибок явный откат.
+      5. **Закрепить.** Оповещение на сессии в состоянии `sleeping` с `open_transaction_count > 0` дольше N секунд
+         и на события `blocked_process_report`, плюс тест сценария тайм-аута, который проверяет, что после ошибки
+         транзакция не остаётся открытой.
+
+      Чего не делать: задание, которое автоматически убивает сессии, как постоянное решение (тихо теряет данные и
+      прячет дефект); новые индексы (головная сессия ничего не выполняет, ускорять нечего); `NOLOCK` (грязные
+      чтения). `READ_COMMITTED_SNAPSHOT` освободит только читателей, пишущие сессии всё равно будут ждать.
+    explanation: |
+      Блокировки принадлежат транзакции, а не запросу. Когда пакет закончился или был прерван, а транзакция
+      осталась открытой, все её эксклюзивные блокировки продолжают действовать, хотя сессия «спит» и не тратит
+      ресурсы. Поэтому по метрикам сервера головную сессию не видно: у неё нет ни CPU, ни ожиданий, ни строки в
+      `sys.dm_exec_requests`. Её выдают состояние `sleeping` и ненулевое число открытых транзакций. В таблице
+      типичных сценариев статьи о блокировках это отдельный случай: такая блокировка сама не рассасывается,
+      сессию можно только завершить, а в Extended Events для неё может быть виден сигнал attention, то есть
+      тайм-аут или отмена запроса.
+
+      Тайм-аут команды на клиенте прерывает выполнение пакета, но сам по себе транзакцию не откатывает: завершить
+      её - обязанность приложения. Если код после исключения не делает откат и продолжает использовать то же
+      соединение, транзакция живёт до тех пор, пока соединение не закроют или не переиспользуют. Ожидание внешнего
+      сервиса внутри транзакции даёт ту же картину: все, кому нужны те же строки, ждут чужой сервис.
+
+      Отсюда и выбор исправления. `KILL` лечит симптом одной волны. Индексы и уровни изоляции меняют то, как
+      выполняются запросы, а проблема в том, что транзакция вообще не завершается. Причина в границах транзакции
+      и обработке ошибок в коде, поэтому и исправление там: короткая транзакция, гарантированный откат при любой
+      ошибке и никаких ожиданий внутри.
+    linkTitles:
+      - "Общие сведения о проблемах с блокировкой в SQL Server и их устранение"
+      - "sys.dm_exec_requests (Transact-SQL)"
+      - "Параметр конфигурации сервера blocked process threshold"
+  en:
+    title: "API requests time out in waves and a sleeping session with an open transaction heads the blocking chain: what do you do?"
+    prompt: |
+      Several times a day API requests to SQL Server start failing with timeouts en masse, after a few minutes
+      everything recovers by itself, and then it happens again. During one wave you look at the blocking chain:
+      dozens of sessions wait on each other, and at its head is a session of one of the services that is in the
+      `sleeping` state, runs no request, but holds an open transaction.
+
+      How do you diagnose it, what do you do right now, and what do you fix so that the waves stop?
+    hint: If a session is not running anything, who has to end its transaction, and what happens to its locks until that happens?
+    answer: |
+      1. **Capture the evidence first, then release the blocking.**
+         - Walk the chain in `sys.dm_exec_requests`: blocked requests have `blocking_session_id`, a `wait_type` like
+           `LCK_M_*` and a `wait_resource`. The head session has no row in `sys.dm_exec_requests` because it is
+           not running a request.
+         - For the head session record `status`, `open_transaction_count`, `host_name`, `program_name`,
+           `login_name` and `last_request_end_time` from `sys.dm_exec_sessions`; the transaction start time from
+           `sys.dm_tran_session_transactions` and `sys.dm_tran_active_transactions`; the last statement from
+           `sys.dm_exec_input_buffer`; the resources it holds from `sys.dm_tran_locks`.
+         - Only then, if the service must be restored urgently, run `KILL` on the head session. This is an
+           emergency measure, not a fix: its transaction is rolled back (the rollback can take noticeable time),
+           and the changes it made are lost.
+      2. **Understand why the transaction hangs.** The gap between `last_request_end_time` and now shows how long
+         the transaction has been open with no work. Its locks are held until `COMMIT` or `ROLLBACK`, and the server
+         will not end the transaction on its own. The waves happen because the chain clears when the application
+         finally ends the transaction or the connection is closed, and builds up again the next time. Typical causes
+         in the application:
+         - a batch was aborted by a command timeout or an error, but the transaction stayed open, and the code caught
+           the exception and kept the same connection without `ROLLBACK` (a long-lived or static connection, a
+           `DbContext` with the wrong lifetime, a connection that is never released);
+         - there is a wait inside the transaction: an HTTP call to another service, a publish to a broker, a retry
+           with a delay, long computation between statements, or waiting for a user action.
+      3. **Find the exact code.** Match `program_name` (set `Application Name` in each service's connection
+         string), `host_name`, the last statement and the transaction start time against the service logs and
+         traces. To catch the waves without watching the console, set the `blocked process threshold` server option
+         and an Extended Events session with the `blocked_process_report` event.
+      4. **Fix it in the application.**
+         - The connection and the transaction live in `using` / `await using` for one operation; disposing
+           (`Dispose`) a transaction without `Commit` rolls it back. `DbContext` is registered as scoped, not
+           singleton.
+         - Inside the transaction there is only database work: data is prepared before it, and external calls and
+           publishes run after the commit (for example through an outbox).
+         - Procedures and batches that open a transaction themselves use `SET XACT_ABORT ON`, so that both an error
+           that aborts the batch and a client command timeout roll the transaction back; the error handler rolls
+           back explicitly.
+      5. **Lock it in.** An alert on `sleeping` sessions with `open_transaction_count > 0` for longer than N seconds
+         and on `blocked_process_report` events, plus a test of the timeout scenario that checks no transaction stays
+         open after the error.
+
+      What not to do: a job that kills sessions automatically as a permanent fix (it silently loses data and hides
+      the defect); new indexes (the head session runs nothing, there is nothing to speed up); `NOLOCK` (dirty
+      reads). `READ_COMMITTED_SNAPSHOT` frees only the readers, writing sessions still wait.
+    explanation: |
+      Locks belong to the transaction, not to the query. When a batch has finished or been aborted but the
+      transaction is still open, all of its exclusive locks stay in force although the session is "sleeping" and
+      uses no resources. That is why server metrics do not reveal the head session: it has no CPU, no waits and no
+      row in `sys.dm_exec_requests`. What gives it away is the `sleeping` state with a non-zero open transaction
+      count. The table of common scenarios in the blocking article lists this as a separate case: the blocking
+      does not resolve on its own, the session can only be killed, and Extended Events may show an attention
+      signal for it, meaning a query timeout or cancel.
+
+      A command timeout on the client aborts the batch, but does not by itself roll back the transaction: ending it
+      is the application's job. If the code does not roll back after the exception and keeps using the same
+      connection, the transaction lives until the connection is closed or reused. Waiting for an external service
+      inside a transaction gives the same picture: everyone who needs the same rows waits for someone else's service.
+
+      This drives the choice of fix. `KILL` treats the symptom of one wave. Indexes and isolation levels change how
+      queries run, while the problem is that the transaction never ends. The cause is in the transaction boundaries
+      and error handling in the code, so the fix belongs there: a short transaction, a guaranteed rollback on any
+      error, and no waits inside.
+    linkTitles:
+      - "Understand and resolve SQL Server blocking problems"
+      - "sys.dm_exec_requests (Transact-SQL)"
+      - "blocked process threshold server configuration option"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

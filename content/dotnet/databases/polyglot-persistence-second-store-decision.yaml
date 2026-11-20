@@ -1,0 +1,152 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RN90KK8C2ECPWF9YHG
+slug: polyglot-persistence-second-store-decision
+stack: dotnet
+topic: databases
+level: architect
+type: open
+grading: self
+tags: [polyglot-persistence, nosql, search, data-synchronization, architecture]
+links:
+  - url: https://learn.microsoft.com/en-us/azure/architecture/guide/technology-choices/data-store-overview
+    lang: en
+    kind: docs
+  - url: https://martinfowler.com/bliki/PolyglotPersistence.html
+    lang: en
+    kind: article
+locales:
+  ru:
+    title: Когда оправдано добавлять второе хранилище данных рядом с реляционной базой и во что оно обходится со временем?
+    prompt: |
+      Основные данные системы живут в реляционной базе (SQL Server или PostgreSQL). Команды регулярно предлагают
+      поставить что-то рядом: Elasticsearch или Azure AI Search для поиска по товарам, Redis для горячих данных,
+      документное хранилище для моделей чтения. Когда добавление второго хранилища оправдано, как вы принимаете
+      это решение и во что каждое дополнительное хранилище обходится организации на горизонте нескольких лет?
+    hint: |
+      Задайте два вопроса: какой конкретный запрос основная база не может обслужить с нужной стоимостью и что
+      происходит с данными в новом хранилище, когда основная база меняется, падает или восстанавливается из резервной копии.
+    answer: |
+      1. **Основание - измеренный шаблон доступа.** Второе хранилище оправдано, только если конкретный важный
+         шаблон доступа нельзя обслужить основной базой с нужной задержкой, пропускной способностью или
+         стоимостью, и это измерено на реалистичных данных, а не предположено. Типичные случаи: полнотекстовый
+         поиск с ранжированием по релевантности, устойчивостью к опечаткам и фасетами по миллионам документов;
+         очень частые чтения по ключу с задержкой меньше миллисекунды (сессии, ограничение частоты запросов,
+         горячие позиции каталога); временные ряды и телеметрия с большим потоком записи; крупные двоичные
+         файлы, которым место в объектном хранилище.
+      2. **Сначала исчерпать возможности основной базы.** Индексы и переписанные запросы, встроенный
+         полнотекстовый поиск, реплики для чтения, индексированные или материализованные представления,
+         JSON-столбцы, кэш в памяти процесса. Часто они закрывают потребность за малую долю долгосрочной цены.
+      3. **Во что обходится каждое дополнительное хранилище.**
+         - Путь синхронизации: данные надо доставить из источника в новое хранилище. Запись в оба места в одном
+           запросе (dual write) без общей транзакции рано или поздно приводит к расхождению, поэтому нужен outbox
+           или захват изменений (CDC), идемпотентные обработчики, повторные попытки и обработка сообщений,
+           которые не удалось применить.
+         - Задержка согласованности: производное хранилище согласовано в конечном счёте; продукт должен
+           переживать то, что поиск ещё не видит только что сохранённое изменение, а задержку надо измерять.
+         - Две схемы, которые надо развивать: каждое новое поле или изменение смысла попадает в отображение,
+           в определение индекса и в процедуру переиндексации.
+         - Эксплуатация: обновления и патчи, планирование мощностей, мониторинг, оповещения, инструкции для
+           дежурных, отдельные окружения для разработки и тестов.
+         - Резервное копирование и восстановление: после восстановления основной базы на момент времени
+           производное хранилище оказывается впереди или позади, и нужен способ привести его в соответствие.
+         - Безопасность и соответствие требованиям: ещё одна поверхность атаки, учётные данные и сетевые
+           правила, шифрование, аудит; удаление персональных данных должно доходить до каждой копии.
+         - Навыки и деньги: команда должна понимать технологию достаточно глубоко, чтобы настраивать её и
+           разбирать инциденты, иначе знание сосредоточено у одного человека; плюс лицензии или плата за
+           управляемый сервис.
+      4. **Правила, если хранилище всё же добавляют.**
+         - Для каждого вида данных есть ровно один источник истины, остальные хранилища - производные проекции.
+         - Любое производное хранилище можно перестроить с нуля из источника; полная перестройка
+           автоматизирована, отрепетирована, и её длительность известна.
+         - Синхронизация через outbox или CDC, с метриками задержки и регулярной сверкой с источником.
+         - Записи и бизнес-решения идут только в источник истины; инварианты не проверяются по производному
+           хранилищу.
+         - У хранилища есть владелец, архитектурное решение (ADR) с измеренной причиной и критерий выхода:
+           при каких условиях хранилище убирают.
+    explanation: |
+      Polyglot persistence, как описывает этот подход Мартин Фаулер, - использование разных технологий
+      хранения для разных видов данных. Выигрыш реален: поисковый движок, хранилище «ключ-значение» или
+      документное хранилище обслуживают свой шаблон доступа гораздо лучше универсальной реляционной базы. Но
+      цена не заканчивается запуском: каждое хранилище - ещё одна технология, которую надо изучить,
+      эксплуатировать, защищать и держать согласованной с остальными. Эти расходы растут со временем, а
+      исходная причина может со временем исчезнуть.
+
+      Главный архитектурный риск - не само хранилище, а вторая копия данных. Как только один факт живёт в двух
+      местах, системе нужен ответ на вопросы «какая копия верна» и «как копии сходятся». Если объявить один
+      источник истины, а остальные хранилища сделать перестраиваемыми проекциями, то расхождение, ошибка в
+      отображении схемы или испорченный индекс превращаются из инцидента без решения в плановую переиндексацию.
+      Это же делает решение обратимым: проекцию можно удалить без потери данных.
+
+      Поэтому решение начинается с измерений и заканчивается явной записью компромисса: выигрыш должен быть
+      измерен, а стоимость расписана на горизонте нескольких лет, а не только первого спринта.
+    linkTitles:
+      - "Обзор моделей хранилищ данных"
+      - "Polyglot Persistence (Мартин Фаулер)"
+  en:
+    title: When is adding a second data store next to the relational database justified, and what does it cost over the years?
+    prompt: |
+      The main data of a system lives in a relational database (SQL Server or PostgreSQL). Teams keep proposing
+      to put something next to it: Elasticsearch or Azure AI Search for product search, Redis for hot data, a
+      document store for read models. When is adding a second data store justified, how do you make the
+      decision, and what does each extra store cost the organization over several years?
+    hint: |
+      Ask two questions: which concrete query the primary database cannot serve at the required cost, and what
+      happens to the data in the new store when the primary changes, fails or is restored from a backup.
+    answer: |
+      1. **The justification is a measured access pattern.** A second store is justified only when a specific,
+         important access pattern cannot be served by the primary database at the required latency, throughput
+         or cost, and this has been measured on realistic data, not assumed. Typical cases: full-text search with
+         relevance ranking, typo tolerance and facets over millions of documents; very frequent key reads with
+         sub-millisecond latency (sessions, rate limits, hot catalog entries); time series and telemetry with a
+         high write volume; large binary files that belong in object storage.
+      2. **Exhaust the primary database first.** Indexes and rewritten queries, built-in full-text search, read
+         replicas, indexed or materialized views, JSON columns, an in-process cache. They often cover the need
+         for a fraction of the long-term cost.
+      3. **What each extra store costs.**
+         - A synchronization path: data has to get from the source to the new store. Writing to both in one
+           request (a dual write) without a shared transaction sooner or later leaves them diverged, so you need
+           an outbox or change data capture (CDC), idempotent handlers, retries and handling of messages that
+           could not be applied.
+         - Consistency lag: the derived store is eventually consistent; the product must tolerate search not yet
+           showing a change that was just saved, and the lag must be measured.
+         - Two schemas to evolve: every new field or change of meaning goes into the mapping, the index
+           definition and the reindex procedure.
+         - Operations: upgrades and patches, capacity planning, monitoring, alerts, on-call runbooks, separate
+           environments for development and tests.
+         - Backup and recovery: after the primary is restored to a point in time, the derived store is ahead or
+           behind, and you need a way to bring it back in line.
+         - Security and compliance: another attack surface, credentials and network rules, encryption, audit;
+           deleting personal data must reach every copy.
+         - Skills and money: the team must understand the technology well enough to tune it and investigate
+           incidents, otherwise the knowledge sits with one person; plus licences or managed service fees.
+      4. **Rules if the store is added anyway.**
+         - Each kind of data has exactly one source of truth; the other stores are derived projections.
+         - Every derived store can be rebuilt from scratch from the source; the full rebuild is automated,
+           rehearsed, and its duration is known.
+         - Synchronization goes through an outbox or CDC, with lag metrics and regular reconciliation against
+           the source.
+         - Writes and business decisions go only to the source of truth; invariants are not checked against a
+           derived store.
+         - The store has an owner, an architecture decision record (ADR) with the measured reason, and an exit
+           criterion: the conditions under which the store is removed.
+    explanation: |
+      Polyglot persistence, as Martin Fowler describes it, means using different storage technologies for
+      different kinds of data. The gain is real: a search engine, a key-value store or a document store each
+      serves its access pattern far better than a general-purpose relational database. But the cost does not
+      end at launch: every store is one more technology to learn, run, secure and keep consistent with the
+      others. These costs grow over time, while the original reason may fade away.
+
+      The main architectural risk is not the store itself but the second copy of the data. As soon as one fact
+      lives in two places, the system needs answers to "which copy is right" and "how do the copies converge".
+      If you declare one source of truth and make every other store a rebuildable projection, a divergence, a
+      bad schema mapping or a corrupted index turns from an incident without a fix into a routine reindex. It
+      also makes the decision reversible: a projection can be dropped without losing data.
+
+      That is why the decision starts with measurements and ends with an explicit record of the trade-off: the
+      gain must be measured, and the cost laid out over a horizon of several years, not just the first sprint.
+    linkTitles:
+      - "Overview of data store models"
+      - "Polyglot Persistence (Martin Fowler)"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

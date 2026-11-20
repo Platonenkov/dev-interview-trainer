@@ -1,0 +1,117 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPRGVX8ZFRG43CAYGE
+slug: grpc-l4-load-balancer-uneven-http2
+stack: dotnet
+topic: grpc-realtime
+level: senior
+type: open
+grading: self
+tags: [grpc, http2, load-balancing, scaling]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/grpc/loadbalancing
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/aspnet/core/grpc/performance
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему L4-балансировщик распределяет трафик gRPC по экземплярам неравномерно и какие есть альтернативы?
+    prompt: |
+      gRPC-сервис развёрнут на шести экземплярах за балансировщиком нагрузки, который работает на уровне
+      TCP-соединений (L4). Мониторинг показывает, что два экземпляра перегружены, остальные почти простаивают,
+      а экземпляры, добавленные при масштабировании, трафика не получают вовсе. Почему так происходит и как
+      распределять вызовы gRPC равномерно?
+    hint: Сколько TCP-соединений открывает один клиент gRPC и в какой момент L4-балансировщик принимает решение?
+    answer: |
+      - **Причина.** gRPC работает поверх HTTP/2: канал открывает долгоживущее соединение и мультиплексирует
+        в нём все вызовы как потоки HTTP/2. L4-балансировщик выбирает экземпляр один раз, при установке
+        TCP-соединения, и дальше все вызовы этого клиента идут на тот же экземпляр.
+      - **Следствия.** Нагрузка распределяется по клиентам, а не по вызовам: несколько активных клиентов
+        перегружают свои экземпляры. Новые экземпляры получают трафик, только когда клиенты переподключаются.
+        Так же ведёт себя обычный Service в Kubernetes: он балансирует на уровне соединений.
+      - **Альтернатива 1: L7-прокси.** Прокси, который понимает HTTP/2 и балансирует каждый вызов отдельно,
+        например Envoy, YARP или service mesh (Linkerd, Istio). Клиенты не меняются, но появляется лишний
+        сетевой переход и ещё один компонент, который надо масштабировать и наблюдать.
+      - **Альтернатива 2: балансировка на клиенте** в `GrpcChannel` (`Grpc.Net.Client` с версии 2.45.0).
+        Резолвер получает список адресов (например, адрес `dns:///...` и headless Service в Kubernetes),
+        а политика балансировки раскладывает вызовы по соединениям ко всем экземплярам. Политику нужно задать
+        явно: если в `ServiceConfig` балансировщик не указан, канал использует `pick_first` и отправляет все
+        вызовы в первое успешное соединение. Для распределения по кругу в `ServiceConfig.LoadBalancingConfigs`
+        добавляют `RoundRobinConfig` (`round_robin`). Лишнего перехода нет, но каждый клиент отвечает за
+        актуальность списка адресов, а клиентам на других языках нужна своя реализация.
+      - **Временная мера.** Ограничить время жизни соединения на клиенте
+        (`SocketsHttpHandler.PooledConnectionLifetime`), чтобы клиенты периодически переподключались и
+        L4-балансировщик перераспределял их. Между переподключениями перекос остаётся.
+    explanation: |
+      L4-балансировщик видит только TCP-соединения и не знает, что внутри одного соединения идут тысячи
+      независимых вызовов. Для HTTP/1.1 с пулом коротких соединений это почти не мешает, а gRPC специально
+      держит одно долгое соединение ради мультиплексирования, поэтому решение "на соединение" становится
+      решением "на всё время жизни клиента".
+
+      Выбор между L7-прокси и балансировкой на клиенте - это выбор, где хранить знание о серверах.
+      Прокси централизует его и подходит, когда клиентов много и они разнородные. Балансировка на клиенте
+      убирает переход и узкое место, но требует свежего списка адресов. По умолчанию DNS-резолвер обновляет
+      адреса, только когда соединение прерывается, поэтому экземпляры, добавленные при масштабировании,
+      клиент может долго не замечать. Чтобы находить их быстрее, резолверу задают периодическое обновление:
+      `new DnsResolverFactory(refreshInterval: TimeSpan.FromSeconds(30))`, зарегистрированный в DI как
+      `ResolverFactory`. Для других источников адресов можно написать собственный резолвер и политику.
+
+      Любой вариант балансирует вызовы, а не отдельные сообщения: долгий потоковый вызов остаётся на одном
+      экземпляре всё время своей жизни, поэтому сотни долгих стримов могут создавать перекос и при L7.
+      При балансировке на клиенте адрес со схемой `dns:///` не говорит, нужен ли TLS, поэтому транспортная
+      безопасность задаётся явно через `GrpcChannelOptions.Credentials`.
+    linkTitles:
+      - "Балансировка нагрузки на клиенте в gRPC"
+      - "Рекомендации по производительности gRPC"
+  en:
+    title: Why does an L4 load balancer spread gRPC traffic unevenly across instances, and what are the alternatives?
+    prompt: |
+      A gRPC service runs on six instances behind a load balancer that works at the TCP connection level (L4).
+      Monitoring shows two instances overloaded and the rest nearly idle, and instances added during scale-out
+      receive no traffic at all. Why does this happen, and how do you spread gRPC calls evenly?
+    hint: How many TCP connections does one gRPC client open, and at which moment does an L4 load balancer make its decision?
+    answer: |
+      - **Cause.** gRPC runs over HTTP/2: a channel opens a long-lived connection and multiplexes all calls in it
+        as HTTP/2 streams. An L4 balancer picks an instance once, when the TCP connection is established, and
+        from then on every call of that client goes to the same instance.
+      - **Consequences.** Load is spread per client, not per call: a few busy clients overload their instances.
+        New instances get traffic only when clients reconnect. A regular Kubernetes Service behaves the same
+        way: it balances at the connection level.
+      - **Alternative 1: an L7 proxy.** A proxy that understands HTTP/2 and balances each call separately, for
+        example Envoy, YARP or a service mesh (Linkerd, Istio). Clients do not change, but there is an extra
+        network hop and one more component to scale and observe.
+      - **Alternative 2: client-side load balancing** in `GrpcChannel` (`Grpc.Net.Client` 2.45.0 and later).
+        A resolver gets the list of addresses (for example a `dns:///...` address and a headless Service in
+        Kubernetes), and a load balancing policy spreads calls over connections to all instances. The policy
+        must be set explicitly: if the `ServiceConfig` has no load balancer, the channel uses `pick_first` and
+        sends every call to the first successful connection. For round-robin distribution add `RoundRobinConfig`
+        (`round_robin`) to `ServiceConfig.LoadBalancingConfigs`. There is no extra hop, but every client is
+        responsible for a fresh address list, and clients in other languages need their own implementation.
+      - **Stopgap.** Limit the connection lifetime on the client (`SocketsHttpHandler.PooledConnectionLifetime`)
+        so clients reconnect periodically and the L4 balancer redistributes them. Between reconnects the skew
+        remains.
+    explanation: |
+      An L4 balancer sees only TCP connections and does not know that thousands of independent calls run
+      inside one connection. With HTTP/1.1 and a pool of short connections this hardly matters, but gRPC keeps
+      one long connection on purpose for multiplexing, so a per-connection decision becomes a decision for the
+      whole lifetime of the client.
+
+      Choosing between an L7 proxy and client-side balancing is choosing where knowledge about the servers
+      lives. A proxy centralises it and suits many heterogeneous clients. Client-side balancing removes the
+      hop and the bottleneck but needs a fresh address list. By default the DNS resolver refreshes addresses
+      only when a connection is interrupted, so a client may not notice instances added during scale-out for
+      a long time. To discover them faster, give the resolver a periodic refresh:
+      `new DnsResolverFactory(refreshInterval: TimeSpan.FromSeconds(30))`, registered in DI as a
+      `ResolverFactory`. For other address sources you can write a custom resolver and policy.
+
+      Either option balances calls, not individual messages: a long streaming call stays on one instance for
+      its whole life, so hundreds of long streams can cause skew even with L7. With client-side balancing a
+      `dns:///` address does not say whether TLS is needed, so transport security is set explicitly through
+      `GrpcChannelOptions.Credentials`.
+    linkTitles:
+      - "gRPC client-side load balancing"
+      - "Performance best practices with gRPC"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

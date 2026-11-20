@@ -1,0 +1,92 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RN0M8X6XRZHJJQF7CR
+slug: include-theninclude-nested-navigation
+stack: dotnet
+topic: ef-core
+level: junior
+type: single
+grading: auto
+tags: [ef-core, eager-loading, include, theninclude]
+options:
+  - id: a
+    correct: false
+  - id: b
+    correct: true
+  - id: c
+    correct: false
+  - id: d
+    correct: false
+links:
+  - url: https://learn.microsoft.com/en-us/ef/core/querying/related-data/eager
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/ef/core/querying/single-split-queries
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Как загрузить заказы с позициями и товаром каждой позиции через Include и ThenInclude?
+    prompt: |
+      В модели EF Core у сущности `Order` есть коллекция `List<OrderItem> Items`, а у `OrderItem` - навигационное
+      свойство `Product Product`. У самого `Order` свойства `Product` нет. Какой запрос загрузит заказы вместе с
+      позициями и товаром каждой позиции одним запросом к базе?
+    hint: Как в цепочке жадной загрузки перейти от коллекции к навигационному свойству её элементов?
+    options:
+      a: "`db.Orders.Include(o => o.Items).Include(o => o.Product).ToList()`"
+      b: "`db.Orders.Include(o => o.Items).ThenInclude(i => i.Product).ToList()`"
+      c: "`db.Orders.ThenInclude(i => i.Product).Include(o => o.Items).ToList()`"
+      d: "`db.Orders.Include(o => o.Items).ToList()` - товары позиций загрузятся автоматически вместе с позициями."
+    optionExplanations:
+      a: "Каждый `Include` начинает путь заново от корневой сущности `Order`. У `Order` нет свойства `Product`, поэтому лямбда `o => o.Product` не скомпилируется. Второй `Include` не может дотянуться до свойства элементов коллекции."
+      c: "`ThenInclude` доступен только после `Include`: он продолжает уже начатый путь. У `DbSet<Order>` такого метода нет, поэтому код не скомпилируется."
+      d: "`Include` загружает только указанную навигацию. Позиции будут загружены, но товары этот запрос не загрузит: `Product` окажется заполнен, только если эти товары уже отслеживаются контекстом (исправление навигаций) или включена ленивая загрузка. Следующий уровень нужно запросить явно через `ThenInclude`."
+    answer: "`db.Orders.Include(o => o.Items).ThenInclude(i => i.Product).ToList()` - `Include` для коллекции позиций, затем `ThenInclude` для навигации `Product` её элементов."
+    explanation: |
+      `Include` задаёт навигацию корневой сущности, которую нужно загрузить жадно. Чтобы спуститься на уровень
+      ниже, к навигации элементов этой коллекции, вызывают `ThenInclude`: его лямбда получает уже тип элемента
+      (`OrderItem`), поэтому `i => i.Product` компилируется и указывает путь `Order -> Items -> Product`.
+
+      Повторный `Include` снова начинает путь от `Order`, поэтому для перехода на второй уровень он не подходит.
+      Его используют, когда нужно загрузить ещё одну навигацию самого заказа, например `Include(o => o.Customer)`.
+
+      По умолчанию EF Core (в том числе EF Core 10) переводит такой запрос в один SQL-запрос с соединениями
+      (`JOIN`). Если коллекций несколько и результат разрастается из-за декартова произведения, можно добавить
+      `AsSplitQuery()`, и тогда EF Core выполнит несколько запросов.
+    linkTitles:
+      - "Жадная загрузка связанных данных"
+      - "Единый и разделённый запросы"
+  en:
+    title: How do you load orders with their items and each item's product using Include and ThenInclude?
+    prompt: |
+      In an EF Core model the `Order` entity has a collection `List<OrderItem> Items`, and `OrderItem` has a
+      navigation property `Product Product`. `Order` itself has no `Product` property. Which query loads the
+      orders together with their items and each item's product in one database query?
+    hint: In an eager loading chain, how do you move from a collection to a navigation property of its elements?
+    options:
+      a: "`db.Orders.Include(o => o.Items).Include(o => o.Product).ToList()`"
+      b: "`db.Orders.Include(o => o.Items).ThenInclude(i => i.Product).ToList()`"
+      c: "`db.Orders.ThenInclude(i => i.Product).Include(o => o.Items).ToList()`"
+      d: "`db.Orders.Include(o => o.Items).ToList()` - the items' products are loaded automatically together with the items."
+    optionExplanations:
+      a: "Every `Include` starts the path again from the root entity `Order`. `Order` has no `Product` property, so the lambda `o => o.Product` does not compile. A second `Include` cannot reach a property of the collection's elements."
+      c: "`ThenInclude` is available only after `Include`: it continues a path that has already started. `DbSet<Order>` has no such method, so the code does not compile."
+      d: "`Include` loads only the navigation it names. The items are loaded, but this query does not load their products: `Product` is filled only if those products are already tracked by the context (navigation fixup) or lazy loading is enabled. The next level has to be requested explicitly with `ThenInclude`."
+    answer: "`db.Orders.Include(o => o.Items).ThenInclude(i => i.Product).ToList()` - `Include` for the items collection, then `ThenInclude` for the `Product` navigation of its elements."
+    explanation: |
+      `Include` names a navigation of the root entity to load eagerly. To go one level deeper, to a navigation of
+      the elements of that collection, you call `ThenInclude`: its lambda already receives the element type
+      (`OrderItem`), so `i => i.Product` compiles and describes the path `Order -> Items -> Product`.
+
+      Another `Include` starts the path from `Order` again, so it cannot be used to reach the second level. It is
+      used to load another navigation of the order itself, for example `Include(o => o.Customer)`.
+
+      By default EF Core (including EF Core 10) translates such a query into a single SQL query with joins
+      (`JOIN`). If there are several collections and the result grows because of a cartesian product, you can add
+      `AsSplitQuery()`, and EF Core then runs several queries.
+    linkTitles:
+      - "Eager loading of related data"
+      - "Single vs. split queries"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

@@ -1,0 +1,127 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RRZ7E9247KQ6YKH2K7
+slug: default-api-version-silently-moves-clients
+stack: dotnet
+topic: web-api
+level: senior
+type: situation
+grading: self
+tags: [api-versioning, breaking-changes, asp-versioning]
+links:
+  - url: https://github.com/dotnet/aspnet-api-versioning
+    lang: en
+    kind: docs
+  - url: https://dotnet.github.io/aspnet-api-versioning/aspnet-core/config/options.html
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: После выпуска v2 сломались клиенты, которые никогда не передавали версию API
+    prompt: |
+      API на ASP.NET Core версионируется библиотекой `Asp.Versioning`. Версия передаётся в параметре строки
+      запроса (`QueryStringApiVersionReader("api-version")`), включён `ReportApiVersions = true`. До выпуска v2
+      действовали `DefaultApiVersion = new ApiVersion(1, 0)` и `AssumeDefaultVersionWhenUnspecified = true`.
+      В релизе v2 команда добавила новые контроллеры с изменённым контрактом ответа и заодно поменяла
+      `DefaultApiVersion` на `new ApiVersion(2, 0)`, остальные настройки не трогали.
+
+      Сразу после развёртывания часть партнёров сообщила об ошибках десериализации, а на некоторых эндпоинтах -
+      об ответах с ошибкой о неподдерживаемой версии API. Клиенты, которые явно передают `api-version=1.0` или
+      `api-version=2.0`, работают нормально.
+      Что произошло и что вы будете менять - сейчас и в правилах команды?
+    hint: Какую версию сервер приписывает запросу, в котором версии нет вообще, и что изменилось для такого запроса после релиза?
+    answer: |
+      1. **Диагноз.** При `AssumeDefaultVersionWhenUnspecified = true` любой запрос без версии обрабатывается так,
+         будто клиент запросил `DefaultApiVersion`. Смена значения с 1.0 на 2.0 в момент развёртывания перевела
+         всех клиентов без версии на v2: они получили новый контракт ответа (ошибки десериализации), а там, где
+         у эндпоинта нет реализации v2, - ответ об ошибке неподдерживаемой версии. Подтвердить по логам: падающие
+         запросы не содержат `api-version`, а явные запросы v1 проходят.
+      2. **Немедленно.** Вернуть `DefaultApiVersion` на 1.0 отдельным быстрым релизом и проверить, что ошибки
+         ушли. Саму v2 не откатывать: клиенты, которые явно просят 2.0, продолжают работать.
+      3. **Правило для версии по умолчанию.** Пока v1 поддерживается, версия по умолчанию остаётся на самой старой
+         поддерживаемой версии. По той же причине для публичного API не подходит селектор
+         `CurrentImplementationApiVersionSelector`, который выбирает самую новую реализованную версию: он
+         переносит клиентов на новую версию с каждым релизом. Альтернатива - требовать версию явно
+         (`AssumeDefaultVersionWhenUnspecified = false`: запрос без версии получает ошибку клиента вместо чужого
+         контракта), но для API, у которого уже есть клиенты без версии, это тоже ломающее изменение: только для
+         новых API или после объявления.
+      4. **Найти клиентов без версии.** Метрика или поле в логах "версия указана явно или выведена по умолчанию"
+         с идентификатором клиента. Этим клиентам - прямое сообщение и руководство по переходу на явную версию.
+      5. **Плановый вывод v1.** Пометить v1 устаревшей (`[ApiVersion("1.0", Deprecated = true)]`, тогда
+         `ReportApiVersions` вернёт её в заголовке `api-deprecated-versions`), объявить дату отключения, а
+         переключение на обязательную версию или удаление v1 делать только когда трафик без версии и на v1 близок
+         к нулю.
+      6. **Закрепить.** Контрактные тесты, которые шлют запросы без версии и проверяют контракт v1. Любое
+         изменение опций версионирования (`DefaultApiVersion`, `AssumeDefaultVersionWhenUnspecified`, селектор
+         версии) на code review рассматривается как изменение публичного контракта.
+    explanation: |
+      Для клиента, который не передаёт версию, версия по умолчанию и есть его контракт, только неявный. Пока
+      значение не меняется, всё работает, и никто не замечает, что клиент вообще не указывает версию. Перенос
+      значения на 2.0 выглядит как безобидная правка конфигурации, но для таких клиентов это ровно то же самое,
+      что изменить контракт v1 на месте: они узнают о нём по ошибкам в production.
+
+      Отсюда два допустимых варианта: либо версия по умолчанию стоит на самой старой поддерживаемой версии и
+      сдвигается только вместе с её выводом из эксплуатации, либо версия обязательна и запрос без неё сразу
+      получает понятную ошибку. Опасна любая настройка, при которой выбор версии для запроса без версии меняется
+      сам по себе с релизом, - явное значение 2.0 или селектор "самая новая версия".
+
+      Сильный ответ сначала быстро возвращает старое поведение, а не заставляет партнёров срочно мигрировать,
+      затем находит клиентов без версии по данным и только после этого планирует переход.
+    linkTitles:
+      - "Репозиторий dotnet/aspnet-api-versioning"
+      - "Документация ASP.NET API Versioning: параметры версионирования API"
+  en:
+    title: After v2 shipped, clients that never sent an API version started failing
+    prompt: |
+      An ASP.NET Core API is versioned with the `Asp.Versioning` library. The version is passed in a query string
+      parameter (`QueryStringApiVersionReader("api-version")`), and `ReportApiVersions = true` is set. Before the
+      v2 release the settings were `DefaultApiVersion = new ApiVersion(1, 0)` and
+      `AssumeDefaultVersionWhenUnspecified = true`. In the v2 release the team added new controllers with a changed
+      response contract and also changed `DefaultApiVersion` to `new ApiVersion(2, 0)`, leaving the other settings
+      as they were.
+
+      Right after the deployment some partners reported deserialization errors, and on some endpoints error
+      responses about an unsupported API version. Clients that explicitly send `api-version=1.0` or
+      `api-version=2.0` work fine.
+      What happened, and what do you change - now and in the team's rules?
+    hint: Which version does the server assign to a request that carries no version at all, and what changed for such a request after the release?
+    answer: |
+      1. **Diagnosis.** With `AssumeDefaultVersionWhenUnspecified = true` every request without a version is
+         handled as if the client had asked for `DefaultApiVersion`. Changing the value from 1.0 to 2.0 moved every
+         unversioned client to v2 at the moment of deployment: they got the new response contract (deserialization
+         errors), and where an endpoint has no v2 implementation, an unsupported version error response. Confirm
+         it in the logs: the failing requests carry no `api-version`, while explicit v1 requests succeed.
+      2. **Right now.** Set `DefaultApiVersion` back to 1.0 in a separate quick release and check that the errors are
+         gone. Do not roll back v2 itself: clients that explicitly ask for 2.0 keep working.
+      3. **A rule for the default version.** While v1 is supported, the default stays on the oldest supported
+         version. For the same reason `CurrentImplementationApiVersionSelector`, which picks the newest implemented
+         version, does not suit a public API: it moves clients to a new version with every release. The alternative
+         is to require the version explicitly (`AssumeDefaultVersionWhenUnspecified = false`: a request without a
+         version gets a client error instead of someone else's contract), but for an API that already has
+         unversioned clients this is a breaking change too: only for new APIs or after an announcement.
+      4. **Find the unversioned clients.** A metric or log field "version explicit or assumed by default" with the
+         client identifier. Those clients get a direct message and a guide for moving to an explicit version.
+      5. **Planned retirement of v1.** Mark v1 deprecated (`[ApiVersion("1.0", Deprecated = true)]`, then
+         `ReportApiVersions` lists it in the `api-deprecated-versions` header), announce a shutdown date, and switch
+         to a required version or remove v1 only when traffic without a version and on v1 is close to zero.
+      6. **Lock it in.** Contract tests that send requests without a version and check the v1 contract. Any change
+         to the versioning options (`DefaultApiVersion`, `AssumeDefaultVersionWhenUnspecified`, the version selector)
+         is treated in code review as a change of the public contract.
+    explanation: |
+      For a client that does not send a version, the default version is its contract, only an implicit one. As long
+      as the value does not change, everything works and nobody notices that the client never specifies a version.
+      Moving the value to 2.0 looks like a harmless configuration edit, but for those clients it is exactly the same
+      as changing the v1 contract in place: they learn about it from errors in production.
+
+      Hence two acceptable options: either the default version sits on the oldest supported version and moves only
+      together with that version's retirement, or the version is required and a request without it gets a clear
+      error at once. Any setting where the version chosen for an unversioned request changes by itself with a
+      release is dangerous - an explicit value of 2.0 or a "newest version" selector.
+
+      A strong answer first restores the old behaviour quickly instead of forcing partners into an urgent
+      migration, then finds the unversioned clients from data, and only after that plans the transition.
+    linkTitles:
+      - "dotnet/aspnet-api-versioning repository"
+      - "ASP.NET API Versioning documentation: API versioning options"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

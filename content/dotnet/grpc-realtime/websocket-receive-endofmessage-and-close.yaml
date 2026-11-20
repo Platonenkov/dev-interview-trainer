@@ -1,0 +1,135 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RPMRR9TR9JPW6B1ARW
+slug: websocket-receive-endofmessage-and-close
+stack: dotnet
+topic: grpc-realtime
+level: senior
+type: open
+grading: self
+tags: [websockets, receive-loop, close-handshake, aspnet-core]
+links:
+  - url: https://learn.microsoft.com/en-us/aspnet/core/fundamentals/websockets
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.net.websockets.websocketreceiveresult
+    lang: en
+    kind: docs
+  - url: https://learn.microsoft.com/en-us/dotnet/api/system.net.websockets.websocket
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Что должен правильно обрабатывать цикл приёма WebSocket в ASP.NET Core - границы сообщений и закрытие?
+    prompt: |
+      Вы пишете WebSocket-эндпоинт на ASP.NET Core (.NET 10) без SignalR: `UseWebSockets`,
+      `AcceptWebSocketAsync()` и свой цикл с `ReceiveAsync`. Клиенты присылают JSON-сообщения.
+      Что этот цикл обязан правильно обрабатывать с точки зрения границ сообщений и закрытия соединения?
+      Какие ошибки здесь типичны?
+    hint: Всегда ли один вызов `ReceiveAsync` - это одно целое сообщение? И чего ждёт клиент после того, как отправил кадр закрытия?
+    answer: |
+      - **Сообщение не равно одному вызову `ReceiveAsync`.** Вызов возвращает часть данных: `Count` байт в буфере.
+        Отправитель может разбить сообщение на несколько кадров, а один вызов отдаёт не больше, чем помещается в
+        буфер. Данные нужно накапливать (например, в `MemoryStream` или `ArrayBufferWriter<byte>`), пока
+        `EndOfMessage` не станет `true`, и только потом декодировать UTF-8 и разбирать JSON. Декодировать каждый
+        кусок отдельно нельзя: многобайтовый символ может оказаться разрезан между вызовами.
+      - **Ограничить размер.** Накопление без предела позволяет клиенту исчерпать память сервера. При превышении
+        лимита соединение закрывают со статусом `WebSocketCloseStatus.MessageTooBig`.
+      - **Обработать сообщение `Close`.** Если `MessageType == WebSocketMessageType.Close` (или задан
+        `CloseStatus`), клиент начал закрытие. Цикл должен выйти и ответить своим кадром закрытия:
+        `CloseAsync(result.CloseStatus.Value, result.CloseStatusDescription, ct)` (или `CloseOutputAsync`). Без ответа
+        рукопожатие закрытия не завершается, и клиент видит обрыв соединения вместо штатного закрытия.
+      - **Закрытие по инициативе сервера.** `CloseOutputAsync` отправляет кадр закрытия и не ждёт ответа, поэтому
+        после него нужно дочитать входящие данные до `Close` клиента. `CloseAsync` отправляет кадр и сам ждёт ответный.
+      - **Разрыв без закрытия.** Если соединение оборвано, `ReceiveAsync` завершается исключением (обычно
+        `WebSocketException`); его надо перехватить и освободить ресурсы соединения. При тихой потере связи сервер
+        не получает никакого сигнала, и `ReceiveAsync` может ждать бесконечно. Это обнаруживают keep-alive
+        (`KeepAliveInterval` и `KeepAliveTimeout` в `WebSocketOptions`) или тайм-аут на уровне приложения.
+      - **Держать запрос живым.** Обработчик должен ожидать цикл до конца: как только middleware или эндпоинт
+        вернул управление, запрос завершается и сокет закрывается.
+      - **Одна операция каждого вида.** На одном `WebSocket` одновременно допустимы один `ReceiveAsync` и один
+        `SendAsync`, поэтому отправку из нескольких мест нужно сериализовать.
+    explanation: |
+      WebSocket передаёт сообщения, но `ReceiveAsync` не обязан вернуть сообщение целиком. Один вызов возвращает
+      не больше, чем помещается в переданный буфер, и не больше данных одного кадра, а сообщение может состоять из
+      нескольких кадров. Сколько байт записано, показывает `Count`, а получено ли сообщение полностью - только
+      `EndOfMessage`. Пример в документации ASP.NET Core тоже передаёт `receiveResult.EndOfMessage` в `SendAsync`,
+      а не считает каждый вызов отдельным сообщением. Код, который разбирает JSON после каждого вызова, работает
+      на коротких сообщениях и ломается на больших.
+
+      Закрытие в WebSocket - это рукопожатие: одна сторона отправляет кадр закрытия, другая отвечает своим.
+      `CloseAsync` и `CloseOutputAsync` в .NET реализуют именно это рукопожатие из спецификации протокола. Пример
+      в документации ASP.NET Core крутит цикл, пока `receiveResult.CloseStatus` не задан, а затем вызывает
+      `CloseAsync` с тем же статусом и описанием. Разница между методами важна, когда закрытие начинает сервер:
+      `CloseOutputAsync` только отправляет кадр, а дочитать ответ клиента остаётся циклу приёма.
+
+      Документация ASP.NET Core подчёркивает, что сервер не узнаёт автоматически о потере связи с клиентом.
+      Keep-alive timeout middleware прерывает соединение и выбрасывает исключение из `ReceiveAsync`, если клиент
+      не ответил на ping в отведённое время; по умолчанию этот тайм-аут отключён.
+
+      Перегрузка `ReceiveAsync` с `Memory<byte>` возвращает `ValueWebSocketReceiveResult` без `CloseStatus`;
+      тогда статус закрытия читают из свойства `WebSocket.CloseStatus`.
+    linkTitles:
+      - "Поддержка WebSockets в ASP.NET Core"
+      - "Класс WebSocketReceiveResult"
+      - "Класс WebSocket"
+  en:
+    title: What must a WebSocket receive loop in ASP.NET Core handle correctly - message boundaries and closing?
+    prompt: |
+      You write a WebSocket endpoint in ASP.NET Core (.NET 10) without SignalR: `UseWebSockets`,
+      `AcceptWebSocketAsync()` and your own loop with `ReceiveAsync`. Clients send JSON messages.
+      What must this loop handle correctly with regard to message boundaries and closing the connection?
+      Which mistakes are typical here?
+    hint: Is one `ReceiveAsync` call always one whole message? And what does a client wait for after it sends a close frame?
+    answer: |
+      - **A message is not one `ReceiveAsync` call.** A call returns part of the data: `Count` bytes in the buffer.
+        The sender may split a message into several frames, and one call returns no more than fits in the buffer.
+        The data must be accumulated (for example in a `MemoryStream` or an `ArrayBufferWriter<byte>`) until
+        `EndOfMessage` is `true`, and only then decoded as UTF-8 and parsed as JSON. Decoding each chunk separately
+        is wrong: a multi-byte character can be split between calls.
+      - **Limit the size.** Accumulating without a limit lets a client exhaust server memory. When the limit is
+        exceeded, the connection is closed with `WebSocketCloseStatus.MessageTooBig`.
+      - **Handle the `Close` message.** If `MessageType == WebSocketMessageType.Close` (or `CloseStatus` is set),
+        the client has started closing. The loop must exit and answer with its own close frame:
+        `CloseAsync(result.CloseStatus.Value, result.CloseStatusDescription, ct)` (or `CloseOutputAsync`). Without
+        the answer the close handshake does not complete, and the client sees a dropped connection instead of a
+        clean close.
+      - **Server-initiated close.** `CloseOutputAsync` sends the close frame and does not wait for an answer, so
+        afterwards the loop has to keep reading until the client's `Close` arrives. `CloseAsync` sends the frame and
+        waits for the answer itself.
+      - **A drop without a close.** If the connection is broken, `ReceiveAsync` fails with an exception (usually
+        `WebSocketException`); catch it and release the connection's resources. On a silent loss of connectivity
+        the server gets no signal at all, and `ReceiveAsync` can wait forever. Keep-alive (`KeepAliveInterval` and
+        `KeepAliveTimeout` in `WebSocketOptions`) or an application-level timeout detects this.
+      - **Keep the request alive.** The handler must await the loop to the end: as soon as the middleware or
+        endpoint returns, the request completes and the socket is closed.
+      - **One operation of each kind.** A single `WebSocket` allows one `ReceiveAsync` and one `SendAsync` at the
+        same time, so sends from several places must be serialized.
+    explanation: |
+      WebSocket carries messages, but `ReceiveAsync` does not have to return a whole message. One call returns no
+      more than fits in the given buffer and no more than the data of one frame, and a message may consist of
+      several frames. `Count` tells how many bytes were written, and only `EndOfMessage` tells whether the message
+      has been received completely. The sample in the ASP.NET Core documentation also passes
+      `receiveResult.EndOfMessage` on to `SendAsync` instead of treating every call as a separate message. Code
+      that parses JSON after every call works for short messages and breaks on large ones.
+
+      Closing a WebSocket is a handshake: one side sends a close frame, the other answers with its own.
+      `CloseAsync` and `CloseOutputAsync` in .NET implement exactly this handshake from the protocol
+      specification. The sample in the ASP.NET Core documentation loops until `receiveResult.CloseStatus` is set
+      and then calls `CloseAsync` with the same status and description. The difference between the two methods
+      matters when the server starts the close: `CloseOutputAsync` only sends the frame, and reading the client's
+      answer is left to the receive loop.
+
+      The ASP.NET Core documentation stresses that the server is not informed automatically when the client
+      loses connectivity. The middleware keep-alive timeout aborts the connection and throws from `ReceiveAsync`
+      when the client does not answer a ping in time; by default this timeout is disabled.
+
+      The `ReceiveAsync` overload that takes `Memory<byte>` returns a `ValueWebSocketReceiveResult` without
+      `CloseStatus`; then the close status is read from the `WebSocket.CloseStatus` property.
+    linkTitles:
+      - "WebSockets support in ASP.NET Core"
+      - "WebSocketReceiveResult class"
+      - "WebSocket class"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19
+  dotnetVersion: "10"

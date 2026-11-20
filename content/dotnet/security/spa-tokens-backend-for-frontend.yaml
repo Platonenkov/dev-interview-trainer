@@ -1,0 +1,143 @@
+# yaml-language-server: $schema=../../schema/question.schema.json
+id: 01M7SVY6RQ3C3T4YCMTH4S5QQE
+slug: spa-tokens-backend-for-frontend
+stack: dotnet
+topic: security
+level: senior
+type: open
+grading: self
+tags: [oauth, oidc, bff, xss, csrf, spa]
+links:
+  - url: https://datatracker.ietf.org/doc/html/draft-ietf-oauth-browser-based-apps
+    lang: en
+    kind: spec
+  - url: https://cheatsheetseries.owasp.org/cheatsheets/HTML5_Security_Cheat_Sheet.html
+    lang: en
+    kind: article
+  - url: https://learn.microsoft.com/en-us/aspnet/core/security/anti-request-forgery
+    lang: en
+    kind: docs
+locales:
+  ru:
+    title: Почему токены OAuth для SPA советуют держать в backend-for-frontend, а не в localStorage?
+    prompt: |
+      SPA на React входит через внешний сервер авторизации (authorization code flow с PKCE) и хранит access token
+      и refresh token в `localStorage`, а затем вызывает API на ASP.NET Core с заголовком `Authorization: Bearer`.
+      Аудит безопасности требует перейти на паттерн backend-for-frontend (BFF). Объясните, чем опасна текущая
+      схема, что меняет BFF и какие новые обязанности он приносит команде.
+    hint: Кто ещё, кроме кода вашего приложения, может выполнить JavaScript на этом origin, и что изменится в запросах к API, когда токены уйдут с клиента?
+    answer: |
+      - **Риск хранения в браузере.** `localStorage` доступен любому скрипту того же origin. Одна XSS-уязвимость
+        или скомпрометированная зависимость позволяет прочитать токены и отправить их злоумышленнику. Дальше он
+        пользуется ими со своей машины, а refresh token даёт доступ на дни, даже после закрытия вкладки. OWASP
+        прямо советует не хранить в `localStorage` идентификаторы сессий и другие чувствительные данные.
+      - **Хранение в памяти проблему не решает полностью.** SPA - публичный клиент без секрета. Вредоносный скрипт
+        на том же origin может сам запустить новый поток авторизации от имени приложения (например, в скрытом
+        iframe), опираясь на сессию пользователя на сервере авторизации, и получить свежие токены, где бы приложение
+        ни хранило свои.
+      - **Что делает BFF.** Серверный компонент (например, на ASP.NET Core) на том же сайте, что и SPA, работает как
+        конфиденциальный клиент: выполняет authorization code flow и аутентифицируется на сервере авторизации
+        секретом или `private_key_jwt`. Токены хранятся на сервере (в серверной сессии или в cookie, зашифрованной
+        Data Protection), BFF проксирует вызовы API, добавляя access token, и сам обновляет токены. Браузер получает
+        только cookie сессии с флагами `Secure` и `HttpOnly` (черновик IETF требует их как MUST) и `SameSite=Strict`
+        (SHOULD). Черновик также советует префикс `__Host-Http-`; широко поддерживаемый браузерами вариант - префикс
+        `__Host-`, который тоже делает cookie доступной только своему хосту.
+      - **Чего BFF не делает.** XSS по-прежнему может отправлять запросы через BFF от имени пользователя, пока
+        страница открыта. Но токены украсть нельзя, и атака заканчивается вместе с сессией в браузере. CSP и
+        кодирование вывода остаются обязательными.
+      - **Новые обязанности:**
+        1. **CSRF.** Браузер сам прикладывает cookie, поэтому нужны antiforgery-токены или обязательный
+           пользовательский заголовок (например, `X-CSRF: 1`), который вызывает предварительный CORS-запрос, плюс
+           строгая политика CORS. `SameSite` сам по себе недостаточен: он не различает поддомены одного сайта, а
+           при `Lax` вместо `Strict` браузер пропускает навигационные `GET`, поэтому `GET` не должен менять состояние.
+        2. **Сессии.** Общее хранилище сессий и общие ключи Data Protection для всех экземпляров, лимит размера
+           cookie, выход с удалением сессии, отзывом refresh token и завершением сессии у сервера авторизации.
+        3. **Эксплуатация.** BFF стоит на пути каждого вызова API: доступность, задержка, масштабирование, хранение
+           и ротация секрета клиента.
+        4. **Безопасность прокси.** Пересылать запросы только на разрешённые API, не превращаться в открытый прокси
+           и не передавать cookie браузера дальше.
+    explanation: |
+      Суть вопроса - где хранятся учётные данные, дающие доступ к API. В хранилище браузера токен имеет тот же
+      уровень доверия, что и любой скрипт на странице, а это включает чужой код из зависимостей и любую XSS. Токен,
+      который можно унести, превращает кратковременную уязвимость в долгий доступ с машины злоумышленника.
+
+      BFF переносит токены туда, куда скрипт дотянуться не может, и делает клиента конфиденциальным, поэтому
+      перехваченный или заново запрошенный код авторизации без учётных данных клиента бесполезен. Черновик IETF
+      «OAuth 2.0 for Browser-Based Applications» называет главным преимуществом BFF именно возможность быть
+      конфиденциальным клиентом. Он требует (MUST), чтобы BFF был конфиденциальным клиентом с authorization code
+      grant и ставил своим cookie флаги `Secure` и `HttpOnly`, а `SameSite=Strict` и префикс `__Host-Http-` относит
+      к SHOULD.
+
+      Цена - возврат к классической модели cookie-аутентификации со всеми её обязанностями. Главная из них -
+      защита от CSRF, которая для bearer-токена в заголовке не требовалась, потому что браузер не добавляет его сам.
+      Сильный ответ называет обе стороны: какую угрозу BFF убирает (кражу токенов), какую оставляет (действия через
+      сессию во время XSS) и какую добавляет (CSRF и серверное состояние).
+    linkTitles:
+      - "IETF draft: OAuth 2.0 for Browser-Based Applications"
+      - "OWASP: памятка по безопасности HTML5"
+      - "Защита от атак CSRF в ASP.NET Core"
+  en:
+    title: Why keep a SPA's OAuth tokens in a backend-for-frontend instead of localStorage?
+    prompt: |
+      A React SPA signs in through an external authorization server (authorization code flow with PKCE), keeps the
+      access token and the refresh token in `localStorage`, and calls an ASP.NET Core API with an
+      `Authorization: Bearer` header. A security review demands a move to the backend-for-frontend (BFF) pattern.
+      Explain what is dangerous in the current design, what a BFF changes, and which new obligations it brings to
+      the team.
+    hint: Who else besides your own code can run JavaScript on this origin, and what changes in the requests to the API once the tokens leave the client?
+    answer: |
+      - **The risk of browser storage.** `localStorage` is readable by any script on the same origin. One XSS flaw
+        or one compromised dependency is enough to read the tokens and send them to the attacker. The attacker then
+        uses them from their own machine, and the refresh token gives access for days, even after the tab is
+        closed. OWASP explicitly advises against storing session identifiers and other sensitive data in
+        `localStorage`.
+      - **Keeping tokens in memory only partly helps.** A SPA is a public client without a secret. A malicious
+        script on the same origin can start a new authorization flow on behalf of the app (for example in a hidden
+        iframe), relying on the user's session at the authorization server, and obtain fresh tokens wherever the
+        app keeps its own.
+      - **What a BFF does.** A server-side component (for example on ASP.NET Core) on the same site as the SPA acts
+        as a confidential client: it runs the authorization code flow and authenticates to the authorization server
+        with a secret or `private_key_jwt`. Tokens are kept on the server (in a server-side session or in a cookie
+        encrypted with Data Protection), the BFF proxies API calls and adds the access token, and it refreshes the
+        tokens itself. The browser gets only a session cookie with the `Secure` and `HttpOnly` flags (the IETF draft
+        makes them a MUST) and `SameSite=Strict` (a SHOULD). The draft also suggests the `__Host-Http-` prefix; the
+        variant widely supported by browsers is the `__Host-` prefix, which also keeps the cookie to its own host.
+      - **What a BFF does not do.** XSS can still send requests through the BFF on behalf of the user while the page
+        is open. But it cannot steal the tokens, and the attack ends with the browser session. CSP and output
+        encoding remain mandatory.
+      - **New obligations:**
+        1. **CSRF.** The browser attaches the cookie by itself, so you need antiforgery tokens or a mandatory custom
+           header (for example `X-CSRF: 1`) that triggers a CORS preflight, plus a strict CORS policy. `SameSite`
+           alone is not enough: it does not distinguish subdomains of one site, and with `Lax` instead of `Strict`
+           the browser lets top-level `GET` navigations through, so a `GET` must not change state.
+        2. **Sessions.** A shared session store and shared Data Protection keys for all instances, the cookie size
+           limit, and logout that deletes the session, revokes the refresh token and ends the session at the
+           authorization server.
+        3. **Operations.** The BFF is on the path of every API call: availability, latency, scaling, and storing and
+           rotating the client secret.
+        4. **Proxy security.** Forward requests only to allowed APIs, never become an open proxy, and do not pass the
+           browser's cookies downstream.
+    explanation: |
+      The core of the question is where the credential that grants API access lives. In browser storage a token
+      has the same trust level as any script on the page, which includes third-party code from dependencies and any
+      XSS. A token that can be carried away turns a short-lived flaw into long-lived access from the attacker's
+      machine.
+
+      A BFF moves the tokens where scripts cannot reach them and makes the client confidential, so an intercepted or
+      freshly requested authorization code is useless without the client's credentials. The IETF draft "OAuth 2.0
+      for Browser-Based Applications" names the ability to act as a confidential client as the main benefit of a
+      BFF. It requires (MUST) the BFF to be a confidential client using the authorization code grant and to set the
+      `Secure` and `HttpOnly` flags on its cookies, and it lists `SameSite=Strict` and the `__Host-Http-` prefix as
+      SHOULD.
+
+      The price is a return to classic cookie authentication with all its obligations. The main one is CSRF
+      protection, which a bearer token in a header did not need, because the browser never adds that header by
+      itself. A strong answer names both sides: which threat the BFF removes (token theft), which it leaves
+      (actions through the session during XSS) and which it adds (CSRF and server-side state).
+    linkTitles:
+      - "IETF draft: OAuth 2.0 for Browser-Based Applications"
+      - "OWASP HTML5 Security Cheat Sheet"
+      - "Prevent Cross-Site Request Forgery (XSRF/CSRF) attacks in ASP.NET Core"
+meta:
+  authors: [platonenkov]
+  verified: 2026-11-19

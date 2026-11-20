@@ -1,0 +1,147 @@
+{
+  "topic": "clr-gc",
+  "stubs": [
+    {
+      "slug": "using-block-disposes-when-exception-thrown",
+      "level": "junior",
+      "type": "output",
+      "subtopic": "IDisposable",
+      "angle": "What does a program print when code inside a using block throws and the exception is caught by the caller, with Dispose, the throw and the catch each printing a word?",
+      "answerHinge": "The compiler lowers a using statement to try/finally, so Dispose runs while the exception propagates, before the caller\u0027s catch block executes.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/statements/using",
+        "https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/using-objects"
+      ]
+    },
+    {
+      "slug": "dispose-not-idempotent-second-call-throws",
+      "level": "middle",
+      "type": "find-bug",
+      "subtopic": "IDisposable",
+      "angle": "A class is disposed both by a using declaration and by an explicit Dispose call, and the second call throws ObjectDisposedException because Dispose flushes an already disposed inner StreamWriter; find the defective line.",
+      "answerHinge": "Dispose must be safe to call many times: a disposed flag must make every call after the first one return without touching the already released resources.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/implementing-dispose"
+      ]
+    },
+    {
+      "slug": "await-using-for-iasyncdisposable-only-type",
+      "level": "middle",
+      "type": "single",
+      "subtopic": "IDisposable",
+      "angle": "How must a type that implements only IAsyncDisposable be released, and what happens if you put it in a plain using statement?",
+      "answerHinge": "A plain using requires IDisposable and fails to compile for a type that has only DisposeAsync; await using is required and awaits DisposeAsync at the end of the scope.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/implementing-disposeasync",
+        "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/statements/using"
+      ]
+    },
+    {
+      "slug": "what-triggers-garbage-collection",
+      "level": "middle",
+      "type": "multi",
+      "subtopic": "garbage collector generations",
+      "angle": "Which events cause the .NET garbage collector to run a collection?",
+      "answerHinge": "A collection starts when the allocation budget of a generation is exceeded, when the OS reports low memory, or when GC.Collect is called; a variable leaving scope or a Dispose call does not trigger one.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/fundamentals"
+      ]
+    },
+    {
+      "slug": "suppressfinalize-skips-finalizer-after-dispose",
+      "level": "senior",
+      "type": "output",
+      "subtopic": "finalization",
+      "angle": "Two objects of a class with a finalizer and a Dispose that calls GC.SuppressFinalize are abandoned, only one of them after Dispose; what does the program print after GC.Collect and GC.WaitForPendingFinalizers?",
+      "answerHinge": "GC.SuppressFinalize removes the disposed object from finalization, so only the object that was never disposed has its finalizer run.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/api/system.gc.suppressfinalize",
+        "https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/implementing-dispose"
+      ]
+    },
+    {
+      "slug": "static-dictionary-attached-data-keeps-keys-alive",
+      "level": "senior",
+      "type": "find-bug",
+      "subtopic": "memory leaks",
+      "angle": "A static Dictionary\u003Cobject, Metadata\u003E that attaches extra data to arbitrary objects keeps those objects alive, and a WeakReference check prints True after a full collection; find the line that causes the leak.",
+      "answerHinge": "A dictionary in a static field holds its keys strongly, so every key stays reachable from a root; ConditionalWeakTable holds keys weakly and lets the attached data die with the key.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/api/system.runtime.compilerservices.conditionalweaktable-2",
+        "https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/fundamentals"
+      ]
+    },
+    {
+      "slug": "collectible-assemblyloadcontext-unload-blocked",
+      "level": "senior",
+      "type": "open",
+      "subtopic": "assemblies",
+      "angle": "How does unloading a collectible AssemblyLoadContext work, and why might a plugin\u0027s assemblies stay in memory after Unload is called?",
+      "answerHinge": "Unload is cooperative and completes only after a garbage collection finds no references from outside the context to its types, objects or delegates, so any leftover reference such as an event handler, a static cache or a running thread keeps it loaded.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/standard/assembly/unloadability",
+        "https://learn.microsoft.com/en-us/dotnet/core/dependency-loading/understanding-assemblyloadcontext"
+      ]
+    },
+    {
+      "slug": "gc-collect-calls-added-to-fix-memory",
+      "level": "lead",
+      "type": "situation",
+      "subtopic": "memory leaks",
+      "angle": "A developer\u0027s PR adds GC.Collect calls after large batch jobs because the service\u0027s memory spikes; as tech lead, what do you do with the PR and the underlying problem?",
+      "answerHinge": "Induced full collections hide the real cause and add blocking pauses and promotion costs, so the lead rejects them as a fix, asks for measurements of what is retained, and fixes allocation or retention at the source.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/induced",
+        "https://learn.microsoft.com/en-us/dotnet/api/system.gc.collect"
+      ]
+    },
+    {
+      "slug": "disposable-ownership-rules-for-team",
+      "level": "lead",
+      "type": "open",
+      "subtopic": "IDisposable",
+      "angle": "Which ownership rules for IDisposable objects would you set for a team\u0027s codebase, and how would you enforce them?",
+      "answerHinge": "Every disposable needs exactly one clear owner: whoever creates it disposes it, the DI container disposes the services it creates, and analyzers such as CA2000 and CA2213 enforce the rule in the build.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/fundamentals/code-analysis/quality-rules/ca2000",
+        "https://learn.microsoft.com/en-us/dotnet/core/extensions/dependency-injection-guidelines"
+      ]
+    },
+    {
+      "slug": "safehandle-over-custom-finalizer-standard",
+      "level": "lead",
+      "type": "single",
+      "subtopic": "finalization",
+      "angle": "Which approach to wrapping unmanaged OS handles should a team adopt as its standard?",
+      "answerHinge": "Wrap each handle in a SafeHandle-derived class instead of writing finalizers in the owning classes, because SafeHandle provides critical finalization and safe release in one reviewed place, and the owner only needs a simple Dispose.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/api/system.runtime.interopservices.safehandle",
+        "https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/implementing-dispose"
+      ]
+    },
+    {
+      "slug": "plugin-isolation-alc-vs-separate-process",
+      "level": "architect",
+      "type": "open",
+      "subtopic": "assemblies",
+      "angle": "For a product that will host third-party extensions for years, how do you choose between loading plugins in-process with AssemblyLoadContext and running them in separate processes?",
+      "answerHinge": "An AssemblyLoadContext isolates dependency versions but shares the process, GC heap, crash domain and permissions, so untrusted or unstable third-party code needs a process boundary despite the cost of IPC and the extra operational work.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/core/dependency-loading/understanding-assemblyloadcontext",
+        "https://learn.microsoft.com/en-us/dotnet/core/tutorials/creating-app-with-plugin-support"
+      ]
+    },
+    {
+      "slug": "large-in-process-cache-gc-mark-cost",
+      "level": "architect",
+      "type": "single",
+      "subtopic": "garbage collector generations",
+      "angle": "A service keeps hundreds of millions of small objects in an in-process gen 2 cache and suffers long full GC pauses; which design change addresses the root cause?",
+      "answerHinge": "Full-collection marking cost grows with the number of live objects and references, so the fix is to reduce the number of managed objects (for example arrays of structs, off-heap storage or an external cache), not to add memory.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/fundamentals",
+        "https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/performance"
+      ]
+    }
+  ]
+}

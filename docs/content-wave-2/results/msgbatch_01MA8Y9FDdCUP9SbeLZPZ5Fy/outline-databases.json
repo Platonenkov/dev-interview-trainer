@@ -1,0 +1,157 @@
+{
+  "topic": "databases",
+  "stubs": [
+    {
+      "slug": "index-seek-vs-index-scan-operators",
+      "level": "junior",
+      "type": "single",
+      "subtopic": "query plans: seek and scan operators",
+      "angle": "Which statement correctly describes the difference between an Index Seek and an Index Scan operator in a SQL Server execution plan?",
+      "answerHinge": "A seek navigates the B-tree to the start of a key range and reads only that range, while a scan reads every leaf page of the index. A scan is not always worse: for a large share of rows it can be the cheaper plan.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/sql/relational-databases/showplan-logical-and-physical-operators-reference",
+        "https://learn.microsoft.com/en-us/sql/relational-databases/sql-server-index-design-guide"
+      ]
+    },
+    {
+      "slug": "nolock-report-missing-and-duplicate-rows",
+      "level": "middle",
+      "type": "find-bug",
+      "subtopic": "isolation levels: NOLOCK and READ UNCOMMITTED",
+      "angle": "A T-SQL revenue report sometimes returns totals that match no committed state and counts some orders twice; find the line responsible (a WITH (NOLOCK) hint on the scanned table).",
+      "answerHinge": "NOLOCK means READ UNCOMMITTED for that table: besides dirty reads, an allocation-order scan that runs during concurrent page splits can skip rows or read the same row twice.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/sql/t-sql/queries/hints-transact-sql-table",
+        "https://learn.microsoft.com/en-us/sql/t-sql/statements/set-transaction-isolation-level-transact-sql"
+      ]
+    },
+    {
+      "slug": "partial-dependency-second-normal-form",
+      "level": "middle",
+      "type": "single",
+      "subtopic": "normalization: second normal form",
+      "angle": "Given OrderItems(OrderId, ProductId, Quantity, ProductName) with the composite key (OrderId, ProductId), which normal form does the table violate and why?",
+      "answerHinge": "ProductName depends on ProductId alone, which is only part of the composite key. That is a partial dependency, so the table breaks 2NF, and ProductName belongs in a Products table.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/office/troubleshoot/access/database-normalization-description"
+      ]
+    },
+    {
+      "slug": "filtered-index-parameterized-predicate",
+      "level": "middle",
+      "type": "open",
+      "subtopic": "indexes: filtered indexes",
+      "angle": "When does a filtered index such as WHERE Status = \u0027Open\u0027 help, and why might a parameterized query WHERE Status = @status ignore it?",
+      "answerHinge": "The optimizer can use a filtered index only when it can prove at compile time that the query predicate is a subset of the index filter. With a parameter the cached plan must be valid for any value, so the filtered index is not chosen unless a literal or OPTION (RECOMPILE) is used.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/sql/relational-databases/indexes/create-filtered-indexes"
+      ]
+    },
+    {
+      "slug": "head-blocker-idle-open-transaction",
+      "level": "senior",
+      "type": "situation",
+      "subtopic": "locks: blocking chains",
+      "angle": "API requests time out in waves, and the blocking chain in SQL Server leads to a head session that is sleeping, runs no request and has an open transaction; how do you diagnose and fix it?",
+      "answerHinge": "The head blocker is an application connection that started a transaction and did not commit or roll back (an error path without rollback, or a user or network wait inside the transaction). It keeps its locks while idle, so the fix is in transaction scope and error handling in the application, not in killing sessions or adding indexes.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/troubleshoot/sql/database-engine/performance/understand-resolve-blocking",
+        "https://learn.microsoft.com/en-us/sql/relational-databases/system-dynamic-management-views/sys-dm-exec-requests-transact-sql"
+      ]
+    },
+    {
+      "slug": "implicit-conversion-nvarchar-parameter-scan",
+      "level": "senior",
+      "type": "find-bug",
+      "subtopic": "indexes and query plans: implicit conversion",
+      "angle": "A lookup by an indexed varchar AccountNumber column with a SQL collation scans the whole index, and the plan shows a CONVERT_IMPLICIT warning; find the line that declares the parameter as nvarchar.",
+      "answerHinge": "nvarchar has higher data type precedence than varchar, so SQL Server converts the column rather than the parameter. A conversion on the column side makes the predicate non-sargable for a SQL-collation index, so the seek becomes a scan.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/sql/t-sql/data-types/data-type-precedence-transact-sql",
+        "https://learn.microsoft.com/en-us/sql/relational-databases/showplan-logical-and-physical-operators-reference"
+      ]
+    },
+    {
+      "slug": "serializable-key-range-locks-phantoms",
+      "level": "senior",
+      "type": "single",
+      "subtopic": "locks: key-range locks under SERIALIZABLE",
+      "angle": "What does SQL Server lock under SERIALIZABLE so that a range query cannot see phantoms, and what happens when no index supports the range predicate?",
+      "answerHinge": "SERIALIZABLE takes key-range locks on the index entries that cover the queried range, including the gaps, so inserts into the range wait. Without a suitable index the engine must lock a much larger range, up to the whole table, which hurts concurrency.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/sql/relational-databases/sql-server-transaction-locking-and-row-versioning-guide"
+      ]
+    },
+    {
+      "slug": "cosmos-db-session-consistency-guarantees",
+      "level": "senior",
+      "type": "multi",
+      "subtopic": "NoSQL trade-offs: tunable consistency",
+      "angle": "Which statements about the session consistency level in Azure Cosmos DB are true?",
+      "answerHinge": "Session consistency gives read-your-writes and monotonic reads only within the scope of a session token. Other clients without that token may read older data, and stronger guarantees such as bounded staleness or strong cost more latency and throughput.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/azure/cosmos-db/consistency-levels"
+      ]
+    },
+    {
+      "slug": "snapshot-isolation-update-conflict-write-skew",
+      "level": "senior",
+      "type": "open",
+      "subtopic": "isolation levels: SNAPSHOT",
+      "angle": "How does SNAPSHOT isolation in SQL Server differ from READ_COMMITTED_SNAPSHOT for writers, and which anomaly does it still allow?",
+      "answerHinge": "SNAPSHOT reads one transaction-level snapshot and fails a transaction with update conflict error 3960 when it modifies a row changed by another transaction after it started. It does not detect write skew, where two transactions read overlapping data and update different rows, so invariants across rows still need locks or constraints.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/sql/relational-databases/sql-server-transaction-locking-and-row-versioning-guide",
+        "https://learn.microsoft.com/en-us/sql/t-sql/statements/set-transaction-isolation-level-transact-sql"
+      ]
+    },
+    {
+      "slug": "rcsi-production-rollout-semantics",
+      "level": "lead",
+      "type": "situation",
+      "subtopic": "isolation levels: enabling RCSI on a live system",
+      "angle": "Readers and writers block each other on a large production database and the team wants to turn on READ_COMMITTED_SNAPSHOT tomorrow; how do you decide and roll it out?",
+      "answerHinge": "RCSI changes the semantics of every READ COMMITTED read: code that relied on a read blocking until a writer commits (queue tables, check-then-act logic) can silently break, and the version store adds tempdb load and row overhead. So the code must be audited for such patterns, the change rehearsed under load and tempdb monitored before it is enabled, with a rollback plan.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/sql/relational-databases/sql-server-transaction-locking-and-row-versioning-guide",
+        "https://learn.microsoft.com/en-us/sql/t-sql/statements/alter-database-transact-sql-set-options"
+      ]
+    },
+    {
+      "slug": "large-table-index-creation-risk-practices",
+      "level": "lead",
+      "type": "multi",
+      "subtopic": "indexes: creating indexes on large production tables",
+      "angle": "Which practices reduce the risk of creating a new index on a 500-million-row SQL Server table that serves live traffic?",
+      "answerHinge": "Online index operations (ONLINE = ON, available in Enterprise edition and Azure SQL) avoid long blocking, RESUMABLE = ON (SQL Server 2019 and later for CREATE INDEX) lets the build pause and continue, and the transaction log and tempdb space must be planned. Running a plain offline CREATE INDEX at peak time holds a schema lock and blocks the table.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/sql/relational-databases/indexes/perform-index-operations-online",
+        "https://learn.microsoft.com/en-us/sql/t-sql/statements/create-index-transact-sql"
+      ]
+    },
+    {
+      "slug": "json-column-vs-normalized-attributes",
+      "level": "lead",
+      "type": "open",
+      "subtopic": "normalization versus semi-structured data",
+      "angle": "The team argues whether variable product attributes should go into a JSON column or into normalized tables; how do you settle it and what rules do you set?",
+      "answerHinge": "JSON fits attributes that are read and written as a whole and not filtered, joined or constrained. Anything the database must filter on, index, type-check or enforce with constraints belongs in columns or tables, and a hot JSON path can be exposed as a computed column with an index.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/sql/relational-databases/json/json-data-sql-server",
+        "https://learn.microsoft.com/en-us/sql/relational-databases/json/index-json-data"
+      ]
+    },
+    {
+      "slug": "polyglot-persistence-second-store-decision",
+      "level": "architect",
+      "type": "open",
+      "subtopic": "NoSQL trade-offs: polyglot persistence",
+      "angle": "When is it justified to add a second data store (a search engine, a key-value store or a document store) next to the main relational database, and what does each extra store cost over the years?",
+      "answerHinge": "A second store is justified only by an access pattern that the primary database cannot serve at the required cost, measured first. Every extra store adds a synchronization path with its own consistency lag, plus operations, backup, security and skills costs, so one store must stay the source of truth and the others must be rebuildable from it.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/azure/architecture/guide/technology-choices/data-store-overview",
+        "https://martinfowler.com/bliki/PolyglotPersistence.html"
+      ]
+    }
+  ]
+}

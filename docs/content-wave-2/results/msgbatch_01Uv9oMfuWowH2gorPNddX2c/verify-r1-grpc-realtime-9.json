@@ -1,0 +1,51 @@
+{
+  "verdicts": [
+    {
+      "stubId": "grpc-realtime-16",
+      "verdict": "pass",
+      "issues": [
+        {
+          "severity": "minor",
+          "field": "locales.en.answer",
+          "claim": "A gzip or Brotli compressor accumulates input until it has a block, which also turns the stream into bursts. ... check \u0060ResponseCompressionOptions.MimeTypes\u0060 in ASP.NET Core",
+          "problem": "The ASP.NET Core response compression middleware flushes its compression stream on FlushAsync (SupportsFlush is true), so compression inside the app does not break per-event flushing. The excerpt also notes that nginx strips Accept-Encoding when proxying, so the app-level compressor often does not run behind it. The statement is true for intermediary compression such as nginx \u0060gzip\u0060 or a CDN, but it overgeneralises for the app\u0027s own middleware.",
+          "suggestedFix": "Say that compression at the proxy or CDN, or a compressor that is not flushed per event, turns the stream into bursts. Add that ASP.NET Core\u0027s middleware can flush per event, but the SSE type should still be kept out of the compressed MIME types. Apply the same change to locales.ru.answer."
+        },
+        {
+          "severity": "minor",
+          "field": "locales.en.answer",
+          "claim": "Small text events compress poorly anyway, so little is lost.",
+          "problem": "Debatable and unnecessary. Text compresses well in general; the point is that per-event compression gains little and adds latency.",
+          "suggestedFix": "Replace with: \u0027Compression gains little on small events and adds latency, so excluding the stream costs almost nothing.\u0027 Apply the same change to the Russian text."
+        }
+      ]
+    },
+    {
+      "stubId": "grpc-realtime-17",
+      "verdict": "fix",
+      "issues": [
+        {
+          "severity": "major",
+          "field": "locales.en.answer",
+          "claim": "Changing the type is a protocol-breaking change: old clients read the value incorrectly or fail to deserialize it.",
+          "problem": "The concrete change proposed in the prompt, \u0060int32\u0060 to \u0060int64\u0060, is wire-compatible in Protobuf (both are varints; the protobuf.dev compatibility rules list int32/int64 as compatible). Old clients only truncate values that do not fit in 32 bits. Presenting it as a generic wire-breaking change teaches the wrong rule. The real danger in this scenario is the silent change of meaning (percent to minor units), plus incompatible type changes in general. The Russian text has the same claim.",
+          "suggestedFix": "Rewrite the first answer item to say that some type changes are wire-compatible (int32 to int64, with truncation on old readers) and others are not (for example int32 to string or to a message). In either case, changing the meaning under the same number is unsafe and no tool will flag it. Keep the conclusion: add a new field with a new number. Apply the same change to locales.ru.answer and locales.ru.hint if the wording depends on it."
+        },
+        {
+          "severity": "minor",
+          "field": "locales.en.answer",
+          "claim": "In responses the server fills both fields and computes the old one from the new one.",
+          "problem": "Converting an absolute amount back to a percentage requires the order total and is lossy because of rounding and the int32 range. The text presents it as a trivial computation.",
+          "suggestedFix": "Add a short note that the old field is a derived, approximate value. Name the rule (for example round(discount_minor_units * 100 / total_minor_units)), or state that old consumers get a best-effort value during the migration window. Apply the same change to the Russian text."
+        },
+        {
+          "severity": "minor",
+          "field": "locales.ru.prompt",
+          "claim": "\u0430\u0431\u0441\u043E\u043B\u044E\u0442\u043D\u043E\u0439 \u0441\u0443\u043C\u043C\u043E\u0439 \u0432 \u0432\u0430\u043B\u044E\u0442\u0435 \u0437\u0430\u043A\u0430\u0437\u0430 \u0441 \u043A\u043E\u043F\u0435\u0439\u043A\u0430\u043C\u0438",
+          "problem": "The English text says \u0027including cents\u0027. \u0027\u041A\u043E\u043F\u0435\u0439\u043A\u0438\u0027 is specific to rubles, although the order currency is generic (the contract has a \u0060currency\u0060 field).",
+          "suggestedFix": "\u0430\u0431\u0441\u043E\u043B\u044E\u0442\u043D\u043E\u0439 \u0441\u0443\u043C\u043C\u043E\u0439 \u0432 \u0432\u0430\u043B\u044E\u0442\u0435 \u0437\u0430\u043A\u0430\u0437\u0430 \u0432 \u043C\u0438\u043D\u0438\u043C\u0430\u043B\u044C\u043D\u044B\u0445 \u0435\u0434\u0438\u043D\u0438\u0446\u0430\u0445 (\u043A\u043E\u043F\u0435\u0439\u043A\u0438, \u0446\u0435\u043D\u0442\u044B)"
+        }
+      ]
+    }
+  ]
+}

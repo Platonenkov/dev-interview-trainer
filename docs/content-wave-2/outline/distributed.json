@@ -1,0 +1,144 @@
+{
+  "topic": "distributed",
+  "source": "msgbatch_01MA8Y9FDdCUP9SbeLZPZ5Fy",
+  "stubs": [
+    {
+      "slug": "rabbitmq-topic-exchange-wildcard-routing",
+      "level": "middle",
+      "type": "single",
+      "subtopic": "RabbitMQ routing",
+      "angle": "Given queues bound to a topic exchange with binding keys such as `order.*`, `order.*.created` and `order.#`, which queues receive a message published with routing key `order.eu.created`?",
+      "answerHinge": "In a topic exchange `*` matches exactly one dot-separated word and `#` matches zero or more words, so `order.*` does not match a three-word key while `order.*.created` and `order.#` do.",
+      "sources": [
+        "https://www.rabbitmq.com/tutorials/tutorial-five-dotnet",
+        "https://www.rabbitmq.com/tutorials/amqp-concepts"
+      ],
+      "stubId": "distributed-01"
+    },
+    {
+      "slug": "kafka-log-compaction-latest-per-key",
+      "level": "middle",
+      "type": "single",
+      "subtopic": "Kafka retention",
+      "angle": "What does a Kafka topic with `cleanup.policy=compact` keep after compaction, and what happens to a key whose last record has a null value?",
+      "answerHinge": "Log compaction keeps at least the latest record for every key instead of deleting by age, and a record with a null value is a tombstone that removes the key after the delete retention period.",
+      "sources": [
+        "https://kafka.apache.org/documentation/"
+      ],
+      "stubId": "distributed-02"
+    },
+    {
+      "slug": "rabbitmq-prefetch-count-tuning",
+      "level": "middle",
+      "type": "open",
+      "subtopic": "Queues and consumer flow control",
+      "angle": "With manual acknowledgements, what does the prefetch count set by basic.qos control, and what goes wrong with a value that is too high or too low when consumers have uneven processing times?",
+      "answerHinge": "Prefetch caps the number of unacknowledged deliveries a consumer can hold, so an unbounded or large value lets one consumer hoard messages while others idle, and a value of 1 maximises fairness at the cost of throughput.",
+      "sources": [
+        "https://www.rabbitmq.com/docs/consumer-prefetch",
+        "https://www.rabbitmq.com/docs/confirms"
+      ],
+      "stubId": "distributed-03"
+    },
+    {
+      "slug": "naturally-idempotent-handler-operations",
+      "level": "middle",
+      "type": "multi",
+      "subtopic": "Idempotency",
+      "angle": "Which of these message handler operations are idempotent by nature, so that processing the same message twice leaves the same state (setting a status, an upsert by key, incrementing a balance, inserting a row without a unique key, deleting by id, sending an email)?",
+      "answerHinge": "An operation is naturally idempotent when repeating it with the same input produces the same final state, which holds for absolute assignments, keyed upserts and deletes by id but not for increments, unkeyed inserts or external notifications.",
+      "sources": [
+        "https://microservices.io/patterns/communication-style/idempotent-consumer.html"
+      ],
+      "stubId": "distributed-04"
+    },
+    {
+      "slug": "saga-compensates-steps-that-never-ran",
+      "level": "middle",
+      "type": "find-bug",
+      "subtopic": "Sagas and compensation",
+      "angle": "A BCL simulation of an order saga (reserve stock, charge payment, create shipment) fails at the shipment step and then compensates by looping over all saga steps instead of the completed ones, printing a wrong customer balance and stock level; find the line.",
+      "answerHinge": "Only steps whose local transactions committed may be compensated, so iterating over every defined step refunds or releases things that were never charged or reserved.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/azure/architecture/patterns/compensating-transaction",
+        "https://learn.microsoft.com/en-us/azure/architecture/patterns/saga"
+      ],
+      "stubId": "distributed-05"
+    },
+    {
+      "slug": "rabbitmq-unroutable-message-confirmed",
+      "level": "senior",
+      "type": "single",
+      "subtopic": "RabbitMQ publisher confirms",
+      "angle": "A publisher uses publisher confirms and gets an ack for every message, yet some messages never reach any queue because no binding matches their routing key: why, and what detects it?",
+      "answerHinge": "The broker confirms an unroutable message as soon as the exchange finds no matching queue, so the publisher must set the mandatory flag and handle basic.return (or use an alternate exchange) to learn about it.",
+      "sources": [
+        "https://www.rabbitmq.com/docs/confirms",
+        "https://www.rabbitmq.com/docs/publishers"
+      ],
+      "stubId": "distributed-06"
+    },
+    {
+      "slug": "kafka-acks-all-min-insync-replicas",
+      "level": "senior",
+      "type": "multi",
+      "subtopic": "Kafka durability",
+      "angle": "For a topic with replication factor 3, which statements about producer `acks` and the topic setting `min.insync.replicas=2` are true when brokers fail?",
+      "answerHinge": "With acks=all the leader waits for all current in-sync replicas, and min.insync.replicas is the minimum ISR size for such writes to be accepted, so writes continue with one broker down and fail with NotEnoughReplicas when the ISR shrinks below 2, while acks=1 can lose acknowledged records on leader failover.",
+      "sources": [
+        "https://kafka.apache.org/documentation/"
+      ],
+      "stubId": "distributed-07"
+    },
+    {
+      "slug": "kafka-max-poll-interval-rebalance-loop",
+      "level": "senior",
+      "type": "situation",
+      "subtopic": "Kafka consumer groups",
+      "angle": "After a downstream API slowed down, a Kafka consumer group rebalances every few minutes, lag keeps growing and the same records are processed again and again: how do you diagnose and fix it?",
+      "answerHinge": "When processing the records returned by one poll takes longer than max.poll.interval.ms, the consumer is removed from the group and its uncommitted records are redelivered, so you shrink max.poll.records, speed up or decouple processing, or raise the interval deliberately.",
+      "sources": [
+        "https://kafka.apache.org/39/javadoc/org/apache/kafka/clients/consumer/KafkaConsumer.html",
+        "https://kafka.apache.org/documentation/"
+      ],
+      "stubId": "distributed-08"
+    },
+    {
+      "slug": "kafka-parallel-processing-offset-commit",
+      "level": "senior",
+      "type": "open",
+      "subtopic": "Kafka offsets and throughput",
+      "angle": "To beat consumer lag, a team processes the records of one partition in parallel tasks and commits the offset of whichever record finishes last: what can go wrong, and how should offsets be committed in that design?",
+      "answerHinge": "A committed offset means every earlier record of the partition is done, so with parallel processing you may only commit the offset after the highest contiguous completed record, otherwise a crash skips unfinished records.",
+      "sources": [
+        "https://kafka.apache.org/39/javadoc/org/apache/kafka/clients/consumer/KafkaConsumer.html"
+      ],
+      "stubId": "distributed-09"
+    },
+    {
+      "slug": "event-contract-evolution-across-teams",
+      "level": "lead",
+      "type": "open",
+      "subtopic": "Message contracts and consistency between services",
+      "angle": "Your team publishes integration events consumed by several other teams and needs to rename a field and change its meaning: how do you evolve the event contract without breaking consumers, and what process do you set up?",
+      "answerHinge": "Event contracts must change compatibly (additive optional fields, tolerant readers, a new event type or version for semantic changes, schema registry compatibility checks), with old and new versions published side by side until consumers migrate.",
+      "sources": [
+        "https://docs.confluent.io/platform/current/schema-registry/fundamentals/schema-evolution.html"
+      ],
+      "stubId": "distributed-10"
+    },
+    {
+      "slug": "messaging-framework-vs-raw-broker-client",
+      "level": "lead",
+      "type": "open",
+      "subtopic": "Queues, outbox and retries in .NET services",
+      "angle": "The team debates building messaging on the raw broker clients versus adopting a framework such as MassTransit or NServiceBus: how do you decide, and which risks do you weigh?",
+      "answerHinge": "A framework provides outbox, retries, sagas, serialization and topology conventions the team would otherwise rebuild, at the price of an extra dependency, licensing terms and abstraction leaks, so the decision rests on which of those capabilities the team needs and the cost of switching later.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/architecture/microservices/multi-container-microservice-net-applications/integration-event-based-microservice-communications",
+        "https://docs.particular.net/nservicebus/"
+      ],
+      "stubId": "distributed-11"
+    }
+  ]
+}

@@ -1,0 +1,65 @@
+{
+  "verdicts": [
+    {
+      "stubId": "databases-09",
+      "verdict": "fix",
+      "issues": [
+        {
+          "severity": "major",
+          "field": "locales.ru.explanation / locales.en.explanation",
+          "claim": "\u041F\u043E\u044D\u0442\u043E\u043C\u0443 RCSI \u0432\u043A\u043B\u044E\u0447\u0430\u044E\u0442 \u0431\u0435\u0437 \u043F\u0440\u0430\u0432\u043A\u0438 \u043A\u043E\u0434\u0430 \u0438 \u0431\u0435\u0437 \u043B\u043E\u0433\u0438\u043A\u0438 \u043F\u043E\u0432\u0442\u043E\u0440\u043E\u0432. / That is why RCSI can be enabled without code changes and without retry logic.",
+          "problem": "This is misleading for a senior candidate, and it contradicts databases-10. Enabling RCSI changes the semantics of every READ COMMITTED read. Code that relied on a read waiting for a writer (queue tables, check-then-act) can break silently and needs an audit. Only the retry logic for update conflicts is unnecessary, because RCSI raises no 3960.",
+          "suggestedFix": "EN: \u0022That is why RCSI does not require retry logic for update conflicts (it never raises 3960). It is not free of code risk, though: reads no longer wait for writers, so code that relied on that waiting must be reviewed.\u0022 Make the same change in RU: \u0022RCSI \u043D\u0435 \u0442\u0440\u0435\u0431\u0443\u0435\u0442 \u043B\u043E\u0433\u0438\u043A\u0438 \u043F\u043E\u0432\u0442\u043E\u0440\u043E\u0432 \u0434\u043B\u044F \u043A\u043E\u043D\u0444\u043B\u0438\u043A\u0442\u043E\u0432 \u043E\u0431\u043D\u043E\u0432\u043B\u0435\u043D\u0438\u044F (3960 \u043E\u043D \u043D\u0435 \u0432\u044B\u0434\u0430\u0451\u0442), \u043D\u043E \u0441\u0435\u043C\u0430\u043D\u0442\u0438\u043A\u0430 \u0447\u0442\u0435\u043D\u0438\u044F \u043C\u0435\u043D\u044F\u0435\u0442\u0441\u044F: \u0447\u0442\u0435\u043D\u0438\u0435 \u0431\u043E\u043B\u044C\u0448\u0435 \u043D\u0435 \u0436\u0434\u0451\u0442 \u043F\u0438\u0441\u0430\u0442\u0435\u043B\u044F, \u043F\u043E\u044D\u0442\u043E\u043C\u0443 \u043A\u043E\u0434, \u0440\u0430\u0441\u0441\u0447\u0438\u0442\u044B\u0432\u0430\u0432\u0448\u0438\u0439 \u043D\u0430 \u044D\u0442\u043E \u043E\u0436\u0438\u0434\u0430\u043D\u0438\u0435, \u043D\u0443\u0436\u043D\u043E \u043F\u0440\u043E\u0432\u0435\u0440\u0438\u0442\u044C.\u0022"
+        },
+        {
+          "severity": "unsure",
+          "field": "locales.*.answer (protection bullet 1)",
+          "claim": "Run the critical transaction under \u0060SERIALIZABLE\u0060, or read the checked rows with the \u0060UPDLOCK, HOLDLOCK\u0060 hints, so the second session waits or gets a deadlock and retries.",
+          "problem": "The question\u0027s example runs under SNAPSHOT, and the item\u0027s excerpts do not show how UPDLOCK/HOLDLOCK hints behave inside a SNAPSHOT transaction. The read may still use versions, or it may itself raise 3960. The sentence does not say which isolation level the hinted read runs under. The statement about waiting or deadlock is correct for SERIALIZABLE and for hints under READ COMMITTED.",
+          "suggestedFix": "Say explicitly that the critical transaction runs not under SNAPSHOT but under \u0060SERIALIZABLE\u0060, or under \u0060READ COMMITTED\u0060 with \u0060UPDLOCK, HOLDLOCK\u0060 on the range read. Drop any implication that the hints are used inside the SNAPSHOT transaction. Example: \u0022Run the critical transaction outside SNAPSHOT: under SERIALIZABLE, or under READ COMMITTED reading the checked rows with UPDLOCK, HOLDLOCK, so the second session waits or becomes a deadlock victim and retries.\u0022"
+        },
+        {
+          "severity": "minor",
+          "field": "locales.*.explanation",
+          "claim": "applies a \u0022first committer wins\u0022 rule: the second writing transaction gets 3960",
+          "problem": "SQL Server implements this with locks. The writer that updates the row first holds the X lock, and the other writer waits and then fails. That is closer to \u0022first updater wins\u0022, and it is how the answer itself describes it (wait for the other transaction\u0027s outcome).",
+          "suggestedFix": "Write \u0022first updater wins (the other writer waits for the lock and, if the first commits, gets 3960)\u0022 instead of \u0022first committer wins\u0022."
+        },
+        {
+          "severity": "minor",
+          "field": "locales.*.answer (SNAPSHOT bullet)",
+          "claim": "All reads of the transaction see one consistent snapshot as of its start.",
+          "problem": "The docs phrase it this way. In practice the snapshot is fixed at the first data access after BEGIN TRANSACTION, which the generator notes mention. A senior-level answer could add that nuance.",
+          "suggestedFix": "Add: \u0022(strictly, as of the first data access in the transaction)\u0022."
+        },
+        {
+          "severity": "minor",
+          "field": "locales.*.hint",
+          "claim": "What does SQL Server check on a write in a \u0060SNAPSHOT\u0060 transaction - the rows the transaction read, or only the rows it modifies?",
+          "problem": "The hint offers a binary choice that nearly states the key hinge (only modified rows are checked), so it is too strong.",
+          "suggestedFix": "Make it less direct: \u0022Two transactions each change a different row after reading the same data - what does SNAPSHOT compare when each one writes?\u0022"
+        },
+        {
+          "severity": "minor",
+          "field": "locales.*.answer (protection bullet 3)",
+          "claim": "Where possible, express the rule declaratively: a constraint or a unique index.",
+          "problem": "An invariant such as \u0022at least one doctor is on call\u0022 spans several rows and is hard to express with a plain CHECK or unique index. It would need an indexed view, a trigger or a schema redesign.",
+          "suggestedFix": "Say: \u0022Where possible, make the rule declarative (a unique/filtered index, a constraint, or an indexed view that makes the violation impossible); for a cross-row rule like this one, use the lock or common-row approach.\u0022"
+        }
+      ]
+    },
+    {
+      "stubId": "databases-10",
+      "verdict": "pass",
+      "issues": [
+        {
+          "severity": "minor",
+          "field": "locales.*.answer (step 2, queue tables)",
+          "claim": "\u0060SELECT TOP (1) ... WHERE Status = \u0027New\u0027\u0060, then \u0060UPDATE\u0060 - two workers now take the same item.",
+          "problem": "That pattern was already racy before RCSI, because the shared lock is released after the read. RCSI makes the race much more frequent. The explanation says so, but the answer reads as if RCSI introduces the defect.",
+          "suggestedFix": "Write \u0022two workers take the same item much more often\u0022 instead of \u0022now take\u0022."
+        }
+      ]
+    }
+  ]
+}

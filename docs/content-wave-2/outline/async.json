@@ -1,0 +1,122 @@
+{
+  "topic": "async",
+  "source": "msgbatch_01MA8Y9FDdCUP9SbeLZPZ5Fy",
+  "stubs": [
+    {
+      "slug": "async-void-only-for-event-handlers",
+      "level": "junior",
+      "type": "single",
+      "subtopic": "Tasks",
+      "angle": "Asks when declaring an async method with a void return type is appropriate and what goes wrong elsewhere.",
+      "answerHinge": "async void is meant only for event handlers because the caller gets no task to await, cannot know when the method finishes and cannot catch its exceptions, which go straight to the synchronization context or thread pool.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/csharp/asynchronous-programming/async-return-types",
+        "https://learn.microsoft.com/en-us/archive/msdn-magazine/2013/march/async-await-best-practices-in-asynchronous-programming"
+      ],
+      "stubId": "async-01"
+    },
+    {
+      "slug": "whenany-returns-faulted-winner-without-throwing",
+      "level": "middle",
+      "type": "output",
+      "subtopic": "Tasks",
+      "angle": "Asks what a program prints when the first task to finish in Task.WhenAny is faulted (completed via TaskCompletionSource.SetException) and the code prints whether the winner is that task and its Status.",
+      "answerHinge": "await Task.WhenAny never throws for a faulted input: it returns the completed task itself, so the output is the reference check True and the status Faulted, and the error surfaces only when the winner is awaited.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/api/system.threading.tasks.task.whenany"
+      ],
+      "stubId": "async-02"
+    },
+    {
+      "slug": "configureawait-suppressthrowing-faulted-task",
+      "level": "middle",
+      "type": "output",
+      "subtopic": "ConfigureAwait",
+      "angle": "Asks what a .NET 10 program prints when it awaits a faulted non-generic Task with ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing) inside try/catch and then prints the task status.",
+      "answerHinge": "Since .NET 8 the SuppressThrowing option makes the await complete without rethrowing the stored exception, so the catch block is skipped and the program prints the Faulted status.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/api/system.threading.tasks.configureawaitoptions",
+        "https://devblogs.microsoft.com/dotnet/configureawait-faq/"
+      ],
+      "stubId": "async-03"
+    },
+    {
+      "slug": "awaitable-pattern-which-types-can-be-awaited",
+      "level": "middle",
+      "type": "multi",
+      "subtopic": "The state machine",
+      "angle": "Asks which expressions can be used with await, mixing Task, ValueTask, Task.Yield(), a custom type with an extension GetAwaiter, an IAsyncResult and a Thread.",
+      "answerHinge": "await works with any type that has an accessible GetAwaiter method (instance or extension) returning an awaiter with IsCompleted, GetResult and INotifyCompletion.OnCompleted, so being a Task is not required and IAsyncResult or Thread are not awaitable.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/await",
+        "https://devblogs.microsoft.com/dotnet/how-async-await-really-works/"
+      ],
+      "stubId": "async-04"
+    },
+    {
+      "slug": "asynclocal-change-in-callee-not-visible-to-caller",
+      "level": "senior",
+      "type": "output",
+      "subtopic": "Tasks",
+      "angle": "Asks what a program prints when the caller sets an AsyncLocal<string> value, an awaited async method changes it after await Task.Yield() and prints it, and the caller prints it again afterwards.",
+      "answerHinge": "The ExecutionContext flows down into the async method, but a change made inside the method is restored when its state machine returns, so the callee prints its new value while the caller still sees the original one.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/api/system.threading.asynclocal-1",
+        "https://learn.microsoft.com/en-us/dotnet/api/system.threading.executioncontext"
+      ],
+      "stubId": "async-05"
+    },
+    {
+      "slug": "async-iterator-missing-enumeratorcancellation",
+      "level": "senior",
+      "type": "find-bug",
+      "subtopic": "Cancellation",
+      "angle": "Asks for the line that makes an IAsyncEnumerable iterator ignore the token passed through WithCancellation, so the consumer that cancels after two items still receives all of them.",
+      "answerHinge": "A token passed via WithCancellation reaches the iterator only through a CancellationToken parameter marked [EnumeratorCancellation]; without the attribute the parameter keeps its default value and the iterator never sees the cancellation.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/api/system.runtime.compilerservices.enumeratorcancellationattribute",
+        "https://learn.microsoft.com/en-us/dotnet/csharp/asynchronous-programming/generate-consume-asynchronous-stream"
+      ],
+      "stubId": "async-06"
+    },
+    {
+      "slug": "async-initialization-team-standard",
+      "level": "lead",
+      "type": "single",
+      "subtopic": "Deadlocks",
+      "angle": "Asks which team standard to adopt for classes that need asynchronous initialization, given developers currently call .Result in constructors or start async void Init methods.",
+      "answerHinge": "Constructors cannot await, so the sound standard is a private constructor plus a static async factory method (or an explicitly awaited initialization task), because blocking in the constructor risks deadlocks and async void Init hides failures and completion.",
+      "sources": [
+        "https://blog.stephencleary.com/2013/01/async-oop-2-constructors.html",
+        "https://learn.microsoft.com/en-us/archive/msdn-magazine/2013/march/async-await-best-practices-in-asynchronous-programming"
+      ],
+      "stubId": "async-07"
+    },
+    {
+      "slug": "fire-and-forget-task-policy",
+      "level": "lead",
+      "type": "open",
+      "subtopic": "Tasks",
+      "angle": "Asks what policy a lead sets for fire-and-forget tasks in a service after errors from discarded tasks were silently lost for weeks.",
+      "answerHinge": "An exception in a task nobody awaits is only raised through TaskScheduler.UnobservedTaskException and is not rethrown, so the policy requires every background operation to be owned and observed, for example by a hosted queue service or a helper that logs failures, with discards of task results flagged in review and by analyzers.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/api/system.threading.tasks.taskscheduler.unobservedtaskexception",
+        "https://learn.microsoft.com/en-us/dotnet/core/extensions/queue-service"
+      ],
+      "stubId": "async-08"
+    },
+    {
+      "slug": "async-io-scalability-not-latency-migration",
+      "level": "architect",
+      "type": "open",
+      "subtopic": "Tasks",
+      "angle": "Asks how an architect decides whether converting a fleet of synchronous I/O-bound services to async end to end is worth the multi-year effort and what it will and will not improve.",
+      "answerHinge": "Async I/O raises throughput per instance by not holding threads during waits, which matters for high-concurrency I/O-bound services, but it does not reduce the latency of a single request or help CPU-bound work, so the decision rests on measured concurrency, thread usage and blocking hot spots rather than on expected speed-ups.",
+      "sources": [
+        "https://learn.microsoft.com/en-us/dotnet/standard/async-in-depth",
+        "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/best-practices"
+      ],
+      "stubId": "async-09"
+    }
+  ]
+}
